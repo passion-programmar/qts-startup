@@ -44,6 +44,7 @@ function restrictedPageMessage(url) {
 const capturePanelOpenPromisesByTab = new Map();
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
 const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
+const MAX_GET_JD_PROFILE_SELECTION = 100;
 const GET_JD_SERVER_URL = 'https://qts-job-system.vercel.app';
 const getJdInFlightTabs = new Set();
 const getJdLastPageByTab = new Map();
@@ -470,7 +471,7 @@ async function extractJobFromTab(tabId) {
   }
 }
 
-async function saveGetJdResult(tabId, result) {
+async function saveGetJdResult(tabId, result, notifyPage = true) {
   const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
   const results = stored[GET_JD_RESULTS_KEY] || {};
   const tabKey = String(tabId);
@@ -481,6 +482,112 @@ async function saveGetJdResult(tabId, result) {
     delete results[oldKey];
   }
   await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
+  if (notifyPage) {
+    chrome.tabs.sendMessage(tabId, {
+      type: 'QTS_GET_JD_RESULT_UPDATED',
+      result,
+    }).catch(() => {});
+  }
+}
+
+async function readGetJdResultForTab(tabId) {
+  const tab = await getTab(tabId);
+  if (!tab?.url) return null;
+  const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
+  const result = stored[GET_JD_RESULTS_KEY]?.[String(tabId)];
+  return result?.pageUrl === tab.url ? result : null;
+}
+
+async function updateGetJdSelection(tabId, profileIds) {
+  if (
+    !Array.isArray(profileIds) ||
+    profileIds.length > MAX_GET_JD_PROFILE_SELECTION ||
+    !profileIds.every((id) => typeof id === 'string') ||
+    new Set(profileIds).size !== profileIds.length
+  ) {
+    return { ok: false, error: 'The selected candidate list is invalid.' };
+  }
+  const result = await readGetJdResultForTab(tabId);
+  if (
+    !result ||
+    result.status !== 'complete' ||
+    result.classification?.isJobPage !== true
+  ) {
+    return { ok: false, error: 'The current job review is no longer available.' };
+  }
+  const allowedIds = new Set((result.profiles || []).map((profile) => profile.id));
+  if (profileIds.some((id) => !allowedIds.has(id))) {
+    return { ok: false, error: 'One or more selected candidates are unavailable.' };
+  }
+  const updated = {
+    ...result,
+    selectedProfileIds: profileIds,
+    updatedAt: Date.now(),
+  };
+  await saveGetJdResult(tabId, updated, false);
+  return { ok: true };
+}
+
+async function cancelGetJdReview(tabId) {
+  const result = await readGetJdResultForTab(tabId);
+  if (!result || result.status !== 'complete') {
+    return { ok: false, error: 'The current job review is no longer available.' };
+  }
+  await saveGetJdResult(tabId, {
+    ...result,
+    status: 'cancelled',
+    reviewDismissed: true,
+    message: 'Cancelled. No Job List rows were saved.',
+    updatedAt: Date.now(),
+  });
+  return { ok: true };
+}
+
+async function saveGetJdSelection(tabId, profileIds) {
+  const selection = await updateGetJdSelection(tabId, profileIds);
+  if (!selection.ok) return selection;
+  if (!profileIds.length) {
+    return { ok: false, error: 'Select at least one candidate before saving.' };
+  }
+  const result = await readGetJdResultForTab(tabId);
+  const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
+  if (!token) {
+    return { ok: false, error: 'Your extension session has expired. Sign in again.' };
+  }
+  const response = await workerApiRequest(
+    'POST',
+    '/api/extension/get-jd/save',
+    {
+      job: result.classification.job,
+      profileIds,
+    },
+  );
+  if (response.success !== true) {
+    return {
+      ok: false,
+      error: response.message || 'Could not save selected candidates.',
+    };
+  }
+  if (Number(response.failedCount || 0) > 0) {
+    const message = 'Some candidates could not be saved. Please review and retry.';
+    await saveGetJdResult(tabId, {
+      ...result,
+      status: 'complete',
+      saveError: message,
+      saveResponse: response,
+      updatedAt: Date.now(),
+    });
+    return { ok: false, error: message };
+  }
+  await saveGetJdResult(tabId, {
+    ...result,
+    status: 'saved',
+    saveError: null,
+    message: 'Job List save finished.',
+    saveResponse: response,
+    updatedAt: Date.now(),
+  });
+  return { ok: true };
 }
 
 async function processGetJdPage(tabId, url, documentId = '') {
@@ -497,6 +604,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
   const initialResult = {
     tabId,
     pageUrl: url,
+    runId: `${Date.now()}:${documentId}`,
     pageTitle: '',
     status: 'processing',
     message: 'Reading this page and checking it against your candidate profiles…',
@@ -574,18 +682,19 @@ async function processGetJdPage(tabId, url, documentId = '') {
     if (!result.classification || !Array.isArray(result.profiles)) {
       throw new Error('QTS returned an incomplete job-classification response.');
     }
+    const currentTab = await getTab(tabId);
+    if (!currentTab?.url || currentTab.url !== url || !(await isGetJdActive())) return;
 
     await saveGetJdResult(tabId, {
       ...initialResult,
       pageTitle: extraction.title || tab.title || '',
       status: 'complete',
       message: !result.classification.isJobPage
-        ? 'This is not a job to apply!'
-        : !result.classification.isRemote
-          ? 'New job. This is not a remote job.'
-          : 'New remote job. Review the suggested profiles, then Save or Cancel.',
+        ? 'This is not Job Page'
+        : 'This is a new job!',
       updatedAt: Date.now(),
       classification: result.classification,
+      jobDescription: result.jobDescription || extractedJobDetails.description,
       profiles: result.profiles,
       reviewDismissed: false,
     });
@@ -639,27 +748,6 @@ async function enableGetJdForTab(tabId) {
 async function isGetJdActive() {
   const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
   return stored[EXTENSION_STATUS_KEY] === 'get_jd';
-}
-
-async function openOrPinChatGptTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://chatgpt.com/*' });
-  const existingTab = tabs
-    .filter((tab) => tab.id != null)
-    .sort((left, right) => Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0))[0];
-  if (existingTab?.id != null) {
-    if (!existingTab.pinned) {
-      await chrome.tabs.update(existingTab.id, { pinned: true });
-    }
-    return existingTab.id;
-  }
-
-  const created = await chrome.tabs.create({
-    url: 'https://chatgpt.com/',
-    active: false,
-    pinned: true,
-  });
-  if (created.id == null) throw new Error('Could not open a pinned ChatGPT tab.');
-  return created.id;
 }
 
 async function verifyFormScanScripts(tabId) {
@@ -2580,16 +2668,105 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'GET_JD_PREVIEW') {
+    (async () => {
+      const tabId = Number.isInteger(msg.tabId) ? msg.tabId : null;
+      if (tabId == null) {
+        sendResponse({ ok: false, error: 'Open a web page before starting Get JD.' });
+        return;
+      }
+      const extraction = await extractJobFromTab(tabId);
+      if (extraction.error) {
+        sendResponse({ ok: false, error: extraction.error });
+        return;
+      }
+      const details = normalizeDetectedJobData(
+        extraction.data,
+        extraction.url || extraction.tab?.url,
+      );
+      sendResponse({
+        ok: true,
+        job: {
+          title: details.title,
+          company: details.company,
+          jobUrl: details.url,
+          description: details.description,
+        },
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not extract this page.',
+    }));
+    return true;
+  }
+  if (msg.type === 'GET_JD_PAGE_RESULT') {
+    const tabId = sender.tab?.id;
+    if (tabId == null) {
+      sendResponse({ ok: false, error: 'Get JD review must be requested from a web page.' });
+      return false;
+    }
+    readGetJdResultForTab(tabId)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Could not load the current job review.',
+      }));
+    return true;
+  }
+  if (msg.type === 'UPDATE_GET_JD_SELECTION') {
+    const tabId = sender.tab?.id;
+    if (tabId == null) {
+      sendResponse({ ok: false, error: 'Candidate selection must come from a web page.' });
+      return false;
+    }
+    updateGetJdSelection(tabId, msg.profileIds)
+      .then(sendResponse)
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Could not update the candidate selection.',
+      }));
+    return true;
+  }
+  if (msg.type === 'SAVE_GET_JD_SELECTION') {
+    const tabId = sender.tab?.id;
+    if (tabId == null) {
+      sendResponse({ ok: false, error: 'Saving candidates must come from a web page.' });
+      return false;
+    }
+    saveGetJdSelection(tabId, msg.profileIds)
+      .then(sendResponse)
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Could not save the selected candidates.',
+      }));
+    return true;
+  }
+  if (msg.type === 'CANCEL_GET_JD_REVIEW') {
+    const tabId = sender.tab?.id;
+    if (tabId == null) {
+      sendResponse({ ok: false, error: 'Cancelling the review must come from a web page.' });
+      return false;
+    }
+    cancelGetJdReview(tabId)
+      .then(sendResponse)
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Could not cancel this review.',
+      }));
+    return true;
+  }
   if (msg.type === 'SET_EXTENSION_STATUS') {
     (async () => {
       const status = msg.status === 'get_jd' ? 'get_jd' : null;
       if (status === 'get_jd') {
-        await openOrPinChatGptTab();
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: status });
         enableGetJdForTab(Number.isInteger(msg.tabId) ? msg.tabId : null)
           .catch((error) => {
             console.error('[QTS Get JD] Could not start current-page classification:', error);
           });
+        if (Number.isInteger(msg.tabId)) {
+          chrome.tabs.sendMessage(msg.tabId, { type: 'QTS_CLOSE_CAPTURE_PANEL' }).catch(() => {});
+        }
       } else {
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
         getJdLastPageByTab.clear();

@@ -74,18 +74,20 @@ Developer mode, select **Load unpacked**, and choose the repository's
 `extension/` folder. After pulling extension changes, use **Reload** on the
 extension's card.
 
-The authenticated extension popup has a persistent **Get JD** mode. While
-enabled, it extracts job-page details from web pages opened in the browser and
-posts them to `POST /api/extension/get-jd`. The endpoint resolves the Manager
-and active candidate profiles from the bearer token, checks for a matching
-Manager Job or Bid, and otherwise asks Gemini to classify the posting and
-recommend candidate profiles. The Manager can adjust the recommended
-selection and save one Job row per chosen Account through
-`POST /api/extension/get-jd/save`. The extension does not create Bids, fill
-application forms, or submit applications. Starting Get JD opens and pins a
-ChatGPT tab if one is not already open; opening the extension popup while the
-mode is active shows the Get JD status and a **Back Home** control. Back Home
-clears the extension status and stops further Get JD page processing.
+The extension's **Get JD** flow first previews the current page's extracted
+title, company, URL, and job description. **Check** enables persistent Get JD
+mode in Chrome storage and closes the QTS panel; **Back** leaves the mode off.
+While enabled, page loads are checked against the Manager's Jobs and Bids by
+URL or company + title. Duplicate results and non-job pages show a toast at
+the top-left of the webpage. For new job pages, QTS asks Gemini to evaluate
+the configured Super Admin job-evaluation prompt using the job details and
+only each active candidate Account's ID, name, and category. The Manager
+reviews the job details and suggested candidates in a Shadow DOM page panel,
+can adjust the checkboxes, and saves one Job row per selected Account through
+`POST /api/extension/get-jd/save`. **Cancel** dismisses that review without
+closing the job tab or turning off Get JD mode; **Back** in the extension
+panel clears the persistent mode. Get JD does not click or fill job-site
+controls, submit applications, or create Bids.
 
 ## Users and candidate profiles
 

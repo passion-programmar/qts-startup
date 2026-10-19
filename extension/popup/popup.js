@@ -34,6 +34,7 @@ let targetTabId = null;
 let sourceWindowId = null;
 let jobSavedInBackend = false;
 let currentUser = null;
+let pendingGetJdPreview = null;
 let candidateStacks = [];
 let managerCustomGptAssigned = false;
 const expandedCandidateIds = new Set();
@@ -60,7 +61,6 @@ const LEGACY_DEFAULT_CANDIDATE_KEY = 'qtsDefaultCandidateByBidder';
 const AUTO_APPLY_ENABLED_KEY = 'qtsAutoApplyEnabled';
 const SELECTED_ACTION_KEY = 'qtsSelectedAction';
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
-const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const ACTION_BUTTON_IDS = ['btn-get-jd', 'btn-custom-apply'];
 const HIGHLIGHT_COLOR_PALETTE = [
   { name: 'Red', value: '#ef4444' },
@@ -2927,15 +2927,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('btn-login').addEventListener('click', doLogin);
   document.getElementById('btn-extension-logout')?.addEventListener('click', doLogout);
-  document.getElementById('btn-get-jd-mode')?.addEventListener('click', toggleGetJdMode);
+  document.getElementById('btn-get-jd-mode')?.addEventListener('click', startGetJdPreview);
   document.getElementById('btn-get-jd-back-home')?.addEventListener('click', backHomeFromGetJd);
-  document.getElementById('btn-get-jd-save')?.addEventListener('click', saveGetJdSelection);
-  document.getElementById('btn-get-jd-cancel')?.addEventListener('click', cancelGetJdSelection);
+  document.getElementById('btn-get-jd-check')?.addEventListener('click', confirmGetJdMode);
+  document.getElementById('btn-get-jd-preview-back')?.addEventListener('click', backHomeFromGetJd);
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (
-      areaName === 'local' &&
-      (changes[EXTENSION_STATUS_KEY] || changes[GET_JD_RESULTS_KEY])
-    ) {
+    if (areaName === 'local' && changes[EXTENSION_STATUS_KEY]) {
       refreshGetJdView().catch((error) => {
         console.error('[QTS Get JD] Could not refresh the popup result:', error);
       });
@@ -6480,16 +6477,11 @@ function showAuthenticatedScreen(user) {
 }
 
 async function refreshGetJdView() {
-  const [stored, tab] = await Promise.all([
-    chrome.storage.local.get([EXTENSION_STATUS_KEY, GET_JD_RESULTS_KEY]),
-    targetTabId ? chrome.tabs.get(targetTabId).catch(() => null) : Promise.resolve(null),
-  ]);
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
   const enabled = stored[EXTENSION_STATUS_KEY] === 'get_jd';
   const button = document.getElementById('btn-get-jd-mode');
   const status = document.getElementById('get-jd-mode-status');
-  const resultElement = document.getElementById('get-jd-result');
-  const alertElement = document.getElementById('get-jd-alert');
-  const reviewElement = document.getElementById('get-jd-review');
+  const preview = document.getElementById('get-jd-preview');
   const activeSection = document.getElementById('get-jd-active-section');
   if (button) {
     button.classList.toggle('hidden', enabled);
@@ -6497,239 +6489,86 @@ async function refreshGetJdView() {
   }
   activeSection?.classList.toggle('hidden', !enabled);
   status?.classList.toggle('hidden', enabled);
-  if (status && !enabled) status.textContent = 'Get JD is off. Start it to classify this page and pages opened afterward.';
-  if (!enabled) {
-    alertElement?.classList.add('hidden');
-    reviewElement?.classList.add('hidden');
-    if (resultElement) resultElement.textContent = '';
-    return;
-  }
-  const results = stored[GET_JD_RESULTS_KEY] || {};
-  const latest = tab?.id == null ? null : results[String(tab.id)];
-  if (!resultElement) return;
-  if (!latest || latest.pageUrl !== tab?.url) {
-    resultElement.textContent = 'No page classified yet.';
-    alertElement?.classList.add('hidden');
-    reviewElement?.classList.add('hidden');
-    if (status && !tab?.url?.startsWith('http://') && !tab?.url?.startsWith('https://')) {
-      status.textContent = 'Get JD can read web pages only. Open an http:// or https:// page.';
-    }
-    return;
-  }
-  if (status) status.textContent = latest.message || 'Page classification complete.';
-  reviewElement?.classList.add('hidden');
-
-  if (latest.status === 'duplicate') {
-    showGetJdAlert(latest.message || "You've already applied to this Job.", 'warn');
-    resultElement.textContent = latest.message || "You've already applied to this Job.";
-    return;
-  }
-  if (latest.status === 'error') {
-    showGetJdAlert(latest.message || 'Could not classify this page.', 'error');
-    resultElement.textContent = latest.message || 'Could not classify this page.';
-    return;
-  }
-  if (latest.status === 'processing') {
-    alertElement?.classList.add('hidden');
-    resultElement.textContent = latest.message || 'Checking this page…';
-    return;
-  }
-  if (latest.status === 'cancelled') {
-    showGetJdAlert('Cancelled. No Job List rows were saved.', 'warn');
-    resultElement.textContent = latest.classification
-      ? JSON.stringify(latest.classification, null, 2)
-      : 'No classification result is available.';
-    return;
-  }
-  if (latest.status === 'saved') {
-    const savedCount = latest.saveResponse?.savedCount || 0;
-    const failedCount = latest.saveResponse?.failedCount || 0;
-    const duplicateCount = latest.saveResponse?.duplicateCount || 0;
-    showGetJdAlert(
-      savedCount
-        ? `Saved ${savedCount} profile${savedCount === 1 ? '' : 's'}; ${duplicateCount} already existed; ${failedCount} failed.`
-        : 'No new Job List rows were saved. See the per-profile results below.',
-      savedCount && !failedCount ? 'success' : 'warn',
-    );
-    resultElement.textContent = JSON.stringify({
-      classification: latest.classification,
-      saveResults: latest.saveResponse?.results || [],
-    }, null, 2);
-    return;
-  }
-
-  const classification = latest.classification;
-  if (!classification) {
-    showGetJdAlert(latest.message || 'No classification result is available.', 'error');
-    resultElement.textContent = latest.message || 'No classification result is available.';
-    return;
-  }
-  if (!classification.isJobPage) {
-    showGetJdAlert('This is not a job to apply!', 'warn');
-  } else if (!classification.isRemote) {
-    showGetJdAlert('New job. This is not a remote job.', 'warn');
-  } else {
-    showGetJdAlert('New remote job. Review the suggested profiles, then Save or Cancel.', 'success');
-    if (!latest.reviewDismissed) {
-      renderGetJdProfiles(latest.profiles || [], latest.selectedProfileIds);
-      reviewElement?.classList.remove('hidden');
-    }
-  }
-  resultElement.textContent = JSON.stringify(classification, null, 2);
+  preview?.classList.add('hidden');
+  if (status && !enabled) status.textContent = 'Preview the job details before turning on Get JD.';
 }
 
-function showGetJdAlert(message, severity) {
-  const alertElement = document.getElementById('get-jd-alert');
-  if (!alertElement) return;
-  alertElement.textContent = message;
-  alertElement.classList.remove('hidden', 'is-error', 'is-success', 'is-warn');
-  alertElement.classList.add(`is-${severity}`);
+function setGetJdPreviewMessage(message, isError = false) {
+  const element = document.getElementById('get-jd-preview-message');
+  if (!element) return;
+  element.textContent = message;
+  element.classList.toggle('is-error', isError);
 }
 
-function renderGetJdProfiles(profiles, selectedProfileIds) {
-  const list = document.getElementById('get-jd-profile-list');
-  if (!list) return;
-  list.replaceChildren();
-  const selectedIds = Array.isArray(selectedProfileIds)
-    ? new Set(selectedProfileIds)
-    : null;
-  if (!profiles.length) {
-    const empty = document.createElement('p');
-    empty.className = 'login-candidate-hint';
-    empty.textContent = 'No candidate profiles are available.';
-    list.appendChild(empty);
-    return;
-  }
-  for (const profile of profiles) {
-    const label = document.createElement('label');
-    label.className = 'get-jd-profile-option';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.dataset.profileId = profile.id;
-    checkbox.checked = selectedIds
-      ? selectedIds.has(profile.id)
-      : profile.recommended === true;
-    checkbox.addEventListener('change', () => {
-      persistGetJdSelectedProfiles().catch((error) => {
-        console.error('[QTS Get JD] Could not persist the profile selection:', error);
-      });
-    });
-    const details = document.createElement('span');
-    details.textContent = profile.name || 'Candidate';
-    if (profile.category) {
-      const category = document.createElement('small');
-      category.textContent = profile.category;
-      details.appendChild(category);
-    }
-    label.append(checkbox, details);
-    list.appendChild(label);
-  }
-}
-
-async function persistGetJdSelectedProfiles() {
-  const tab = targetTabId ? await chrome.tabs.get(targetTabId).catch(() => null) : null;
-  if (!tab?.id) return;
-  const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
-  const results = stored[GET_JD_RESULTS_KEY] || {};
-  const latest = results[String(tab.id)];
-  if (!latest || latest.pageUrl !== tab.url) return;
-  latest.selectedProfileIds = Array.from(
-    document.querySelectorAll('#get-jd-profile-list input[data-profile-id]:checked'),
-    (input) => input.dataset.profileId,
-  ).filter(Boolean);
-  results[String(tab.id)] = latest;
-  await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
-}
-
-async function saveGetJdSelection() {
-  const saveButton = document.getElementById('btn-get-jd-save');
-  const selectedIds = Array.from(
-    document.querySelectorAll('#get-jd-profile-list input[data-profile-id]:checked'),
-    (input) => input.dataset.profileId,
-  ).filter(Boolean);
-  if (!selectedIds.length) {
-    showGetJdAlert('Select at least one profile, or click Cancel.', 'error');
-    return;
-  }
-  if (saveButton) saveButton.disabled = true;
-  showGetJdAlert('Saving selected profiles to the Job List…', 'warn');
-  try {
-    const [stored, tab] = await Promise.all([
-      chrome.storage.local.get([GET_JD_RESULTS_KEY]),
-      targetTabId ? chrome.tabs.get(targetTabId).catch(() => null) : Promise.resolve(null),
-    ]);
-    const results = stored[GET_JD_RESULTS_KEY] || {};
-    const latest = tab?.id == null ? null : results[String(tab.id)];
-    if (!latest?.classification?.job || latest.pageUrl !== tab?.url) {
-      throw new Error('The current page result is no longer available. Run Get JD again.');
-    }
-    const response = await window.api.saveGetJdJobs(
-      latest.classification.job,
-      selectedIds,
-    );
-    if (!response.success) {
-      throw new Error(response.message || 'Could not save selected profiles.');
-    }
-    const updated = {
-      ...latest,
-      status: 'saved',
-      message: 'Job List save finished.',
-      saveResponse: response,
-      updatedAt: Date.now(),
-    };
-    results[String(tab.id)] = updated;
-    await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
-    await refreshGetJdView();
-  } catch (error) {
-    showGetJdAlert(error?.message || 'Could not save selected profiles.', 'error');
-  } finally {
-    if (saveButton) saveButton.disabled = false;
-  }
-}
-
-async function cancelGetJdSelection() {
-  const tab = targetTabId ? await chrome.tabs.get(targetTabId).catch(() => null) : null;
-  if (!tab?.id) return;
-  const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
-  const results = stored[GET_JD_RESULTS_KEY] || {};
-  const latest = results[String(tab.id)];
-  if (!latest || latest.pageUrl !== tab.url) return;
-  results[String(tab.id)] = {
-    ...latest,
-    status: 'cancelled',
-    reviewDismissed: true,
-    message: 'Cancelled. No Job List rows were saved.',
-    updatedAt: Date.now(),
-  };
-  await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
-}
-
-async function toggleGetJdMode() {
+async function startGetJdPreview() {
   const button = document.getElementById('btn-get-jd-mode');
-  const status = document.getElementById('get-jd-mode-status');
+  const preview = document.getElementById('get-jd-preview');
+  const checkButton = document.getElementById('btn-get-jd-check');
+  const backButton = document.getElementById('btn-get-jd-preview-back');
+  if (button) button.disabled = true;
+  pendingGetJdPreview = null;
+  preview?.classList.remove('hidden');
+  setGetJdPreviewMessage('Extracting job details from this page...');
+  for (const id of [
+    'get-jd-preview-title',
+    'get-jd-preview-company',
+    'get-jd-preview-url',
+    'get-jd-preview-description',
+  ]) {
+    const field = document.getElementById(id);
+    if (field) field.textContent = '';
+  }
+  if (checkButton) checkButton.disabled = true;
+  if (backButton) backButton.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GET_JD_PREVIEW',
+      tabId: targetTabId,
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || 'Could not extract job details from this page.');
+    }
+    pendingGetJdPreview = response.job;
+    document.getElementById('get-jd-preview-title').textContent = response.job.title || 'Not detected';
+    document.getElementById('get-jd-preview-company').textContent = response.job.company || 'Not detected';
+    document.getElementById('get-jd-preview-url').textContent = response.job.jobUrl || 'Not detected';
+    document.getElementById('get-jd-preview-description').textContent =
+      response.job.description || 'Not detected';
+    setGetJdPreviewMessage('Review these details, then click Check to activate Get JD.');
+    if (checkButton) checkButton.disabled = false;
+  } catch (error) {
+    setGetJdPreviewMessage(error?.message || 'Could not extract job details.', true);
+  } finally {
+    if (button) button.disabled = false;
+    if (backButton) backButton.disabled = false;
+  }
+}
+
+async function confirmGetJdMode() {
+  const button = document.getElementById('btn-get-jd-check');
+  if (!pendingGetJdPreview) {
+    setGetJdPreviewMessage('Extract job details before starting Get JD.', true);
+    return;
+  }
   if (button) button.disabled = true;
   try {
-    const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
-    if (stored[EXTENSION_STATUS_KEY] === 'get_jd') return;
     const response = await chrome.runtime.sendMessage({
       type: 'SET_EXTENSION_STATUS',
       status: 'get_jd',
       tabId: targetTabId,
     });
     if (!response?.ok) {
-      throw new Error(response?.error || 'Could not update Get JD mode.');
+      throw new Error(response?.error || 'Could not activate Get JD mode.');
     }
-    if (status) status.textContent = 'Get JD is starting. ChatGPT has been opened in a pinned tab.';
-    await refreshGetJdView();
   } catch (error) {
-    if (status) status.textContent = error?.message || 'Could not update Get JD mode.';
-  } finally {
+    setGetJdPreviewMessage(error?.message || 'Could not activate Get JD mode.', true);
     if (button) button.disabled = false;
   }
 }
 
-async function backHomeFromGetJd() {
-  const button = document.getElementById('btn-get-jd-back-home');
+async function backHomeFromGetJd(event) {
+  const button = event?.currentTarget
+    || document.getElementById('btn-get-jd-back-home');
   const status = document.getElementById('get-jd-mode-status');
   if (button) button.disabled = true;
   try {
@@ -6740,7 +6579,9 @@ async function backHomeFromGetJd() {
     if (!response?.ok) {
       throw new Error(response?.error || 'Could not return to Home.');
     }
+    pendingGetJdPreview = null;
     await refreshGetJdView();
+    setGetJdPreviewMessage('');
   } catch (error) {
     if (status) status.textContent = error?.message || 'Could not return to Home.';
   } finally {

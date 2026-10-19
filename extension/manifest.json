@@ -44,6 +44,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "content/get-jd-review.js",
         "shared/text-highlighting.js",
         "content/text-highlighter.js"
       ],

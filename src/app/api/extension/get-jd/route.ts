@@ -2,14 +2,11 @@ import {
   and,
   asc,
   eq,
-  inArray,
   isNull,
 } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import {
   categories,
-  educations,
-  experiences,
   profiles,
   prompts,
   users,
@@ -29,8 +26,6 @@ const responseSchema = {
   properties: {
     isJobPage: { type: "BOOLEAN" },
     isRemote: { type: "BOOLEAN" },
-    confidence: { type: "STRING", enum: ["high", "medium", "low"] },
-    reason: { type: "STRING" },
     job: {
       type: "OBJECT",
       properties: {
@@ -39,7 +34,6 @@ const responseSchema = {
         location: { type: "STRING" },
         employmentType: { type: "STRING" },
         jobUrl: { type: "STRING" },
-        description: { type: "STRING" },
       },
       required: [
         "title",
@@ -47,7 +41,6 @@ const responseSchema = {
         "location",
         "employmentType",
         "jobUrl",
-        "description",
       ],
     },
     matchingProfileIds: {
@@ -58,8 +51,6 @@ const responseSchema = {
   required: [
     "isJobPage",
     "isRemote",
-    "confidence",
-    "reason",
     "job",
     "matchingProfileIds",
   ],
@@ -69,45 +60,17 @@ type CandidateProfileForEvaluation = {
   id: string;
   name: string;
   category: string | null;
-  headline: string | null;
-  linkedinUrl: string | null;
-  country: string | null;
-  city: string | null;
-  province: string | null;
-  education: Array<{
-    institution: string;
-    degree: string | null;
-    fieldOfStudy: string | null;
-    startDate: string | null;
-    endDate: string | null;
-    isCurrent: boolean;
-    description: string | null;
-  }>;
-  experience: Array<{
-    companyName: string;
-    jobTitle: string;
-    location: string | null;
-    startDate: string | null;
-    endDate: string | null;
-    isCurrent: boolean;
-    description: string | null;
-  }>;
 };
-
-type ClassificationConfidence = "high" | "medium" | "low";
 
 type GetJdClassification = {
   isJobPage: boolean;
   isRemote: boolean;
-  confidence: ClassificationConfidence;
-  reason: string;
   job: {
     title: string;
     company: string;
     location: string;
     employmentType: string;
     jobUrl: string;
-    description: string;
   };
   matchingProfileIds: string[];
 };
@@ -152,7 +115,9 @@ export async function POST(request: Request): Promise<NextResponse> {
         success: true,
         duplicate: true,
         duplicateKind: duplicate,
-        message: "You've already applied to this Job.",
+        message: duplicate === "applied"
+          ? "You've already applied to this job"
+          : "You've already found this job",
       });
     }
 
@@ -164,12 +129,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
     const candidateProfiles = profileResult.profiles;
-    if (!candidateProfiles.length) {
-      return jsonResponse(
-        { success: false, message: "No active candidate Accounts are available for this Manager." },
-        422,
-      );
-    }
 
     const [prompt] = await db
       .select({ promptTemplate: prompts.promptTemplate })
@@ -213,15 +172,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       candidateId: candidate.id,
       candidateName: candidate.name,
       category: candidate.category,
-      profile: {
-        headline: candidate.headline,
-        linkedinUrl: candidate.linkedinUrl,
-        country: candidate.country,
-        city: candidate.city,
-        province: candidate.province,
-        education: candidate.education,
-        experience: candidate.experience,
-      },
     }));
     const promptText = [
       prompt.promptTemplate,
@@ -231,10 +181,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       "Return only JSON matching the required response schema.",
       "Set isRemote to true only when the posting explicitly indicates remote work; otherwise set it to false.",
       "If this is not one specific job posting, set isJobPage and isRemote to false and return no matchingProfileIds.",
-      "For a real job posting, list only the candidate IDs that are a reasonable match based on supplied facts. Return IDs exactly as supplied, at most once each. Never infer qualifications or include IDs not supplied.",
-      "Do not include contact details. Use an empty string for unknown job fields.",
+      "For a real job posting, select suitable candidates using only the job details and each candidate's category. Treat the category as the candidate's primary role. Ignore candidate names when deciding suitability.",
+      "Return only candidate IDs from the supplied list, at most once each. Never infer qualifications or include IDs not supplied.",
+      "Return exactly these fields: isJobPage, isRemote, job (title, company, location, employmentType, jobUrl), and matchingProfileIds. Do not add confidence, reason, description, or other fields.",
+      "Use an empty string for unknown job fields.",
       `Job page data:\n${JSON.stringify(jobContext)}`,
-      `Candidate profiles:\n${JSON.stringify(candidateContext)}`,
+      `Candidate accounts (only ID, name, and category):\n${JSON.stringify(candidateContext)}`,
     ].join("\n\n");
 
     const modelResult = await requestGeminiJson(apiKey, promptText);
@@ -246,6 +198,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return jsonResponse({
       success: true,
       classification,
+      jobDescription: extracted.description,
       profiles: candidateProfiles.map((candidate) => ({
         id: candidate.id,
         name: candidate.name,
@@ -282,11 +235,6 @@ async function loadManagerCandidateProfiles(
       firstName: profiles.firstName,
       lastName: profiles.lastName,
       category: categories.name,
-      headline: profiles.headline,
-      linkedinUrl: profiles.linkedinUrl,
-      country: profiles.country,
-      city: profiles.city,
-      province: profiles.province,
     })
     .from(users)
     .innerJoin(profiles, eq(profiles.userId, users.id))
@@ -302,41 +250,6 @@ async function loadManagerCandidateProfiles(
     .limit(maxManagerAccounts + 1);
 
   if (rows.length > maxManagerAccounts) return { profiles: [], tooMany: true };
-  if (!rows.length) return { profiles: [], tooMany: false };
-  const candidateIds = rows.map((row) => row.id);
-  const [educationRows, experienceRows] = await Promise.all([
-    db
-      .select({
-        profileUserId: educations.profileUserId,
-        institution: educations.institution,
-        degree: educations.degree,
-        fieldOfStudy: educations.fieldOfStudy,
-        startDate: educations.startDate,
-        endDate: educations.endDate,
-        isCurrent: educations.isCurrent,
-        description: educations.description,
-      })
-      .from(educations)
-      .where(inArray(educations.profileUserId, candidateIds))
-      .orderBy(asc(educations.profileUserId), asc(educations.sortOrder))
-      .limit(maxManagerAccounts * 5),
-    db
-      .select({
-        profileUserId: experiences.profileUserId,
-        companyName: experiences.companyName,
-        jobTitle: experiences.jobTitle,
-        location: experiences.location,
-        startDate: experiences.startDate,
-        endDate: experiences.endDate,
-        isCurrent: experiences.isCurrent,
-        description: experiences.description,
-      })
-      .from(experiences)
-      .where(inArray(experiences.profileUserId, candidateIds))
-      .orderBy(asc(experiences.profileUserId), asc(experiences.sortOrder))
-      .limit(maxManagerAccounts * 10),
-  ]);
-
   return {
     tooMany: false,
     profiles: rows.map((row) => ({
@@ -344,41 +257,8 @@ async function loadManagerCandidateProfiles(
       name: ([row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate")
         .slice(0, 300),
       category: row.category,
-      headline: limitText(row.headline, 1000),
-      linkedinUrl: limitText(row.linkedinUrl, 2048),
-      country: limitText(row.country, 200),
-      city: limitText(row.city, 200),
-      province: limitText(row.province, 200),
-      education: educationRows
-        .filter((item) => item.profileUserId === row.id)
-        .slice(0, 5)
-        .map((item) => ({
-          institution: item.institution.slice(0, 300),
-          degree: limitText(item.degree, 200),
-          fieldOfStudy: limitText(item.fieldOfStudy, 300),
-          startDate: item.startDate,
-          endDate: item.endDate,
-          isCurrent: item.isCurrent,
-          description: limitText(item.description, 1000),
-        })),
-      experience: experienceRows
-        .filter((item) => item.profileUserId === row.id)
-        .slice(0, 10)
-        .map((item) => ({
-          companyName: item.companyName.slice(0, 300),
-          jobTitle: item.jobTitle.slice(0, 300),
-          location: limitText(item.location, 200),
-          startDate: item.startDate,
-          endDate: item.endDate,
-          isCurrent: item.isCurrent,
-          description: limitText(item.description, 1500),
-        })),
     })),
   };
-}
-
-function limitText(value: string | null, maxLength: number): string | null {
-  return value == null ? null : value.slice(0, maxLength);
 }
 
 async function requestGeminiJson(
@@ -459,8 +339,6 @@ function validateClassification(
     !isRecord(value) ||
     typeof value.isJobPage !== "boolean" ||
     typeof value.isRemote !== "boolean" ||
-    !isClassificationConfidence(value.confidence) ||
-    typeof value.reason !== "string" ||
     !isRecord(value.job) ||
     !Array.isArray(value.matchingProfileIds)
   ) {
@@ -476,7 +354,6 @@ function validateClassification(
     "company",
     "location",
     "employmentType",
-    "description",
   ] as const;
   for (const field of stringFields) {
     if (typeof job[field] !== "string") {
@@ -486,11 +363,7 @@ function validateClassification(
       );
     }
   }
-  if (
-    value.matchingProfileIds.length > candidates.length ||
-    typeof value.reason !== "string" ||
-    value.reason.length > 2000
-  ) {
+  if (value.matchingProfileIds.length > candidates.length) {
     throw getJdError(
       "gemini_classification_too_large",
       "Gemini response contained too much classification data.",
@@ -519,17 +392,14 @@ function validateClassification(
   return {
     isJobPage,
     isRemote,
-    confidence: value.confidence,
-    reason: value.reason.slice(0, 2000),
     job: {
       title: String(job.title).slice(0, 500),
       company: String(job.company).slice(0, 500),
       location: String(job.location).slice(0, 500),
       employmentType: String(job.employmentType).slice(0, 300),
       jobUrl: pageUrl,
-      description: String(job.description).slice(0, maxJobTextLength),
     },
-    matchingProfileIds: isJobPage && isRemote ? matchingProfileIds : [],
+    matchingProfileIds: isJobPage ? matchingProfileIds : [],
   };
 }
 
@@ -570,10 +440,6 @@ function isHttpUrl(value: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isClassificationConfidence(value: unknown): value is ClassificationConfidence {
-  return value === "high" || value === "medium" || value === "low";
 }
 
 function jsonResponse(body: object, status = 200): NextResponse {

@@ -209,42 +209,31 @@
       gap: 8px;
       margin-top: 4px;
     }
-    .get-jd-alert {
-      margin: 10px 0;
-      padding: 9px 10px;
-      border-radius: 8px;
-      font-size: 12px;
-      line-height: 1.45;
-    }
-    .get-jd-alert.hidden,
-    .get-jd-review.hidden { display: none; }
-    .get-jd-alert.is-error { background: #fef2f2; color: #b91c1c; }
-    .get-jd-alert.is-success { background: #f0fdf4; color: #166534; }
-    .get-jd-alert.is-warn { background: #fffbeb; color: #92400e; }
-    .get-jd-review {
-      margin: 10px 0;
-      padding: 10px;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-    }
-    .get-jd-profile-list {
-      max-height: 170px;
-      overflow: auto;
+    #get-jd-preview.hidden { display: none; }
+    #get-jd-preview-message.is-error { color: #b91c1c; }
+    .get-jd-preview-field {
       margin: 8px 0;
+      padding: 8px;
+      border-radius: 7px;
+      background: #f8fafc;
     }
-    .get-jd-profile-option {
-      display: flex;
-      gap: 8px;
-      align-items: flex-start;
-      padding: 6px 0;
+    .get-jd-preview-label {
+      display: block;
+      margin-bottom: 3px;
+      color: #64748b;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .get-jd-preview-value {
+      max-height: 120px;
+      margin: 0;
+      overflow: auto;
       color: #1e293b;
       font-size: 12px;
-    }
-    .get-jd-profile-option input { margin: 2px 0 0; }
-    .get-jd-profile-option small {
-      display: block;
-      margin-top: 2px;
-      color: #64748b;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
     }
     .get-jd-review-actions {
       display: flex;
@@ -590,36 +579,43 @@
           </div>
           <div class="login-field">
             <button class="btn btn-primary btn-block" id="btn-get-jd-mode" type="button" aria-pressed="false">
-              Start Get JD
+              Get JD
             </button>
             <p id="get-jd-mode-status" class="login-candidate-hint" role="status" aria-live="polite">
-              Get JD is off. Start it to classify this page and pages opened afterward.
+              Preview the job details before turning on Get JD.
             </p>
           </div>
+          <section id="get-jd-preview" class="hidden" aria-label="Preview extracted job details">
+            <div class="get-jd-preview-field">
+              <span class="get-jd-preview-label">Title</span>
+              <p id="get-jd-preview-title" class="get-jd-preview-value"></p>
+            </div>
+            <div class="get-jd-preview-field">
+              <span class="get-jd-preview-label">Company</span>
+              <p id="get-jd-preview-company" class="get-jd-preview-value"></p>
+            </div>
+            <div class="get-jd-preview-field">
+              <span class="get-jd-preview-label">URL</span>
+              <p id="get-jd-preview-url" class="get-jd-preview-value"></p>
+            </div>
+            <div class="get-jd-preview-field">
+              <span class="get-jd-preview-label">Job description</span>
+              <p id="get-jd-preview-description" class="get-jd-preview-value"></p>
+            </div>
+            <p id="get-jd-preview-message" class="login-candidate-hint" role="status" aria-live="polite"></p>
+            <div class="get-jd-review-actions">
+              <button class="btn btn-primary" id="btn-get-jd-check" type="button">Check</button>
+              <button class="btn btn-ghost" id="btn-get-jd-preview-back" type="button">Back</button>
+            </div>
+          </section>
           <section id="get-jd-active-section" class="hidden">
             <div class="login-field">
               <button class="btn btn-ghost btn-block" id="btn-get-jd-back-home" type="button">
-                Back Home
+                Back
               </button>
               <p class="login-candidate-hint">
-                Get JD mode is active. Keep browsing job pages; QTS checks each page and lets you review matching profiles before saving. Click Back Home to stop page checks.
+                Get JD is active. The extension checks pages as they load and shows new-job reviews on the page. Click Back to turn it off.
               </p>
-            </div>
-            <div id="get-jd-active-content">
-              <div id="get-jd-alert" class="get-jd-alert hidden" role="status" aria-live="polite"></div>
-              <section id="get-jd-review" class="get-jd-review hidden" aria-label="Review suggested candidate profiles">
-                <strong>Choose profiles for this Job List entry</strong>
-                <p class="login-candidate-hint">Gemini suggestions are checked. You can change the selection before saving.</p>
-                <div id="get-jd-profile-list" class="get-jd-profile-list"></div>
-                <div class="get-jd-review-actions">
-                  <button class="btn btn-primary" id="btn-get-jd-save" type="button">Save</button>
-                  <button class="btn btn-ghost" id="btn-get-jd-cancel" type="button">Cancel</button>
-                </div>
-              </section>
-              <div class="login-field">
-                <label class="login-label" for="get-jd-result">Latest Get JD result</label>
-                <pre id="get-jd-result" style="max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px;"></pre>
-              </div>
             </div>
           </section>
           <button class="btn btn-ghost btn-block" id="btn-extension-logout" type="button">Log out</button>
