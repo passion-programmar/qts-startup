@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>QTS Capture</title>
+  <link rel="stylesheet" href="../assets/theme.css">
+  <link rel="stylesheet" href="../assets/popup.css">
+  <style>
+    html,
+    body {
+      margin: 0;
+      overflow: hidden;
+      width: 420px;
+      height: 600px;
+    }
+    body {
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .popup-top {
+      flex-shrink: 0;
+      z-index: 20;
+    }
+    .popup-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #cbd5e1 transparent;
+    }
+    .popup-scroll::-webkit-scrollbar {
+      width: 8px;
+    }
+    .popup-scroll::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 999px;
+    }
+    #f-desc {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      height: 140px;
+      min-height: 140px;
+      max-height: 140px;
+      resize: none;
+      overflow-x: hidden;
+      overflow-y: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      scrollbar-width: thin;
+      scrollbar-color: #cbd5e1 transparent;
+    }
+    #f-title,
+    #f-company,
+    #f-url {
+      font-size: 13px;
+    }
+    #f-desc::-webkit-scrollbar {
+      width: 8px;
+    }
+    #f-desc::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 999px;
+    }
+    #login-alert:empty,
+    #main-alert:empty { display: none; }
+    #page-highlights-status.is-error { color: #b91c1c; }
+    .existing-job-notice {
+      background: #fef3c7;
+      border: 1px solid #fde68a;
+      border-radius: var(--radius-sm);
+      padding: var(--space-control);
+      margin-bottom: var(--space-inline);
+      font-size: 12px;
+    }
+    .existing-job-notice strong { display: block; margin-bottom: 4px; color: #92400e; }
+    .job-account-assignment {
+      margin: 0 0 14px;
+      padding: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+    #f-title, #f-company, #f-url { font-size: 13px; }
+    .job-account-assignment.hidden { display: none; }
+    .job-account-assignment-title {
+      margin: 0;
+      color: #0f172a;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .job-account-assignment-hint {
+      margin: 4px 0 10px;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .job-account-category + .job-account-category { margin-top: 10px; }
+    .job-account-category-title {
+      margin: 0 0 5px;
+      color: #334155;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .job-account-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 5px 0;
+      color: #1e293b;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .job-account-option input { margin: 1px 0 0; accent-color: #2563eb; }
+    .job-account-option small {
+      display: block;
+      margin-top: 2px;
+      color: #64748b;
+      font-size: 10px;
+    }
+    .job-account-assignment-status {
+      margin: 6px 0 0;
+      color: #64748b;
+      font-size: 11px;
+    }
+    .session-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 18px;
+      background: #1e293b;
+      color: #e2e8f0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 12px;
+    }
+    .session-bar.hidden { display: none; }
+    .session-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1;
+    }
+    .session-org {
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .session-user {
+      color: #94a3b8;
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .session-user.hidden { display: none; }
+    .session-logout {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #e2e8f0;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+    .session-logout:hover {
+      background: rgba(248, 113, 113, 0.14);
+      border-color: rgba(248, 113, 113, 0.45);
+      color: #fecaca;
+    }
+    .session-logout-icon {
+      font-size: 14px;
+      line-height: 1;
+      opacity: 0.9;
+    }
+    #login-section { padding: 0; }
+    #job-section { padding: 14px 18px; }
+    #action-bar.hidden { display: none; }
+    .login-candidate-step {
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid #e2e8f0;
+    }
+    .login-candidate-step.hidden { display: none; }
+    .login-form.hidden { display: none; }
+    .login-candidate-hint {
+      margin: 6px 0 0;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #64748b;
+    }
+    .login-candidate-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .get-jd-alert {
+      margin: 10px 0;
+      padding: 9px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .get-jd-alert.hidden,
+    .get-jd-review.hidden { display: none; }
+    .get-jd-alert.is-error { background: #fef2f2; color: #b91c1c; }
+    .get-jd-alert.is-success { background: #f0fdf4; color: #166534; }
+    .get-jd-alert.is-warn { background: #fffbeb; color: #92400e; }
+    .get-jd-review {
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+    }
+    .get-jd-profile-list {
+      max-height: 170px;
+      overflow: auto;
+      margin: 8px 0;
+    }
+    .get-jd-profile-option {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      padding: 6px 0;
+      color: #1e293b;
+      font-size: 12px;
+    }
+    .get-jd-profile-option input { margin: 2px 0 0; }
+    .get-jd-profile-option small {
+      display: block;
+      margin-top: 2px;
+      color: #64748b;
+    }
+    .get-jd-review-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .auto-apply-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      font-size: 12px;
+    }
+    .auto-apply-bar.is-active {
+      border-color: #86efac;
+      background: #f0fdf4;
+    }
+    .auto-apply-bar.hidden { display: none; }
+    .auto-apply-status {
+      font-weight: 600;
+      color: #334155;
+    }
+    .auto-apply-bar.is-active .auto-apply-status { color: #166534; }
+    .action-section {
+      padding: 28px 20px;
+    }
+    .action-shell {
+      max-width: 360px;
+      margin: 0 auto;
+    }
+    .action-card {
+      padding: 24px;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      background: #fff;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    }
+    .action-title {
+      margin: 0 0 6px;
+      color: #0f172a;
+      font-size: 20px;
+      text-align: center;
+    }
+    .action-subtitle {
+      margin: 0 0 20px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.5;
+      text-align: center;
+    }
+    .application-disabled-note {
+      margin: 14px 0 0;
+      padding: 10px;
+      border: 1px solid #fed7aa;
+      border-radius: 8px;
+      background: #fff7ed;
+      color: #9a3412;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .action-buttons {
+      display: grid;
+      gap: 10px;
+    }
+    .action-buttons .btn {
+      min-height: 42px;
+      font-weight: 600;
+    }
+    .action-buttons .btn.is-selected {
+      background: #166534;
+      color: #fff;
+      box-shadow: 0 0 0 3px #bbf7d0;
+    }
+    .site-discovery {
+      margin-top: 18px;
+      padding: 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      background: #fff;
+    }
+    .site-discovery h3 {
+      margin: 0 0 6px;
+      color: #0f172a;
+      font-size: 15px;
+    }
+    .site-discovery > p {
+      margin: 0 0 10px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .site-discovery-actions {
+      display: grid;
+      gap: 6px;
+    }
+    .site-discovery-actions .btn {
+      min-height: 34px;
+    }
+    .site-discovery .site-discovery-status {
+      margin: 10px 0 0;
+      color: #475569;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    #get-jd-confirmation {
+      width: min(340px, calc(100% - 40px));
+      padding: 22px;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      color: #0f172a;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
+    }
+    #get-jd-confirmation::backdrop {
+      background: rgba(15, 23, 42, 0.48);
+    }
+    .get-jd-confirmation-title {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+    .get-jd-confirmation-message {
+      margin: 0 0 18px;
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .get-jd-confirmation-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    #scanner-save-status {
+      margin: 0;
+      padding: 8px 16px 12px;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    #scanner-document-review {
+      width: min(720px, calc(100% - 24px));
+      max-width: 100%;
+      max-height: calc(100vh - 24px);
+      padding: 16px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
+    }
+    #scanner-document-review::backdrop {
+      background: rgba(15, 23, 42, 0.58);
+    }
+    #scanner-answer-review {
+      width: min(380px, calc(100% - 24px));
+      max-width: 100%;
+      max-height: calc(100vh - 24px);
+      padding: 16px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
+    }
+    #scanner-answer-review::backdrop {
+      background: rgba(15, 23, 42, 0.58);
+    }
+    #scanner-answer-review-description {
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    #scanner-answer-review-value {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 140px;
+      resize: vertical;
+    }
+    #scanner-answer-review-options {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 38px;
+    }
+    #scanner-answer-review-value[hidden],
+    #scanner-answer-review-options[hidden] {
+      display: none;
+    }
+    #scanner-document-preview {
+      width: 100%;
+      height: min(62vh, 620px);
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+    .scanner-document-review-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .job-mode-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .job-mode-feature-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .job-mode-indicator {
+      color: #166534;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .login-signed-in-as {
+      margin: 0 0 12px;
+      font-size: 12px;
+      color: #475569;
+      text-align: center;
+    }
+    .cand-default-badge {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 8px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #dbeafe;
+      color: #1d4ed8;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      vertical-align: middle;
+    }
+    .cand-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .cand-default-select {
+      min-width: 140px;
+      max-width: 200px;
+      font-size: 11px;
+      padding: 5px 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body class="popup-app">
+  <div class="popup-top">
+  <header class="app-header">
+    <div class="app-header-left">
+      <img id="header-logo" src="" alt="WYS" class="app-logo-sm">
+    </div>
+    <div class="app-header-center" aria-label="Quality, Time, Speed">
+      <div class="qts-tagline">
+        <span class="qts-pillar qts-pillar--quality">
+          <span class="qts-letter">Q</span>
+          <span class="qts-word">uality</span>
+        </span>
+        <span class="qts-plus" aria-hidden="true">+</span>
+        <span class="qts-pillar qts-pillar--time">
+          <span class="qts-letter">T</span>
+          <span class="qts-word">ime</span>
+        </span>
+        <span class="qts-plus" aria-hidden="true">+</span>
+        <span class="qts-pillar qts-pillar--speed">
+          <span class="qts-letter">S</span>
+          <span class="qts-word">peed</span>
+        </span>
+      </div>
+      <div class="qts-subline">Built for precision bidding</div>
+    </div>
+    <div class="app-header-right">
+      <div id="connection-status" class="status-pill status-checking">
+        <span class="status-dot"></span>
+        <span id="status-text">Checking…</span>
+      </div>
+    </div>
+  </header>
+
+  <div id="session-bar" class="session-bar hidden">
+    <div class="session-info">
+      <span class="session-org" id="session-account">—</span>
+      <span class="session-user" id="session-user">—</span>
+    </div>
+    <button class="session-logout hidden" id="btn-change-team" type="button">Change Account</button>
+    <button class="session-logout" id="btn-logout" type="button" aria-label="Log out">
+      <span class="session-logout-icon" aria-hidden="true">⎋</span>
+      <span>Log out</span>
+    </button>
+  </div>
+  </div>
+
+  <div class="popup-scroll">
+    <div class="popup-scroll-inner">
+    <!-- Login -->
+    <div id="login-section">
+      <div class="login-shell">
+        <div class="login-card">
+          <div class="login-brand">
+            <div class="login-badge" aria-hidden="true">QTS</div>
+            <h2 class="login-title">Manager Sign In</h2>
+            <p class="login-subtitle">Sign in with your Manager account from QTS.</p>
+          </div>
+
+          <div id="login-setup-hint" class="alert alert-warn login-setup-hint">
+            Only active Manager accounts can sign in. Ask your Admin to create or unblock your account.
+          </div>
+          <div id="login-alert"></div>
+
+          <div id="login-form" class="login-form">
+            <div class="login-field">
+              <label class="login-label" for="login-user">Username</label>
+              <input type="text" id="login-user" class="login-input" placeholder="Type name from qts" autocomplete="username">
+            </div>
+            <div class="login-field">
+              <label class="login-label" for="login-pass">Password</label>
+              <input type="password" id="login-pass" class="login-input" placeholder="Type password qts" autocomplete="current-password">
+            </div>
+            <button class="btn btn-primary btn-block login-submit" id="btn-login" type="button">Log In</button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <section id="authenticated-section" class="hidden" aria-live="polite">
+      <div class="login-shell">
+        <div class="login-card">
+          <div class="login-brand">
+            <div class="login-badge" aria-hidden="true">QTS</div>
+            <h2 class="login-title">You&apos;re signed in</h2>
+            <p class="login-subtitle">Extension authentication is ready.</p>
+          </div>
+          <div class="login-signed-in-as">
+            <strong id="authenticated-name"></strong><br>
+            <span id="authenticated-login"></span>
+          </div>
+          <div class="login-field">
+            <button class="btn btn-primary btn-block" id="btn-get-jd-mode" type="button" aria-pressed="false">
+              Start Get JD
+            </button>
+            <p id="get-jd-mode-status" class="login-candidate-hint" role="status" aria-live="polite">
+              Get JD is off. Start it to classify this page and pages opened afterward.
+            </p>
+          </div>
+          <section id="get-jd-active-section" class="hidden">
+            <div class="login-field">
+              <button class="btn btn-ghost btn-block" id="btn-get-jd-back-home" type="button">
+                Back Home
+              </button>
+              <p class="login-candidate-hint">
+                Get JD mode is active. Keep browsing job pages; QTS checks each page and lets you review matching profiles before saving. Click Back Home to stop page checks.
+              </p>
+            </div>
+            <div id="get-jd-active-content">
+              <div id="get-jd-alert" class="get-jd-alert hidden" role="status" aria-live="polite"></div>
+              <section id="get-jd-review" class="get-jd-review hidden" aria-label="Review suggested candidate profiles">
+                <strong>Choose profiles for this Job List entry</strong>
+                <p class="login-candidate-hint">Gemini suggestions are checked. You can change the selection before saving.</p>
+                <div id="get-jd-profile-list" class="get-jd-profile-list"></div>
+                <div class="get-jd-review-actions">
+                  <button class="btn btn-primary" id="btn-get-jd-save" type="button">Save</button>
+                  <button class="btn btn-ghost" id="btn-get-jd-cancel" type="button">Cancel</button>
+                </div>
+              </section>
+              <div class="login-field">
+                <label class="login-label" for="get-jd-result">Latest Get JD result</label>
+                <pre id="get-jd-result" style="max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px;"></pre>
+              </div>
+            </div>
+          </section>
+          <button class="btn btn-ghost btn-block" id="btn-extension-logout" type="button">Log out</button>
+        </div>
+      </div>
+    </section>
+
+    <div id="action-section" class="action-section hidden" aria-live="polite">
+      <div class="action-shell">
+        <div class="action-card">
+          <h2 class="action-title">Job Application</h2>
+          <p class="action-subtitle">Select an action for the current job page.</p>
+          <div id="action-alert" aria-live="polite"></div>
+          <div class="action-buttons">
+            <button class="btn btn-primary" id="btn-get-jd" type="button" aria-pressed="false">Get JD</button>
+            <button class="btn btn-ghost btn-text-highlights hidden" type="button" aria-controls="page-highlights" aria-expanded="false">Text Highlight</button>
+            <button class="btn btn-primary" id="btn-custom-apply" type="button" aria-pressed="false">Custom Apply</button>
+            <button class="btn btn-ghost" id="btn-action-logout" type="button">Logout</button>
+          </div>
+          <p class="application-disabled-note hidden" id="application-disabled-note">
+            Apply pauses for unresolved answers, CAPTCHA, one-time codes, consent, or signature fields that need a person.
+          </p>
+          <section class="site-discovery" id="site-discovery" aria-labelledby="site-discovery-title">
+            <h3 id="site-discovery-title">Scanner</h3>
+            <p>Apply uses the selected Account’s profile and GPT for supported fields, advances through unique recognized Next controls, and submits through a unique recognized submit control after you start Apply. CAPTCHA, one-time codes, consent, signatures, uncertain fields, and unresolved answers pause for a person. Scanner remains available only to Managers assigned Scanner access.</p>
+            <div class="site-discovery-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-discover-site-step" type="button">Scan current step</button>
+              <button class="btn btn-primary btn-sm" id="btn-apply" type="button">Apply</button>
+              <button class="btn btn-ghost btn-sm hidden" id="btn-connect-account-mailbox" type="button">Connect Account Gmail</button>
+            </div>
+            <p class="site-discovery-status" id="site-discovery-status" role="status" aria-live="polite">Scanner has not scanned this step yet.</p>
+            <p class="site-discovery-status hidden" id="account-mailbox-status" role="status" aria-live="polite"></p>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <section id="page-highlights" class="page-highlights hidden" aria-labelledby="page-highlights-title">
+      <div class="page-highlights-header">
+        <h2 id="page-highlights-title">Text highlights on all websites</h2>
+        <button class="btn btn-ghost btn-sm" id="btn-close-page-highlights" type="button">Back</button>
+      </div>
+      <p class="page-highlights-hint">Rules are shared from the database and automatically highlighted across supported HTTP and HTTPS websites. Select a saved phrase below to edit it in the shared editor. Only Managers assigned by Super can change them.</p>
+      <form id="page-highlight-form" class="page-highlight-form">
+        <label class="page-highlight-field page-highlight-term">
+          <span>Text or characters</span>
+          <input id="page-highlight-text" type="text" maxlength="500" required>
+        </label>
+        <div id="page-highlight-text-color-picker"></div>
+        <div id="page-highlight-background-color-picker"></div>
+        <div id="page-highlight-form-preview"></div>
+        <div class="page-highlight-form-actions">
+          <button class="btn btn-primary btn-sm" id="page-highlight-submit" type="submit">Add rule</button>
+          <button class="btn btn-ghost btn-sm hidden" id="page-highlight-cancel" type="button">New rule</button>
+          <button class="btn btn-ghost btn-sm hidden" id="page-highlight-delete" type="button">Delete rule</button>
+        </div>
+      </form>
+      <p id="page-highlights-status" class="page-highlights-status" role="status" aria-live="polite"></p>
+      <ul id="page-highlight-list" class="page-highlight-list"></ul>
+    </section>
+
+    <dialog id="get-jd-confirmation" aria-labelledby="get-jd-confirmation-title">
+      <h2 class="get-jd-confirmation-title" id="get-jd-confirmation-title">Get job details?</h2>
+      <p class="get-jd-confirmation-message">
+        Read the current page to find the job URL, title, company, and description?
+      </p>
+      <form method="dialog" class="get-jd-confirmation-actions">
+        <button class="btn btn-ghost" type="submit" value="no">No</button>
+        <button class="btn btn-primary" type="submit" value="yes">Yes</button>
+      </form>
+    </dialog>
+
+    <dialog id="scanner-document-review" aria-labelledby="scanner-document-review-title" aria-describedby="scanner-document-review-description">
+      <h2 id="scanner-document-review-title">Review generated document</h2>
+      <p id="scanner-document-review-description"></p>
+      <iframe id="scanner-document-preview" title="Generated PDF preview"></iframe>
+      <form method="dialog" class="scanner-document-review-actions">
+        <button class="btn btn-ghost" type="submit" value="reject">Do not upload</button>
+        <button class="btn btn-primary" type="submit" value="approve">Approve upload</button>
+      </form>
+    </dialog>
+
+    <dialog id="scanner-answer-review" aria-labelledby="scanner-answer-review-title" aria-describedby="scanner-answer-review-description">
+      <h2 id="scanner-answer-review-title">Review application answer</h2>
+      <p id="scanner-answer-review-description"></p>
+      <label id="scanner-answer-review-label" for="scanner-answer-review-value">Edit the answer if needed, then approve it to fill this field.</label>
+      <textarea id="scanner-answer-review-value" rows="7"></textarea>
+      <select id="scanner-answer-review-options" hidden></select>
+      <form method="dialog" class="scanner-document-review-actions">
+        <button class="btn btn-ghost" type="submit" value="skip">Skip this field</button>
+        <button class="btn btn-primary" type="submit" value="approve">Approve selection</button>
+      </form>
+    </dialog>
+
+    <!-- Job Form -->
+    <div id="job-section" class="hidden">
+      <div class="job-mode-actions">
+        <span class="job-mode-indicator">Get JD mode</span>
+        <div class="job-mode-feature-actions">
+          <button class="btn btn-ghost btn-sm btn-text-highlights hidden" type="button" aria-controls="page-highlights" aria-expanded="false">Text Highlight</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-change-mode">Change mode</button>
+        </div>
+      </div>
+      <div id="main-alert"></div>
+
+      <div id="auto-apply-bar" class="auto-apply-bar hidden" aria-live="polite">
+        <span class="auto-apply-status" id="auto-apply-status">Auto-apply: off</span>
+        <button type="button" class="btn btn-primary btn-sm" id="btn-toggle-auto-apply">Start on job pages</button>
+      </div>
+
+      <div id="application-status" class="application-status hidden" aria-live="polite">
+        <div class="application-status-head">
+          <span class="application-status-title">Application session</span>
+          <button type="button" class="btn btn-ghost btn-xs" id="btn-refresh-application">↻ Check</button>
+        </div>
+        <div class="application-status-meta">
+          <span class="application-status-label">Session ID</span>
+          <button type="button" class="application-session-id" id="application-session-id" title="Click to copy session number">—</button>
+        </div>
+        <div class="application-status-meta">
+          <span class="application-status-label">GPT task</span>
+          <button type="button" class="application-task-id" id="application-task-id" title="Click to copy PROCESS_TASK message">—</button>
+        </div>
+        <div class="application-gpt-steps hidden" id="application-gpt-steps" aria-label="Custom GPT action sync">
+          <div class="application-gpt-steps-title">Custom GPT Actions</div>
+          <ol class="application-gpt-steps-list" id="application-gpt-steps-list"></ol>
+        </div>
+        <div class="application-status-grid" id="application-status-grid"></div>
+        <div class="application-pending-wrap hidden" id="application-pending-wrap">
+          <div class="application-pending-title">AI questions sent to server</div>
+          <ul class="application-pending-list" id="application-pending-list"></ul>
+        </div>
+        <p class="application-status-hint" id="application-status-hint"></p>
+        <p class="application-gpt-pipeline hidden" id="application-gpt-pipeline"></p>
+        <button type="button" class="btn btn-primary application-gpt-btn hidden" id="btn-open-custom-gpt">
+          Send PROCESS_TASK
+        </button>
+        <button type="button" class="btn btn-ghost application-gpt-btn hidden" id="btn-apply-gpt-package">
+          Apply answers (extension)
+        </button>
+      </div>
+
+      <div id="application-preview" class="application-preview hidden" aria-hidden="true">
+        <div class="application-preview-panel" role="dialog" aria-labelledby="application-preview-title">
+          <div class="application-preview-head">
+            <span class="application-preview-title" id="application-preview-title">Review application fields</span>
+            <span class="application-preview-flow" id="application-preview-flow"></span>
+          </div>
+          <p class="application-preview-note" id="application-preview-note">
+            Review discovered fields, then click Confirm. Profile fields fill on the job page; Custom GPT runs next for AI questions and document uploads. You submit manually on the job site.
+          </p>
+          <div class="application-preview-stats" id="application-preview-stats"></div>
+          <ul class="application-preview-warnings hidden" id="application-preview-warnings"></ul>
+          <div class="application-preview-table-wrap">
+            <table class="application-preview-table" id="application-preview-table">
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Type</th>
+                  <th>Source</th>
+                  <th>Proposed value</th>
+                </tr>
+              </thead>
+              <tbody id="application-preview-body"></tbody>
+            </table>
+          </div>
+          <div class="application-preview-actions">
+            <button type="button" class="btn btn-primary" id="btn-preview-confirm">Confirm &amp; fill form</button>
+            <button type="button" class="btn btn-ghost" id="btn-preview-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="learning-review-panel" class="learning-review-panel hidden" aria-live="polite">
+        <div class="learning-review-head">
+          <span class="learning-review-title">Learned answer review</span>
+        </div>
+        <div id="learning-review-status" class="learning-review-status" role="status" aria-live="polite"></div>
+        <ul id="learning-review-list" class="learning-review-list"></ul>
+      </div>
+
+      <!-- DEV ONLY: temporary field-capture inspector — remove before production GPT handoff -->
+      <div id="dev-capture-debug" class="dev-capture-debug hidden" aria-label="Development capture debug">
+        <div class="dev-capture-head">
+          <span class="dev-capture-title">DEV · captured fields (temporary)</span>
+          <div class="dev-capture-actions">
+            <button type="button" class="btn btn-ghost btn-xs" id="btn-copy-dev-summary">Copy summary</button>
+            <button type="button" class="btn btn-ghost btn-xs" id="btn-copy-dev-raw">Copy JSON</button>
+          </div>
+        </div>
+        <label class="dev-capture-label" for="dev-capture-summary">Readable check — what was caught &amp; classified</label>
+        <textarea id="dev-capture-summary" class="dev-capture-textarea" readonly spellcheck="false" rows="8"></textarea>
+        <label class="dev-capture-label" for="dev-capture-raw">Raw JSON — scan + classify + server state</label>
+        <textarea id="dev-capture-raw" class="dev-capture-textarea dev-capture-textarea-raw" readonly spellcheck="false" rows="6"></textarea>
+      </div>
+
+      <div class="job-fields-row two-col">
+        <div class="field-group">
+          <div class="field-label">Job Title <span class="required">*</span></div>
+          <input type="text" id="f-title" placeholder="Senior Node.js Engineer">
+          <div class="field-error" id="err-title">Job title is required.</div>
+        </div>
+
+        <div class="field-group">
+          <div class="field-label">Company <span class="required">*</span></div>
+          <input type="text" id="f-company" placeholder="Example Company">
+          <div class="field-error" id="err-company">Company name is required.</div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-label">URL <span class="required">*</span></div>
+        <input type="url" id="f-url" placeholder="https://example.com/jobs/123">
+        <div class="field-error" id="err-url">URL is required.</div>
+      </div>
+
+      <section id="job-account-assignment" class="job-account-assignment hidden" aria-labelledby="job-account-assignment-title">
+        <div id="job-account-groups" aria-live="polite">
+          <p class="job-account-assignment-status">Loading Accounts…</p>
+        </div>
+        <p id="job-account-selection-status" class="job-account-assignment-status">No Accounts selected.</p>
+      </section>
+
+      <div class="divider"></div>
+
+      <div class="cand-header">
+        <div class="cand-header-actions">
+               </div>
+      </div>
+      <div class="cand-list" id="cand-list"></div>
+      <div id="cand-empty" class="hidden text-muted cand-empty">No active candidates for this Account team. Ask your Manager to add candidates in QTS_Startup.</div>
+
+      <div class="field-group field-group-desc">
+        <div class="field-label">Description <span class="field-optional">(optional)</span></div>
+        <textarea id="f-desc" class="desc-textbox" placeholder="Full job description…" spellcheck="true"></textarea>
+        <div class="field-error" id="err-desc">Could not save the description.</div>
+      </div>
+      <button class="btn btn-ghost hidden" id="btn-scanner-output-folder" type="button">Choose another files folder (optional)</button>
+      <p class="site-discovery-status hidden" id="scanner-output-folder-status" role="status" aria-live="polite"></p>
+      <p class="site-discovery-status hidden" id="scanner-save-status" role="status" aria-live="polite"></p>
+    </div>
+    </div>
+  </div>
+
+  <div class="actions-bar" id="action-bar">
+    <button class="btn btn-ghost" id="btn-refresh" type="button">↻ Refresh</button>
+    <button class="btn btn-primary" id="btn-save" type="button">Save Job</button>
+    <button class="btn btn-primary hidden" id="btn-save-and-scan" type="button">Save Job &amp; Scan</button>
+  </div>
+
+  <div id="qts-toast-host" class="qts-toast-host" aria-live="polite" aria-atomic="true"></div>
+
+  <div id="loading-overlay" class="loading-overlay" aria-live="polite" aria-busy="false">
+    <div class="loading-panel">
+      <div class="loading-spinner" role="status" aria-label="Loading">
+        <span class="loading-bar"></span>
+        <span class="loading-bar"></span>
+        <span class="loading-bar"></span>
+        <span class="loading-bar"></span>
+        <span class="loading-bar"></span>
+        <span class="loading-bar"></span>
+        <span class="loading-bar"></span>
+        <span class="loading-bar"></span>
+      </div>
+      <p class="loading-text" id="loading-text">Loading…</p>
+    </div>
+  </div>
+
+  <script src="../shared/application-flow.js"></script>
+  <script src="../shared/application-preview-render.js"></script>
+  <script src="../shared/page-url.js"></script>
+  <script src="../shared/text-highlighting.js"></script>
+  <script src="../shared/job-detect.js"></script>
+  <script src="../shared/api-prefetch.js"></script>
+  <script src="../shared/candidate-colors.js"></script>
+  <script src="../shared/field-classifier.js"></script>
+  <script src="../shared/candidate-matcher.js"></script>
+  <script src="../shared/fill-policy.js"></script>
+  <script src="../shared/scanner-capture.js"></script>
+  <script src="../shared/scanner-chatgpt.js"></script>
+  <script src="../shared/custom-gpt.js"></script>
+  <script src="../shared/account-auth-storage.js"></script>
+  <script src="../shared/apply-session-store.js"></script>
+  <script src="../shared/scanner-document-store.js"></script>
+  <script src="../shared/scanner-job-context.js"></script>
+  <script src="../shared/scanner-output-paths.js"></script>
+  <script src="api-client.js"></script>
+  <script src="learning-review-panel.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

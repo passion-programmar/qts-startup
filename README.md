@@ -66,8 +66,13 @@ verification reloads the Manager from Neon, so blocked accounts and sessions
 invalidated by an auth-version change are rejected. The extension stores the
 token in extension local storage and clears its local copy on logout; the
 server-issued token expires after 24 hours. Use HTTPS for
-deployed environments; the extension currently defaults to
-`http://localhost:3000` for local development.
+deployed environments. The extension source is in `extension/` and defaults
+to `https://qts-job-system.vercel.app` for sign-in and API requests.
+
+To load the unpacked extension in Chrome, open `chrome://extensions`, enable
+Developer mode, select **Load unpacked**, and choose the repository's
+`extension/` folder. After pulling extension changes, use **Reload** on the
+extension's card.
 
 The authenticated extension popup has a persistent **Get JD** mode. While
 enabled, it extracts job-page details from web pages opened in the browser and

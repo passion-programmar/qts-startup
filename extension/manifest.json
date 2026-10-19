@@ -1,0 +1,74 @@
+{
+  "manifest_version": 3,
+  "name": "QTS_Startup",
+  "version": "1.13.50",
+  "description": "Capture job postings with QTS_Startup.",
+  "permissions": ["activeTab", "storage", "tabs", "scripting", "windows", "webNavigation", "downloads"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "http://localhost:1028/*",
+    "http://127.0.0.1:1028/*",
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "https://qts-job-system.vercel.app/*",
+    "https://*.vercel.app/*",
+    "https://www.linkedin.com/*",
+    "https://*.linkedin.com/*",
+    "https://*.indeed.com/*",
+    "https://www.glassdoor.com/*",
+    "https://*.glassdoor.com/*",
+    "https://*.greenhouse.io/*",
+    "https://jobs.lever.co/*",
+    "https://*.workable.com/*",
+    "https://*.smartrecruiters.com/*",
+    "https://jobs.ashbyhq.com/*",
+    "https://*.ashbyhq.com/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "shared/chatgpt-composer-handoff.js",
+        "content/chatgpt-handoff.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "shared/text-highlighting.js",
+        "content/text-highlighter.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["popup/popup.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_title": "QTS_Startup",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "32": "assets/icon32.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icon16.png",
+    "32": "assets/icon32.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  }
+}
