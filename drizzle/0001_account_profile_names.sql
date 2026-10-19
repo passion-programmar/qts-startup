@@ -1,0 +1,2 @@
+ALTER TABLE "users" ALTER COLUMN "display_name" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_display_name_matches_role_check" CHECK (("users"."role" = 'account' and "users"."display_name" is null) or ("users"."role" <> 'account' and "users"."display_name" is not null));
