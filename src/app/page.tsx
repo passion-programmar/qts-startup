@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { sql } from "drizzle-orm";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { PaginatedTable } from "@/app/components/paginated-table";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -172,7 +173,7 @@ export default async function Home() {
 
   return (
     <WorkspaceShell activeHref="/" user={currentUser}>
-      <main className="mx-auto max-w-[1440px] px-4 py-7 sm:px-7 sm:py-9">
+      <main className="mx-auto max-w-[1440px] py-1">
           <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
@@ -207,7 +208,7 @@ export default async function Home() {
             })}
           </section>
 
-          <section className="mt-7 grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="mt-7 grid grid-cols-1 items-start gap-5">
             <article className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-6">
                 <div>
@@ -219,68 +220,44 @@ export default async function Home() {
                   {workspaceUsers.length} total
                 </span>
               </div>
-              {workspaceUsers.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-left sm:min-w-[560px]">
-                    <thead>
-                      <tr className="bg-slate-50/70 text-[10px] font-medium uppercase tracking-[0.11em] text-slate-400">
-                        <th className="px-4 py-3 sm:px-6">Name</th>
-                        <th className="px-3 py-3">Role</th>
-                        <th className="hidden px-4 py-3 sm:table-cell">
-                          Category / added
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {workspaceUsers.slice(0, 12).map((user) => {
-                        const name = displayUserName(user);
-                        return (
-                          <tr
-                            className="border-t border-slate-100"
-                            key={user.id}
-                          >
-                            <td className="px-4 py-3.5 sm:px-6">
-                              <div className="flex items-center gap-3">
-                                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-[10px] font-semibold text-indigo-700">
-                                  {initials(name) || "?"}
-                                </div>
-                                <div className="min-w-0">
-                                  <p className="truncate text-xs font-semibold text-slate-800">
-                                    {name}
-                                    {user.blocked_at && (
-                                      <span className="ml-2 text-[9px] font-medium text-rose-600">
-                                        Blocked
-                                      </span>
-                                    )}
-                                  </p>
-                                  <p className="mt-0.5 truncate text-[10px] text-slate-400">
-                                    {user.role === "account"
-                                      ? user.candidate_email || "No candidate email"
-                                      : `@${user.login_name}`}
-                                  </p>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-3 py-3.5 text-[10px] text-slate-500">
-                              {roleLabels[user.role] ?? user.role}
-                            </td>
-                            <td className="hidden px-4 py-3.5 text-[10px] text-slate-500 sm:table-cell">
-                              {user.category_name || formatDate(user.created_at)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="px-6 py-12 text-center">
-                  <Users className="mx-auto size-8 text-slate-300" />
-                  <p className="mt-3 text-sm font-medium text-slate-700">
-                    No team members yet
-                  </p>
-                </div>
-              )}
+              <PaginatedTable
+                columns={[
+                  { label: "Name", className: "min-w-52" },
+                  { label: "Role", className: "min-w-28" },
+                  { label: "Category / added", className: "min-w-36" },
+                ]}
+                emptyMessage="No team members"
+                rows={workspaceUsers.map((user) => {
+                  const name = displayUserName(user);
+                  return {
+                    id: user.id,
+                    cells: [
+                      <div className="flex items-center gap-3" key="name">
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-semibold text-indigo-700">
+                          {initials(name) || "?"}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate font-semibold">
+                            {name}
+                            {user.blocked_at && (
+                              <span className="ml-2 text-xs font-medium text-rose-600">
+                                Blocked
+                              </span>
+                            )}
+                          </span>
+                          <span className="mt-1 block truncate text-xs text-slate-500">
+                            {user.role === "account"
+                              ? user.candidate_email || "—"
+                              : `@${user.login_name}`}
+                          </span>
+                        </span>
+                      </div>,
+                      roleLabels[user.role] ?? user.role,
+                      user.category_name || formatDate(user.created_at),
+                    ],
+                  };
+                })}
+              />
               {canViewBlocked && (
                 <div className="border-t border-slate-100 px-6 py-3 text-[11px] text-slate-500">
                   {blockedCount} blocked
@@ -296,32 +273,26 @@ export default async function Home() {
                       Recent sign-ins
                     </h2>
                   </div>
-                  {recentLogins.length > 0 ? (
-                    <ul className="divide-y divide-slate-100">
-                      {recentLogins.map((login, index) => (
-                        <li
-                          className="flex items-center justify-between gap-3 px-5 py-3"
-                          key={`${login.user_id}-${asDate(login.logged_in_at).getTime()}-${index}`}
+                  <PaginatedTable
+                    columns={[
+                      { label: "Name", className: "min-w-48" },
+                      { label: "Login", className: "min-w-40" },
+                      { label: "Signed in", className: "min-w-44" },
+                    ]}
+                    emptyMessage="No sign-ins"
+                    rows={recentLogins.map((login, index) => ({
+                      id: `${login.user_id}-${asDate(login.logged_in_at).getTime()}-${index}`,
+                      cells: [
+                        login.display_name ?? "Staff user",
+                        `@${login.login_name ?? "unknown"}`,
+                        <time
+                          key="signed-in"
                         >
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-medium text-slate-700">
-                              {login.display_name}
-                            </p>
-                            <p className="mt-0.5 truncate text-[10px] text-slate-400">
-                              @{login.login_name}
-                            </p>
-                          </div>
-                          <time className="shrink-0 text-[10px] text-slate-500">
-                            {formatDateTime(login.logged_in_at)}
-                          </time>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="px-5 py-8 text-center text-xs text-slate-400">
-                      No sign-ins
-                    </div>
-                  )}
+                          {formatDateTime(login.logged_in_at)}
+                        </time>,
+                      ],
+                    }))}
+                  />
                 </article>
               ) : null}
             </div>

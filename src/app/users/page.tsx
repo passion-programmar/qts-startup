@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import {
-  FolderTree,
   ShieldCheck,
   Users,
 } from "lucide-react";
@@ -16,6 +15,7 @@ import {
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { PaginatedTable } from "@/app/components/paginated-table";
 
 export const instant = false;
 
@@ -53,33 +53,12 @@ type UserRow = {
   category_name: string | null;
 };
 
-type UserNode = UserRow & { children: UserNode[] };
-
 function userName(user: UserRow): string {
   if (user.role !== "account") return user.display_name ?? "Staff user";
   return (
     [user.first_name, user.last_name].filter(Boolean).join(" ") ||
     "Incomplete candidate profile"
   );
-}
-
-function buildTree(rows: UserRow[], rootId: string): UserNode | null {
-  const nodes = new Map<string, UserNode>();
-  for (const row of rows) nodes.set(row.id, { ...row, children: [] });
-
-  for (const node of nodes.values()) {
-    if (node.parent_user_id) {
-      nodes.get(node.parent_user_id)?.children.push(node);
-    }
-  }
-
-  for (const node of nodes.values()) {
-    node.children.sort((left, right) =>
-      userName(left).localeCompare(userName(right)),
-    );
-  }
-
-  return nodes.get(rootId) ?? null;
 }
 
 export default async function UsersPage() {
@@ -127,10 +106,28 @@ export default async function UsersPage() {
     from visible_users
     left join profiles on profiles.user_id = visible_users.id
     left join categories on categories.id = profiles.category_id
+    order by
+      profiles.first_name nulls last,
+      profiles.last_name nulls last,
+      visible_users.display_name nulls last,
+      visible_users.login_name nulls last,
+      visible_users.id
   `);
+  const usersById = new Map(result.rows.map((user) => [user.id, user]));
+  const directReportsByUserId = new Map<string, UserRow[]>();
+  const peersByParentAndRole = new Map<string, UserRow[]>();
+  for (const user of result.rows) {
+    if (user.parent_user_id) {
+      const reports = directReportsByUserId.get(user.parent_user_id) ?? [];
+      reports.push(user);
+      directReportsByUserId.set(user.parent_user_id, reports);
+    }
 
-  const tree = buildTree(result.rows, actor.id);
-  if (!tree) throw new Error("The signed-in user is missing from the workspace.");
+    const peerKey = `${user.parent_user_id ?? "root"}:${user.role}`;
+    const peers = peersByParentAndRole.get(peerKey) ?? [];
+    peers.push(user);
+    peersByParentAndRole.set(peerKey, peers);
+  }
 
   const createRole =
     actor.role === "super_admin"
@@ -150,7 +147,7 @@ export default async function UsersPage() {
 
   return (
     <WorkspaceShell activeHref="/users" user={actor}>
-    <main className="px-4 py-7 sm:px-7 sm:py-9">
+    <main className="py-1">
       <div className="mx-auto max-w-7xl">
         <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -187,235 +184,171 @@ export default async function UsersPage() {
           })}
         </section>
 
-        <div
-          className={`mt-5 grid items-start gap-5 ${
-            createRole === "account"
-              ? "lg:grid-cols-1"
-              : "lg:grid-cols-[minmax(0,1fr)_360px]"
-          }`}
-        >
-          <section
-            className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 ${
-              createRole === "account" ? "order-2" : ""
-            }`}
-          >
-            <div className="mb-5 flex items-center gap-3 border-b border-slate-100 pb-4">
-              <FolderTree className="size-4 text-indigo-600" />
-              <div>
-                <h2 className="text-base font-semibold text-slate-800">
-                  {actor.role === "manager"
-                    ? "Candidate Accounts"
-                    : "Organization tree"}
-                </h2>
-              </div>
+        <div className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="min-w-0">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-base font-semibold text-slate-800">
+                {actor.role === "manager" ? "Candidate accounts" : "People"}
+              </h2>
             </div>
             {actor.role === "manager" ? (
-              <div className="overflow-x-auto">
-                {result.rows.filter((user) => user.role === "account").length ? (
-                  <table className="w-full min-w-[980px] text-left text-xs">
-                    <thead className="border-b border-slate-100 text-[10px] uppercase tracking-wide text-slate-400">
-                      <tr>
-                        <th className="px-3 py-3 font-semibold">Candidate</th>
-                        <th className="px-3 py-3 font-semibold">Category</th>
-                        <th className="px-3 py-3 font-semibold">Contact</th>
-                        <th className="px-3 py-3 font-semibold">Location</th>
-                        <th className="px-3 py-3 font-semibold">Headline</th>
-                        <th className="px-3 py-3 font-semibold">LinkedIn</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {result.rows
-                        .filter((user) => user.role === "account")
-                        .map((candidate) => (
-                          <tr key={candidate.id}>
-                            <td className="px-3 py-4 align-top">
-                              <p className="font-semibold text-slate-800">
-                                {userName(candidate)}
-                              </p>
-                              <EditCandidateProfileForm
-                                candidate={{
-                                  userId: candidate.id,
-                                  firstName: candidate.first_name,
-                                  lastName: candidate.last_name,
-                                  candidateEmail: candidate.candidate_email,
-                                  phone: candidate.phone,
-                                  headline: candidate.headline,
-                                  linkedinUrl: candidate.linkedin_url,
-                                  country: candidate.country,
-                                  city: candidate.city,
-                                  province: candidate.province,
-                                  addressLine1: candidate.address_line_1,
-                                  postalCode: candidate.postal_code,
-                                  categoryId: candidate.category_id,
-                                }}
-                                categories={categoryOptions}
-                              />
-                            </td>
-                            <td className="px-3 py-4 align-top text-slate-600">
-                              {candidate.category_name ?? "Uncategorized"}
-                            </td>
-                            <td className="px-3 py-4 align-top text-slate-600">
-                              <p>{candidate.candidate_email ?? "—"}</p>
-                              <p className="mt-1 text-slate-400">
-                                {candidate.phone ?? "—"}
-                              </p>
-                            </td>
-                            <td className="px-3 py-4 align-top text-slate-600">
-                              {[
-                                candidate.address_line_1,
-                                candidate.city,
-                                candidate.province,
-                                candidate.country,
-                                candidate.postal_code,
-                              ]
-                                .filter(Boolean)
-                                .join(", ") || "—"}
-                            </td>
-                            <td className="max-w-56 px-3 py-4 align-top text-slate-600">
-                              {candidate.headline ?? "—"}
-                            </td>
-                            <td className="px-3 py-4 align-top">
-                              {candidate.linkedin_url ? (
-                                <a
-                                  className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-700"
-                                  href={candidate.linkedin_url}
-                                  rel="noreferrer"
-                                  target="_blank"
-                                >
-                                  Open profile
-                                </a>
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <p className="rounded-lg bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    No candidate accounts
-                  </p>
-                )}
-              </div>
+              <PaginatedTable
+                columns={[
+                  { label: "Candidate", className: "min-w-40" },
+                  { label: "Category", className: "min-w-36" },
+                  { label: "Contact", className: "min-w-48" },
+                  { label: "Location", className: "min-w-52" },
+                  { label: "Headline", className: "min-w-56" },
+                  { label: "LinkedIn", className: "min-w-24" },
+                ]}
+                emptyMessage="No candidate accounts"
+                rows={result.rows
+                  .filter((candidate) => candidate.role === "account")
+                  .map((candidate) => ({
+                    id: candidate.id,
+                    cells: [
+                      <div key="candidate">
+                        <div className="font-semibold">{userName(candidate)}</div>
+                        <EditCandidateProfileForm
+                          candidate={{
+                            userId: candidate.id,
+                            firstName: candidate.first_name,
+                            lastName: candidate.last_name,
+                            candidateEmail: candidate.candidate_email,
+                            phone: candidate.phone,
+                            headline: candidate.headline,
+                            linkedinUrl: candidate.linkedin_url,
+                            country: candidate.country,
+                            city: candidate.city,
+                            province: candidate.province,
+                            addressLine1: candidate.address_line_1,
+                            postalCode: candidate.postal_code,
+                            categoryId: candidate.category_id,
+                          }}
+                          categories={categoryOptions}
+                        />
+                      </div>,
+                      candidate.category_name ?? "Uncategorized",
+                      <div key="contact">
+                        <div>{candidate.candidate_email ?? "—"}</div>
+                        <div className="mt-1 text-slate-500">
+                          {candidate.phone ?? "—"}
+                        </div>
+                      </div>,
+                      [
+                        candidate.address_line_1,
+                        candidate.city,
+                        candidate.province,
+                        candidate.country,
+                        candidate.postal_code,
+                      ]
+                        .filter(Boolean)
+                        .join(", ") || "—",
+                      candidate.headline ?? "—",
+                      candidate.linkedin_url ? (
+                        <a
+                          className="text-indigo-600 hover:underline"
+                          href={candidate.linkedin_url}
+                          key="linkedin"
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Open profile
+                        </a>
+                      ) : (
+                        "—"
+                      ),
+                    ],
+                  }))}
+              />
             ) : (
-              <ul className="space-y-2">
-                <UserTreeNode
-                  canEditCredentials={actor.role === "super_admin"}
-                  allUsers={result.rows}
-                  user={tree}
-                />
-              </ul>
+              <PaginatedTable
+                columns={[
+                  { label: "Name", className: "min-w-44" },
+                  { label: "Reports to", className: "min-w-36" },
+                  { label: "Role", className: "min-w-28" },
+                  { label: "Direct reports", className: "min-w-28" },
+                  { label: "Status", className: "min-w-24" },
+                  { label: "Actions", className: "min-w-64" },
+                ]}
+                emptyMessage="No people found"
+                rows={result.rows.map((person) => {
+                  const directReports =
+                    directReportsByUserId.get(person.id) ?? [];
+                  const parent = person.parent_user_id
+                    ? usersById.get(person.parent_user_id)
+                    : undefined;
+                  const peerKey = `${person.parent_user_id ?? "root"}:${person.role}`;
+                  const replacementUsers = (
+                    peersByParentAndRole.get(peerKey) ?? []
+                  )
+                    .filter(
+                      (candidate) =>
+                        candidate.id !== person.id &&
+                        candidate.role === person.role &&
+                        candidate.parent_user_id === person.parent_user_id &&
+                        !candidate.blocked_at,
+                    )
+                    .map((candidate) => ({
+                      id: candidate.id,
+                      name: `${userName(candidate)} (@${candidate.login_name ?? "no username"})`,
+                    }));
+                  return {
+                    id: person.id,
+                    cells: [
+                      <div key="person">
+                        <div className="font-semibold">{userName(person)}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {person.role === "account"
+                            ? person.candidate_email || "—"
+                            : `@${person.login_name}`}
+                        </div>
+                      </div>,
+                      parent ? userName(parent) : "—",
+                      roleLabels[person.role] ?? person.role,
+                      directReports.length,
+                      person.blocked_at ? (
+                        <span className="rounded bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700">
+                          Blocked
+                        </span>
+                      ) : (
+                        <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                          Active
+                        </span>
+                      ),
+                      actor.role === "super_admin" &&
+                      person.role !== "account" &&
+                      person.login_name ? (
+                        <div className="flex flex-wrap items-center gap-2" key="actions">
+                          <CredentialResetForm
+                            loginName={person.login_name}
+                            userId={person.id}
+                          />
+                          {(person.role === "admin" ||
+                            person.role === "manager") && (
+                            <DeleteStaffUserForm
+                              reportsCount={directReports.length}
+                              replacementUsers={replacementUsers}
+                              userId={person.id}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        "—"
+                      ),
+                    ],
+                  };
+                })}
+              />
             )}
           </section>
 
-          <div className={`grid gap-5 ${createRole === "account" ? "order-1" : ""}`}>
+          <div>
             <CreateUserForm categories={categoryOptions} role={createRole} />
           </div>
         </div>
       </div>
     </main>
     </WorkspaceShell>
-  );
-}
-
-function UserTreeNode({
-  user,
-  canEditCredentials,
-  allUsers,
-}: {
-  user: UserNode;
-  canEditCredentials: boolean;
-  allUsers: UserRow[];
-}) {
-  const name = userName(user);
-  const blocked = Boolean(user.blocked_at);
-  const replacementUsers = allUsers
-    .filter(
-      (candidate) =>
-        candidate.id !== user.id &&
-        candidate.role === user.role &&
-        candidate.parent_user_id === user.parent_user_id &&
-        !candidate.blocked_at,
-    )
-    .map((candidate) => ({
-      id: candidate.id,
-      name: `${userName(candidate)} (@${candidate.login_name ?? "no username"})`,
-    }));
-
-  return (
-    <li>
-      <div
-        className={`rounded-lg border px-3 py-3 ${
-          blocked
-            ? "border-rose-200 bg-rose-50/50"
-            : "border-slate-100 bg-slate-50/60"
-        }`}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex min-w-0 items-center gap-3">
-            <span
-              className={`flex size-8 shrink-0 items-center justify-center rounded-lg text-[10px] font-semibold ${
-                blocked
-                  ? "bg-rose-100 text-rose-700"
-                  : "bg-indigo-100 text-indigo-700"
-              }`}
-            >
-              {name
-                .split(/\s+/)
-                .filter(Boolean)
-                .slice(0, 2)
-                .map((part) => part[0]?.toUpperCase())
-                .join("") || "?"}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-xs font-semibold text-slate-800">
-                {name}
-                {blocked && (
-                  <span className="ml-2 font-medium text-rose-600">Blocked</span>
-                )}
-              </span>
-              <span className="mt-0.5 block truncate text-[10px] text-slate-400">
-                {user.role === "account"
-                  ? user.candidate_email || "No candidate email"
-                  : `@${user.login_name}`}
-              </span>
-            </span>
-          </div>
-          <span className="rounded-full bg-white px-2 py-1 text-[9px] font-semibold text-slate-500">
-            {roleLabels[user.role] ?? user.role}
-          </span>
-        </div>
-        {canEditCredentials &&
-          user.role !== "account" &&
-          user.login_name && (
-            <div className="ml-11">
-              <CredentialResetForm
-                loginName={user.login_name}
-                userId={user.id}
-              />
-              {(user.role === "admin" || user.role === "manager") && (
-                <DeleteStaffUserForm
-                  reportsCount={user.children.length}
-                  replacementUsers={replacementUsers}
-                  userId={user.id}
-                />
-              )}
-            </div>
-          )}
-      </div>
-      {user.children.length > 0 && (
-        <ul className="ml-4 mt-2 space-y-2 border-l border-slate-200 pl-3 sm:ml-5 sm:pl-4">
-          {user.children.map((child) => (
-            <UserTreeNode
-              canEditCredentials={canEditCredentials}
-              allUsers={allUsers}
-              key={child.id}
-              user={child}
-            />
-          ))}
-        </ul>
-      )}
-    </li>
   );
 }

@@ -1,8 +1,34 @@
 @import "tailwindcss";
 
+@theme {
+  --color-indigo-50: #e7f1ff;
+  --color-indigo-100: #cfe2ff;
+  --color-indigo-200: #9ec5fe;
+  --color-indigo-300: #6ea8fe;
+  --color-indigo-400: #3d8bfd;
+  --color-indigo-500: #0d6efd;
+  --color-indigo-600: #0b5ed7;
+  --color-indigo-700: #0a58ca;
+  --color-indigo-800: #084298;
+  --color-indigo-900: #052c65;
+  --color-slate-50: #f8f9fa;
+  --color-slate-100: #f1f3f5;
+  --color-slate-200: #dee2e6;
+  --color-slate-300: #ced4da;
+  --color-slate-400: #adb5bd;
+  --color-slate-500: #6c757d;
+  --color-slate-600: #495057;
+  --color-slate-700: #343a40;
+  --color-slate-800: #212529;
+  --color-slate-900: #212529;
+  --radius-xl: 0.375rem;
+  --radius-2xl: 0.375rem;
+  --shadow-sm: 0 0.125rem 0.25rem rgb(0 0 0 / 8%);
+}
+
 :root {
   color-scheme: light;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -14,8 +40,8 @@
 
 body {
   margin: 0;
-  background: #f8fafc;
-  color: #0f172a;
+  background: #f8f9fa;
+  color: #212529;
 }
 
 button:disabled,
@@ -24,12 +50,12 @@ input:disabled {
 }
 
 ::selection {
-  background: #e0e7ff;
-  color: #312e81;
+  background: #cfe2ff;
+  color: #084298;
 }
 
 :focus-visible {
-  outline: 3px solid rgb(99 102 241 / 40%);
+  outline: 3px solid rgb(13 110 253 / 40%);
   outline-offset: 2px;
 }
 

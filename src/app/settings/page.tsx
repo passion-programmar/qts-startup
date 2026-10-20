@@ -10,6 +10,7 @@ import {
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { PaginatedTable } from "@/app/components/paginated-table";
 
 export const instant = false;
 
@@ -87,7 +88,7 @@ export default async function SettingsPage() {
 
   return (
     <WorkspaceShell activeHref="/settings" user={currentUser}>
-    <main className="px-4 py-7 text-slate-900 sm:px-7 sm:py-9">
+    <main className="py-1 text-slate-900">
       <div className="mx-auto max-w-6xl">
         <header className="mb-7">
           <div>
@@ -166,27 +167,36 @@ export default async function SettingsPage() {
               Manager prompt assignments
             </h2>
           </div>
-          {managerRows.length > 0 ? (
-            <div className="grid gap-3 lg:grid-cols-2">
-              {managerRows.map((manager) => (
+          <PaginatedTable
+            columns={[
+              { label: "Manager", className: "min-w-48" },
+              { label: "Prompt assignment", className: "min-w-[28rem]" },
+            ]}
+            emptyMessage="No active managers"
+            rows={managerRows.map((manager) => ({
+              id: manager.id,
+              cells: [
+                <div key="manager">
+                  <div className="font-semibold">
+                    {manager.displayName ?? "Manager"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    @{manager.loginName ?? "unknown"}
+                  </div>
+                </div>,
                 <PromptAssignmentForm
                   assignedPromptName={manager.assignedPromptName}
-                  key={manager.id}
+                  key="assignment"
                   managerId={manager.id}
-                  managerName={`${manager.displayName ?? "Manager"} (@${manager.loginName ?? "unknown"})`}
                   prompts={chatGptPrompts.map((prompt) => ({
                     id: prompt.id,
                     name: prompt.name,
                     version: prompt.version,
                   }))}
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="rounded-lg bg-slate-50 px-4 py-5 text-center text-xs text-slate-500">
-              No active Managers are available for assignment.
-            </p>
-          )}
+                />,
+              ],
+            }))}
+          />
         </section>
       </div>
     </main>

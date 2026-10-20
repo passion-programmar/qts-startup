@@ -56,7 +56,7 @@ export default async function ManagerPromptsPage() {
 
   return (
     <WorkspaceShell activeHref="/prompts" user={currentUser}>
-    <main className="px-4 py-7 text-slate-900 sm:px-7 sm:py-9">
+    <main className="py-1 text-slate-900">
       <div className="mx-auto max-w-4xl">
         <header className="mb-7">
           <div>

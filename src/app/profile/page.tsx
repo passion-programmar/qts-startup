@@ -17,7 +17,7 @@ export default async function ProfilePage() {
 
   return (
     <WorkspaceShell activeHref="/profile" user={user}>
-    <main className="px-4 py-7 sm:px-7 sm:py-9">
+    <main className="py-1">
       <div className="mx-auto max-w-3xl">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">

@@ -10,6 +10,7 @@ import {
 } from "@/lib/gemini-usage";
 import { requireUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { PaginatedTable } from "@/app/components/paginated-table";
 
 export const instant = false;
 
@@ -68,7 +69,7 @@ export default async function GeminiUsagePage() {
 
   return (
     <WorkspaceShell activeHref="/settings/gemini-usage" user={currentUser}>
-    <main className="px-4 py-7 text-slate-900 sm:px-7 sm:py-9">
+    <main className="py-1 text-slate-900">
       <div className="mx-auto max-w-5xl">
         <header className="mb-7 flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -91,8 +92,17 @@ export default async function GeminiUsagePage() {
             No Gemini API keys are configured on the server.
           </section>
         ) : (
-          <section aria-label="Gemini key usage" className="grid gap-4 sm:grid-cols-2">
-            {keys.map((_key, index) => {
+          <PaginatedTable
+            columns={[
+              { label: "API key", className: "min-w-40" },
+              { label: "Requests / 60 sec", className: "min-w-44" },
+              { label: "Requests today", className: "min-w-40" },
+              { label: "Input tokens / 60 sec", className: "min-w-48" },
+              { label: "Status", className: "min-w-28" },
+              { label: "Last call", className: "min-w-40" },
+            ]}
+            emptyMessage="No API keys configured"
+            rows={keys.map((_key, index) => {
               const hash = keyHashes[index];
               const usage = usageByKey.get(hash);
               const isBusy = busyKeys.has(hash);
@@ -104,62 +114,52 @@ export default async function GeminiUsagePage() {
                 minuteInputTokens >= geminiApiLimits.inputTokensPerMinute ||
                 dayRequests >= geminiApiLimits.requestsPerDay;
 
-              return (
-                <article
-                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"
-                  key={hash}
-                >
-                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <h2 className="text-sm font-semibold text-slate-800">
-                        Key {index + 1}
-                      </h2>
-                      <p className="mt-1 font-mono text-[11px] text-slate-400">
-                        Fingerprint {hash.slice(0, 10)}
-                      </p>
+              return {
+                id: hash,
+                cells: [
+                  <div key="key">
+                    <div className="font-semibold">Key {index + 1}</div>
+                    <div className="mt-1 font-mono text-xs text-slate-500">
+                      {hash.slice(0, 10)}
                     </div>
-                    <span
-                      className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
-                        isBusy
-                          ? "bg-amber-50 text-amber-700"
-                          : isLimited
-                            ? "bg-rose-50 text-rose-700"
-                            : "bg-emerald-50 text-emerald-700"
-                      }`}
-                    >
-                      {isBusy ? "Busy" : isLimited ? "Limit reached" : "Available"}
-                    </span>
-                  </div>
-
-                  <dl className="grid gap-4 sm:grid-cols-3">
-                    <UsageMetric
-                      label="API requests in the last 60 seconds"
-                      used={minuteRequests}
-                      limit={geminiApiLimits.requestsPerMinute}
-                    />
-                    <UsageMetric
-                      label="API requests today (Pacific)"
-                      used={dayRequests}
-                      limit={geminiApiLimits.requestsPerDay}
-                    />
-                    <UsageMetric
-                      label="Input tokens in the last 60 seconds"
-                      used={minuteInputTokens}
-                      limit={geminiApiLimits.inputTokensPerMinute}
-                    />
-                  </dl>
-                  <p className="mt-4 text-[10px] text-slate-400">
-                    {usage
-                      ? `Last recorded call: ${new Intl.DateTimeFormat("en", {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        }).format(new Date(usage.updatedAt))}`
-                      : "No requests recorded in QTS yet."}
-                  </p>
-                </article>
-              );
+                  </div>,
+                  <UsageMetric
+                    key="minute-requests"
+                    used={minuteRequests}
+                    limit={geminiApiLimits.requestsPerMinute}
+                  />,
+                  <UsageMetric
+                    key="day-requests"
+                    used={dayRequests}
+                    limit={geminiApiLimits.requestsPerDay}
+                  />,
+                  <UsageMetric
+                    key="minute-tokens"
+                    used={minuteInputTokens}
+                    limit={geminiApiLimits.inputTokensPerMinute}
+                  />,
+                  <span
+                    className={`inline-flex rounded px-2 py-1 text-xs font-medium ${
+                      isBusy
+                        ? "bg-amber-50 text-amber-700"
+                        : isLimited
+                          ? "bg-rose-50 text-rose-700"
+                          : "bg-emerald-50 text-emerald-700"
+                    }`}
+                    key="status"
+                  >
+                    {isBusy ? "Busy" : isLimited ? "Limit reached" : "Available"}
+                  </span>,
+                  usage
+                    ? new Intl.DateTimeFormat("en", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }).format(new Date(usage.updatedAt))
+                    : "—",
+                ],
+              };
             })}
-          </section>
+          />
         )}
       </div>
     </main>
@@ -168,25 +168,22 @@ export default async function GeminiUsagePage() {
 }
 
 function UsageMetric({
-  label,
   used,
   limit,
 }: {
-  label: string;
   used: number;
   limit: number;
 }) {
   const remaining = Math.max(0, limit - used);
   const progress = Math.min(100, (used / limit) * 100);
   return (
-    <div className="rounded-lg bg-slate-50 p-3">
-      <dt className="text-[11px] text-slate-500">{label}</dt>
-      <dd className="mt-1 text-lg font-semibold tabular-nums text-slate-800">
+    <div className="min-w-28">
+      <div className="font-semibold tabular-nums text-slate-800">
         {used.toLocaleString()}{" "}
-        <span className="text-xs font-medium text-slate-400">
+        <span className="text-xs font-normal text-slate-500">
           / {limit.toLocaleString()}
         </span>
-      </dd>
+      </div>
       <div
         aria-label={`${used.toLocaleString()} of ${limit.toLocaleString()}`}
         aria-valuemax={limit}
@@ -200,9 +197,7 @@ function UsageMetric({
           style={{ width: `${progress}%` }}
         />
       </div>
-      <p className="mt-1 text-[10px] text-slate-400">
-        {remaining.toLocaleString()} remaining
-      </p>
+      <div className="mt-1 text-[10px] text-slate-500">{remaining.toLocaleString()} left</div>
     </div>
   );
 }

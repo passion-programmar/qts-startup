@@ -147,12 +147,10 @@ export function GlobalPromptForm({
 
 export function PromptAssignmentForm({
   managerId,
-  managerName,
   assignedPromptName,
   prompts,
 }: {
   managerId: string;
-  managerName: string;
   assignedPromptName: string | null;
   prompts: { id: string; name: string; version: number }[];
 }) {
@@ -166,23 +164,16 @@ export function PromptAssignmentForm({
   );
 
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-xs font-semibold text-slate-800">
-            {managerName}
-          </h3>
-          <p className="mt-1 text-[10px] text-slate-500">
-            {assignedPromptName
-              ? `Assigned: ${assignedPromptName}`
-              : "No assigned prompt"}
-          </p>
-        </div>
+    <div className="min-w-64 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-slate-600">
+          {assignedPromptName ?? "No prompt assigned"}
+        </span>
         {assignedPromptName && (
           <form action={unassignAction}>
             <input name="managerId" type="hidden" value={managerId} />
             <button
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-200 px-2.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+              className="inline-flex h-7 items-center gap-1 rounded border border-rose-200 px-2 text-[10px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
               disabled={unassignPending}
               type="submit"
             >
@@ -192,10 +183,10 @@ export function PromptAssignmentForm({
           </form>
         )}
       </div>
-      <form action={assignAction} className="mt-4 flex flex-col gap-2 sm:flex-row">
+      <form action={assignAction} className="flex flex-col gap-2 sm:flex-row">
         <input name="managerId" type="hidden" value={managerId} />
         <select
-          className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+          className="h-9 min-w-0 flex-1 rounded border border-slate-300 bg-white px-2 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
           defaultValue=""
           name="promptChoice"
           required
@@ -203,7 +194,7 @@ export function PromptAssignmentForm({
           <option disabled value="">
             Choose a prompt
           </option>
-          <option value="random">Choose a random active ChatGPT prompt</option>
+          <option value="random">Random active prompt</option>
           {prompts.map((prompt) => (
             <option key={prompt.id} value={prompt.id}>
               {prompt.name} · v{prompt.version}
@@ -211,17 +202,17 @@ export function PromptAssignmentForm({
           ))}
         </select>
         <button
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
           disabled={assignPending || prompts.length === 0}
           type="submit"
         >
           <Shuffle className="size-3.5" />
-          {assignPending ? "Assigning..." : "Assign prompt"}
+          {assignPending ? "Assigning..." : "Assign"}
         </button>
       </form>
       <ActionFeedback state={assignState} />
       <ActionFeedback state={unassignState} />
-    </article>
+    </div>
   );
 }
 
