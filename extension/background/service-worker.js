@@ -693,7 +693,13 @@ async function processGetJdPage(tabId, url, documentId = '') {
         ? 'This is not Job Page'
         : 'This is a new job!',
       updatedAt: Date.now(),
-      classification: result.classification,
+      classification: {
+        ...result.classification,
+        job: {
+          ...result.classification.job,
+          location: extractedJobDetails.location || result.classification.job.location,
+        },
+      },
       jobDescription: result.jobDescription || extractedJobDetails.description,
       profiles: result.profiles,
       reviewDismissed: false,
@@ -755,7 +761,9 @@ async function verifyFormScanScripts(tabId) {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => ({
+        applicationFlow: typeof window.__qtsApplicationFlow?.getNavigationBoundaryReason === 'function',
         scan: typeof window.__scanApplicationForm === 'function',
+        shadowDom: typeof window.__qtsQueryAllOpenShadowRoots === 'function',
         discover: typeof window.__discoverApplicationForm === 'function',
         registry: typeof window.__qtsTemplateRegistry === 'object',
         justjoin: typeof window.__qtsPlatformJustjoin === 'object',
@@ -775,7 +783,7 @@ async function ensureFormScanScripts(tabId) {
   }
 
   let status = await verifyFormScanScripts(tabId);
-  if (status.discover && status.scan) {
+  if (status.applicationFlow && status.discover && status.scan && status.shadowDom) {
     return { ok: true, status };
   }
 
@@ -788,7 +796,10 @@ async function ensureFormScanScripts(tabId) {
   }
 
   status = await verifyFormScanScripts(tabId);
-  return { ok: Boolean(status.discover && status.scan && status.learning), status };
+  return {
+    ok: Boolean(status.applicationFlow && status.discover && status.scan && status.shadowDom && status.learning),
+    status,
+  };
 }
 
 async function injectFormScan(tabId) {
@@ -1395,6 +1406,9 @@ async function advanceManagerApplicationStepOnTab(tabId) {
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: () => {
+      const queryAll = (selector) => window.__qtsQueryAllOpenShadowRoots
+        ? window.__qtsQueryAllOpenShadowRoots(selector)
+        : Array.from(document.querySelectorAll(selector));
       const visible = (element) => {
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
@@ -1409,13 +1423,18 @@ async function advanceManagerApplicationStepOnTab(tabId) {
           || 'Required field';
         return String(label).replace(/\s+/g, ' ').trim().slice(0, 160);
       };
-      const controls = Array.from(document.querySelectorAll(
+      const controls = queryAll(
         'input:not([type="hidden"]), select, textarea, [aria-required="true"]'
-      )).filter((element) => !element.disabled && visible(element));
+      ).filter((element) => (
+        !element.disabled
+        && element.getAttribute('aria-disabled') !== 'true'
+        && visible(element)
+      ));
       const invalidFields = [];
       for (const element of controls) {
         const required = element.required === true || element.getAttribute('aria-required') === 'true';
-        const hasNativeError = typeof element.checkValidity === 'function' && !element.checkValidity();
+        const hasNativeError = element.validity?.valid === false
+          || element.getAttribute('aria-invalid') === 'true';
         const value = element.type === 'checkbox' || element.type === 'radio'
           ? (element.checked ? 'checked' : '')
           : element.isContentEditable
@@ -1423,47 +1442,98 @@ async function advanceManagerApplicationStepOnTab(tabId) {
             : String(element.value || '').trim();
         if (hasNativeError || (required && !value)) invalidFields.push(fieldLabel(element));
       }
-      if (invalidFields.length) {
+      const scan = window.__scanApplicationForm?.();
+      const invalidScannedFields = (scan?.fields || []).filter((field) => (
+        field.invalid === true
+      )).map((field) => field.label || 'Invalid field');
+      const unansweredRequiredFields = (scan?.fields || []).filter((field) => {
+        if (!field.required || field.invalid) return false;
+        const value = String(field.currentValue || '').trim();
+        return ['checkbox', 'switch'].includes(field.fieldType)
+          ? value !== 'true'
+          : !value;
+      }).map((field) => field.label || 'Required field');
+      invalidFields.push(...invalidScannedFields, ...unansweredRequiredFields);
+      const uniqueInvalidFields = [...new Set(invalidFields)];
+      if (uniqueInvalidFields.length) {
         return {
           advanced: false,
-          reason: `Required or invalid fields remain: ${[...new Set(invalidFields)].slice(0, 8).join(', ')}.`,
-          invalidFields: [...new Set(invalidFields)],
+          reason: `Required or invalid fields remain: ${uniqueInvalidFields.slice(0, 8).join(', ')}.`,
+          invalidFields: uniqueInvalidFields,
         };
       }
 
-      const candidates = Array.from(document.querySelectorAll(
+      const candidates = queryAll(
         'button, input[type="button"], input[type="submit"], [role="button"]'
-      )).filter(visible).map((element) => {
-        const label = String(
-          element.textContent || element.value || element.getAttribute('aria-label') || ''
+      ).filter(visible).map((element) => {
+        const host = element.getRootNode?.()?.host;
+        const label = window.__qtsGetAccessibleControlLabel?.(element) || String(
+          element.textContent
+          || element.value
+          || element.getAttribute('aria-label')
+          || element.getAttribute('title')
+          || host?.getAttribute('aria-label')
+          || host?.innerText
+          || host?.textContent
+          || ''
         ).replace(/\s+/g, ' ').trim();
+        let contextRoot = element.closest('form, [role="dialog"], [aria-modal="true"]');
+        if (!contextRoot) {
+          for (let parent = element.parentElement, depth = 0; parent && depth < 6; parent = parent.parentElement, depth += 1) {
+            if (parent.querySelector('input, textarea, select, [role="textbox"], [role="combobox"]')) {
+              contextRoot = parent;
+              break;
+            }
+          }
+        }
+        const contextText = String(contextRoot?.innerText || contextRoot?.textContent || '')
+          .replace(/\s+/g, ' ').trim();
         return {
           element,
           label,
           disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
+          contextRoot,
+          contextText,
         };
       }).filter((candidate) => candidate.label);
       const flow = window.__qtsApplicationFlow;
       if (!flow?.selectAutomaticNextAction || !flow?.classifyNavigationAction) {
         return { advanced: false, reason: 'The safe navigation classifier is unavailable.' };
       }
-      const actions = candidates.map(({ element, ...candidate }) => ({
-        ...candidate,
-        classification: flow.classifyNavigationAction(candidate.label, { mode: 'REAL_APPLICATION' }).classification,
-        element,
-      }));
-      const protectedControl = Array.from(document.querySelectorAll(
+      const otpControlCount = queryAll(
+        'input[autocomplete="one-time-code"], input[name*="otp" i], input[id*="otp" i], input[name*="verification" i], input[id*="verification" i], input[maxlength="1"][inputmode="numeric"], input[maxlength="1"][inputmode="decimal"]'
+      ).filter(visible).length;
+      const segmentedCodeInputs = queryAll('input[maxlength="1"]').filter(visible).length >= 4;
+      const verificationCopy = /\b(enter|type|input|check for).{0,60}\b(verification|security|one[- ]time|confirmation) code\b|\bcode sent to your (email|phone|mobile)\b|\b(verify|verification required|confirm your email)\b/i
+        .test(document.body.innerText || '');
+      const otpStepDetected = otpControlCount > 0 || segmentedCodeInputs || verificationCopy;
+      const actions = candidates.map(({ element, contextText, ...candidate }) => {
+        const navigationBoundaryReason = flow.getNavigationBoundaryReason?.({
+          verificationRequired: otpStepDetected,
+          fieldTypes: (scan?.fields || []).map((field) => field.fieldType),
+          hasEmailField: (scan?.fields || []).some((field) => field.fieldType === 'email'
+            || /email/i.test(`${field.label} ${field.autocompleteAttr} ${field.nameAttr}`)),
+          text: contextText,
+        });
+        return {
+          ...candidate,
+          navigationBoundaryReason,
+          classification: flow.classifyNavigationAction(candidate.label, { mode: 'REAL_APPLICATION' }).classification,
+          element,
+        };
+      });
+      const protectedControl = queryAll(
         'input[type="checkbox"], input[type="radio"], [role="checkbox"], [role="radio"]'
-      )).filter(visible).some((element) => {
+      ).filter(visible).some((element) => {
         const label = element.labels?.[0]?.textContent
           || element.getAttribute('aria-label')
           || element.parentElement?.textContent
           || '';
         return /\b(certif(?:y|ication)|attest|truthful|accurate|electronic signature|i agree|consent to)\b/i.test(label);
       });
-      const verificationRequired = Boolean(document.querySelector(
+      const verificationRequired = otpStepDetected || Boolean(queryAll(
         'iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], input[autocomplete="one-time-code"], input[name*="otp" i], input[id*="otp" i]'
-      )) || /\b(captcha|one[- ]time password|verification code|two[- ]factor code)\b/i.test(document.body.innerText || '');
+      ).length) || /\b(captcha|one[- ]time password|verification code|two[- ]factor code)\b/i.test(document.body.innerText || '');
       const humanBoundaryReason = protectedControl
         ? 'A consent, attestation, or signature control needs Manager input. Apply paused.'
         : verificationRequired

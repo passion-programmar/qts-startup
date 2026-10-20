@@ -145,6 +145,7 @@
     elements.details.replaceChildren();
     appendDetail(elements.details, 'Title', result.classification.job.title);
     appendDetail(elements.details, 'Company', result.classification.job.company);
+    appendDetail(elements.details, 'Location', result.classification.job.location);
     appendDetail(elements.details, 'URL', result.classification.job.jobUrl);
     appendDetail(elements.details, 'Job description', result.jobDescription, 'description');
     elements.profiles.replaceChildren();

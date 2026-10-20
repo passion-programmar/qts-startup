@@ -11,12 +11,14 @@ test('missing extracted job details are filled without replacing saved values', 
     title: 'Saved title',
     company: 'Saved company',
     description: '',
+    location: '',
     url: 'https://apply.workable.com/example/j/123',
     source: 'workable',
   }, {
     title: 'Detected title',
     company: 'Detected company',
     description: 'Description extracted from the page.',
+    location: 'Riga, Latvia',
     url: 'https://apply.workable.com/example/j/456',
     source: 'other',
   });
@@ -25,6 +27,7 @@ test('missing extracted job details are filled without replacing saved values', 
     title: 'Saved title',
     company: 'Saved company',
     description: 'Description extracted from the page.',
+    location: 'Riga, Latvia',
     url: 'https://apply.workable.com/example/j/123',
     source: 'workable',
   });
@@ -35,12 +38,14 @@ test('missing extracted values stay empty when the page did not provide them', (
     title: '',
     company: '',
     description: '',
+    location: '',
     url: 'https://apply.workable.com/example/j/123',
     source: '',
   }, {
     title: '   ',
     company: '',
     description: '',
+    location: '',
     url: '',
     source: 'workable',
   });
@@ -49,6 +54,7 @@ test('missing extracted values stay empty when the page did not provide them', (
     title: '',
     company: '',
     description: '',
+    location: '',
     url: 'https://apply.workable.com/example/j/123',
     source: 'workable',
   });
@@ -59,6 +65,7 @@ test('progressive page captures retain the most complete job details', () => {
     title: 'Jobs',
     company: '',
     description: '',
+    location: '',
     url: '',
     source: 'workable',
   }, 'https://apply.workable.com/example/j/123');
@@ -73,6 +80,7 @@ test('progressive page captures retain the most complete job details', () => {
   assert.equal(merged.title, 'Program Coordinator');
   assert.equal(merged.company, 'Resource Innovations');
   assert.equal(merged.description.length, 100);
+  assert.equal(merged.location, '');
   assert.equal(merged.url, 'https://apply.workable.com/example/j/123');
   assert.equal(merged.source, 'workable');
 });
@@ -82,12 +90,14 @@ test('partial extraction exposes useful details but filters generic page heading
     title: 'Careers',
     company: 'Resource Innovations',
     description: '',
+    location: '',
     url: 'https://apply.workable.com/example/j/123',
   }), {
     data: {
       title: '',
       company: 'Resource Innovations',
       description: '',
+      location: '',
       url: 'https://apply.workable.com/example/j/123',
       source: '',
     },
@@ -97,5 +107,18 @@ test('partial extraction exposes useful details but filters generic page heading
     title: 'Jobs',
     company: '',
     description: '',
+    location: '',
   }).hasDetails, false);
+});
+
+test('location-only extraction is retained as useful partial job data', () => {
+  const partial = usablePartialJobDetails({
+    title: '',
+    company: '',
+    description: '',
+    location: 'Latvia',
+  });
+
+  assert.equal(partial.data.location, 'Latvia');
+  assert.equal(partial.hasDetails, true);
 });

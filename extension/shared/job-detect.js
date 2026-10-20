@@ -46,6 +46,7 @@ function normalizeDetectedJobData(data, pageUrl) {
     title: String(data?.title || '').trim(),
     company: String(data?.company || '').trim(),
     description: String(data?.description || '').trim(),
+    location: String(data?.location || '').trim(),
     url: normalizeJobUrl(rawUrl),
     source: String(data?.source || '').trim(),
   };
@@ -53,7 +54,7 @@ function normalizeDetectedJobData(data, pageUrl) {
 
 function mergeMissingJobDetails(current, detected) {
   const merged = { ...current };
-  for (const key of ['title', 'company', 'description', 'url', 'source']) {
+  for (const key of ['title', 'company', 'description', 'location', 'url', 'source']) {
     const currentValue = String(current?.[key] || '').trim();
     const detectedValue = String(detected?.[key] || '').trim();
     merged[key] = currentValue ? current[key] : detectedValue;
@@ -76,6 +77,7 @@ function mergeJobExtractionSamples(previous, next, pageUrl) {
     description: candidate.description.length > current.description.length
       ? candidate.description
       : current.description,
+    location: current.location || candidate.location,
     url: normalizeJobUrl(pageUrl || current.url || candidate.url),
     source: current.source || candidate.source,
   };
@@ -90,7 +92,9 @@ function usablePartialJobDetails(data, pageUrl) {
   };
   return {
     data: partial,
-    hasDetails: Boolean(partial.title || partial.company || partial.description.trim()),
+    hasDetails: Boolean(
+      partial.title || partial.company || partial.description.trim() || partial.location,
+    ),
   };
 }
 

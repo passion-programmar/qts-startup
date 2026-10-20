@@ -251,6 +251,9 @@ export default async function Home() {
               ...(currentUser.role === "super_admin"
                 ? [{ label: "Settings", icon: Settings2, href: "/settings" }]
                 : []),
+              ...(currentUser.role === "super_admin"
+                ? [{ label: "Gemini usage", icon: Activity, href: "/settings/gemini-usage" }]
+                : []),
             ].map((item) => {
               const Icon = item.icon;
               if ("href" in item && item.href) {

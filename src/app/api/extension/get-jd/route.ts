@@ -4,6 +4,7 @@ import {
   eq,
   isNull,
 } from "drizzle-orm";
+import { randomInt } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
   categories,
@@ -14,6 +15,14 @@ import {
 import { getExtensionManager } from "@/lib/extension-auth";
 import { findGetJdDuplicate } from "@/lib/extension-get-jd";
 import { db } from "@/lib/db";
+import {
+  acquireGeminiKey,
+  countGeminiInputTokens,
+  geminiModel,
+  getGeminiApiKeys,
+  releaseGeminiKey,
+  reserveGeminiGeneration,
+} from "@/lib/gemini-usage";
 
 const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
@@ -54,6 +63,12 @@ const responseSchema = {
     "job",
     "matchingProfileIds",
   ],
+} as const;
+
+const generationConfig = {
+  responseMimeType: "application/json",
+  responseSchema,
+  temperature: 0.2,
 } as const;
 
 type CandidateProfileForEvaluation = {
@@ -149,15 +164,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const apiKey =
-      process.env.GEMINI_API_KEY?.trim() ||
-      process.env.JD_READ_PROMPT_GEMINI_API_KEY_1?.trim();
-    if (!apiKey) {
+    const apiKeys = getGeminiApiKeys();
+    if (apiKeys.length === 0) {
       return jsonResponse(
         {
           success: false,
           message:
-            "Gemini is not configured on the QTS server. Set GEMINI_API_KEY in the server environment and restart QTS.",
+            "Gemini is not configured on the QTS server. Set GEMINI_API_KEYS or GEMINI_API_KEY in the server environment and restart QTS.",
         },
         503,
       );
@@ -189,7 +202,29 @@ export async function POST(request: Request): Promise<NextResponse> {
       `Candidate accounts (only ID, name, and category):\n${JSON.stringify(candidateContext)}`,
     ].join("\n\n");
 
-    const modelResult = await requestGeminiJson(apiKey, promptText);
+    const selectedKey = await selectAvailableGeminiApiKey(
+      apiKeys,
+      promptText,
+      generationConfig,
+    );
+    if (!selectedKey) {
+      return jsonResponse(
+        {
+          success: false,
+          message:
+            "QTS is temporarily unable to process this request because all configured Gemini keys are busy or at their QTS usage limits. Try again shortly.",
+          diagnosticCode: "gemini_local_capacity_unavailable",
+        },
+        503,
+      );
+    }
+    const { apiKey, leaseId } = selectedKey;
+    let modelResult: unknown;
+    try {
+      modelResult = await requestGeminiJson(apiKey, promptText);
+    } finally {
+      await releaseGeminiKey(apiKey, leaseId);
+    }
     const classification = validateClassification(
       modelResult,
       extracted.url,
@@ -209,6 +244,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch (error) {
     const diagnosticCode = getGetJdFailureCode(error);
     logGetJdFailure(diagnosticCode);
+    const status = /^gemini_(?:count_tokens_)?http_429$/.test(diagnosticCode)
+      ? 429
+      : 502;
     return jsonResponse(
       {
         success: false,
@@ -218,9 +256,40 @@ export async function POST(request: Request): Promise<NextResponse> {
         ),
         diagnosticCode,
       },
-      502,
+      status,
     );
   }
+}
+
+async function selectAvailableGeminiApiKey(
+  apiKeys: string[],
+  prompt: string,
+  config: typeof generationConfig,
+): Promise<{ apiKey: string; leaseId: string } | null> {
+  const shuffledKeys = [...apiKeys];
+  for (let index = shuffledKeys.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInt(index + 1);
+    [shuffledKeys[index], shuffledKeys[swapIndex]] = [
+      shuffledKeys[swapIndex],
+      shuffledKeys[index],
+    ];
+  }
+
+  for (const apiKey of shuffledKeys) {
+    const leaseId = await acquireGeminiKey(apiKey);
+    if (!leaseId) continue;
+    try {
+      const inputTokens = await countGeminiInputTokens(apiKey, prompt, config);
+      if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens)) {
+        return { apiKey, leaseId };
+      }
+    } catch (error) {
+      await releaseGeminiKey(apiKey, leaseId);
+      throw error;
+    }
+    await releaseGeminiKey(apiKey, leaseId);
+  }
+  return null;
 }
 
 async function loadManagerCandidateProfiles(
@@ -266,7 +335,7 @@ async function requestGeminiJson(
   prompt: string,
 ): Promise<unknown> {
   const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
     {
       method: "POST",
       headers: {
@@ -275,11 +344,7 @@ async function requestGeminiJson(
       },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema,
-          temperature: 0.2,
-        },
+        generationConfig,
       }),
       signal: AbortSignal.timeout(45_000),
       cache: "no-store",
@@ -507,7 +572,7 @@ function getGetJdFailureMessage(
   code: string,
   providerMessage?: string,
 ): string {
-  const httpStatus = /^gemini_http_(\d{3})$/.exec(code)?.[1];
+  const httpStatus = /^gemini_(?:count_tokens_)?http_(\d{3})$/.exec(code)?.[1];
   if (httpStatus === "400") {
     if (
       providerMessage?.toLowerCase().includes("user location is not supported")
@@ -536,6 +601,9 @@ function getGetJdFailureMessage(
       ? ` Google reported: ${providerMessage}`
       : "";
     return `Gemini rate limit or quota was reached (HTTP 429). Check the API quota and billing configuration.${explanation} Diagnostic: ${code}.`;
+  }
+  if (code === "gemini_count_tokens_invalid_response") {
+    return "QTS could not verify this request's Gemini token count, so it did not send the job-evaluation request. Try again later.";
   }
   if (httpStatus && Number(httpStatus) >= 500) {
     const explanation = providerMessage

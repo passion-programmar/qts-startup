@@ -49,16 +49,72 @@ function workableExtract() {
 // SmartRecruiters extractor
 function smartrecruitersExtract() {
   const ld = window.__extractJsonLd && window.__extractJsonLd();
-  if (ld && ld.title) return { ...ld, source: 'smartrecruiters' };
+  const main = document.querySelector('main, [role="main"]') || document;
+  const structured = ld || {};
+  const title = structured.title
+    || tryText(['.job-title', 'h1[class*="title"]', 'h1'], main);
+  const company = structured.company
+    || tryText(['.company-name', '[class*="company"]'], main)
+    || smartRecruitersCompanyName();
+  const description = structured.description
+    || smartRecruitersDescription(main);
   return {
-    title: tryText(['.job-title', 'h1[class*="title"]', 'h1']),
-    company: tryText(['.company-name', '[class*="company"]']),
-    description: (() => {
-      const el = document.querySelector('.job-description,[class*="description"]');
-      return el ? window.__stripHtml(el.innerHTML) : '';
-    })(),
-    url: document.location.href, source: 'smartrecruiters',
+    title,
+    company,
+    description,
+    url: structured.url || document.location.href,
+    source: 'smartrecruiters',
   };
+}
+
+function smartRecruitersCompanyName() {
+  const logoAlt = tryText([
+    'header img[alt]',
+    '[role="banner"] img[alt]',
+    'img[alt*="logo" i]',
+  ]);
+  if (logoAlt) return logoAlt.replace(/\s+logo$/i, '').trim();
+  return tryText(['meta[property="og:site_name"]']);
+}
+
+function smartRecruitersDescription(root) {
+  const strip = window.__stripHtml || ((html) => html || '');
+  const selectors = [
+    '#st-jobDescription .wysiwyg',
+    '#st-jobDescription',
+    '[id*="jobDescription"] .wysiwyg',
+    '[id*="jobDescription"]',
+    '.job-description',
+    '[class~="job-description"]',
+  ];
+  for (const selector of selectors) {
+    const element = root.querySelector(selector);
+    const text = element ? strip(element.innerHTML).trim() : '';
+    if (text.length >= 80) return text;
+  }
+
+  for (const heading of root.querySelectorAll('h1, h2, h3, h4')) {
+    const label = (heading.innerText || heading.textContent || '').trim();
+    if (!/^(job description|role description|about the role)$/i.test(label)) continue;
+    const section = heading.closest('section, article, [class*="section"]')
+      || heading.parentElement;
+    if (!section) continue;
+    const content = section.querySelector('.wysiwyg, [class*="description"], [class*="content"]');
+    const text = strip(content?.innerHTML || section.innerHTML).trim();
+    if (text.length >= 80) return text;
+  }
+
+  const fallbackSelectors = [
+    '.job-sections .wysiwyg',
+    '[class*="job-description"]',
+    '[class*="description-content"]',
+  ];
+  for (const selector of fallbackSelectors) {
+    const element = root.querySelector(selector);
+    const text = element ? strip(element.innerHTML).trim() : '';
+    if (text.length >= 80) return text;
+  }
+  return '';
 }
 
 // Ashby extractor
@@ -76,10 +132,10 @@ function ashbyExtract() {
   };
 }
 
-function tryText(selectors) {
+function tryText(selectors, root = document) {
   for (const sel of selectors) {
     try {
-      const el = document.querySelector(sel);
+      const el = root.querySelector(sel);
       if (el) {
         const t = (el.getAttribute('alt') || el.innerText || el.textContent || '').trim();
         if (t) return t;

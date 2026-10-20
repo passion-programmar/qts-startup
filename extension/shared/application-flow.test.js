@@ -135,6 +135,48 @@ test('automatic advancement rejects ambiguous, disabled, and unknown controls', 
   ]).action, null);
 });
 
+test('automatic advancement pauses when a unique next control is in a verification or account-entry step', () => {
+  const verification = flow.selectAutomaticNextAction([
+    {
+      label: 'Next',
+      disabled: false,
+      navigationBoundaryReason: 'This appears to be a one-time-code verification step.',
+    },
+  ]);
+  assert.equal(verification.action, null);
+  assert.match(verification.reason, /verification step/);
+
+  const accountEntry = flow.selectAutomaticNextAction([
+    {
+      label: 'Continue',
+      disabled: false,
+      navigationBoundaryReason: 'This appears to be an email/account entry step.',
+    },
+  ]);
+  assert.equal(accountEntry.action, null);
+  assert.match(accountEntry.reason, /account entry step/);
+});
+
+test('navigation context identifies verification and email-only account entry semantically', () => {
+  assert.match(flow.getNavigationBoundaryReason({
+    verificationRequired: true,
+    fieldTypes: ['text'],
+    text: 'Apply now Enter verification code sent to your email',
+  }), /verification step/);
+
+  assert.match(flow.getNavigationBoundaryReason({
+    fieldTypes: ['email'],
+    hasEmailField: true,
+    text: 'Apply now Enter your email. By continuing, you agree to Terms and Privacy Policy.',
+  }), /email\/account entry step/);
+
+  assert.equal(flow.getNavigationBoundaryReason({
+    fieldTypes: ['email', 'text', 'tel', 'file'],
+    hasEmailField: true,
+    text: 'Apply now Terms Privacy Policy',
+  }), null);
+});
+
 test('automatic final submission accepts only one exact recognized submit control', () => {
   assert.equal(flow.selectAutomaticFinalSubmitAction([
     { label: 'Submit application', disabled: false },

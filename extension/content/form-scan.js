@@ -1,7 +1,7 @@
 // Deterministic application form scan + fill (no AI)
 
 (function initFormScan() {
-  if (window.__scanApplicationForm) return;
+  if (window.__scanApplicationForm && window.__qtsQueryAllOpenShadowRoots) return;
   const HIDDEN_STYLE = ['none', 'hidden', 'collapse'];
   const INTERACTIVE_SELECTOR = [
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]):not([disabled])',
@@ -22,6 +22,39 @@
     return String(value || '').replace(/\s+/g, ' ').trim();
   }
 
+  function queryAllOpenShadowRoots(selector, root = document) {
+    const matches = [];
+    const roots = [root];
+    const visited = new Set(roots);
+    for (let index = 0; index < roots.length; index += 1) {
+      const currentRoot = roots[index];
+      if (typeof currentRoot?.querySelectorAll !== 'function') continue;
+      matches.push(...currentRoot.querySelectorAll(selector));
+      currentRoot.querySelectorAll('*').forEach((element) => {
+        const shadowRoot = element.shadowRoot;
+        if (shadowRoot && !visited.has(shadowRoot)) {
+          visited.add(shadowRoot);
+          roots.push(shadowRoot);
+        }
+      });
+    }
+    return [...new Set(matches)];
+  }
+
+  function queryOneOpenShadowRoot(selector, root = document) {
+    return queryAllOpenShadowRoots(selector, root)[0] || null;
+  }
+
+  function getElementByIdOpenShadowRoots(id) {
+    return document.getElementById(id)
+      || queryAllOpenShadowRoots('[id]').find((element) => element.id === id)
+      || null;
+  }
+
+  function getComposedParent(element) {
+    return element?.parentElement || element?.getRootNode?.()?.host || null;
+  }
+
   function getReadableText(node) {
     if (!node) return '';
     const clone = node.cloneNode(true);
@@ -35,7 +68,11 @@
   }
 
   function isInApplicationDialog(el) {
-    return Boolean(el?.closest('[role="dialog"], [aria-modal="true"], dialog, [class*="modal" i], [class*="Modal" i]'));
+    const selector = '[role="dialog"], [aria-modal="true"], dialog, [class*="modal" i], [class*="Modal" i]';
+    for (let node = el; node; node = getComposedParent(node)) {
+      if (node.matches?.(selector)) return true;
+    }
+    return false;
   }
 
   function isVisuallyHiddenInput(el) {
@@ -88,22 +125,22 @@
     let score = 0;
     const text = cleanText(root.textContent).toLowerCase();
 
-    if (root.querySelector('input[type="file"]')) score += 60;
-    if (root.querySelector('input[type="email"], input[autocomplete*="email" i]')) score += 35;
-    if (root.querySelector('textarea')) score += 20;
-    if (root.querySelector('input[type="checkbox"], [role="checkbox"], [role="switch"]')) score += 15;
-    if (root.querySelector('input[type="text"], input:not([type])')) score += 10;
+    if (queryOneOpenShadowRoot('input[type="file"]', root)) score += 60;
+    if (queryOneOpenShadowRoot('input[type="email"], input[autocomplete*="email" i]', root)) score += 35;
+    if (queryOneOpenShadowRoot('textarea', root)) score += 20;
+    if (queryOneOpenShadowRoot('input[type="checkbox"], [role="checkbox"], [role="switch"]', root)) score += 15;
+    if (queryOneOpenShadowRoot('input[type="text"], input:not([type])', root)) score += 10;
 
     if (/apply|aplikuj|application|aplikacj/i.test(text)) score += 20;
     if (/wyrażam zgodę|personal data|danych osobowych|recruitment process/i.test(text)) score += 15;
     if (/add document|upload|cv|resume|załącz/i.test(text)) score += 15;
 
     if (/cookie|privacy settings|zarządzaj plikami cookie|pliki cookie/i.test(text)
-      && !root.querySelector('input[type="file"]')) {
+      && !queryOneOpenShadowRoot('input[type="file"]', root)) {
       score -= 90;
     }
     if ((/sign in|log in|zaloguj|create account|register/i.test(text))
-      && !root.querySelector('input[type="file"]')) {
+      && !queryOneOpenShadowRoot('input[type="file"]', root)) {
       score -= 50;
     }
 
@@ -115,27 +152,14 @@
   }
 
   function getVisibleModalRoots() {
-    const selectors = [
+    const selector = [
       '[role="dialog"]',
       '[aria-modal="true"]',
       'dialog',
       '[class*="modal" i][class*="open" i]',
       '[data-testid*="modal" i]',
-    ];
-    const seen = new Set();
-    const roots = [];
-    selectors.forEach((selector) => {
-      try {
-        document.querySelectorAll(selector).forEach((node) => {
-          if (seen.has(node) || !isVisibleRoot(node)) return;
-          seen.add(node);
-          roots.push(node);
-        });
-      } catch {
-        // ignore invalid selectors
-      }
-    });
-    return roots;
+    ].join(',');
+    return queryAllOpenShadowRoots(selector).filter(isVisibleRoot);
   }
 
   function pickBestApplicationRoots(roots) {
@@ -145,7 +169,9 @@
       .sort((a, b) => b.score - a.score);
     const best = scored[0];
     if (best && best.score > 0) return [best.root];
-    const withInputs = roots.filter((root) => root.querySelector('input, textarea, select, [role="textbox"]'));
+    const withInputs = roots.filter((root) => (
+      queryOneOpenShadowRoot('input, textarea, select, [role="textbox"]', root)
+    ));
     if (withInputs.length) return [withInputs[withInputs.length - 1]];
     return roots;
   }
@@ -162,8 +188,9 @@
   }
 
   function getLabelFromFor(el) {
+    if (el.labels?.[0]) return getReadableText(el.labels[0]);
     if (el.id) {
-      const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const label = queryOneOpenShadowRoot(`label[for="${CSS.escape(el.id)}"]`);
       if (label) return getReadableText(label);
     }
     const wrappingLabel = el.closest('label');
@@ -178,18 +205,18 @@
   function getAriaLabelledBy(el) {
     const ids = cleanText(el.getAttribute('aria-labelledby')).split(/\s+/).filter(Boolean);
     if (!ids.length) return '';
-    return cleanText(ids.map((id) => getReadableText(document.getElementById(id))).join(' '));
+    return cleanText(ids.map((id) => getReadableText(getElementByIdOpenShadowRoots(id))).join(' '));
   }
 
   function getUploadZoneLabel(el) {
     if (inferFieldType(el) !== 'file') return '';
-    let node = el.parentElement;
+    let node = getComposedParent(el);
     for (let depth = 0; node && depth < 5; depth += 1) {
       const text = getReadableText(node);
       if (/add document|upload|cv|resume|attach/i.test(text)) {
         return text.slice(0, 180);
       }
-      node = node.parentElement;
+      node = getComposedParent(node);
     }
     return '';
   }
@@ -198,13 +225,13 @@
     const labelText = getLabelFromFor(el);
     if (labelText) return labelText.slice(0, 220);
 
-    let node = el.parentElement;
+    let node = getComposedParent(el);
     for (let depth = 0; node && depth < 4; depth += 1) {
       const clone = node.cloneNode(true);
       clone.querySelectorAll('input, textarea, select, button').forEach((child) => child.remove());
       const text = getReadableText(clone);
       if (text.length >= 8) return text.slice(0, 220);
-      node = node.parentElement;
+      node = getComposedParent(node);
     }
 
     const uploadLabel = getUploadZoneLabel(el);
@@ -223,8 +250,8 @@
     }
     const name = cleanText(el.name);
     if (el.type === 'radio' && name) {
-      const scope = el.form || document;
-      return Array.from(scope.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`));
+      const scope = el.form || el.getRootNode?.() || document;
+      return queryAllOpenShadowRoots(`input[type="radio"][name="${CSS.escape(name)}"]`, scope);
     }
     return [el];
   }
@@ -240,13 +267,13 @@
       if (ariaLabel) return ariaLabel;
     }
 
-    let node = group || el.parentElement;
+    let node = group || getComposedParent(el);
     for (let depth = 0; node && depth < 4; depth += 1) {
       const clone = node.cloneNode(true);
       clone.querySelectorAll('input[type="radio"], [role="radio"], label').forEach((child) => child.remove());
       const text = getReadableText(clone);
       if (text) return text.slice(0, 220);
-      node = node.parentElement;
+      node = getComposedParent(node);
     }
     return '';
   }
@@ -262,14 +289,24 @@
     const heading = dialog?.querySelector('h1, h2, h3, [role="heading"]');
     if (heading) return getReadableText(heading).slice(0, 120);
 
-    let node = el.parentElement;
+    let node = getComposedParent(el);
     for (let depth = 0; node && depth < 6; depth += 1) {
       const localHeading = node.querySelector(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > legend, :scope > [role="heading"]');
       if (localHeading && localHeading !== el && !localHeading.contains(el)) {
         const text = getReadableText(localHeading);
         if (text) return text;
       }
-      node = node.parentElement;
+      node = getComposedParent(node);
+    }
+    return '';
+  }
+
+  function getFileUploadContext(el) {
+    let node = el;
+    for (let depth = 0; node && depth < 10; depth += 1) {
+      const text = cleanText(node.innerText || node.textContent);
+      if (text.length <= 120 && /\b(resume|cv|cover letter)\b/i.test(text)) return text;
+      node = getComposedParent(node);
     }
     return '';
   }
@@ -300,12 +337,14 @@
     if (describedBy) {
       const message = describedBy
         .split(/\s+/)
-        .map((id) => cleanText(document.getElementById(id)?.textContent))
+        .map((id) => cleanText(getElementByIdOpenShadowRoots(id)?.textContent))
         .join(' ');
       if (/\brequired\b/i.test(message)) return true;
     }
     if (inferFieldType(el) === 'file') {
-      return /\*|required|must|cv|resume/i.test(label);
+      return /\*|required|must|cv|resume/i.test(
+        `${label} ${getSectionHeading(el)} ${getFileUploadContext(el)}`,
+      );
     }
     return false;
   }
@@ -317,9 +356,31 @@
     return cleanText(
       describedBy
         .split(/\s+/)
-        .map((id) => document.getElementById(id)?.textContent || '')
+        .map((id) => getElementByIdOpenShadowRoots(id)?.textContent || '')
         .join(' ')
     );
+  }
+
+  function getValidationErrorMessage(el) {
+    const nativeMessage = cleanText(el.validationMessage);
+    if (nativeMessage) return nativeMessage;
+
+    const errorMessageIds = cleanText(el.getAttribute('aria-errormessage')).split(/\s+/).filter(Boolean);
+    const describedByIds = cleanText(el.getAttribute('aria-describedby')).split(/\s+/).filter(Boolean);
+    const describedErrors = describedByIds.filter((id) => {
+      const message = getElementByIdOpenShadowRoots(id);
+      return message?.getAttribute('role') === 'alert'
+        || ['assertive', 'polite'].includes(message?.getAttribute('aria-live'));
+    });
+    return cleanText([...new Set([...errorMessageIds, ...describedErrors])]
+      .map((id) => getElementByIdOpenShadowRoots(id)?.textContent || '')
+      .join(' '));
+  }
+
+  function isFieldInvalid(el) {
+    return el.getAttribute('aria-invalid') === 'true'
+      || el.validity?.valid === false
+      || Boolean(getValidationErrorMessage(el));
   }
 
   function isSwitchControl(el) {
@@ -336,7 +397,7 @@
       if (parent?.getAttribute('role') === 'switch') return true;
       const label = cleanText(
         el.closest('label')?.textContent
-        || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent)
+        || (el.id && queryOneOpenShadowRoot(`label[for="${CSS.escape(el.id)}"]`)?.textContent)
       );
       if (/attach a message|message for the employer/i.test(label)) return true;
     }
@@ -499,7 +560,7 @@
       '.application-step.active',
     ];
     for (const selector of stepSelectors) {
-      const node = document.querySelector(selector);
+      const node = queryOneOpenShadowRoot(selector);
       if (node) return cleanText(node.textContent).slice(0, 120);
     }
     const stepMatch = document.body?.innerText?.match(/step\s+(\d+)\s+of\s+(\d+)/i);
@@ -518,20 +579,22 @@
   ].join(',');
 
   function getClickableLabel(el) {
-    const parts = [
-      el.getAttribute('aria-label'),
-      el.getAttribute('title'),
-      el.value,
-      el.textContent,
-    ];
-    const label = cleanText(parts.filter(Boolean).join(' '));
+    const host = el.getRootNode?.()?.host;
+    const label = cleanText(el.innerText
+      || el.textContent
+      || el.value
+      || el.getAttribute('aria-label')
+      || el.getAttribute('title')
+      || host?.getAttribute('aria-label')
+      || host?.innerText
+      || host?.textContent);
     if (label) return label;
     const labelledBy = cleanText(el.getAttribute('aria-labelledby'));
     if (labelledBy) {
       return cleanText(
         labelledBy
           .split(/\s+/)
-          .map((id) => document.getElementById(id)?.textContent || '')
+          .map((id) => getElementByIdOpenShadowRoots(id)?.textContent || '')
           .join(' ')
       );
     }
@@ -574,7 +637,7 @@
 
   function findApplyButtons() {
     const scored = [];
-    document.querySelectorAll(APPLY_BUTTON_SELECTOR).forEach((el) => {
+    queryAllOpenShadowRoots(APPLY_BUTTON_SELECTOR).forEach((el) => {
       if (!isVisible(el)) return;
       const label = getClickableLabel(el);
       const score = scoreApplyCandidate(el, label);
@@ -673,7 +736,7 @@
   }
 
   function getLabelMatchMethod(el) {
-    if (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) {
+    if (el.labels?.length || (el.id && queryOneOpenShadowRoot(`label[for="${CSS.escape(el.id)}"]`))) {
       return 'native_label_for';
     }
     if (el.closest('label')) {
@@ -746,6 +809,8 @@
       nameAttr: cleanText(el.name),
       autocompleteAttr: cleanText(el.getAttribute('autocomplete')),
       validationMessage: getValidationMessage(el),
+      validationError: getValidationErrorMessage(el),
+      invalid: isFieldInvalid(el),
       selectorHints: buildSelectorHints(el),
       domEvidence: buildDomEvidence(el),
       fieldFingerprint: fingerprint,
@@ -775,7 +840,7 @@
     const fields = [];
 
     getScanRoots().forEach((root) => {
-      root.querySelectorAll(INTERACTIVE_SELECTOR).forEach((el) => {
+      queryAllOpenShadowRoots(INTERACTIVE_SELECTOR, root).forEach((el) => {
         collectFieldFromElement(el, pageUrl, pageStep, seen, fields);
       });
     });
@@ -825,20 +890,20 @@
   function findTargetElement(field) {
     const hints = field.selectorHints || {};
     if (hints.id) {
-      const byId = document.getElementById(hints.id);
+      const byId = getElementByIdOpenShadowRoots(hints.id);
       if (matchesCapturedField(byId, field)) return byId;
     }
     if (hints.role && hints.testId) {
-      const byTest = document.querySelector(`[role="${CSS.escape(hints.role)}"][data-testid="${CSS.escape(hints.testId)}"]`);
+      const byTest = queryOneOpenShadowRoot(`[role="${CSS.escape(hints.role)}"][data-testid="${CSS.escape(hints.testId)}"]`);
       if (matchesCapturedField(byTest, field)) return byTest;
     }
     if (hints.name) {
       const selector = `${hints.tag || 'input'}[name="${CSS.escape(hints.name)}"]`;
-      const byName = document.querySelector(selector);
+      const byName = queryOneOpenShadowRoot(selector);
       if (matchesCapturedField(byName, field)) return byName;
     }
     if (field.nameAttr) {
-      const byName = document.querySelector(`[name="${CSS.escape(field.nameAttr)}"]`);
+      const byName = queryOneOpenShadowRoot(`[name="${CSS.escape(field.nameAttr)}"]`);
       if (matchesCapturedField(byName, field)) return byName;
     }
 
@@ -847,7 +912,7 @@
       const roots = getScanRoots();
       const matches = new Set();
       roots.forEach((root) => {
-        root.querySelectorAll(INTERACTIVE_SELECTOR).forEach((candidate) => {
+        queryAllOpenShadowRoots(INTERACTIVE_SELECTOR, root).forEach((candidate) => {
           if (!isVisible(candidate) || !matchesCapturedField(candidate, field, true)) return;
           if (field.fieldType === 'radio' && [...matches].some((existing) => (
             getRadioGroupMembers(existing).includes(candidate)
@@ -860,11 +925,11 @@
 
     if (field.fieldType === 'file' || field.category === 'document_upload') {
       const roots = window.__qtsPlatformJustjoin?.getApplicationScanRoots?.()
-        || Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog'));
+        || queryAllOpenShadowRoots('[role="dialog"], [aria-modal="true"], dialog');
       const searchRoots = roots?.length ? roots : [document];
       const fileInputs = [];
       searchRoots.forEach((root) => {
-        root.querySelectorAll('input[type="file"]').forEach((input) => {
+        queryAllOpenShadowRoots('input[type="file"]', root).forEach((input) => {
           if (isVisible(input)) fileInputs.push(input);
         });
       });
@@ -929,15 +994,15 @@
       el.getAttribute('aria-controls'),
       el.getAttribute('aria-owns'),
     ].flatMap((value) => cleanText(value).split(/\s+/)).filter(Boolean);
-    const roots = ids.map((id) => document.getElementById(id)).filter(Boolean);
+    const roots = ids.map((id) => getElementByIdOpenShadowRoots(id)).filter(Boolean);
     const listbox = el.closest?.('[role="listbox"]');
     if (listbox) roots.push(listbox);
     if (!roots.length) {
-      document.querySelectorAll('[role="listbox"]').forEach((root) => roots.push(root));
+      queryAllOpenShadowRoots('[role="listbox"]').forEach((root) => roots.push(root));
     }
     const candidates = roots.length
-      ? roots.flatMap((root) => Array.from(root.querySelectorAll('[role="option"], option')))
-      : Array.from(document.querySelectorAll('[role="option"]'));
+      ? roots.flatMap((root) => queryAllOpenShadowRoots('[role="option"], option', root))
+      : queryAllOpenShadowRoots('[role="option"]');
     return [...new Set(candidates)].filter((option) => !visibleOnly || isVisible(option));
   }
 
@@ -1110,6 +1175,12 @@
   }
 
   window.__scanApplicationForm = scanApplicationForm;
+  window.__qtsQueryAllOpenShadowRoots = queryAllOpenShadowRoots;
+  window.__qtsGetAccessibleControlLabel = getClickableLabel;
+  window.__qtsGetFieldValidation = (el) => ({
+    invalid: isFieldInvalid(el),
+    message: getValidationErrorMessage(el),
+  });
   window.__looksLikeApplicationForm = looksLikeApplicationForm;
   window.__clickApplyToOpenForm = clickApplyToOpenForm;
   window.__fillApplicationFields = fillApplicationFields;

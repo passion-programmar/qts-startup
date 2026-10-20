@@ -1,7 +1,7 @@
 // Application flow types and display helpers (popup + content scripts)
 
 (function initQtsApplicationFlow(global) {
-  if (global.__qtsApplicationFlow) return;
+  if (global.__qtsApplicationFlow?.getNavigationBoundaryReason) return;
 
   const APPLICATION_FLOW_TYPES = {
     INLINE_SINGLE: 'inline_single',
@@ -305,6 +305,30 @@
     };
   }
 
+  function getNavigationBoundaryReason(context = {}) {
+    if (context.verificationRequired) {
+      return 'This appears to be an email or one-time-code verification step. Complete verification yourself; Apply paused.';
+    }
+
+    const fieldTypes = Array.isArray(context.fieldTypes)
+      ? context.fieldTypes.map((type) => cleanText(type).toLowerCase())
+      : [];
+    const text = cleanText(context.text);
+    const hasEmailField = context.hasEmailField === true
+      || fieldTypes.includes('email');
+    const emailAccountEntry = hasEmailField
+      && fieldTypes.length > 0
+      && fieldTypes.length <= 2
+      && fieldTypes.every((type) => ['email', 'password', 'text', 'textbox'].includes(type))
+      && /\b(apply now|start your application|candidate|create account|register)\b/i.test(text)
+      && /\b(terms|privacy policy|verification)\b/i.test(text);
+
+    if (emailAccountEntry) {
+      return 'This appears to be an email/account entry step before the application. Continue manually; Apply will rescan the page afterward.';
+    }
+    return null;
+  }
+
   function selectAutomaticNextAction(candidates = []) {
     const allowedLabels = new Set([
       'next',
@@ -315,22 +339,26 @@
       'dalej',
       'kontynuuj',
     ]);
-    const eligible = (Array.isArray(candidates) ? candidates : []).filter((candidate) => {
+    const recognized = (Array.isArray(candidates) ? candidates : []).filter((candidate) => {
       const label = cleanText(candidate?.label);
       return !candidate?.disabled
         && allowedLabels.has(label.toLowerCase())
         && classifyNavigationAction(label, { mode: APPLICATION_MODES.REAL_APPLICATION }).classification
           === ACTION_CLASSIFICATIONS.POSSIBLE_NEXT_REQUIRES_REVIEW;
     });
-    if (eligible.length !== 1) {
+    if (recognized.length !== 1) {
       return {
         action: null,
-        reason: eligible.length
+        reason: recognized.length
           ? 'More than one recognized next-step control is visible.'
           : 'No recognized next-step control is available.',
       };
     }
-    return { action: eligible[0], reason: null };
+    const action = recognized[0];
+    if (action.navigationBoundaryReason) {
+      return { action: null, reason: action.navigationBoundaryReason };
+    }
+    return { action, reason: null };
   }
 
   function selectAutomaticFinalSubmitAction(candidates = []) {
@@ -637,6 +665,7 @@
     resolveFlowType,
     normalizeApplicationMode,
     classifyNavigationAction,
+    getNavigationBoundaryReason,
     selectAutomaticNextAction,
     selectAutomaticFinalSubmitAction,
     buildDiscoveryCheckpoint,
@@ -663,6 +692,7 @@
       shouldBlockRealApplication,
       normalizeApplicationMode,
       classifyNavigationAction,
+      getNavigationBoundaryReason,
       selectAutomaticNextAction,
       selectAutomaticFinalSubmitAction,
       buildDiscoveryCheckpoint,

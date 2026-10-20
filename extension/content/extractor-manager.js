@@ -21,6 +21,16 @@ function extractJobData() {
     const extractor = selectExtractor(hostname);
     if (!extractor) return window.__genericExtract();
     const data = extractor();
+    if (extractor !== window.__genericExtract && window.__genericExtract) {
+      try {
+        const fallback = window.__genericExtract();
+        for (const field of ['title', 'company', 'description', 'location', 'url']) {
+          if (!data[field]?.trim() && fallback[field]?.trim()) data[field] = fallback[field];
+        }
+      } catch (e) {
+        console.error('[QTS_Startup] Generic extraction fallback error:', e);
+      }
+    }
     if (!data.url) data.url = window.location.href;
     if (window.__normalizeJobUrl) {
       data.url = window.__normalizeJobUrl(data.url);
@@ -29,7 +39,7 @@ function extractJobData() {
     return data;
   } catch (e) {
     console.error('[QTS_Startup] Extraction error:', e);
-    return { title: '', company: '', description: '', url: window.location.href, source: 'unknown', error: e.message };
+    return { title: '', company: '', description: '', location: '', url: window.location.href, source: 'unknown', error: e.message };
   }
 }
 

@@ -49,13 +49,39 @@ For another environment, generate a separate secret and store it only in that
 environment's secret store. Never reuse secrets between environments or commit
 them.
 
-`OPENAI_API_KEY` and `GEMINI_API_KEY` are used only by their respective
-server-side integrations. For local Get JD, put your Gemini API key value in
-the `GEMINI_API_KEY` entry in `.env.local` (the variable name is not the name
-you gave the key in Google AI Studio). The previous
-`JD_READ_PROMPT_GEMINI_API_KEY_1` variable name is also accepted for
-compatibility. Restart the QTS server after changing `.env.local`. Get JD also
-requires an active default Gemini `job_description_evaluation` prompt.
+`OPENAI_API_KEY` and Gemini keys are used only by their respective server-side
+integrations. For local Get JD, set `GEMINI_API_KEYS` in `.env.local` to a
+comma-separated list of Gemini API keys. QTS selects one key per request. For
+one key, `GEMINI_API_KEY` is still supported; the older
+`JD_READ_PROMPT_GEMINI_API_KEY_1` variable is also accepted for compatibility.
+QTS enforces these per-key caps: 9 Gemini API requests in any rolling
+60-second window, 200 requests per day (resetting at midnight Pacific), and
+25,000 input tokens per rolling 60 seconds. A Get JD evaluation first calls
+Gemini's `countTokens` endpoint,
+then sends at most one `generateContent` request using the same key. Both API
+calls count toward the request limits; token usage from the generation prompt
+counts toward the token limit. This allows up to four successful evaluations
+per key in a rolling minute and 100 per key per day when each uses both calls;
+preflight calls that cannot proceed still count as requests. If no key has
+capacity, QTS does not generate the evaluation. QTS also does not retry
+another key after a Gemini API error.
+
+Gemini keys are reserved atomically in Neon while a Get JD evaluation is
+running. A concurrent request skips a busy key and tries another free key.
+The token-count and generation calls for one evaluation use the same reserved
+key; the reservation is released when the request finishes. It expires after
+two minutes if a server process stops before cleanup. When every key is busy
+or at its QTS limit, QTS returns HTTP 503 (temporarily unavailable), not 429;
+it does not wait in a queue. HTTP 429 is reserved for a 429 response from
+Google.
+
+Google applies its own quotas per project, not per key. Keys from one project
+share Google's quota, so these QTS per-key caps do not increase the project's
+Google quota. The Super Admin can see per-key QTS usage and remaining capacity
+on the **Gemini usage** page; key values are never displayed. Store keys only
+in the server environment, never in client-side code or source control.
+Restart the QTS server after changing `.env.local`. Get JD also requires an
+active default Gemini `job_description_evaluation` prompt.
 
 ## Browser extension sign-in
 

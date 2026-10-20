@@ -429,6 +429,31 @@ export const loginHistory = pgTable(
   (table) => [index("login_history_user_logged_in_at_index").on(table.userId, table.loggedInAt)],
 );
 
+export const geminiKeyUsageEvents = pgTable(
+  "gemini_key_usage_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    keyHash: text("key_hash").notNull(),
+    inputTokens: integer("input_tokens").default(0).notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("gemini_key_usage_events_key_occurred_at_index").on(
+      table.keyHash,
+      table.occurredAt,
+    ),
+  ],
+);
+
+export const geminiKeyBusyLeases = pgTable("gemini_key_busy_leases", {
+  keyHash: text("key_hash").primaryKey(),
+  leaseId: uuid("lease_id").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" })
+    .notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Profile = typeof profiles.$inferSelect;

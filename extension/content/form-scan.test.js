@@ -1,10 +1,11 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function loadFormScanner(control, optionElements = []) {
+function loadFormScanner(control, optionElements = [], shadowControls = []) {
   const controls = [control, ...optionElements];
   class FakeElement {
     constructor(tagName, attributes = {}) {
@@ -65,18 +66,51 @@ function loadFormScanner(control, optionElements = []) {
   const listbox = {
     querySelectorAll: () => optionElements,
   };
+  const shadowRoot = {
+    querySelectorAll(selector) {
+      if (selector === '*') return [];
+      if (selector.includes('input:not([type="hidden"])')) {
+        return shadowControls.filter((element) => (
+          ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)
+          || ['textbox', 'combobox', 'listbox', 'spinbutton', 'radio', 'checkbox', 'switch']
+            .includes(element.getAttribute?.('role'))
+        ));
+      }
+      if (selector === '[id]') return shadowControls.filter((element) => element.id);
+      if (selector === '[role="radio"]') {
+        return shadowControls.filter((element) => element.getAttribute?.('role') === 'radio');
+      }
+      if (selector.startsWith('input[type="radio"][name="')) {
+        const name = selector.match(/\[name="([^"]*)"\]/)?.[1];
+        return shadowControls.filter((element) => element.type === 'radio' && element.name === name);
+      }
+      return [];
+    },
+  };
+  const shadowHost = {
+    tagName: 'DIV',
+    shadowRoot,
+    isConnected: true,
+    innerText: shadowControls.some((element) => element.tagName === 'BUTTON') ? 'Next' : '',
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ width: 100, height: 24 }),
+  };
+  shadowRoot.host = shadowHost;
   const document = {
     body: {},
     documentElement: { lang: 'en' },
     getElementById: (id) => {
       const matched = controls.find((element) => element.getAttribute?.('id') === id);
       if (matched) return matched;
-      if (control.getAttribute('aria-controls') === id) return listbox;
+      if (control.getAttribute?.('aria-controls') === id) return listbox;
       return null;
     },
     querySelectorAll: (selector) => {
+      if (selector === '*') return shadowControls.length ? [shadowHost] : [];
       if (selector === '[role="option"]') return optionElements.filter((element) => element.getAttribute('role') === 'option');
-      if (selector.includes('input:not([type="hidden"])')) return controls;
+      if (selector.includes('input:not([type="hidden"])')) {
+        return controls.filter((element) => element !== shadowHost && !element.shadowRoot);
+      }
       if (selector === '[role="radio"]') return controls.filter((element) => element.getAttribute?.('role') === 'radio');
       if (selector.includes('[role="radio"]')) return controls.filter((element) => element.getAttribute?.('role') === 'radio');
       if (selector.startsWith('input[type="radio"][name="')) {
@@ -108,11 +142,45 @@ function loadFormScanner(control, optionElements = []) {
   return {
     fill: window.__fillApplicationFields,
     scan: window.__scanApplicationForm,
+    getFieldValidation: window.__qtsGetFieldValidation,
+    getControlLabel: window.__qtsGetAccessibleControlLabel,
     FakeElement,
     HTMLInputElement,
     HTMLSelectElement,
   };
 }
+
+test('scanner validation recognizes native and accessible custom-control errors', () => {
+  const setup = loadFormScanner({});
+  const nativeInvalid = new setup.FakeElement('input');
+  nativeInvalid.validity = { valid: false };
+  const accessibleInvalid = new setup.FakeElement('div', {
+    'aria-invalid': 'true',
+    'aria-errormessage': 'email-error',
+  });
+  const error = new setup.FakeElement('span', { id: 'email-error' });
+  error.textContent = 'Enter a valid email address.';
+  const accessibleSetup = loadFormScanner(accessibleInvalid, [error]);
+  const describedError = new setup.FakeElement('span', {
+    id: 'phone-error',
+    role: 'alert',
+  });
+  describedError.textContent = 'Enter a valid phone number.';
+  const describedInvalid = new setup.FakeElement('input', {
+    'aria-describedby': 'phone-error',
+  });
+  const describedSetup = loadFormScanner(describedInvalid, [describedError]);
+
+  const nativeValidation = setup.getFieldValidation(nativeInvalid);
+  assert.equal(nativeValidation.invalid, true);
+  assert.equal(nativeValidation.message, '');
+  const accessibleValidation = accessibleSetup.getFieldValidation(accessibleInvalid);
+  assert.equal(accessibleValidation.invalid, true);
+  assert.equal(accessibleValidation.message, 'Enter a valid email address.');
+  const describedValidation = describedSetup.getFieldValidation(describedInvalid);
+  assert.equal(describedValidation.invalid, true);
+  assert.equal(describedValidation.message, 'Enter a valid phone number.');
+});
 
 function scannerField(fillValue, fieldType, id) {
   return {
@@ -122,6 +190,91 @@ function scannerField(fillValue, fieldType, id) {
     fillValue,
   };
 }
+
+test('form scanner discovers and fills controls in open Shadow DOM and reads slotted button labels', async () => {
+  const shadowRoot = {};
+  const makeShadowControl = (tagName, attributes = {}) => ({
+    tagName: tagName.toUpperCase(),
+    id: attributes.id || '',
+    type: attributes.type || '',
+    name: attributes.name || '',
+    value: '',
+    required: attributes.required === true,
+    disabled: false,
+    isConnected: true,
+    textContent: '',
+    attributes: new Map(Object.entries(attributes)),
+    getAttribute(name) {
+      return this.attributes.get(name) || null;
+    },
+    setAttribute(name, value) {
+      this.attributes.set(name, String(value));
+    },
+    getRootNode() {
+      return this.root || shadowRoot;
+    },
+    getBoundingClientRect() {
+      return { width: 120, height: 30 };
+    },
+    dispatchEvent() {
+      return true;
+    },
+    closest() {
+      return null;
+    },
+  });
+  const email = makeShadowControl('input', {
+    id: 'shadow-email',
+    type: 'email',
+    'aria-label': 'Email address',
+    required: true,
+  });
+  const resume = makeShadowControl('input', {
+    type: 'file',
+    'aria-label': 'Choose a file or drop it here',
+  });
+  const resumeRoot = {
+    host: {
+      innerText: 'Choose a file or drop it here',
+      textContent: '',
+      parentElement: {
+        innerText: 'Resume *',
+        textContent: 'Resume *',
+        parentElement: null,
+        querySelector: () => null,
+      },
+      getAttribute: () => null,
+      querySelector: () => null,
+    },
+  };
+  resume.root = resumeRoot;
+  const nextButton = makeShadowControl('button');
+  const setup = loadFormScanner({
+    tagName: 'DIV',
+    getAttribute: () => null,
+  }, [], [email, resume, nextButton]);
+  shadowRoot.host = {
+    innerText: 'Next',
+    getAttribute: () => null,
+    querySelector: () => null,
+  };
+
+  const scan = setup.scan();
+  assert.equal(scan.fields.length, 2);
+  const emailField = scan.fields.find((field) => field.fieldType === 'email');
+  const resumeField = scan.fields.find((field) => field.fieldType === 'file');
+  assert.equal(emailField.label, 'Email address');
+  assert.equal(emailField.required, true);
+  assert.equal(resumeField.required, true);
+
+  const fillResult = await setup.fill([{
+    ...scannerField('person@example.test', 'email', 'shadow-email'),
+    label: 'Email address',
+  }]);
+  assert.equal(fillResult.results[0].ok, true);
+  assert.equal(email.value, 'person@example.test');
+  assert.equal(setup.getControlLabel(nextButton), 'Next');
+});
 
 test('scanner captures required select choices without disabled or placeholder options', () => {
   const control = {
