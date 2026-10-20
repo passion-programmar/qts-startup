@@ -1,12 +1,21 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import {
+  useActionState,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import {
   ChevronDown,
+  Pencil,
   Plus,
   ShieldCheck,
   Trash2,
   UserPlus,
+  X,
 } from "lucide-react";
 import { PasswordField } from "@/app/components/password-field";
 import {
@@ -27,42 +36,40 @@ type CreateUserFormProps = {
 export function CreateUserForm({ role, categories }: CreateUserFormProps) {
   const [educationRows, setEducationRows] = useState([0]);
   const [experienceRows, setExperienceRows] = useState([0]);
+  const [isOpen, setIsOpen] = useState(false);
+  const closeModal = useCallback(() => setIsOpen(false), []);
   const [state, formAction, isPending] = useActionState(
     createUserAction,
     initialState,
   );
   const isAccount = role === "account";
   const roleLabel = isAccount
-    ? "candidate Account"
+    ? "Candidate account"
     : role === "admin"
       ? "Admin"
       : "Manager";
 
   return (
-    <details className="group rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden sm:px-6">
-        <span className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-            <UserPlus className="size-4" />
-          </span>
-          <span>
-            <span className="block text-sm font-semibold text-slate-800">
-              Add {roleLabel}
-            </span>
-            <span className="mt-1 block text-[11px] text-slate-400">
-              {isAccount
-                ? "Create a candidate profile managed by you."
-                : "Create a staff account in your hierarchy."}
-            </span>
-          </span>
-        </span>
-        <ChevronDown className="size-4 text-slate-400 transition group-open:rotate-180" />
-      </summary>
-
-      <form
-        action={formAction}
-        className="space-y-5 border-t border-slate-100 px-5 py-5 sm:px-6"
+    <>
+      <button
+        className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus-visible:outline-indigo-600"
+        onClick={() => setIsOpen(true)}
+        type="button"
       >
+        <UserPlus aria-hidden="true" className="size-4" />
+        Add {roleLabel}
+      </button>
+      <Modal
+        onClose={closeModal}
+        open={isOpen}
+        subtitle={
+          isAccount
+            ? "Add contact details and career information for this candidate."
+            : "Set up a staff account in your reporting hierarchy."
+        }
+        title={`Create ${roleLabel}`}
+      >
+        <form action={formAction} className="space-y-6">
         {isAccount ? (
           <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -314,16 +321,26 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
         {state.success && (
           <FormMessage variant="success">{state.success}</FormMessage>
         )}
-        <button
-          className="inline-flex h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-xs font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
-          disabled={isPending}
-          type="submit"
-        >
-          <Plus className="size-3.5" />
-          {isPending ? "Creating..." : `Create ${roleLabel}`}
-        </button>
-      </form>
-    </details>
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+            <button
+              className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              onClick={() => setIsOpen(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
+              disabled={isPending}
+              type="submit"
+            >
+              <Plus className="size-4" />
+              {isPending ? "Creating..." : `Create ${roleLabel}`}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </>
   );
 }
 
@@ -405,6 +422,8 @@ export function EditCandidateProfileForm({
   candidate: CandidateProfileValues;
   categories: { id: string; name: string }[];
 }) {
+  const [isOpen, setIsOpen] = useState(false);
+const closeModal = useCallback(() => setIsOpen(false), []);
   const [state, formAction, isPending] = useActionState(
     updateCandidateProfileAction,
     initialState,
@@ -412,13 +431,24 @@ export function EditCandidateProfileForm({
   const fieldId = (field: string) => `${field}-${candidate.userId}`;
 
   return (
-    <details className="group mt-3">
-      <summary className="cursor-pointer text-xs font-semibold text-indigo-600 hover:text-indigo-700">
-        Edit candidate profile
-      </summary>
-      <form action={formAction} className="mt-4 space-y-4">
-        <input name="userId" type="hidden" value={candidate.userId} />
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <>
+      <button
+        className="mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-indigo-600 transition hover:bg-indigo-50 hover:text-indigo-700"
+        onClick={() => setIsOpen(true)}
+        type="button"
+      >
+        <Pencil aria-hidden="true" className="size-3.5" />
+        Edit profile
+      </button>
+      <Modal
+        onClose={closeModal}
+        open={isOpen}
+        subtitle="Update the candidate's contact information and profile details."
+        title="Edit candidate profile"
+      >
+        <form action={formAction} className="space-y-6">
+          <input name="userId" type="hidden" value={candidate.userId} />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <TextField
             autoComplete="given-name"
             defaultValue={candidate.firstName ?? ""}
@@ -518,20 +548,137 @@ export function EditCandidateProfileForm({
             name="categoryId"
             options={categories}
           />
+          </div>
+          {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
+          {state.success && (
+            <FormMessage variant="success">{state.success}</FormMessage>
+          )}
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+            <button
+              className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              onClick={() => setIsOpen(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
+              disabled={isPending}
+              type="submit"
+            >
+              {isPending ? "Saving..." : "Save profile"}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </>
+  );
+}
+
+function Modal({
+  open,
+  onClose,
+  title,
+  subtitle,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const subtitleId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
+      'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    );
+    (firstFocusable ?? dialogRef.current)?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+      if (!first || !last) {
+        event.preventDefault();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+    };
+  }, [onClose, open]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-[2px] sm:p-6"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        aria-describedby={subtitleId}
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-7 sm:py-5">
+          <div>
+            <h2
+              className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl"
+              id={titleId}
+            >
+              {title}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500" id={subtitleId}>
+              {subtitle}
+            </p>
+          </div>
+          <button
+            aria-label="Close dialog"
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+            onClick={onClose}
+            type="button"
+          >
+            <X aria-hidden="true" className="size-4" />
+          </button>
         </div>
-        {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
-        {state.success && (
-          <FormMessage variant="success">{state.success}</FormMessage>
-        )}
-        <button
-          className="inline-flex h-9 items-center rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
-          disabled={isPending}
-          type="submit"
-        >
-          {isPending ? "Saving..." : "Save profile"}
-        </button>
-      </form>
-    </details>
+        <div className="overflow-y-auto px-5 py-5 sm:px-7 sm:py-6">
+          {children}
+        </div>
+      </div>
+    </div>
   );
 }
 
