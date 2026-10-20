@@ -184,7 +184,10 @@ export default async function UsersPage() {
           })}
         </section>
 
-        <div className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="mt-5 space-y-5">
+          <section>
+            <CreateUserForm categories={categoryOptions} role={createRole} />
+          </section>
           <section className="min-w-0">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800">
@@ -194,12 +197,12 @@ export default async function UsersPage() {
             {actor.role === "manager" ? (
               <PaginatedTable
                 columns={[
-                  { label: "Candidate", className: "min-w-40" },
-                  { label: "Category", className: "min-w-36" },
-                  { label: "Contact", className: "min-w-48" },
-                  { label: "Location", className: "min-w-52" },
-                  { label: "Headline", className: "min-w-56" },
-                  { label: "LinkedIn", className: "min-w-24" },
+                  { label: "Candidate", className: "min-w-32" },
+                  { label: "Category", className: "min-w-28" },
+                  { label: "Contact", className: "min-w-40" },
+                  { label: "Location", className: "min-w-40" },
+                  { label: "Headline", className: "min-w-40" },
+                  { label: "LinkedIn", className: "min-w-20" },
                 ]}
                 emptyMessage="No candidate accounts"
                 rows={result.rows
@@ -342,10 +345,6 @@ export default async function UsersPage() {
               />
             )}
           </section>
-
-          <div>
-            <CreateUserForm categories={categoryOptions} role={createRole} />
-          </div>
         </div>
       </div>
     </main>
