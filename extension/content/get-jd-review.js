@@ -232,10 +232,15 @@
     const toastKey = `${result.runId || result.updatedAt || ''}:${result.status}`;
     if (result.status === 'duplicate') {
       elements.panel.hidden = true;
-      const message = result.duplicateKind === 'applied'
-        ? "You've already applied to this job"
-        : "You've already found this job";
+      const message = result.inBids
+        ? 'You have already applied to this job.'
+        : 'This job already exists in Jobs.';
       showToast(message, 'normal', toastKey);
+      return;
+    }
+    if (result.status === 'new') {
+      elements.panel.hidden = true;
+      showToast(result.message || 'This is a new job!', 'success', toastKey);
       return;
     }
     if (result.status === 'error') {

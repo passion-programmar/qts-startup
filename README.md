@@ -1,8 +1,9 @@
 # QTS Job Application Workspace
 
-QTS is a job-application platform built with Next.js. The initial milestone
-establishes the application shell and dashboard preview; the workflows and
-integrations will be implemented in later phases.
+QTS is a job-application workspace built with Next.js and a Chrome extension.
+The current extension workflow extracts job details locally from the active
+page and displays them in an in-page preview. Gemini evaluation and saving jobs
+from that preview are reserved for a later release.
 
 ## Current status
 
@@ -10,9 +11,14 @@ integrations will be implemented in later phases.
 - Responsive sign-in page and role-scoped dashboard connected to Neon.
 - Server-only Neon connection helper and Users/Profiles/Categories/Login History schema.
 - Gmail mailbox OAuth is deferred until the candidate-consent flow is defined.
-- Manager-only browser-extension sign-in and a Get JD workflow are available
-  for local development. Gemini classifies pages and recommends matching
-  Manager Accounts; Managers can review the suggestions and save Job List rows.
+- The browser extension provides an in-page launcher before sign-in. Its Get JD
+  action extracts a local preview without Gemini or a server request.
+- Scanner, application-session, document-generation, text-highlight, Gmail,
+  and automatic-application code is disabled until its matching server API and
+  integration coverage are implemented.
+
+The canonical ownership model, supported APIs, disabled feature boundary, and
+database invariants are documented in [docs/architecture.md](docs/architecture.md).
 
 Planned AI responsibilities:
 
@@ -80,8 +86,9 @@ share Google's quota, so these QTS per-key caps do not increase the project's
 Google quota. The Super Admin can see per-key QTS usage and remaining capacity
 on the **Gemini usage** page; key values are never displayed. Store keys only
 in the server environment, never in client-side code or source control.
-Restart the QTS server after changing `.env.local`. Get JD also requires an
-active default Gemini `job_description_evaluation` prompt.
+Restart the QTS server after changing `.env.local`. The server-side Gemini job
+evaluation endpoint requires an active default `job_description_evaluation`
+prompt, although the current extension keeps that endpoint disabled.
 
 ## Browser extension sign-in
 
@@ -93,27 +100,28 @@ invalidated by an auth-version change are rejected. The extension stores the
 token in extension local storage and clears its local copy on logout; the
 server-issued token expires after 24 hours. Use HTTPS for
 deployed environments. The extension source is in `extension/` and defaults
-to `https://qts-job-system.vercel.app` for sign-in and API requests.
+to `https://qts-job-system.vercel.app` for sign-in and API requests. For local
+extension testing, set `qtsServerUrl` in Chrome extension local storage. Popup
+and background requests share that value through the runtime configuration
+module.
 
 To load the unpacked extension in Chrome, open `chrome://extensions`, enable
 Developer mode, select **Load unpacked**, and choose the repository's
 `extension/` folder. After pulling extension changes, use **Reload** on the
 extension's card.
 
-The extension's **Get JD** flow first previews the current page's extracted
-title, company, URL, and job description. **Check** enables persistent Get JD
-mode in Chrome storage and closes the QTS panel; **Back** leaves the mode off.
-While enabled, page loads are checked against the Manager's Jobs and Bids by
-URL or company + title. Duplicate results and non-job pages show a toast at
-the top-left of the webpage. For new job pages, QTS asks Gemini to evaluate
-the configured Super Admin job-evaluation prompt using the job details and
-only each active candidate Account's ID, name, and category. The Manager
-reviews the job details and suggested candidates in a Shadow DOM page panel,
-can adjust the checkboxes, and saves one Job row per selected Account through
-`POST /api/extension/get-jd/save`. **Cancel** dismisses that review without
-closing the job tab or turning off Get JD mode; **Back** in the extension
-panel clears the persistent mode. Get JD does not click or fill job-site
-controls, submit applications, or create Bids.
+The extension renders a floating QTS icon directly on every supported web
+page, including before sign-in. Clicking it opens a radial menu with **Get
+JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
+toolbar icon has no click behavior. Sign In opens the existing Manager login
+panel inside the current page and the panel closes after a successful login.
+Get JD stores persistent `get_jd` status, extracts job identity whenever a page
+loads, and checks the authenticated Manager's Jobs and Bids for a duplicate.
+The result appears in a top-left page toast. This flow does not call Gemini.
+Generation and Apply remain visible release placeholders and report that they
+are not enabled. Sign Out clears the stored extension session and Get JD mode.
+The legacy popup Gemini mode is hard-disabled by the shared runtime feature
+configuration so an old stored mode cannot start background classification.
 
 ## Users and candidate profiles
 
@@ -205,8 +213,10 @@ remain and also removes that staff user's login history; it cannot be undone.
 Password fields have a show/hide control while entering a password, but saved
 passwords cannot be viewed because the database stores only one-way hashes.
 Changing a password invalidates the user's existing sessions.
-Staff passwords must contain at least four characters; longer passwords are
-recommended for better security.
+New and replacement staff passwords must contain at least 12 characters.
+Existing password hashes remain valid until the password is changed. Login
+attempts are throttled in PostgreSQL and successful authentication clears the
+account-specific attempt bucket while retaining the network abuse counter.
 
 After adding `DATABASE_URL` to `.env.local`, apply the migration with
 `npm run db:migrate`. This modifies the selected Neon database.
@@ -230,7 +240,9 @@ environment values.
 
 ```bash
 npm run db:generate
+npm run typecheck
 npm run lint
+npm test
 npm run build
 ```
 

@@ -6,6 +6,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users } from "@/db/schema";
+import { retryTransientDatabaseRead } from "@/server/database/retry-transient-read";
 
 const sessionCookieName = "qts_session";
 const sessionDurationSeconds = 60 * 60 * 24 * 7;
@@ -85,24 +86,26 @@ export async function getCurrentUser(): Promise<StaffSession | null> {
     return null;
   }
 
-  const [user] = await db
-    .select({
-      id: users.id,
-      role: users.role,
-      displayName: users.displayName,
-      loginName: users.loginName,
-      authVersion: users.authVersion,
-    })
-    .from(users)
-    .where(
-      and(
-        eq(users.id, subject),
-        eq(users.role, role),
-        eq(users.authVersion, authVersion),
-        isNull(users.blockedAt),
-      ),
-    )
-    .limit(1);
+  const [user] = await retryTransientDatabaseRead(() =>
+    db
+      .select({
+        id: users.id,
+        role: users.role,
+        displayName: users.displayName,
+        loginName: users.loginName,
+        authVersion: users.authVersion,
+      })
+      .from(users)
+      .where(
+        and(
+          eq(users.id, subject),
+          eq(users.role, role),
+          eq(users.authVersion, authVersion),
+          isNull(users.blockedAt),
+        ),
+      )
+      .limit(1),
+  );
 
   if (!user || !user.displayName || !user.loginName) return null;
 

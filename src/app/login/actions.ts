@@ -2,6 +2,7 @@
 
 import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { loginHistory, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import {
@@ -9,6 +10,10 @@ import {
   verifyPassword,
 } from "@/lib/password";
 import { clearSession, createSession } from "@/lib/session";
+import {
+  clearLoginAttempts,
+  consumeLoginAttempt,
+} from "@/server/auth/login-rate-limit";
 
 export type LoginState = {
   error: string | null;
@@ -38,9 +43,16 @@ export async function loginAction(
   }
 
   const normalizedLoginName = rawLoginName.trim().toLowerCase();
+  const requestHeaders = await headers();
   let stage = "looking up staff account";
   let user;
   try {
+    const allowed = await consumeLoginAttempt(normalizedLoginName, requestHeaders);
+    if (!allowed) {
+      return {
+        error: "Too many sign-in attempts. Wait 15 minutes and try again.",
+      };
+    }
     [user] = await db
       .select({
         id: users.id,
@@ -73,6 +85,14 @@ export async function loginAction(
 
   if (!(await verifyPassword(password, user.passwordHash))) {
     return invalidCredentials;
+  }
+
+  stage = "clearing login attempts";
+  try {
+    await clearLoginAttempts(normalizedLoginName, requestHeaders);
+  } catch (error) {
+    logLoginFailure(stage, error);
+    throw error;
   }
 
   stage = "creating session";

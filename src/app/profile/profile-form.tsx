@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { Check } from "lucide-react";
 import { updateProfileAction, type ProfileState } from "@/app/profile/actions";
 import { PasswordField } from "@/app/components/password-field";
+import { minimumPasswordLength } from "@/lib/password-policy";
 
 const initialState: ProfileState = { error: null, success: null };
 
@@ -71,14 +72,14 @@ export function ProfileForm({ displayName, loginName }: ProfileFormProps) {
           id="newPassword"
           label="New password"
           name="newPassword"
-          minLength={4}
+          minLength={minimumPasswordLength}
         />
         <PasswordField
           autoComplete="new-password"
           id="confirmPassword"
           label="Confirm new password"
           name="confirmPassword"
-          minLength={4}
+          minLength={minimumPasswordLength}
         />
       </div>
 

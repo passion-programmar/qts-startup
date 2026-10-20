@@ -252,6 +252,17 @@ export const jobs = pgTable(
       .notNull(),
   },
   (table) => [
+    uniqueIndex("jobs_manager_candidate_normalized_url_unique").on(
+      table.managerId,
+      table.candidateId,
+      sql`regexp_replace(split_part(btrim(${table.jobUrl}), '#', 1), '/+$', '')`,
+    ),
+    uniqueIndex("jobs_manager_candidate_title_company_unique").on(
+      table.managerId,
+      table.candidateId,
+      sql`lower(btrim(${table.jobTitle}))`,
+      sql`lower(btrim(${table.company}))`,
+    ),
     index("jobs_manager_date_index").on(table.managerId, table.date),
     index("jobs_candidate_date_status_index").on(
       table.candidateId,
@@ -453,6 +464,24 @@ export const geminiKeyBusyLeases = pgTable("gemini_key_busy_leases", {
   expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" })
     .notNull(),
 });
+
+export const loginRateLimitEvents = pgTable(
+  "login_rate_limit_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    keyHash: text("key_hash").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("login_rate_limit_events_occurred_at_index").on(table.occurredAt),
+    index("login_rate_limit_events_key_occurred_at_index").on(
+      table.keyHash,
+      table.occurredAt,
+    ),
+  ],
+);
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

@@ -5,6 +5,10 @@ import { revalidatePath } from "next/cache";
 import { categories, profiles, users } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
 import { hashPassword } from "@/lib/password";
+import {
+  minimumPasswordLength,
+  passwordLengthError,
+} from "@/lib/password-policy";
 import { requireUser } from "@/lib/session";
 
 export type UserActionState = {
@@ -64,10 +68,10 @@ export async function createUserAction(
     };
   }
 
-  if (expectedRole !== "account" && password.length < 4) {
+  if (expectedRole !== "account" && password.length < minimumPasswordLength) {
     return {
       ...emptyState,
-      error: "The password must be at least 4 characters.",
+      error: passwordLengthError(),
     };
   }
 
@@ -381,10 +385,10 @@ export async function updateUserCredentialsAction(
       error: "Enter a login name or a new password.",
     };
   }
-  if (password && password.length < 4) {
+  if (password && password.length < minimumPasswordLength) {
     return {
       ...emptyState,
-      error: "A new password must be at least 4 characters.",
+      error: passwordLengthError("A new password"),
     };
   }
 

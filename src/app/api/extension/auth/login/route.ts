@@ -7,6 +7,10 @@ import {
   performDummyPasswordCheck,
   verifyPassword,
 } from "@/lib/password";
+import {
+  clearLoginAttempts,
+  consumeLoginAttempt,
+} from "@/server/auth/login-rate-limit";
 
 const invalidCredentials = {
   success: false,
@@ -40,6 +44,29 @@ export async function POST(request: Request): Promise<NextResponse> {
     return jsonResponse(invalidCredentials, 400);
   }
 
+  const normalizedLoginName = loginName.trim().toLowerCase();
+  try {
+    const allowed = await consumeLoginAttempt(normalizedLoginName, request.headers);
+    if (!allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Too many sign-in attempts. Wait 15 minutes and try again.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Cache-Control": "no-store",
+            "Retry-After": "900",
+          },
+        },
+      );
+    }
+  } catch (error) {
+    logExtensionLoginFailure("checking the login rate limit", error);
+    throw error;
+  }
+
   let manager;
   try {
     [manager] = await db
@@ -54,7 +81,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       .from(users)
       .where(
         and(
-          sql`lower(btrim(${users.loginName})) = ${loginName.trim().toLowerCase()}`,
+          sql`lower(btrim(${users.loginName})) = ${normalizedLoginName}`,
           eq(users.role, "manager"),
           sql`${users.blockedAt} is null`,
         ),
@@ -75,6 +102,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    await clearLoginAttempts(normalizedLoginName, request.headers);
     const sessionUser = {
       id: manager.id,
       role: "manager" as const,

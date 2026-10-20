@@ -1,0 +1,1 @@
+CREATE INDEX "login_rate_limit_events_occurred_at_index" ON "login_rate_limit_events" USING btree ("occurred_at");

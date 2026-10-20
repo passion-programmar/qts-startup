@@ -16,7 +16,19 @@ function loadApiClient(fetchImpl) {
     btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
     Blob,
     Uint8Array,
+    URL,
+    chrome: {
+      storage: {
+        local: { get: async () => ({}) },
+      },
+    },
   });
+  context.self = window;
+  const runtimeSource = fs.readFileSync(
+    path.join(__dirname, '..', 'shared', 'runtime-config.js'),
+    'utf8',
+  );
+  vm.runInContext(runtimeSource, context, { filename: 'runtime-config.js' });
   const source = fs.readFileSync(path.join(__dirname, 'api-client.js'), 'utf8');
   vm.runInContext(source, context, { filename: 'api-client.js' });
   return window.api;
@@ -85,7 +97,7 @@ test('Get JD selected profiles are saved through the authenticated QTS endpoint'
   assert.deepEqual(JSON.parse(requests[0].options.body), { job, profileIds });
 });
 
-test('Manager Scanner document fetch is available on the popup API client', async () => {
+test('Manager Scanner document fetch is disabled without its server contract', async () => {
   const requests = [];
   const api = loadApiClient(async (url, options) => {
     requests.push({ url, options });
@@ -94,18 +106,12 @@ test('Manager Scanner document fetch is available on the popup API client', asyn
 
   const result = await api.fetchManagerGptTaskDocument('task_example', 'resume');
 
-  assert.equal(result.success, true);
-  assert.equal(result.fileName, 'generated-resume.pdf');
-  assert.equal(result.mimeType, 'application/pdf');
-  assert.equal(Buffer.from(result.base64, 'base64').toString(), 'resume-pdf');
-  assert.equal(
-    requests[0].url,
-    'https://qts-job-system.vercel.app/api/v2/gpt-application-tasks/task_example/documents/resume'
-  );
-  assert.equal(requests[0].options.headers.Authorization, 'Bearer test-token');
+  assert.equal(result.success, false);
+  assert.equal(result.disabled, true);
+  assert.equal(requests.length, 0);
 });
 
-test('application-session document fetch remains available', async () => {
+test('application-session document fetch is disabled without its server contract', async () => {
   const requests = [];
   const api = loadApiClient(async (url, options) => {
     requests.push({ url, options });
@@ -114,16 +120,12 @@ test('application-session document fetch remains available', async () => {
 
   const result = await api.fetchApplicationDocument('42', 'resume');
 
-  assert.equal(result.success, true);
-  assert.equal(result.fileName, 'resume.pdf');
-  assert.equal(Buffer.from(result.base64, 'base64').toString(), 'legacy-pdf');
-  assert.equal(
-    requests[0].url,
-    'https://qts-job-system.vercel.app/api/application-sessions/42/documents/resume'
-  );
+  assert.equal(result.success, false);
+  assert.equal(result.disabled, true);
+  assert.equal(requests.length, 0);
 });
 
-test('Manager Scanner download paths are saved and retrievable per task', async () => {
+test('Manager Scanner download APIs do not call missing server routes', async () => {
   const requests = [];
   const api = loadApiClient(async (url, options) => {
     requests.push({ url, options });
@@ -141,10 +143,9 @@ test('Manager Scanner download paths are saved and retrievable per task', async 
   const saved = await api.recordManagerGptTaskDownloads('task_example', documents);
   const retrieved = await api.getManagerGptTaskDownloads('task_example');
 
-  assert.equal(saved.success, true);
-  assert.equal(retrieved.success, true);
-  assert.equal(requests[0].url, 'https://qts-job-system.vercel.app/api/v2/gpt-application-tasks/task_example/downloads');
-  assert.equal(requests[0].options.method, 'POST');
-  assert.deepEqual(JSON.parse(requests[0].options.body), { documents });
-  assert.equal(requests[1].options.method, 'GET');
+  assert.equal(saved.success, false);
+  assert.equal(saved.disabled, true);
+  assert.equal(retrieved.success, false);
+  assert.equal(retrieved.disabled, true);
+  assert.equal(requests.length, 0);
 });

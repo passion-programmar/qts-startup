@@ -2916,8 +2916,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     await showLogin();
   }
 
-  document.getElementById('login-pass').addEventListener('keyup', e => { if (e.key === 'Enter') doLogin(); });
-  document.getElementById('login-user').addEventListener('keyup', e => { if (e.key === 'Enter') doLogin(); });
+  const loginForm = document.getElementById('login-form');
+  const loginUser = document.getElementById('login-user');
+  const loginPassword = document.getElementById('login-pass');
+  const submitCompletedLogin = () => {
+    if (loginUser.value.trim() && loginPassword.value) doLogin();
+  };
+  loginForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitCompletedLogin();
+  });
+  loginUser.addEventListener('change', submitCompletedLogin);
+  loginPassword.addEventListener('change', submitCompletedLogin);
   document.getElementById('login-default-candidate')?.addEventListener('keyup', (e) => {
     if (e.key === 'Enter') {
       startAutoApplyFromLoginStep().catch((err) => {
@@ -2925,7 +2935,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
   });
-  document.getElementById('btn-login').addEventListener('click', doLogin);
   document.getElementById('btn-extension-logout')?.addEventListener('click', doLogout);
   document.getElementById('btn-get-jd-mode')?.addEventListener('click', startGetJdPreview);
   document.getElementById('btn-get-jd-back-home')?.addEventListener('click', backHomeFromGetJd);
@@ -4010,8 +4019,10 @@ async function checkAuth() {
   return bootstrapPopupFast();
 }
 
+let loginInFlight = false;
+
 async function doLogin() {
-  await window.api.ensureServerUrl();
+  if (loginInFlight) return;
   const username = document.getElementById('login-user').value.trim();
   const password = document.getElementById('login-pass').value;
   if (!username || !password) {
@@ -4019,10 +4030,10 @@ async function doLogin() {
     return;
   }
 
-  const loginBtn = document.getElementById('btn-login');
+  loginInFlight = true;
   showLoading('Signing in…');
-  if (loginBtn) loginBtn.disabled = true;
   try {
+    await window.api.ensureServerUrl();
     if (!global.__qtsAccountAuth?.storePopupAuth) {
       throw new Error('Extension auth module not loaded. Reload the extension in chrome://extensions.');
     }
@@ -4064,7 +4075,7 @@ async function doLogin() {
       'error'
     );
   } finally {
-    if (loginBtn) loginBtn.disabled = false;
+    loginInFlight = false;
     hideLoading(true);
   }
 }
@@ -6478,19 +6489,24 @@ function showAuthenticatedScreen(user) {
 
 async function refreshGetJdView() {
   const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
+  const geminiEvaluationEnabled = window.__qtsRuntimeConfig?.features?.geminiEvaluation === true;
   const enabled = stored[EXTENSION_STATUS_KEY] === 'get_jd';
   const button = document.getElementById('btn-get-jd-mode');
   const status = document.getElementById('get-jd-mode-status');
   const preview = document.getElementById('get-jd-preview');
   const activeSection = document.getElementById('get-jd-active-section');
   if (button) {
-    button.classList.toggle('hidden', enabled);
+    button.classList.toggle('hidden', enabled || !geminiEvaluationEnabled);
     button.setAttribute('aria-pressed', String(enabled));
   }
   activeSection?.classList.toggle('hidden', !enabled);
-  status?.classList.toggle('hidden', enabled);
+  status?.classList.toggle('hidden', enabled && geminiEvaluationEnabled);
   preview?.classList.add('hidden');
-  if (status && !enabled) status.textContent = 'Preview the job details before turning on Get JD.';
+  if (status && !geminiEvaluationEnabled) {
+    status.textContent = 'Use the floating QTS button on the current page. Get JD extracts a local preview without Gemini.';
+  } else if (status && !enabled) {
+    status.textContent = 'Preview the job details before turning on Get JD.';
+  }
 }
 
 function setGetJdPreviewMessage(message, isError = false) {
@@ -6590,8 +6606,13 @@ async function backHomeFromGetJd(event) {
 }
 
 function updateFeatureGatedControls(user) {
+  const runtimeFeatures = window.__qtsRuntimeConfig?.features || {};
   const managerMode = user?.role === 'manager';
-  const scannerUnavailable = managerMode && !managerExtensionFeatures.canUseScanner;
+  const scannerEnabled = runtimeFeatures.scanner === true;
+  const applicationEnabled = runtimeFeatures.applicationAutomation === true;
+  const highlightsEnabled = runtimeFeatures.textHighlights === true;
+  const scannerUnavailable = managerMode
+    && (!scannerEnabled || !managerExtensionFeatures.canUseScanner);
   const outputFolderButton = document.getElementById('btn-scanner-output-folder');
   outputFolderButton?.classList.toggle('hidden', !managerMode || scannerUnavailable);
   if (managerMode && !scannerUnavailable) {
@@ -6601,17 +6622,22 @@ function updateFeatureGatedControls(user) {
   } else {
     document.getElementById('scanner-output-folder-status')?.classList.add('hidden');
   }
-  const canManageHighlights = managerMode && managerExtensionFeatures.canManageTextHighlights;
+  const canManageHighlights = highlightsEnabled
+    && managerMode
+    && managerExtensionFeatures.canManageTextHighlights;
   const scannerSection = document.getElementById('site-discovery');
-  scannerSection?.classList.toggle('hidden', !managerMode);
+  scannerSection?.classList.toggle('hidden', !managerMode || (!scannerEnabled && !applicationEnabled));
   const scannerTitle = document.getElementById('site-discovery-title');
   if (scannerTitle) scannerTitle.textContent = scannerUnavailable ? 'Apply' : 'Apply & Scanner';
   const scannerButton = document.getElementById('btn-discover-site-step');
   scannerButton?.classList.toggle('hidden', scannerUnavailable);
-  document.getElementById('btn-apply')?.classList.toggle('hidden', !managerMode || !managerExtensionFeatures.canUseApply);
+  document.getElementById('btn-apply')?.classList.toggle(
+    'hidden',
+    !applicationEnabled || !managerMode || !managerExtensionFeatures.canUseApply
+  );
   document.getElementById('btn-connect-account-mailbox')?.classList.toggle(
     'hidden',
-    !managerMode || !scannerApplyMode || !scannerSelectedAccountId || !managerExtensionFeatures.canUseApply
+    !applicationEnabled || !managerMode || !scannerApplyMode || !scannerSelectedAccountId || !managerExtensionFeatures.canUseApply
   );
   document.querySelectorAll('.btn-text-highlights').forEach((button) => {
     button.classList.toggle('hidden', !canManageHighlights);
@@ -6648,6 +6674,15 @@ async function refreshManagerExtensionFeatures() {
   managerExtensionFeatures = { canManageTextHighlights: false, canUseScanner: false, canUseApply: false };
   managerExtensionFeaturesError = '';
   if (currentUser?.role !== 'manager') return managerExtensionFeatures;
+  const runtimeFeatures = window.__qtsRuntimeConfig?.features || {};
+  if (
+    runtimeFeatures.scanner !== true
+    && runtimeFeatures.applicationAutomation !== true
+    && runtimeFeatures.textHighlights !== true
+  ) {
+    updateFeatureGatedControls(currentUser);
+    return managerExtensionFeatures;
+  }
   const result = await window.api.getManagerExtensionFeatures();
   if (!result.success || !result.features) {
     managerExtensionFeaturesError = result.message || 'Could not verify this Manager’s extension permissions.';
@@ -6676,13 +6711,15 @@ async function initializeManagerExtensionFeatures(user) {
   setSession(user);
   if (user?.role === 'manager') await refreshManagerExtensionFeatures();
   else managerExtensionFeatures = { canManageTextHighlights: false, canUseScanner: false, canUseApply: false };
-  try {
-    const highlights = await chrome.runtime.sendMessage({ type: 'GET_GLOBAL_TEXT_HIGHLIGHTS' });
-    if (!highlights?.success) {
-      console.warn('[QTS text highlights] Shared rules were not refreshed after Manager sign-in:', highlights?.message);
+  if (window.__qtsRuntimeConfig?.isFeatureEnabled('textHighlights')) {
+    try {
+      const highlights = await chrome.runtime.sendMessage({ type: 'GET_GLOBAL_TEXT_HIGHLIGHTS' });
+      if (!highlights?.success) {
+        console.warn('[QTS text highlights] Shared rules were not refreshed after Manager sign-in:', highlights?.message);
+      }
+    } catch (error) {
+      console.warn('[QTS text highlights] Could not refresh shared rules after sign-in:', error);
     }
-  } catch (error) {
-    console.warn('[QTS text highlights] Could not refresh shared rules after sign-in:', error);
   }
   updateFeatureGatedControls(user);
 }

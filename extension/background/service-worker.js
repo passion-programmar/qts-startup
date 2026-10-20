@@ -1,7 +1,7 @@
 // Background service worker — tab tracking, capture window, messages
 
 importScripts(
-  '../shared/text-highlighting.js',
+  '../shared/runtime-config.js',
   '../shared/application-flow.js',
   '../shared/job-detect.js',
   '../shared/api-prefetch.js',
@@ -45,7 +45,6 @@ const capturePanelOpenPromisesByTab = new Map();
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
 const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
-const GET_JD_SERVER_URL = 'https://qts-job-system.vercel.app';
 const getJdInFlightTabs = new Set();
 const getJdLastPageByTab = new Map();
 let lastSourceTabId = null;
@@ -607,7 +606,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
     runId: `${Date.now()}:${documentId}`,
     pageTitle: '',
     status: 'processing',
-    message: 'Reading this page and checking it against your candidate profiles…',
+    message: 'Reading this page and checking Jobs and Bids…',
     updatedAt: Date.now(),
     classification: null,
   };
@@ -642,45 +641,29 @@ async function processGetJdPage(tabId, url, documentId = '') {
     if (!(await isGetJdActive())) return;
     const pageUrl = extraction.url || url;
     const extractedJobDetails = normalizeDetectedJobData(extraction.data, pageUrl);
-    const response = await fetch(`${GET_JD_SERVER_URL}/api/extension/get-jd`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+    const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
+      job: {
+        jobUrl: extractedJobDetails.url,
+        jobTitle: extractedJobDetails.title,
+        company: extractedJobDetails.company,
       },
-      body: JSON.stringify({
-        pageUrl,
-        pageTitle: extraction.title || tab.title || pageUrl,
-        extractedJobDetails,
-      }),
-      signal: AbortSignal.timeout(60_000),
-      cache: 'no-store',
     });
-
-    let result;
-    try {
-      result = await response.json();
-    } catch {
-      throw new Error(`QTS returned an invalid response (${response.status}).`);
-    }
-    if (!response.ok || result.success !== true) {
-      throw new Error(result.message || `Get JD request failed (${response.status}).`);
+    if (result.success !== true) {
+      throw new Error(result.message || 'Get JD duplicate check failed.');
     }
     if (!(await isGetJdActive())) return;
 
-    if (result.duplicate === true) {
+    if (result.exists === true) {
       await saveGetJdResult(tabId, {
         ...initialResult,
         pageTitle: extraction.title || tab.title || '',
         status: 'duplicate',
-        message: result.message || "You've already applied to this Job.",
-        duplicateKind: result.duplicateKind,
+        message: result.message || 'This job already exists.',
+        inJobs: result.inJobs === true,
+        inBids: result.inBids === true,
         updatedAt: Date.now(),
       });
       return;
-    }
-    if (!result.classification || !Array.isArray(result.profiles)) {
-      throw new Error('QTS returned an incomplete job-classification response.');
     }
     const currentTab = await getTab(tabId);
     if (!currentTab?.url || currentTab.url !== url || !(await isGetJdActive())) return;
@@ -688,25 +671,20 @@ async function processGetJdPage(tabId, url, documentId = '') {
     await saveGetJdResult(tabId, {
       ...initialResult,
       pageTitle: extraction.title || tab.title || '',
-      status: 'complete',
-      message: !result.classification.isJobPage
-        ? 'This is not Job Page'
-        : 'This is a new job!',
+      status: 'new',
+      message: result.message || 'This is a new job!',
       updatedAt: Date.now(),
-      classification: {
-        ...result.classification,
-        job: {
-          ...result.classification.job,
-          location: extractedJobDetails.location || result.classification.job.location,
-        },
+      job: {
+        title: extractedJobDetails.title,
+        company: extractedJobDetails.company,
+        location: extractedJobDetails.location,
+        jobUrl: extractedJobDetails.url,
       },
-      jobDescription: result.jobDescription || extractedJobDetails.description,
-      profiles: result.profiles,
-      reviewDismissed: false,
+      jobDescription: extractedJobDetails.description,
     });
   } catch (error) {
     if (!(await isGetJdActive())) return;
-    console.error('[QTS Get JD] Page classification failed:', error);
+    console.error('[QTS Get JD] Page duplicate check failed:', error);
     await saveGetJdResult(tabId, {
       ...initialResult,
       status: 'error',
@@ -2737,7 +2715,148 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
+const featureMessageGroups = {
+  textHighlights: new Set([
+    'GET_GLOBAL_TEXT_HIGHLIGHTS',
+  ]),
+  scanner: new Set([
+    'DISCOVER_APPLICATION_FORM',
+    'CAPTURE_APPLICATION_STEP',
+    'SAVE_SCANNER_STEP_EVIDENCE',
+    'GET_APPLY_TEMPLATE',
+    'DETECT_APPLY_TEMPLATE',
+    'SCAN_APPLICATION_FORM',
+    'FILL_APPLICATION_FORM',
+  ]),
+  applicationAutomation: new Set([
+    'ADVANCE_MANAGER_APPLICATION_STEP',
+    'CHECK_APPLICATION_SUBMISSION_STATUS',
+    'POLL_AND_APPLY_GPT_TASK',
+    'APPLY_GPT_PACKAGE_TO_TAB',
+    'SEND_GPT_TASK',
+    'DISPATCH_GPT_TASK',
+    'START_AUTO_APPLY_ON_TAB',
+  ]),
+};
+
+function disabledFeatureForMessage(type) {
+  for (const [feature, messageTypes] of Object.entries(featureMessageGroups)) {
+    if (messageTypes.has(type) && !self.__qtsRuntimeConfig.isFeatureEnabled(feature)) {
+      return feature;
+    }
+  }
+  return null;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const disabledFeature = disabledFeatureForMessage(msg?.type);
+  if (disabledFeature) {
+    sendResponse({
+      ok: false,
+      success: false,
+      disabled: true,
+      error: `${disabledFeature} is not enabled in this QTS release.`,
+    });
+    return false;
+  }
+  if (msg.type === 'GET_QTS_RUNTIME_CONFIG') {
+    self.__qtsRuntimeConfig.getServerUrl()
+      .then((serverUrl) => sendResponse({
+        ok: true,
+        serverUrl,
+        features: self.__qtsRuntimeConfig.features,
+      }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (msg.type === 'QTS_PAGE_ACTION') {
+    (async () => {
+      const action = String(msg.action || '');
+      const tabId = sender.tab?.id;
+      if (action === 'sign_in') {
+        if (tabId == null) {
+          sendResponse({ ok: false, error: 'Sign in must be opened from a web page.' });
+          return;
+        }
+        const loginName = typeof msg.loginName === 'string' ? msg.loginName.trim() : '';
+        const password = typeof msg.password === 'string' ? msg.password : '';
+        if (!loginName || !password) {
+          sendResponse({ ok: false, error: 'User Name and Password are required.' });
+          return;
+        }
+        await self.__qtsAccountAuth?.clearAuth?.();
+        const serverUrl = await self.__qtsRuntimeConfig.getServerUrl();
+        const response = await fetch(`${serverUrl}/api/extension/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ loginName, password }),
+        });
+        let result;
+        try {
+          result = await response.json();
+        } catch {
+          sendResponse({ ok: false, error: `QTS returned an invalid response (${response.status}).` });
+          return;
+        }
+        if (!response.ok || result.success !== true || !result.token) {
+          sendResponse({ ok: false, error: result.message || 'Sign in failed.' });
+          return;
+        }
+        const sessionUser = {
+          id: result.id,
+          username: result.username,
+          role: result.role,
+          name: result.name || result.username,
+        };
+        await self.__qtsAccountAuth.storeAuth(result.token, sessionUser, result.expiresAt);
+        sendResponse({ ok: true, signedIn: true });
+        return;
+      }
+      if (action === 'sign_out') {
+        await self.__qtsAccountAuth?.clearAuth?.();
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        getJdInFlightTabs.clear();
+        getJdLastPageByTab.clear();
+        sendResponse({ ok: true, message: 'Signed out.' });
+        return;
+      }
+      if (action === 'generation' || action === 'apply') {
+        sendResponse({
+          ok: false,
+          disabled: true,
+          error: `${action === 'generation' ? 'Generation' : 'Apply'} is not enabled yet.`,
+        });
+        return;
+      }
+      if (action !== 'get_jd') {
+        sendResponse({ ok: false, error: 'Unknown QTS action.' });
+        return;
+      }
+      if (tabId == null) {
+        sendResponse({ ok: false, error: 'Get JD must be started from a web page.' });
+        return;
+      }
+      const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
+      if (!token) {
+        sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Get JD.' });
+        return;
+      }
+      await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'get_jd' });
+      getJdLastPageByTab.clear();
+      enableGetJdForTab(tabId).catch((error) => {
+        console.error('[QTS Get JD] Could not start page monitoring:', error);
+      });
+      sendResponse({
+        ok: true,
+        status: 'get_jd',
+        message: "Let's start finding Your Remote Job!",
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not run this QTS action.',
+    }));
+    return true;
+  }
   if (msg.type === 'GET_JD_PREVIEW') {
     (async () => {
       const tabId = Number.isInteger(msg.tabId) ? msg.tabId : null;
@@ -2767,6 +2886,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       ok: false,
       error: error instanceof Error ? error.message : 'Could not extract this page.',
     }));
+    return true;
+  }
+  if (msg.type === 'QTS_CLOSE_SIGN_IN_PANEL') {
+    const tabId = sender.tab?.id;
+    if (tabId == null) {
+      sendResponse({ ok: false, error: 'The sign-in page is unavailable.' });
+      return false;
+    }
+    chrome.tabs.sendMessage(tabId, { type: 'QTS_CLOSE_CAPTURE_PANEL' })
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (msg.type === 'GET_JD_PAGE_RESULT') {
@@ -2829,6 +2959,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       const status = msg.status === 'get_jd' ? 'get_jd' : null;
       if (status === 'get_jd') {
+        if (!self.__qtsRuntimeConfig.isFeatureEnabled('geminiEvaluation')) {
+          await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+          sendResponse({
+            ok: false,
+            disabled: true,
+            error: 'Gemini evaluation is paused. Use the in-page Get JD preview.',
+          });
+          return;
+        }
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: status });
         enableGetJdForTab(Number.isInteger(msg.tabId) ? msg.tabId : null)
           .catch((error) => {
@@ -3412,6 +3551,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.authToken) {
     if (!changes.authToken.newValue) {
       disarmJobPageActivity();
+      chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null }).catch(() => {});
+      getJdInFlightTabs.clear();
+      getJdLastPageByTab.clear();
     }
     return;
   }
@@ -3425,12 +3567,6 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
-
-chrome.action.onClicked.addListener((tab) => {
-  openCapturePanel(tab?.id, { toggle: true }).catch((error) => {
-    console.error('[QTS_Startup] Could not toggle the QTS panel:', error);
-  });
-});
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const tab = await getTab(activeInfo.tabId);

@@ -3,6 +3,10 @@ import {
   scrypt as scryptCallback,
   timingSafeEqual,
 } from "node:crypto";
+import {
+  minimumPasswordLength,
+  passwordLengthError,
+} from "@/lib/password-policy";
 
 const scryptCost = 32_768;
 const scryptBlockSize = 8;
@@ -40,8 +44,8 @@ function deriveKey(
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  if (password.length < 4) {
-    throw new Error("Passwords must be at least 4 characters long.");
+  if (password.length < minimumPasswordLength) {
+    throw new Error(passwordLengthError("Passwords"));
   }
 
   const salt = randomBytes(saltBytes);

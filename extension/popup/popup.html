@@ -525,9 +525,9 @@
       <span class="session-user" id="session-user">—</span>
     </div>
     <button class="session-logout hidden" id="btn-change-team" type="button">Change Account</button>
-    <button class="session-logout" id="btn-logout" type="button" aria-label="Log out">
+    <button class="session-logout" id="btn-logout" type="button" aria-label="Sign Out">
       <span class="session-logout-icon" aria-hidden="true">⎋</span>
-      <span>Log out</span>
+      <span>Sign Out</span>
     </button>
   </div>
   </div>
@@ -538,28 +538,18 @@
     <div id="login-section">
       <div class="login-shell">
         <div class="login-card">
-          <div class="login-brand">
-            <div class="login-badge" aria-hidden="true">QTS</div>
-            <h2 class="login-title">Manager Sign In</h2>
-            <p class="login-subtitle">Sign in with your Manager account from QTS.</p>
-          </div>
-
-          <div id="login-setup-hint" class="alert alert-warn login-setup-hint">
-            Only active Manager accounts can sign in. Ask your Admin to create or unblock your account.
-          </div>
           <div id="login-alert"></div>
 
-          <div id="login-form" class="login-form">
+          <form id="login-form" class="login-form">
             <div class="login-field">
-              <label class="login-label" for="login-user">Username</label>
-              <input type="text" id="login-user" class="login-input" placeholder="Type name from qts" autocomplete="username">
+              <label class="login-label" for="login-user">User Name</label>
+              <input type="text" id="login-user" class="login-input" autocomplete="username" required autofocus>
             </div>
             <div class="login-field">
               <label class="login-label" for="login-pass">Password</label>
-              <input type="password" id="login-pass" class="login-input" placeholder="Type password qts" autocomplete="current-password">
+              <input type="password" id="login-pass" class="login-input" autocomplete="current-password" required>
             </div>
-            <button class="btn btn-primary btn-block login-submit" id="btn-login" type="button">Log In</button>
-          </div>
+          </form>
 
         </div>
       </div>
@@ -618,7 +608,7 @@
               </p>
             </div>
           </section>
-          <button class="btn btn-ghost btn-block" id="btn-extension-logout" type="button">Log out</button>
+          <button class="btn btn-ghost btn-block" id="btn-extension-logout" type="button">Sign Out</button>
         </div>
       </div>
     </section>
@@ -633,7 +623,7 @@
             <button class="btn btn-primary" id="btn-get-jd" type="button" aria-pressed="false">Get JD</button>
             <button class="btn btn-ghost btn-text-highlights hidden" type="button" aria-controls="page-highlights" aria-expanded="false">Text Highlight</button>
             <button class="btn btn-primary" id="btn-custom-apply" type="button" aria-pressed="false">Custom Apply</button>
-            <button class="btn btn-ghost" id="btn-action-logout" type="button">Logout</button>
+            <button class="btn btn-ghost" id="btn-action-logout" type="button">Sign Out</button>
           </div>
           <p class="application-disabled-note hidden" id="application-disabled-note">
             Apply pauses for unresolved answers, CAPTCHA, one-time codes, consent, or signature fields that need a person.
@@ -884,6 +874,7 @@
     </div>
   </div>
 
+  <script src="../shared/runtime-config.js"></script>
   <script src="../shared/application-flow.js"></script>
   <script src="../shared/application-preview-render.js"></script>
   <script src="../shared/page-url.js"></script>

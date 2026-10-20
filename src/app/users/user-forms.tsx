@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { PasswordField } from "@/app/components/password-field";
+import { minimumPasswordLength } from "@/lib/password-policy";
 import {
   createUserAction,
   deleteStaffUserAction,
@@ -308,7 +309,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                 autoComplete="new-password"
                 id="newStaffPassword"
                 label="Temporary password"
-                minLength={4}
+                minLength={minimumPasswordLength}
                 name="password"
                 placeholder="At least 4 characters"
                 required
@@ -379,7 +380,7 @@ export function CredentialResetForm({
           autoComplete="new-password"
           id={`resetPassword-${userId}`}
           label="Set a new password (optional)"
-          minLength={4}
+          minLength={minimumPasswordLength}
           name="password"
           placeholder="At least 4 characters"
         />

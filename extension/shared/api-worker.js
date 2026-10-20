@@ -1,7 +1,25 @@
 // Minimal API helpers for the service worker (GPT poll + document download).
 
-const WORKER_DEFAULT_SERVER = 'https://qts-job-system.vercel.app';
 const qtsRoot = typeof globalThis !== 'undefined' ? globalThis : self;
+
+function workerExperimentalApisEnabled() {
+  const features = qtsRoot.__qtsRuntimeConfig?.features || {};
+  return features.scanner === true || features.applicationAutomation === true;
+}
+
+function workerUnavailableResponse() {
+  return {
+    success: false,
+    disabled: true,
+    message: 'This extension workflow is not enabled in the current QTS release.',
+  };
+}
+
+function workerSupportedApiPath(path) {
+  return path === '/api/extension/get-jd/check'
+    || path === '/api/extension/get-jd/save'
+    || path.startsWith('/api/extension/auth/');
+}
 
 async function workerReadAuth() {
   const auth = qtsRoot.__qtsAccountAuth;  const token = auth?.getWorkerAuthToken
@@ -9,11 +27,14 @@ async function workerReadAuth() {
     : (await chrome.storage.local.get(['authToken', 'authExpiresAt'])).authToken || '';
   return {
     token,
-    serverUrl: WORKER_DEFAULT_SERVER,
+    serverUrl: await qtsRoot.__qtsRuntimeConfig.getServerUrl(),
   };
 }
 
 async function workerApiRequest(method, path, body) {
+  if (!workerSupportedApiPath(path) && !workerExperimentalApisEnabled()) {
+    return workerUnavailableResponse();
+  }
   const { token, serverUrl } = await workerReadAuth();
   if (!token) return { success: false, message: 'Not logged in.' };
 
@@ -31,7 +52,13 @@ async function workerApiRequest(method, path, body) {
     try {
       data = await response.json();
     } catch {
-      return { success: false, message: 'Invalid server response.', _httpStatus: response.status };
+      return {
+        success: false,
+        message: response.status === 404
+          ? 'This QTS server does not have the Get JD check endpoint yet. Deploy the latest server version.'
+          : `QTS server returned a non-JSON response (HTTP ${response.status}).`,
+        _httpStatus: response.status,
+      };
     }
     if (!response.ok && data.success !== false) data.success = false;
     data._httpStatus = response.status;
@@ -49,6 +76,7 @@ async function workerApiRequest(method, path, body) {
 }
 
 async function workerFetchDocumentBase64(applicationId, docType) {
+  if (!workerExperimentalApisEnabled()) return workerUnavailableResponse();
   const { token, serverUrl } = await workerReadAuth();
   if (!token) return { success: false, message: 'Not logged in.' };
 
@@ -94,6 +122,7 @@ async function workerFetchDocumentBase64(applicationId, docType) {
 }
 
 async function workerFetchAccountResumeBase64(accountId) {
+  if (!workerExperimentalApisEnabled()) return workerUnavailableResponse();
   const { token, serverUrl } = await workerReadAuth();
   if (!token) return { success: false, message: 'Not logged in.' };
 
@@ -146,6 +175,7 @@ async function workerFetchAccountResumeBase64(accountId) {
 }
 
 async function workerFetchGptTaskDocumentBase64(taskId, documentType) {
+  if (!workerExperimentalApisEnabled()) return workerUnavailableResponse();
   const { token, serverUrl } = await workerReadAuth();
   if (!token) return { success: false, message: 'Not logged in.' };
   if (!['resume', 'cover_letter'].includes(documentType)) {

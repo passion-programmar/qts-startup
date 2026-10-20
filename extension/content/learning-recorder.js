@@ -1,7 +1,6 @@
 (function initQtsLearningRecorder(global) {
   if (global.__qtsLearningRecorder) return;
 
-  const SERVER_URL = 'https://qts-job-system.vercel.app';
   const pendingByKey = new Map();
   let started = false;
 
@@ -151,6 +150,10 @@
   }
 
   async function submitLearningConfirmation(payload) {
+    const runtime = await chrome.runtime.sendMessage({ type: 'GET_QTS_RUNTIME_CONFIG' });
+    if (!runtime?.ok || runtime.features?.applicationAutomation !== true) {
+      return { success: false, disabled: true, message: 'Application learning is not enabled.' };
+    }
     const sessionId = getActiveSessionId();
     if (!sessionId) {
       return { success: false, message: 'No active application session for learning capture.' };
@@ -162,7 +165,7 @@
     }
 
     try {
-      const response = await fetch(`${SERVER_URL}/api/application-sessions/${sessionId}/learning-confirmation`, {
+      const response = await fetch(`${runtime.serverUrl}/api/application-sessions/${sessionId}/learning-confirmation`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

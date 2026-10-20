@@ -1,24 +1,39 @@
 // API client for the extension popup
 
-const DEFAULT_SERVER = 'https://qts-job-system.vercel.app';
+const runtimeConfig = window.__qtsRuntimeConfig;
+if (!runtimeConfig) {
+  throw new Error('QTS runtime configuration must load before the API client.');
+}
+const DEFAULT_SERVER_URL = runtimeConfig.DEFAULT_SERVER_URL;
 
 let cachedAuthToken = null;
 
-function normalizeServerUrl(url) {
-  let normalized = String(url || '').trim().replace(/\/+$/, '');
-  if (!normalized) return DEFAULT_SERVER;
-  normalized = normalized.replace(/\/api\/health\/?$/i, '');
-  normalized = normalized.replace(/\/api\/?$/i, '');
-  normalized = normalized.replace(/\/+$/, '');
-  return normalized || DEFAULT_SERVER;
+function experimentalApisEnabled() {
+  const features = runtimeConfig.features;
+  return features.scanner === true
+    || features.applicationAutomation === true
+    || features.textHighlights === true;
+}
+
+function isSupportedApiPath(path) {
+  return path.startsWith('/api/extension/auth/')
+    || path === '/api/extension/get-jd/save';
+}
+
+function unavailableApiResponse() {
+  return {
+    success: false,
+    disabled: true,
+    message: 'This extension workflow is not enabled in the current QTS release.',
+  };
 }
 
 async function getServerUrl() {
-  return DEFAULT_SERVER;
+  return runtimeConfig.getServerUrl();
 }
 
 async function ensureServerUrl() {
-  return DEFAULT_SERVER;
+  return getServerUrl();
 }
 
 async function getToken() {
@@ -51,6 +66,9 @@ function formatApiMessage(data, fallback) {
 }
 
 async function apiRequest(method, path, body) {
+  if (!isSupportedApiPath(path) && !experimentalApisEnabled()) {
+    return unavailableApiResponse();
+  }
   const [serverUrl, token] = await Promise.all([getServerUrl(), getToken()]);
   const url = serverUrl.replace(/\/$/, '') + path;
   const opts = {
@@ -112,6 +130,7 @@ async function apiRequest(method, path, body) {
 }
 
 async function fetchApplicationDocument(applicationId, docType) {
+  if (!experimentalApisEnabled()) return unavailableApiResponse();
   const [serverUrl, token] = await Promise.all([getServerUrl(), getToken()]);
   const url = `${serverUrl.replace(/\/$/, '')}/api/application-sessions/${applicationId}/documents/${encodeURIComponent(docType)}`;
   let response;
@@ -158,6 +177,7 @@ async function fetchApplicationDocument(applicationId, docType) {
 }
 
 async function fetchManagerGptTaskDocument(taskId, documentType) {
+  if (!experimentalApisEnabled()) return unavailableApiResponse();
   const [serverUrl, token] = await Promise.all([getServerUrl(), getToken()]);
   const url = `${serverUrl.replace(/\/$/, '')}/api/v2/gpt-application-tasks/${encodeURIComponent(taskId)}/documents/${encodeURIComponent(documentType)}`;
   let response;
@@ -221,7 +241,7 @@ async function confirmApplicationLearning(applicationId, payload) {
 }
 
 window.api = {
-  DEFAULT_SERVER,
+  DEFAULT_SERVER: DEFAULT_SERVER_URL,
   formatApiMessage,
   getServerUrl,
   ensureServerUrl,

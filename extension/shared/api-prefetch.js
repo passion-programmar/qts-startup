@@ -1,6 +1,5 @@
 // Shared API prefetch helpers (service worker + popup via importScripts / script tag)
 
-const API_SERVER = 'https://qts-job-system.vercel.app';
 const PREFETCH_CANDIDATE_CACHE_KEY = 'qtsCandidateCache';
 const PREFETCH_SESSION_USER_KEY = 'qtsSessionUser';
 const PREFETCH_CUSTOM_GPT_CONFIG_KEY = 'qtsCustomGptConfig';
@@ -26,10 +25,16 @@ async function prefetchReadAuthToken() {
 }
 
 async function prefetchApiRequest(path) {
+  const runtimeConfig = (typeof self !== 'undefined' ? self : globalThis).__qtsRuntimeConfig;
+  const features = runtimeConfig?.features || {};
+  if (features.scanner !== true && features.applicationAutomation !== true) {
+    return { success: false, disabled: true };
+  }
   const token = await prefetchReadAuthToken();
   if (!token) return { success: false, _noToken: true };
 
-  const url = API_SERVER.replace(/\/$/, '') + path;
+  const serverUrl = await runtimeConfig.getServerUrl();
+  const url = serverUrl.replace(/\/$/, '') + path;
   try {
     const response = await fetch(url, {
       method: 'GET',

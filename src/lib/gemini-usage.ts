@@ -3,14 +3,18 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import {
+  buildGeminiCountTokensRequest,
+  geminiModel,
+} from "@/server/gemini/gemini-request";
+
+export { geminiModel };
 
 export const geminiApiLimits = {
   requestsPerMinute: 9,
   requestsPerDay: 200,
   inputTokensPerMinute: 25_000,
 } as const;
-
-export const geminiModel = "gemini-3.5-flash-lite";
 
 export function getGeminiApiKeys(): string[] {
   const configuredKeys = process.env.GEMINI_API_KEYS
@@ -83,12 +87,9 @@ export async function countGeminiInputTokens(
         "Content-Type": "application/json",
         "x-goog-api-key": apiKey,
       },
-      body: JSON.stringify({
-        generateContentRequest: {
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig,
-        },
-      }),
+      body: JSON.stringify(
+        buildGeminiCountTokensRequest(prompt, generationConfig),
+      ),
       signal: AbortSignal.timeout(15_000),
       cache: "no-store",
     },

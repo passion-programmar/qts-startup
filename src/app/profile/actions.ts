@@ -6,6 +6,10 @@ import { redirect } from "next/navigation";
 import { users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { hashPassword, verifyPassword } from "@/lib/password";
+import {
+  minimumPasswordLength,
+  passwordLengthError,
+} from "@/lib/password-policy";
 import { createSession, requireUser } from "@/lib/session";
 
 export type ProfileState = {
@@ -32,9 +36,9 @@ export async function updateProfileAction(
     return { error: "The new passwords do not match.", success: null };
   }
 
-  if (newPassword && newPassword.length < 4) {
+  if (newPassword && newPassword.length < minimumPasswordLength) {
     return {
-      error: "A new password must be at least 4 characters.",
+      error: passwordLengthError("A new password"),
       success: null,
     };
   }

@@ -13,7 +13,6 @@ import {
   users,
 } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { findGetJdDuplicate } from "@/lib/extension-get-jd";
 import { db } from "@/lib/db";
 import {
   acquireGeminiKey,
@@ -23,6 +22,7 @@ import {
   releaseGeminiKey,
   reserveGeminiGeneration,
 } from "@/lib/gemini-usage";
+import { findGetJdDuplicates } from "@/server/jobs/get-jd-jobs";
 
 const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
@@ -120,22 +120,6 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const duplicate = await findGetJdDuplicate(manager.id, {
-      jobUrl: extracted.url,
-      jobTitle: extracted.title,
-      company: extracted.company,
-    });
-    if (duplicate) {
-      return jsonResponse({
-        success: true,
-        duplicate: true,
-        duplicateKind: duplicate,
-        message: duplicate === "applied"
-          ? "You've already applied to this job"
-          : "You've already found this job",
-      });
-    }
-
     const profileResult = await loadManagerCandidateProfiles(manager.id);
     if (profileResult.tooMany) {
       return jsonResponse(
@@ -143,7 +127,43 @@ export async function POST(request: Request): Promise<NextResponse> {
         413,
       );
     }
-    const candidateProfiles = profileResult.profiles;
+    if (profileResult.profiles.length === 0) {
+      return jsonResponse(
+        {
+          success: false,
+          message: "Create an active candidate Account before evaluating jobs.",
+        },
+        409,
+      );
+    }
+    const duplicateProfiles = await findGetJdDuplicates(
+      manager.id,
+      {
+        jobUrl: extracted.url,
+        jobTitle: extracted.title,
+        company: extracted.company,
+      },
+      profileResult.profiles.map((profile) => profile.id),
+    );
+    const candidateProfiles = profileResult.profiles.filter(
+      (profile) => !duplicateProfiles.has(profile.id),
+    );
+    if (
+      profileResult.profiles.length > 0 &&
+      candidateProfiles.length === 0
+    ) {
+      const allApplied = [...duplicateProfiles.values()].every(
+        (kind) => kind === "applied",
+      );
+      return jsonResponse({
+        success: true,
+        duplicate: true,
+        duplicateKind: allApplied ? "applied" : "job_list",
+        message: allApplied
+          ? "All active candidates have already applied to this job"
+          : "This job is already assigned to every active candidate",
+      });
+    }
 
     const [prompt] = await db
       .select({ promptTemplate: prompts.promptTemplate })

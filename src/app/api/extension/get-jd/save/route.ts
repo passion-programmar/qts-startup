@@ -1,9 +1,13 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { categories, profiles, users, jobs } from "@/db/schema";
+import { categories, profiles, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { findGetJdDuplicate } from "@/lib/extension-get-jd";
 import { db } from "@/lib/db";
+import {
+  findGetJdDuplicate,
+  insertGetJdJob,
+} from "@/server/jobs/get-jd-jobs";
+import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 
 const maxProfilesPerSave = 100;
 
@@ -71,7 +75,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const today = new Date().toISOString().slice(0, 10);
     const results: SaveProfileResult[] = [];
     for (const candidate of candidates) {
       const name = [candidate.firstName, candidate.lastName]
@@ -92,21 +95,22 @@ export async function POST(request: Request): Promise<NextResponse> {
       }
 
       try {
-        const [savedJob] = await db
-          .insert(jobs)
-          .values({
-            jobUrl: job.jobUrl,
-            jobTitle: job.jobTitle,
-            company: job.company,
-            location: job.location,
-            managerId: manager.id,
-            candidateId: candidate.id,
-            date: today,
-            status: "todo",
-          })
-          .returning({ id: jobs.id });
-        if (!savedJob) {
-          throw new Error("Job insert returned no row.");
+        const savedJob = await insertGetJdJob({
+          ...job,
+          managerId: manager.id,
+          candidateId: candidate.id,
+        });
+        if (savedJob.status !== "saved") {
+          results.push({
+            profileId: candidate.id,
+            name,
+            category: candidate.category,
+            status: "already_exists",
+            message: savedJob.status === "applied"
+              ? "Already applied."
+              : "Already present in the Job List.",
+          });
+          continue;
         }
         results.push({
           profileId: candidate.id,
@@ -114,7 +118,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           category: candidate.category,
           status: "saved",
           message: "Added to the Job List.",
-          jobId: savedJob.id,
+          jobId: savedJob.jobId,
         });
       } catch (error) {
         logSaveFailure(error);
@@ -165,7 +169,7 @@ function readJob(
     return null;
   }
   return {
-    jobUrl: normalizeUrl(job.jobUrl),
+    jobUrl: normalizeJobUrl(job.jobUrl),
     jobTitle: job.title.trim(),
     company: job.company.trim(),
     location: job.location.trim() || null,
@@ -184,23 +188,6 @@ function readProfileIds(value: unknown): string[] | null {
     return null;
   }
   return profileIds;
-}
-
-function normalizeUrl(value: string): string {
-  const url = new URL(value);
-  url.hash = "";
-  url.pathname = url.pathname.replace(/\/+$/, "") || "/";
-  return url.href;
-}
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === "https:" || url.protocol === "http:") &&
-      !url.username && !url.password;
-  } catch {
-    return false;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
