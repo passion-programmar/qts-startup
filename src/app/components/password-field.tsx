@@ -8,7 +8,7 @@ type PasswordFieldProps = {
   name: string;
   label: string;
   autoComplete: string;
-  placeholder: string;
+  placeholder?: string;
   required?: boolean;
   minLength?: number;
 };

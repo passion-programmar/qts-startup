@@ -1,5 +1,4 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { GlobalPromptForm, PromptAssignmentForm, PromptModeForm } from "@/app/settings/prompt-forms";
 import {
@@ -10,6 +9,7 @@ import {
 } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { WorkspaceShell } from "@/app/components/workspace-shell";
 
 export const instant = false;
 
@@ -86,46 +86,29 @@ export default async function SettingsPage() {
     );
 
   return (
-    <main className="min-h-screen bg-[#f7f8fa] px-5 py-8 text-slate-900 sm:px-8 sm:py-10">
+    <WorkspaceShell activeHref="/settings" user={currentUser}>
+    <main className="px-4 py-7 text-slate-900 sm:px-7 sm:py-9">
       <div className="mx-auto max-w-6xl">
-        <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <header className="mb-7">
           <div>
-            <p className="mb-2 text-xs font-medium text-slate-400">
-              Super Admin workspace
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
               AI prompt settings
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-              Manage global prompt versions, choose the Manager prompt mode, and
-              assign stable ChatGPT prompt overrides.
-            </p>
           </div>
-          <Link
-            className="text-xs font-semibold text-indigo-600 hover:text-indigo-700"
-            href="/"
-          >
-            Back to dashboard
-          </Link>
         </header>
 
-        <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <h2 className="mb-4 text-sm font-semibold text-slate-800">
             Prompt mode
           </h2>
           <PromptModeForm mode={mode} />
         </section>
 
-        <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="mb-5">
             <h2 className="text-sm font-semibold text-slate-800">
               Global prompt library
             </h2>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              Saving an existing prompt creates a new version and preserves its
-              earlier revisions. Only one active version per prompt group is
-              used.
-            </p>
           </div>
           <div className="space-y-7">
             {promptGroups.map((group) => {
@@ -177,16 +160,11 @@ export default async function SettingsPage() {
           </div>
         </section>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="mb-5">
             <h2 className="text-sm font-semibold text-slate-800">
               Manager prompt assignments
             </h2>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              Assign a specific active ChatGPT prompt or select random once.
-              Random assignments are saved and remain stable until unassigned
-              or replaced.
-            </p>
           </div>
           {managerRows.length > 0 ? (
             <div className="grid gap-3 lg:grid-cols-2">
@@ -212,5 +190,6 @@ export default async function SettingsPage() {
         </section>
       </div>
     </main>
+    </WorkspaceShell>
   );
 }

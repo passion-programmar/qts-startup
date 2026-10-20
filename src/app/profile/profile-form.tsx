@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { Check, ShieldCheck } from "lucide-react";
+import { Check } from "lucide-react";
 import { updateProfileAction, type ProfileState } from "@/app/profile/actions";
 import { PasswordField } from "@/app/components/password-field";
 
@@ -57,28 +57,11 @@ export function ProfileForm({ displayName, loginName }: ProfileFormProps) {
         </div>
       </div>
 
-      <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-4">
-        <div className="flex items-start gap-3">
-          <ShieldCheck className="mt-0.5 size-4 shrink-0 text-indigo-600" />
-          <div>
-            <p className="text-xs font-semibold text-slate-800">
-              Passwords are stored securely
-            </p>
-            <p className="mt-1 text-[11px] leading-5 text-slate-600">
-              Existing passwords cannot be viewed. Enter your current password
-              to confirm changes; leave the new-password fields blank to keep
-              it unchanged.
-            </p>
-          </div>
-        </div>
-      </div>
-
       <PasswordField
         autoComplete="current-password"
         id="currentPassword"
         label="Current password"
         name="currentPassword"
-        placeholder="Confirm your identity"
         required
       />
 
@@ -88,7 +71,6 @@ export function ProfileForm({ displayName, loginName }: ProfileFormProps) {
           id="newPassword"
           label="New password"
           name="newPassword"
-          placeholder="At least 4 characters"
           minLength={4}
         />
         <PasswordField
@@ -96,7 +78,6 @@ export function ProfileForm({ displayName, loginName }: ProfileFormProps) {
           id="confirmPassword"
           label="Confirm new password"
           name="confirmPassword"
-          placeholder="Repeat the new password"
           minLength={4}
         />
       </div>

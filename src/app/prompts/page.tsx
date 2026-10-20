@@ -1,5 +1,4 @@
 import { and, eq } from "drizzle-orm";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ManagerPromptForm } from "@/app/settings/prompt-forms";
 import {
@@ -10,6 +9,7 @@ import {
 } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { WorkspaceShell } from "@/app/components/workspace-shell";
 
 export const instant = false;
 
@@ -55,53 +55,28 @@ export default async function ManagerPromptsPage() {
   const savedPrivatePrompt = overrideRows[0]?.promptTemplate;
 
   return (
-    <main className="min-h-screen bg-[#f7f8fa] px-5 py-8 text-slate-900 sm:px-8 sm:py-10">
+    <WorkspaceShell activeHref="/prompts" user={currentUser}>
+    <main className="px-4 py-7 text-slate-900 sm:px-7 sm:py-9">
       <div className="mx-auto max-w-4xl">
-        <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <header className="mb-7">
           <div>
-            <p className="mb-2 text-xs font-medium text-slate-400">
-              Manager workspace
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight">My AI prompt</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-              Your ChatGPT prompt is shared by resume and cover-letter
-              generation. Gemini application prompts are managed by Super Admin
-              and are not available here.
-            </p>
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">My AI prompt</h1>
           </div>
-          <Link
-            className="text-xs font-semibold text-indigo-600 hover:text-indigo-700"
-            href="/"
-          >
-            Back to dashboard
-          </Link>
         </header>
 
         {!privateMode ? (
-          <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <h2 className="text-sm font-semibold text-slate-800">
-              Global prompt mode is active
+              Global prompt active
+              {assignedPromptName ? ` · ${assignedPromptName}` : ""}
             </h2>
-            <p className="mt-2 text-xs leading-5 text-slate-500">
-              Your generation uses the Super Admin global ChatGPT prompt
-              {assignedPromptName
-                ? `, overridden by the assigned prompt “${assignedPromptName}”.`
-                : "."}{" "}
-              Private prompt editing is disabled until Super Admin changes the
-              prompt mode.
-            </p>
           </section>
         ) : defaultPrompt ? (
-          <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <div className="mb-5">
-              <h2 className="text-sm font-semibold text-slate-800">
+              <h2 className="text-base font-semibold text-slate-800">
                 Private ChatGPT prompt
               </h2>
-              <p className="mt-1 text-xs leading-5 text-slate-500">
-                {savedPrivatePrompt
-                  ? "Your saved private prompt is shown below."
-                  : "No private prompt has been saved yet. The global prompt is prefilled as your starting point."}
-              </p>
             </div>
             <ManagerPromptForm
               assignedPromptName={assignedPromptName}
@@ -110,11 +85,11 @@ export default async function ManagerPromptsPage() {
           </section>
         ) : (
           <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-            A global ChatGPT prompt has not been configured yet. Please contact
-            Super Admin before saving a private prompt.
+            Global ChatGPT prompt not configured
           </section>
         )}
       </div>
     </main>
+    </WorkspaceShell>
   );
 }

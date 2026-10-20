@@ -156,11 +156,6 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               name="categoryId"
               options={categories}
             />
-            <div className="sm:col-span-2 rounded-lg bg-slate-50 px-3.5 py-3 text-[11px] leading-5 text-slate-500">
-              Candidates are profile-only Accounts. They do not receive a login
-              name or password. All profile details are optional except the
-              candidate&apos;s name.
-            </div>
           </div>
           <HistorySection
             addRow={() =>
@@ -683,9 +678,6 @@ function HistorySection({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-          <p className="mt-1 text-[11px] text-slate-500">
-            Add up to 20 records. Leave an unused row empty.
-          </p>
         </div>
         <button
         className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 px-3 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"

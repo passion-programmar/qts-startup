@@ -43,10 +43,6 @@ export function PromptModeForm({ mode }: { mode: "global" | "private" }) {
           <option value="global">Global default</option>
           <option value="private">Manager private prompts</option>
         </select>
-        <p className="mt-2 text-[11px] leading-5 text-slate-500">
-          Super Admin assignments override either mode. In private mode,
-          Managers can edit one prompt for both resumes and cover letters.
-        </p>
       </div>
       <ActionFeedback state={state} />
       <button
@@ -244,11 +240,9 @@ export function ManagerPromptForm({
   return (
     <form action={formAction} className="space-y-4">
       {assignedPromptName && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
-          Super Admin has assigned “{assignedPromptName}”. It is currently used
-          instead of your private prompt. Your changes here are saved and will
-          be used if that assignment is removed.
-        </p>
+        <span className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-[11px] font-medium text-amber-800">
+          Assigned prompt: {assignedPromptName}
+        </span>
       )}
       <div>
         <label
@@ -266,11 +260,6 @@ export function ManagerPromptForm({
           required
           rows={14}
         />
-        <p className="mt-2 text-[11px] text-slate-500">
-          This single prompt is used for both resume and cover-letter
-          generation. Gemini prompts are managed separately by Super Admin and
-          are not shown here.
-        </p>
       </div>
       <ActionFeedback state={state} />
       <button

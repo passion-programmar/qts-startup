@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { Sparkles } from "lucide-react";
 import { LoginForm } from "@/app/login/login-form";
 import { getCurrentUser } from "@/lib/session";
 
@@ -28,31 +27,19 @@ export default async function LoginPage() {
           </span>
         </div>
 
-        <div className="relative max-w-lg pb-12">
-          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-indigo-200">
-            <Sparkles className="size-3.5" />
-            Your job search, in one workspace
-          </div>
-          <h1 className="text-4xl font-semibold leading-[1.15] tracking-[-0.04em] xl:text-5xl">
-            Find your next
-            <br />
-            great opportunity.
-          </h1>
-          <p className="mt-5 max-w-md text-sm leading-6 text-slate-300">
-            Keep candidate profiles, applications, and career documents
-            organized in a workspace built for your team.
-          </p>
-          <div className="mt-10 flex items-center gap-2 text-xs text-slate-400">
-            <span className="size-2 rounded-full bg-emerald-400" />
-            Secure team access
-            <span className="px-1 text-slate-600">·</span>
-            Role-based workspace
+        <div aria-hidden="true" className="relative flex flex-1 items-center justify-center">
+          <div className="absolute size-72 rounded-full border border-white/10 xl:size-96" />
+          <div className="absolute size-56 rounded-full border border-white/10 xl:size-72" />
+          <div className="relative flex size-40 items-center justify-center rounded-[2.5rem] border border-white/15 bg-white/10 text-7xl font-bold tracking-tighter text-white shadow-2xl backdrop-blur xl:size-52 xl:text-8xl">
+            q
           </div>
         </div>
 
-        <p className="relative text-[10px] text-slate-500">
-          QTS Job Application Workspace
-        </p>
+        <div className="relative flex gap-2 pb-2">
+          <span className="h-1.5 w-10 rounded-full bg-indigo-400" />
+          <span className="h-1.5 w-4 rounded-full bg-white/20" />
+          <span className="h-1.5 w-4 rounded-full bg-white/20" />
+        </div>
       </section>
 
       <section className="flex min-h-screen items-center justify-center px-6 py-12">
@@ -65,18 +52,11 @@ export default async function LoginPage() {
               qts<span className="text-indigo-600">.</span>
             </span>
           </div>
-          <p className="text-xs font-medium text-indigo-600">Welcome back</p>
-          <h2 className="mt-2 text-[28px] font-semibold tracking-[-0.04em] text-slate-900">
-            Sign in to your account
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-600">Welcome back</p>
+          <h2 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
+            Sign in
           </h2>
-          <p className="mt-2 text-sm text-slate-500">
-            Enter the staff login credentials provided by your administrator.
-          </p>
           <LoginForm />
-          <p className="mt-8 text-center text-[11px] leading-5 text-slate-400">
-            Candidate Accounts are managed by their assigned Manager and do not
-            sign in.
-          </p>
         </div>
       </section>
     </main>

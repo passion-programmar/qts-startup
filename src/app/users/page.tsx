@@ -1,13 +1,10 @@
 import type { Metadata } from "next";
 import {
-  ChevronRight,
-  CircleHelp,
   FolderTree,
   ShieldCheck,
   Users,
 } from "lucide-react";
 import { sql } from "drizzle-orm";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { categories } from "@/db/schema";
 import {
@@ -18,6 +15,7 @@ import {
 } from "@/app/users/user-forms";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
+import { WorkspaceShell } from "@/app/components/workspace-shell";
 
 export const instant = false;
 
@@ -151,47 +149,19 @@ export default async function UsersPage() {
   const candidateCount = visibleCount - staffCount;
 
   return (
-    <main className="min-h-screen bg-[#f7f8fa] px-5 py-8 sm:px-8 sm:py-12">
+    <WorkspaceShell activeHref="/users" user={actor}>
+    <main className="px-4 py-7 sm:px-7 sm:py-9">
       <div className="mx-auto max-w-7xl">
-        <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <div className="mb-2 flex items-center gap-2 text-xs text-slate-400">
-              <span>Workspace</span>
-              <ChevronRight className="size-3.5" />
-              <span className="font-medium text-slate-700">Users</span>
-            </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
               {actor.role === "manager"
                 ? "Candidate Accounts"
                 : "Users & hierarchy"}
             </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              {actor.role === "manager"
-                ? "Manage candidate profiles assigned to you."
-                : "View people within your organization branch and add the next role in the hierarchy."}
-            </p>
           </div>
-          <Link
-            className="text-xs font-semibold text-indigo-600 hover:text-indigo-700"
-            href="/"
-          >
-            Back to dashboard
-          </Link>
         </div>
-        {actor.role === "super_admin" && (
-          <Link
-            className="mt-4 inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-50"
-            href="/categories"
-          >
-            <FolderTree className="size-3.5" />
-            Manage candidate categories
-          </Link>
-        )}
-
-        <section
-          aria-label="Visible user totals"
-          className="mt-7 grid gap-3 sm:grid-cols-3"
-        >
+        <section aria-label="Visible user totals" className="mb-5 grid gap-3 sm:grid-cols-3">
           {[
             { label: "Visible users", value: visibleCount, icon: Users },
             { label: "Staff accounts", value: staffCount, icon: ShieldCheck },
@@ -200,7 +170,7 @@ export default async function UsersPage() {
             const Icon = item.icon;
             return (
               <article
-                className="flex items-center gap-3 rounded-xl border border-slate-200/80 bg-white p-4"
+                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
                 key={item.label}
               >
                 <span className="flex size-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
@@ -225,25 +195,18 @@ export default async function UsersPage() {
           }`}
         >
           <section
-            className={`rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] sm:p-6 ${
+            className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 ${
               createRole === "account" ? "order-2" : ""
             }`}
           >
-            <div className="mb-5 flex items-start gap-3 border-b border-slate-100 pb-4">
-              <FolderTree className="mt-0.5 size-4 text-indigo-600" />
+            <div className="mb-5 flex items-center gap-3 border-b border-slate-100 pb-4">
+              <FolderTree className="size-4 text-indigo-600" />
               <div>
-                <h2 className="text-sm font-semibold text-slate-800">
+                <h2 className="text-base font-semibold text-slate-800">
                   {actor.role === "manager"
                     ? "Candidate Accounts"
                     : "Organization tree"}
                 </h2>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  {actor.role === "manager"
-                    ? "View and edit candidate profile details. Education and experience records are managed separately."
-                    : actor.role === "super_admin"
-                      ? "All users and descendants, including blocked records."
-                      : "Your account and the users managed below you."}
-                </p>
               </div>
             </div>
             {actor.role === "manager" ? (
@@ -331,8 +294,7 @@ export default async function UsersPage() {
                   </table>
                 ) : (
                   <p className="rounded-lg bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    No candidate Accounts yet. Use Add candidate Account to
-                    create the first profile.
+                    No candidate accounts
                   </p>
                 )}
               </div>
@@ -349,28 +311,11 @@ export default async function UsersPage() {
 
           <div className={`grid gap-5 ${createRole === "account" ? "order-1" : ""}`}>
             <CreateUserForm categories={categoryOptions} role={createRole} />
-            <section className="rounded-xl border border-slate-200/80 bg-white p-5">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-                <CircleHelp className="size-4 text-indigo-600" />
-                Creation permissions
-              </div>
-              <p className="mt-2 text-[11px] leading-5 text-slate-500">
-                {actor.role === "super_admin"
-                  ? "Super Admin creates Admin accounts. Admins add Managers; Managers add candidate Accounts."
-                  : actor.role === "admin"
-                    ? "You can add Managers who report directly to you."
-                    : "You can create candidate profiles assigned to your management branch."}
-              </p>
-              <p className="mt-3 border-t border-slate-100 pt-3 text-[10px] leading-4 text-slate-400">
-                Passwords are never readable after creation. Super Admin can
-                replace staff login credentials, which invalidates their
-                existing sessions.
-              </p>
-            </section>
           </div>
         </div>
       </div>
     </main>
+    </WorkspaceShell>
   );
 }
 

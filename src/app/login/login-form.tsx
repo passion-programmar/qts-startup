@@ -31,7 +31,6 @@ export function LoginForm() {
             id="loginName"
             maxLength={128}
             name="loginName"
-            placeholder="Your login name"
             required
           />
         </div>
@@ -42,7 +41,6 @@ export function LoginForm() {
         id="password"
         label="Password"
         name="password"
-        placeholder="Enter your password"
         required
       />
 

@@ -9,6 +9,7 @@ import {
   getGeminiApiKeys,
 } from "@/lib/gemini-usage";
 import { requireUser } from "@/lib/session";
+import { WorkspaceShell } from "@/app/components/workspace-shell";
 
 export const instant = false;
 
@@ -66,44 +67,31 @@ export default async function GeminiUsagePage() {
   const busyKeys = new Set(busyRows.map((row) => row.keyHash));
 
   return (
-    <main className="min-h-screen bg-[#f7f8fa] px-5 py-8 text-slate-900 sm:px-8 sm:py-10">
+    <WorkspaceShell activeHref="/settings/gemini-usage" user={currentUser}>
+    <main className="px-4 py-7 text-slate-900 sm:px-7 sm:py-9">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <header className="mb-7 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="mb-2 text-xs font-medium text-slate-400">
-              Super Admin workspace
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
               Gemini API usage
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-              Usage and remaining QTS limits for each configured key. Refresh
-              this page to see the latest counters.
-            </p>
           </div>
-          <div className="flex gap-4 text-xs font-semibold text-indigo-600">
-            <Link className="hover:text-indigo-700" href="/settings/gemini-usage">
+          <div className="flex gap-2">
+            <Link className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="/settings/gemini-usage">
               Refresh
             </Link>
-            <Link className="hover:text-indigo-700" href="/settings">
+            <Link className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="/settings">
               Settings
             </Link>
           </div>
         </header>
 
-        <section className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-900">
-          Google applies its own quota per project. Multiple keys from the same
-          project still share Google&apos;s project quota; these counters show only
-          the per-key limits enforced by QTS. Each evaluation uses a token-count
-          call and, if allowed, one generation call.
-        </section>
-
         {keys.length === 0 ? (
-          <section className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600">
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
             No Gemini API keys are configured on the server.
           </section>
         ) : (
-          <section aria-label="Gemini key usage" className="grid gap-4">
+          <section aria-label="Gemini key usage" className="grid gap-4 sm:grid-cols-2">
             {keys.map((_key, index) => {
               const hash = keyHashes[index];
               const usage = usageByKey.get(hash);
@@ -118,7 +106,7 @@ export default async function GeminiUsagePage() {
 
               return (
                 <article
-                  className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6"
+                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"
                   key={hash}
                 >
                   <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -175,6 +163,7 @@ export default async function GeminiUsagePage() {
         )}
       </div>
     </main>
+    </WorkspaceShell>
   );
 }
 
@@ -188,6 +177,7 @@ function UsageMetric({
   limit: number;
 }) {
   const remaining = Math.max(0, limit - used);
+  const progress = Math.min(100, (used / limit) * 100);
   return (
     <div className="rounded-lg bg-slate-50 p-3">
       <dt className="text-[11px] text-slate-500">{label}</dt>
@@ -197,6 +187,19 @@ function UsageMetric({
           / {limit.toLocaleString()}
         </span>
       </dd>
+      <div
+        aria-label={`${used.toLocaleString()} of ${limit.toLocaleString()}`}
+        aria-valuemax={limit}
+        aria-valuemin={0}
+        aria-valuenow={used}
+        className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"
+        role="progressbar"
+      >
+        <div
+          className="h-full rounded-full bg-indigo-500 transition-[width]"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
       <p className="mt-1 text-[10px] text-slate-400">
         {remaining.toLocaleString()} remaining
       </p>
