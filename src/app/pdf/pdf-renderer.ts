@@ -14,9 +14,13 @@ type PdfWriter = {
   heading(text: string, size?: number): void;
   paragraph(text: string, size?: number): void;
   section(text: string): void;
-  bullet(text: string): void;
   inlineBullets(items: string[]): void;
-  entry(heading: string, dateRange?: string, subheading?: string): void;
+  entry(
+    heading: string,
+    dateRange?: string,
+    subheading?: string,
+    bullets?: string[],
+  ): void;
   centeredLine(text: string, size?: number): void;
   space(amount: number): void;
   save(): Promise<Uint8Array>;
@@ -55,8 +59,7 @@ async function renderResumePdf(
   }
   for (const section of document.sections) {
     pdf.section(section.title);
-    const inlineItems = template === "vellum"
-      && /^(skills|technical skills|core skills|languages)$/i.test(section.title);
+    const inlineItems = /^(skills|technical skills|core skills|languages)$/i.test(section.title);
     if (inlineItems) {
       pdf.inlineBullets(section.items.flatMap((item) => [
         item.heading,
@@ -68,24 +71,12 @@ async function renderResumePdf(
       continue;
     }
     for (const item of section.items) {
-      if (item.heading) {
-        if (template === "vellum") {
-          pdf.entry(item.heading, item.dateRange, item.subheading);
-        } else {
-          pdf.heading(
-            `${item.heading}${item.dateRange ? `  |  ${item.dateRange}` : ""}`,
-            11,
-          );
-          if (item.subheading) pdf.line(item.subheading, 9, "gray");
-        }
-      } else if (template === "vellum" && (item.dateRange || item.subheading)) {
-        pdf.entry("", item.dateRange, item.subheading);
-      } else if (item.subheading) {
-        pdf.line(item.subheading, 9, "gray");
-      }
-      for (const bullet of item.bullets ?? []) {
-        pdf.bullet(bullet.replaceAll("**", ""));
-      }
+      pdf.entry(
+        item.heading ?? "",
+        item.dateRange,
+        item.subheading,
+        (item.bullets ?? []).map((bullet) => bullet.replaceAll("**", "")),
+      );
     }
   }
   return pdf.save();
@@ -140,13 +131,20 @@ async function createWriter(
   const ink = rgb(...design.ink);
   const muted = rgb(...design.muted);
   const margin = design.margin;
-  const sectionGap = design.compact ? 4 : 9;
-  const lineGap = design.compact ? 2 : 4;
+  const bodyLeading = 13.8;
+  const bulletLeading = 13;
+  const bulletGap = 2.5;
+  const entryGap = design.compact ? 10 : 12;
+  const sectionBefore = design.compact ? 8 : 10;
+  const sectionAfter = design.compact ? 8 : 9;
   let page = document.addPage([width, height]);
   let y = height - margin;
   const clean = (text: string) => text.normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E\xA0-\xFF\u2022]/g, "?");
+    .replace(/[—−]/g, "–")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, "\"")
+    .replace(/[^\x20-\x7E\xA0-\xFF\u2013\u2022]/g, "?");
   const ensure = (needed = 18) => {
     if (y < margin + needed) {
       if (document.getPageCount() >= maxPages) {
@@ -191,7 +189,7 @@ async function createWriter(
         font: regular,
         color: color === "gray" ? muted : ink,
       });
-      y -= size + lineGap;
+      y -= size === 10 ? bodyLeading : Math.max(size * 1.35, size + 3);
     }
   };
   const line = (text: string, size = 10, color: "black" | "gray" = "black") => {
@@ -209,7 +207,7 @@ async function createWriter(
       color: accent,
       maxWidth: width - margin * 2,
     });
-    y -= size + 6;
+      y -= Math.max(size * 1.35, size + 4);
   };
   const centeredLine = (text: string, size = 10) => {
     drawWrapped(text, size, "gray", true);
@@ -218,8 +216,8 @@ async function createWriter(
     if (template === "vellum") {
       ensure(size + 42);
       page.drawLine({
-        start: { x: margin, y: y + 10 },
-        end: { x: width - margin, y: y + 10 },
+        start: { x: margin, y: y + 22 },
+        end: { x: width - margin, y: y + 22 },
         thickness: 0.55,
         color: muted,
       });
@@ -232,7 +230,7 @@ async function createWriter(
         color: ink,
         maxWidth: width - margin * 2,
       });
-      y -= size + 4;
+      y -= size + 9;
       if (detail) {
         for (const part of wrap(detail, 10, width - margin * 2)) {
           ensure(15);
@@ -303,7 +301,7 @@ async function createWriter(
         : accent,
       maxWidth: width - margin * 2,
     });
-    y -= size + 7;
+    y -= size + 9;
     for (const part of wrap(detail, 9, width - margin * 2)) {
       const detailWidth = regular.widthOfTextAtSize(part, 9);
       page.drawText(part, {
@@ -326,8 +324,8 @@ async function createWriter(
   };
   const paragraph = (text: string, size = 10) => line(text, size);
   const section = (text: string) => {
-    y -= sectionGap;
-    ensure(28);
+    y -= sectionBefore;
+    ensure(42);
     const label = clean(template === "vellum" ? text : text.toUpperCase());
     const labelSize = 10.5;
     const labelWidth = bold.widthOfTextAtSize(label, labelSize);
@@ -355,7 +353,7 @@ async function createWriter(
         font: bold,
         color: ink,
       });
-      y -= 18;
+      y -= 10.5 + sectionAfter;
       return;
     }
     if (design.section === "band" || design.section === "card") {
@@ -372,63 +370,121 @@ async function createWriter(
       font: bold,
       color: design.section === "band" ? rgb(1, 1, 1) : accent,
     });
-    y -= 15;
+    y -= 14;
     if (design.section === "rule" || design.section === "double-rule") {
       page.drawLine({ start: { x: margin, y: y + 3 }, end: { x: width - margin, y: y + 3 }, thickness: 1, color: accent });
       if (design.section === "double-rule") page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: .4, color: accent });
-      y -= design.section === "double-rule" ? 5 : 3;
+      y -= design.section === "double-rule" ? sectionAfter + 3 : sectionAfter;
+    } else {
+      y -= sectionAfter;
     }
   };
-  const entry = (title: string, dateRange?: string, subheading?: string) => {
+  const entry = (
+    title: string,
+    dateRange?: string,
+    subheading?: string,
+    bullets: string[] = [],
+  ) => {
     const titleSize = 10.5;
-    const dateSize = 9;
-    const cleanedTitle = clean(title);
-    const cleanedDate = dateRange ? clean(dateRange) : "";
-    const dateWidth = cleanedDate ? regular.widthOfTextAtSize(cleanedDate, dateSize) : 0;
-    const availableTitleWidth = width - margin * 2 - dateWidth - (cleanedDate ? 10 : 0);
-    const titleLines = wrap(cleanedTitle, titleSize, availableTitleWidth);
-    titleLines.forEach((part, index) => {
-      ensure(titleSize + lineGap + 3);
-      page.drawText(part, {
-        x: margin,
-        y,
-        size: titleSize,
-        font: bold,
-        color: ink,
-        maxWidth: index === 0 ? availableTitleWidth : width - margin * 2,
+    const detailSize = 9;
+    const cleanedDate = dateRange
+      ? clean(dateRange).replace(/\s+(?:\?|-)\s+/g, " – ")
+      : "";
+    const dateWidth = cleanedDate
+      ? regular.widthOfTextAtSize(cleanedDate, detailSize)
+      : 0;
+    const titleWidth = width - margin * 2 - dateWidth - (dateWidth ? 12 : 0);
+    const titleLines = title ? wrap(title, titleSize, titleWidth) : [];
+    const firstBulletLines = bullets[0]
+      ? wrap(bullets[0], 9.5, width - margin * 2 - 22).length
+      : 0;
+    ensure(
+      Math.max(34, titleLines.length * 14.2 + (subheading ? 13 : 0)
+        + Math.min(firstBulletLines, 2) * bulletLeading),
+    );
+
+    if (titleLines.length || cleanedDate) {
+      const rowY = y;
+      titleLines.forEach((part, index) => {
+        page.drawText(part, {
+          x: margin,
+          y: rowY - index * 14.2,
+          size: titleSize,
+          font: template === "vellum" ? regular : bold,
+          color: ink,
+          maxWidth: index === 0 ? titleWidth : width - margin * 2,
+        });
       });
-      if (index === 0 && cleanedDate) {
+      if (cleanedDate) {
         page.drawText(cleanedDate, {
           x: width - margin - dateWidth,
-          y,
-          size: dateSize,
+          y: rowY,
+          size: detailSize,
           font: regular,
           color: muted,
-          maxWidth: dateWidth,
         });
       }
-      y -= titleSize + lineGap;
-    });
-    if (subheading) drawWrapped(subheading, 9, "gray");
-    y -= 2;
+      y -= Math.max(1, titleLines.length) * 14.2;
+    }
+    if (subheading) {
+      for (const part of wrap(subheading, detailSize, width - margin * 2)) {
+        page.drawText(part, {
+          x: margin,
+          y,
+          size: detailSize,
+          font: regular,
+          color: muted,
+        });
+        y -= 12.2;
+      }
+      y -= 3.5;
+    } else if (titleLines.length || cleanedDate) {
+      y -= 3.5;
+    }
+
+    for (const bulletText of bullets) {
+      const parts = wrap(bulletText, 9.5, width - margin * 2 - 22);
+      parts.forEach((part, index) => {
+        ensure(bulletLeading + bulletGap);
+        if (index === 0) {
+          page.drawText("•", {
+            x: margin + 5,
+            y,
+            size: 9.5,
+            font: regular,
+            color: ink,
+          });
+        }
+        page.drawText(part, {
+          x: margin + 17,
+          y,
+          size: 9.5,
+          font: regular,
+          color: ink,
+        });
+        y -= bulletLeading;
+      });
+      y -= bulletGap;
+    }
+    y -= entryGap;
   };
   const inlineBullets = (items: string[]) => {
-    const text = items.map((item) => `• ${item}`).join("    ");
-    drawWrapped(text, 9.5);
-  };
-  const bullet = (text: string) => {
-    const parts = wrap(text, 9.5, width - margin * 2 - 15);
-    parts.forEach((part, index) => {
-      ensure(14);
-      page.drawText(index === 0 ? `• ${part}` : `  ${part}`, {
-        x: margin + 6,
-        y,
-        size: 9.5,
-        font: regular,
-        color: ink,
-      });
-      y -= 13;
-    });
+    const size = 9.5;
+    const maxX = width - margin;
+    const startX = margin;
+    let x = startX;
+    for (const item of items) {
+      const token = `• ${clean(item)}`;
+      const tokenWidth = regular.widthOfTextAtSize(token, size);
+      if (x > startX && x + tokenWidth > maxX) {
+        y -= bulletLeading + bulletGap;
+        ensure(bulletLeading + bulletGap);
+        x = startX;
+      }
+      page.drawText(token, { x, y, size, font: regular, color: ink });
+      x += tokenWidth + 10;
+    }
+    y -= bulletLeading + entryGap;
   };
   return {
     header,
@@ -436,7 +492,6 @@ async function createWriter(
     heading,
     paragraph,
     section,
-    bullet,
     inlineBullets,
     entry,
     centeredLine,

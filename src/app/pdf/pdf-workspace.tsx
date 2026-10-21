@@ -26,19 +26,64 @@ type PdfSavedJob = {
 
 const example = JSON.stringify({
   resume: {
-    candidate: { fullName: "Jordan Taylor", email: "jordan@example.com", phone: "+1 555 0100", linkedinUrl: "https://linkedin.com/in/jordan-taylor", location: "Austin, TX", headline: "Program Coordinator" },
-    targetRole: "Program Coordinator", targetCompany: "Example Company",
-    summary: "Organized program coordinator experienced in reporting, stakeholder communication, and delivery tracking.",
+    candidate: { fullName: "Jordan Taylor", email: "jordan@example.com", phone: "+1 555 0100", linkedinUrl: "https://linkedin.com/in/jordan-taylor", location: "Austin, TX", headline: "Software Engineer" },
+    targetRole: "Software Engineer", targetCompany: "Example Company",
+    summary: "Software engineer with experience building dependable web applications, improving service performance, and collaborating across product teams. Skilled at turning complex requirements into maintainable software and measurable customer improvements.",
     sections: [
-      { title: "Core Skills", items: [{ bullets: ["Program coordination", "Reporting and documentation", "Stakeholder communication"] }] },
-      { title: "Professional Experience", items: [{ heading: "Program Coordinator", subheading: "Example Organization", dateRange: "2022 – Present", bullets: ["Coordinated schedules, records, and deliverables across multiple programs."] }] },
-      { title: "Education", items: [{ heading: "Bachelor of Business Administration", subheading: "Example University", dateRange: "2018 – 2022" }] },
+      {
+        title: "Experience",
+        items: [
+          {
+            heading: "Senior Software Engineer",
+            subheading: "Northstar Digital · Austin, TX",
+            dateRange: "2021 – Present",
+            bullets: [
+              "Designed Node.js services supporting customer workflows and improved peak-load reliability through targeted performance work.",
+              "Reduced common API response times by optimizing database access patterns and adding focused query monitoring.",
+              "Built reusable React and TypeScript components with product and design partners, improving consistency across key screens.",
+              "Introduced automated integration checks in the delivery pipeline, helping the team release changes with fewer regressions.",
+              "Mentored four engineers through design reviews, pairing sessions, and practical documentation.",
+            ],
+          },
+          {
+            heading: "Software Engineer",
+            subheading: "Cedar Labs · Dallas, TX",
+            dateRange: "2018 – 2021",
+            bullets: [
+              "Delivered customer-facing features using React, Express, and PostgreSQL from technical discovery through production support.",
+              "Integrated external payment and identity services with clear error handling and operational logging.",
+              "Expanded automated test coverage for high-use application flows using Jest and Cypress.",
+              "Worked with support and analytics teams to investigate recurring issues and prioritize durable fixes.",
+              "Helped migrate legacy interface modules to smaller, accessible components that were easier to maintain.",
+            ],
+          },
+        ],
+      },
+      {
+        title: "Education",
+        items: [{
+          heading: "Bachelor of Science in Computer Science",
+          subheading: "Hillview State University · Austin, TX",
+          dateRange: "2014 – 2018",
+          bullets: ["Focus: Software systems and applied mathematics", "Graduated with honors"],
+        }],
+      },
+      {
+        title: "Skills",
+        items: [{
+          bullets: [
+            "JavaScript", "TypeScript", "React", "Node.js", "Express",
+            "REST APIs", "PostgreSQL", "MongoDB", "Jest", "Cypress",
+            "Git", "CI/CD", "AWS", "Docker", "Agile delivery",
+          ],
+        }],
+      },
     ],
   },
   coverLetter: {
     candidate: { fullName: "Jordan Taylor", email: "jordan@example.com", phone: "+1 555 0100", linkedinUrl: "https://linkedin.com/in/jordan-taylor" },
-    targetRole: "Program Coordinator", targetCompany: "Example Company", date: "October 20, 2026", salutation: "Dear Hiring Manager,",
-    bodyParagraphs: ["I am applying for the Program Coordinator position at Example Company.", "My experience coordinating schedules, maintaining records, and communicating with stakeholders aligns well with this role."],
+    targetRole: "Software Engineer", targetCompany: "Example Company", date: "October 20, 2026", salutation: "Dear Hiring Manager,",
+    bodyParagraphs: ["I am interested in the Software Engineer role at Example Company. I have built web products across the stack and enjoy making complex workflows clear and dependable for customers.", "In recent roles I have delivered React interfaces and Node.js services, improved performance through careful measurement, and partnered across engineering, product, and support. I would welcome the opportunity to bring that practical, collaborative approach to your team."],
     closing: "Sincerely,", signatureName: "Jordan Taylor",
   },
 }, null, 2);
@@ -62,9 +107,7 @@ export function PdfWorkspace({
   savedJobs: PdfSavedJob[];
 }) {
   const [selectedJobId, setSelectedJobId] = useState(savedJobs[0]?.id ?? "");
-  const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>(
-    savedJobs[0]?.pdfTemplate ?? "heritage",
-  );
+  const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>("vellum");
   const [source, setSource] = useState(() => initialDocumentSource(savedJobs));
   const [parsed, setParsed] = useState<PdfPackage | null>(
     () => tryParsePdfPackage(initialDocumentSource(savedJobs)),
@@ -146,7 +189,6 @@ export function PdfWorkspace({
   function selectSavedJob(jobId: string) {
     setSelectedJobId(jobId);
     const job = savedJobs.find((savedJob) => savedJob.id === jobId) ?? null;
-    setSelectedTemplate(job?.pdfTemplate ?? "heritage");
     updateSource(job ? generatedDocumentSource(job) || example : example);
   }
   async function downloadPair() {
@@ -200,7 +242,7 @@ export function PdfWorkspace({
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
             <p className="mt-3 text-xs text-slate-500">Files save automatically under Downloads / QTS_Resume / {managerName} / candidate / date_time_job title_company. No folder selection is required.</p>
             {sampleSourceSelected && <p className="text-xs text-amber-800">Sample template JSON is prefilled for preview. Replace it with your generated resume data before saving files.</p>}
-            <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !parsed || !currentPreview || sampleSourceSelected} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : "Save résumé and cover letter"}</button></div>
+            <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" disabled={busy || !selectedJob || !parsed || !currentPreview} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : sampleSourceSelected ? "Download sample preview" : "Save résumé and cover letter"}</button></div>
           </div>
         </section>
         <section className="space-y-5">

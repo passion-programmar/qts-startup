@@ -54,3 +54,69 @@ test("every one-column template renders a valid resume and cover letter PDF", as
 test("Vellum is named QTS_Template_1 in the template selector", () => {
   assert.equal(pdfTemplateLabels.vellum, "QTS_Template_1");
 });
+
+test("full resume sections and bullets fit without exceeding two pages", async () => {
+  const fullResume: PdfPackage = {
+    ...data,
+    resume: {
+      ...data.resume,
+      summary: "Software engineer building dependable web products, improving service performance, and collaborating across teams to deliver practical customer outcomes.",
+      sections: [
+        {
+          title: "Experience",
+          items: [
+            {
+              heading: "Senior Software Engineer",
+              subheading: "Northstar Digital · Austin, TX",
+              dateRange: "2021 – Present",
+              bullets: [
+                "Designed Node.js services supporting customer workflows and improved peak-load reliability through performance tuning.",
+                "Reduced API response times by optimizing database access patterns and adding query monitoring.",
+                "Built reusable React and TypeScript components with product and design partners.",
+                "Introduced automated integration checks into the delivery pipeline.",
+                "Mentored engineers through design reviews, pairing, and practical documentation.",
+              ],
+            },
+            {
+              heading: "Software Engineer",
+              subheading: "Cedar Labs · Dallas, TX",
+              dateRange: "2018 – 2021",
+              bullets: [
+                "Delivered customer-facing features using React, Express, and PostgreSQL.",
+                "Integrated external payment and identity services with robust error handling.",
+                "Expanded automated test coverage using Jest and Cypress.",
+                "Worked with support and analytics teams to prioritize durable fixes.",
+                "Migrated legacy interface modules to accessible, maintainable components.",
+              ],
+            },
+          ],
+        },
+        {
+          title: "Education",
+          items: [{
+            heading: "Bachelor of Science in Computer Science",
+            subheading: "Hillview State University · Austin, TX",
+            dateRange: "2014 – 2018",
+            bullets: ["Focus: Software systems and applied mathematics", "Graduated with honors"],
+          }],
+        },
+        {
+          title: "Skills",
+          items: [{
+            bullets: [
+              "JavaScript", "TypeScript", "React", "Node.js", "Express",
+              "REST APIs", "PostgreSQL", "MongoDB", "Jest", "Cypress",
+              "Git", "CI/CD", "AWS", "Docker", "Agile delivery",
+            ],
+          }],
+        },
+      ],
+    },
+  };
+
+  for (const template of ["heritage", "vellum"] as const) {
+    const rendered = await renderPdfPackage(fullResume, template);
+    const resume = await PDFDocument.load(rendered.resume);
+    assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 2, template);
+  }
+});
