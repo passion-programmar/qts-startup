@@ -20,6 +20,7 @@ type PdfWriter = {
     dateRange?: string,
     subheading?: string,
     bullets?: string[],
+    hasFollowingEntry?: boolean,
   ): void;
   centeredLine(text: string, size?: number): void;
   space(amount: number): void;
@@ -70,14 +71,15 @@ async function renderResumePdf(
         .map((item) => item.replaceAll("**", ""))));
       continue;
     }
-    for (const item of section.items) {
+    section.items.forEach((item, index) => {
       pdf.entry(
         item.heading ?? "",
         item.dateRange,
         item.subheading,
         (item.bullets ?? []).map((bullet) => bullet.replaceAll("**", "")),
+        index < section.items.length - 1,
       );
-    }
+    });
   }
   return pdf.save();
 }
@@ -321,6 +323,9 @@ async function createWriter(
       y -= ruleCount === 2 ? 8 : 5;
     }
     y -= design.compact ? 5 : 9;
+    if (design.header === "band" || design.header === "soft" || design.header === "card") {
+      y = Math.min(y, headerTop - blockHeight - 8);
+    }
   };
   const paragraph = (text: string, size = 10) => line(text, size);
   const section = (text: string) => {
@@ -384,6 +389,7 @@ async function createWriter(
     dateRange?: string,
     subheading?: string,
     bullets: string[] = [],
+    hasFollowingEntry = false,
   ) => {
     const titleSize = 10.5;
     const detailSize = 9;
@@ -466,7 +472,7 @@ async function createWriter(
       });
       y -= bulletGap;
     }
-    y -= entryGap;
+    if (hasFollowingEntry) y -= entryGap;
   };
   const inlineBullets = (items: string[]) => {
     const size = 9.5;
@@ -484,7 +490,7 @@ async function createWriter(
       page.drawText(token, { x, y, size, font: regular, color: ink });
       x += tokenWidth + 10;
     }
-    y -= bulletLeading + entryGap;
+    y -= bulletLeading;
   };
   return {
     header,

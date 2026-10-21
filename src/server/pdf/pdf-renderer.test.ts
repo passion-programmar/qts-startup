@@ -114,7 +114,7 @@ test("full resume sections and bullets fit without exceeding two pages", async (
     },
   };
 
-  for (const template of ["heritage", "vellum"] as const) {
+  for (const template of pdfTemplateValues) {
     const rendered = await renderPdfPackage(fullResume, template);
     const resume = await PDFDocument.load(rendered.resume);
     assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 2, template);
