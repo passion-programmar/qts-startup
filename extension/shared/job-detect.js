@@ -341,6 +341,15 @@ function isValidDetectedJob(data, pageUrl) {
   return true;
 }
 
+function isValidGetJdCheckJob(data, pageUrl) {
+  const normalized = normalizeDetectedJobData(data, pageUrl);
+  return isValidDetectedJob(normalized, pageUrl)
+    && normalized.title.length <= 500
+    && normalized.company.length > 0
+    && normalized.company.length <= 500
+    && normalized.url.length <= 2048;
+}
+
 function resolveDetectMode(pageType, pageUrl, data, valid) {
   if (!valid) return 'none';
   if (pageType === 'detail') return 'detail';
@@ -401,6 +410,7 @@ async function removeDetectedJobForTab(tabId) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     classifyJobPageUrl,
+    isValidGetJdCheckJob,
     mergeJobExtractionSamples,
     mergeMissingJobDetails,
     usablePartialJobDetails,

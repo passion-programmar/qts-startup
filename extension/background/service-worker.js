@@ -428,7 +428,7 @@ async function injectJobPanelWatch(tabId, pageUrl) {
   }
 }
 
-async function extractJobFromTab(tabId) {
+async function extractJobFromTab(tabId, { requireCompany = false } = {}) {
   const tab = await getTab(tabId);
   if (!tab?.id) {
     return { error: 'No active tab', tab: null };
@@ -458,7 +458,12 @@ async function extractJobFromTab(tabId) {
         func: () => (window.__extractJobData ? window.__extractJobData() : null),
       });
       data = mergeJobExtractionSamples(data, results[0]?.result, tab.url);
-      if (isValidDetectedJob(data, tab.url)) break;
+      if (
+        isValidDetectedJob(data, tab.url)
+        && (!requireCompany || normalizeDetectedJobData(data, tab.url).company)
+      ) {
+        break;
+      }
     }
     return {
       data,
@@ -651,7 +656,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
       return;
     }
 
-    const extraction = await extractJobFromTab(tabId);
+    const extraction = await extractJobFromTab(tabId, { requireCompany: true });
     if (!(await isGetJdActive())) return;
     if (extraction.error) {
       await saveGetJdResult(tabId, {
@@ -667,6 +672,21 @@ async function processGetJdPage(tabId, url, documentId = '') {
     if (!(await isGetJdActive())) return;
     const pageUrl = extraction.url || url;
     const extractedJobDetails = normalizeDetectedJobData(extraction.data, pageUrl);
+    if (!isValidGetJdCheckJob(extractedJobDetails, pageUrl)) {
+      const hasCompletePosting = isValidDetectedJob(extractedJobDetails, pageUrl);
+      await saveGetJdResult(tabId, {
+        ...initialResult,
+        pageTitle: extraction.title || tab.title || '',
+        status: 'error',
+        message: !extractedJobDetails.company
+          ? 'Could not identify the hiring company on this page. Refresh the job page and try again.'
+          : hasCompletePosting
+            ? 'The extracted job details exceed supported limits. Open the job detail page and try again.'
+            : 'This page does not contain a complete job posting. Open a job detail page and try again.',
+        updatedAt: Date.now(),
+      });
+      return;
+    }
     const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
       job: {
         jobUrl: extractedJobDetails.url,
@@ -2090,7 +2110,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     let jobDescription = '';
     try {
       await showGenerationPageStatus(jobTabId, 'Reading job details for Generation...');
-      const extraction = await extractJobFromTab(jobTabId);
+      const extraction = await extractJobFromTab(jobTabId, { requireCompany: true });
       if (extraction.error) throw new Error(extraction.error);
       const details = normalizeDetectedJobData(
         extraction.data,

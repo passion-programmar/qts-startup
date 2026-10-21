@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   classifyJobPageUrl,
+  isValidGetJdCheckJob,
   mergeJobExtractionSamples,
   mergeMissingJobDetails,
   usablePartialJobDetails,
@@ -16,6 +17,22 @@ test('ATS job identifiers classify custom-host pages as job details', () => {
     classifyJobPageUrl('https://jobs.anyoneai.com/?ashby_jid=e80c2c62-6895-41f5-bf9d-89ae5207d2bf'),
     'detail',
   );
+});
+
+test('Get JD check requires complete API-ready extracted job details', () => {
+  const job = {
+    title: 'Senior Engineer',
+    company: 'Example',
+    description: 'A'.repeat(80),
+    url: 'https://example.com/jobs/123',
+  };
+
+  assert.equal(isValidGetJdCheckJob(job), true);
+  assert.equal(isValidGetJdCheckJob({ ...job, company: '' }), false);
+  assert.equal(isValidGetJdCheckJob({ ...job, company: 'x'.repeat(501) }), false);
+  assert.equal(isValidGetJdCheckJob({ ...job, title: 'x'.repeat(501) }), false);
+  assert.equal(isValidGetJdCheckJob({ ...job, url: `https://example.com/${'x'.repeat(2048)}` }), false);
+  assert.equal(isValidGetJdCheckJob({ ...job, description: 'Too short' }), false);
 });
 
 test('missing extracted job details are filled without replacing saved values', () => {
