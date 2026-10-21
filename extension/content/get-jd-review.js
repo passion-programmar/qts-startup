@@ -293,9 +293,11 @@
     const toastKey = `${result.runId || result.updatedAt || ''}:${result.status}`;
     if (result.status === 'duplicate') {
       elements.panel.hidden = true;
-      const message = result.inBids
-        ? 'You have already applied to this job.'
-        : 'This job already exists in Jobs.';
+      const message = result.toastMessage || (result.inBids
+        ? 'Already applied.'
+        : result.inJobs
+          ? 'Already added.'
+          : 'New job.');
       showToast(message, 'normal', toastKey);
       return;
     }
@@ -333,8 +335,8 @@
       return;
     }
     showToast(
-      result.message || 'Select candidates to save this job.',
-      result.hasDuplicates ? 'normal' : 'success',
+      result.toastMessage || 'New job.',
+      result.toastKind === 'new' ? 'success' : 'normal',
       `${result.runId || result.updatedAt}:candidate-review`,
     );
     renderReview(result);

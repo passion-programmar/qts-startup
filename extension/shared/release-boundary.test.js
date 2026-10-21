@@ -70,6 +70,9 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes("checkbox.disabled = profile.available === false"));
   assert.ok(review.includes("elements.panel.querySelector('h2').textContent = 'Save result'"));
   assert.ok(review.includes('Successfully saved ${savedCount}'));
+  assert.ok(review.includes("? 'Already applied.'"));
+  assert.ok(review.includes("? 'Already added.'"));
+  assert.ok(review.includes("result.toastMessage || 'New job.'"));
 });
 
 test('the login panel submits completed credentials without a timer or button', () => {

@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { categories, profiles, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
-import { findGetJdDuplicates } from "@/server/jobs/get-jd-jobs";
+import {
+  findGetJdDuplicates,
+  findManagerJobPresence,
+} from "@/server/jobs/get-jd-jobs";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 
 const maxManagerAccounts = 100;
@@ -69,15 +72,20 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const duplicates = await findGetJdDuplicates(
-      manager.id,
-      job,
-      candidateRows.map((candidate) => candidate.id),
-    );
-    const duplicateKinds = [...duplicates.values()];
-    const inJobs = duplicateKinds.includes("job_list");
-    const inBids = duplicateKinds.includes("applied");
+    const [duplicates, presence] = await Promise.all([
+      findGetJdDuplicates(
+        manager.id,
+        job,
+        candidateRows.map((candidate) => candidate.id),
+      ),
+      findManagerJobPresence(manager.id, job),
+    ]);
     const allCandidatesAssigned = duplicates.size === candidateRows.length;
+    const toastKind = presence.inBids
+      ? "applied"
+      : presence.inJobs
+        ? "added"
+        : "new";
     const candidateProfiles = candidateRows.map((candidate) => {
       const duplicateKind = duplicates.get(candidate.id) ?? null;
       return {
@@ -93,10 +101,15 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     return jsonResponse({
       success: true,
-      exists: duplicates.size > 0,
+      exists: presence.inJobs || presence.inBids,
       allCandidatesAssigned,
-      inJobs,
-      inBids,
+      ...presence,
+      toastKind,
+      toastMessage: toastKind === "applied"
+        ? "Already applied."
+        : toastKind === "added"
+          ? "Already added."
+          : "New job.",
       profiles: candidateProfiles,
       message: allCandidatesAssigned
         ? "This job already exists for every active candidate."

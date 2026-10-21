@@ -681,6 +681,8 @@ async function processGetJdPage(tabId, url, documentId = '') {
         pageTitle: extraction.title || tab.title || '',
         status: 'duplicate',
         message: result.message || 'This job already exists.',
+        toastKind: result.toastKind,
+        toastMessage: result.toastMessage,
         inJobs: result.inJobs === true,
         inBids: result.inBids === true,
         updatedAt: Date.now(),
@@ -696,6 +698,8 @@ async function processGetJdPage(tabId, url, documentId = '') {
       status: 'complete',
       message: result.message || 'Select candidates to save this job.',
       hasDuplicates: result.exists === true,
+      toastKind: result.toastKind,
+      toastMessage: result.toastMessage,
       updatedAt: Date.now(),
       classification: {
         isJobPage: true,

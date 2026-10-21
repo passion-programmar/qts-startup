@@ -28,12 +28,19 @@ function duplicateConditions(
   table: typeof jobs | typeof bids,
   job: GetJdJobIdentity,
 ) {
-  const sameUrl = sql`regexp_replace(split_part(btrim(${table.jobUrl}), '#', 1), '/+$', '') = ${normalizeJobUrl(job.jobUrl)}`;
+  const sameUrl = normalizedUrlCondition(table, job.jobUrl);
   const sameTitleAndCompany = and(
     sql`lower(btrim(${table.jobTitle})) = ${job.jobTitle.trim().toLowerCase()}`,
     sql`lower(btrim(${table.company})) = ${job.company.trim().toLowerCase()}`,
   );
   return or(sameUrl, sameTitleAndCompany);
+}
+
+function normalizedUrlCondition(
+  table: typeof jobs | typeof bids,
+  jobUrl: string,
+) {
+  return sql`regexp_replace(split_part(btrim(${table.jobUrl}), '#', 1), '/+$', '') = ${normalizeJobUrl(jobUrl)}`;
 }
 
 export async function findManagerJobPresence(
@@ -44,12 +51,12 @@ export async function findManagerJobPresence(
     db
       .select({ id: jobs.id })
       .from(jobs)
-      .where(and(eq(jobs.managerId, managerId), duplicateConditions(jobs, job)))
+      .where(and(eq(jobs.managerId, managerId), normalizedUrlCondition(jobs, job.jobUrl)))
       .limit(1),
     db
       .select({ id: bids.id })
       .from(bids)
-      .where(and(eq(bids.managerId, managerId), duplicateConditions(bids, job)))
+      .where(and(eq(bids.managerId, managerId), normalizedUrlCondition(bids, job.jobUrl)))
       .limit(1),
   ]);
 
