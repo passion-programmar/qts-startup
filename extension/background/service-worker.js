@@ -1,6 +1,7 @@
 // Background service worker — tab tracking, capture window, messages
 
 importScripts(
+  '../shared/page-exclusions.js',
   '../shared/runtime-config.js',
   '../shared/application-flow.js',
   '../shared/job-detect.js',
@@ -20,6 +21,7 @@ importScripts(
 
 function isExtractablePageUrl(url) {
   if (!url || typeof url !== 'string') return false;
+  if (self.__qtsPageExclusions.shouldSkipPage(url)) return false;
   try {
     const parsed = new URL(url);
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';

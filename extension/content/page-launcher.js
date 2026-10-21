@@ -1,5 +1,6 @@
 function initializeQtsPageLauncher() {
   if (globalThis.__qtsPageLauncher) return;
+  if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
 
   const host = document.createElement('div');
   host.setAttribute('data-qts-page-launcher', '');

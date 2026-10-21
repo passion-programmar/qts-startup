@@ -3,9 +3,9 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { categories } from "@/db/schema";
+import { categories, educations, experiences } from "@/db/schema";
 import {
   CopyableAccountField,
   CopyLinkedInUrl,
@@ -143,6 +143,36 @@ export default async function UsersPage() {
     .select({ id: categories.id, name: categories.name })
     .from(categories)
     .orderBy(categories.name);
+
+  const candidateIds = result.rows
+    .filter((user) => user.role === "account")
+    .map((user) => user.id);
+  const [educationHistory, experienceHistory] = candidateIds.length
+    ? await Promise.all([
+        db
+          .select()
+          .from(educations)
+          .where(inArray(educations.profileUserId, candidateIds))
+          .orderBy(educations.profileUserId, educations.sortOrder),
+        db
+          .select()
+          .from(experiences)
+          .where(inArray(experiences.profileUserId, candidateIds))
+          .orderBy(experiences.profileUserId, experiences.sortOrder),
+      ])
+    : [[], []];
+  const educationByCandidate = new Map<string, typeof educationHistory>();
+  for (const entry of educationHistory) {
+    const rows = educationByCandidate.get(entry.profileUserId) ?? [];
+    rows.push(entry);
+    educationByCandidate.set(entry.profileUserId, rows);
+  }
+  const experienceByCandidate = new Map<string, typeof experienceHistory>();
+  for (const entry of experienceHistory) {
+    const rows = experienceByCandidate.get(entry.profileUserId) ?? [];
+    rows.push(entry);
+    experienceByCandidate.set(entry.profileUserId, rows);
+  }
 
   const visibleCount = result.rows.length;
   const staffCount = result.rows.filter((user) => user.role !== "account").length;
@@ -288,6 +318,28 @@ export default async function UsersPage() {
                           addressLine1: candidate.address_line_1,
                           postalCode: candidate.postal_code,
                           categoryId: candidate.category_id,
+                          education: (educationByCandidate.get(candidate.id) ?? []).map(
+                            (entry) => ({
+                              institution: entry.institution,
+                              degree: entry.degree,
+                              fieldOfStudy: entry.fieldOfStudy,
+                              startDate: entry.startDate?.slice(0, 7) ?? null,
+                              endDate: entry.endDate?.slice(0, 7) ?? null,
+                              isCurrent: entry.isCurrent,
+                              description: entry.description,
+                            }),
+                          ),
+                          experience: (experienceByCandidate.get(candidate.id) ?? []).map(
+                            (entry) => ({
+                              companyName: entry.companyName,
+                              jobTitle: entry.jobTitle,
+                              location: entry.location,
+                              startDate: entry.startDate?.slice(0, 7) ?? null,
+                              endDate: entry.endDate?.slice(0, 7) ?? null,
+                              isCurrent: entry.isCurrent,
+                              description: entry.description,
+                            }),
+                          ),
                         }}
                         categories={categoryOptions}
                         key="edit"

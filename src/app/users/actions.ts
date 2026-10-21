@@ -2,7 +2,7 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { categories, profiles, users } from "@/db/schema";
+import { categories, users } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
 import { hashPassword } from "@/lib/password";
 import {
@@ -266,6 +266,24 @@ export async function updateCandidateProfileAction(
     postalCode: readText(formData, "postalCode", limits.postalCode),
     categoryId: readText(formData, "categoryId", limits.categoryId),
   };
+  const educationRows = readHistoryRows(formData, "education", {
+    institution: 120,
+    degree: 120,
+    fieldOfStudy: 120,
+    startDate: 7,
+    endDate: 7,
+    isCurrent: 5,
+    description: 5000,
+  });
+  const experienceRows = readHistoryRows(formData, "experience", {
+    companyName: 160,
+    jobTitle: 160,
+    location: 160,
+    startDate: 7,
+    endDate: 7,
+    isCurrent: 5,
+    description: 5000,
+  });
   if (
     Object.entries(limits).some(([name, maxLength]) => {
       const value = formData.get(name);
@@ -273,6 +291,12 @@ export async function updateCandidateProfileAction(
     })
   ) {
     return { ...emptyState, error: "One or more profile fields are invalid." };
+  }
+  if (!educationRows || !experienceRows) {
+    return {
+      ...emptyState,
+      error: "History forms are invalid or contain too many entries (maximum 20 each).",
+    };
   }
 
   if (!values.firstName || !values.lastName) {
@@ -293,6 +317,10 @@ export async function updateCandidateProfileAction(
   if (values.categoryId && !isUuid(values.categoryId)) {
     return { ...emptyState, error: "Select a valid candidate category." };
   }
+  const educationError = validateEducationRows(educationRows);
+  if (educationError) return { ...emptyState, error: educationError };
+  const experienceError = validateExperienceRows(experienceRows);
+  if (experienceError) return { ...emptyState, error: experienceError };
 
   try {
     if (values.categoryId) {
@@ -309,40 +337,92 @@ export async function updateCandidateProfileAction(
       }
     }
 
-    const [updatedProfile] = await db
-      .update(profiles)
-      .set({
-        categoryId: values.categoryId || null,
-        firstName: values.firstName,
-        lastName: values.lastName,
-        candidateEmail: values.candidateEmail
-          ? values.candidateEmail.toLowerCase()
-          : null,
-        phone: values.phone || null,
-        headline: values.headline || null,
-        linkedinUrl: values.linkedinUrl || null,
-        country: values.country || null,
-        city: values.city || null,
-        province: values.province || null,
-        addressLine1: values.addressLine1 || null,
-        postalCode: values.postalCode || null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(profiles.userId, userId),
-          sql`exists (
+    const educationEntries = educationRows
+      .filter((row) => row.institution)
+      .map((row, sortOrder) => ({
+        institution: row.institution,
+        degree: row.degree || null,
+        field_of_study: row.fieldOfStudy || null,
+        start_date: toDatabaseMonth(row.startDate),
+        end_date: toDatabaseMonth(row.endDate),
+        is_current: row.isCurrent === "true",
+        description: row.description || null,
+        sort_order: sortOrder,
+      }));
+    const experienceEntries = experienceRows
+      .filter((row) => row.companyName && row.jobTitle)
+      .map((row, sortOrder) => ({
+        company_name: row.companyName,
+        job_title: row.jobTitle,
+        location: row.location || null,
+        start_date: toDatabaseMonth(row.startDate),
+        end_date: toDatabaseMonth(row.endDate),
+        is_current: row.isCurrent === "true",
+        description: row.description || null,
+        sort_order: sortOrder,
+      }));
+    const results = await neonSql.transaction((tx) => [
+      tx`
+        update profiles
+        set category_id = ${values.categoryId || null}::uuid,
+          first_name = ${values.firstName}, last_name = ${values.lastName},
+          candidate_email = ${values.candidateEmail ? values.candidateEmail.toLowerCase() : null},
+          phone = ${values.phone || null}, headline = ${values.headline || null},
+          linkedin_url = ${values.linkedinUrl || null}, country = ${values.country || null},
+          city = ${values.city || null}, province = ${values.province || null},
+          address_line_1 = ${values.addressLine1 || null}, postal_code = ${values.postalCode || null},
+          updated_at = now()
+        where profiles.user_id = ${userId}::uuid
+          and exists (
             select 1 from users
-            where users.id = ${profiles.userId}
-              and users.role = 'account'
-              and users.parent_user_id = ${actor.id}
-              and users.blocked_at is null
-          )`,
-        ),
-      )
-      .returning({ userId: profiles.userId });
+            where users.id = profiles.user_id and users.role = 'account'
+              and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+          )
+        returning profiles.user_id
+      `,
+      tx`
+        delete from educations using users
+        where educations.profile_user_id = users.id and users.id = ${userId}::uuid
+          and users.role = 'account' and users.parent_user_id = ${actor.id}::uuid
+          and users.blocked_at is null
+      `,
+      tx`
+        insert into educations (
+          profile_user_id, institution, degree, field_of_study, start_date,
+          end_date, is_current, description, sort_order
+        )
+        select users.id, entry.institution, entry.degree, entry.field_of_study,
+          entry.start_date, entry.end_date, entry.is_current, entry.description, entry.sort_order
+        from users
+        cross join jsonb_to_recordset(${JSON.stringify(educationEntries)}::jsonb)
+          as entry(institution text, degree text, field_of_study text, start_date date,
+            end_date date, is_current boolean, description text, sort_order integer)
+        where users.id = ${userId}::uuid and users.role = 'account'
+          and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+      `,
+      tx`
+        delete from experiences using users
+        where experiences.profile_user_id = users.id and users.id = ${userId}::uuid
+          and users.role = 'account' and users.parent_user_id = ${actor.id}::uuid
+          and users.blocked_at is null
+      `,
+      tx`
+        insert into experiences (
+          profile_user_id, company_name, job_title, location, start_date,
+          end_date, is_current, description, sort_order
+        )
+        select users.id, entry.company_name, entry.job_title, entry.location,
+          entry.start_date, entry.end_date, entry.is_current, entry.description, entry.sort_order
+        from users
+        cross join jsonb_to_recordset(${JSON.stringify(experienceEntries)}::jsonb)
+          as entry(company_name text, job_title text, location text, start_date date,
+            end_date date, is_current boolean, description text, sort_order integer)
+        where users.id = ${userId}::uuid and users.role = 'account'
+          and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+      `,
+    ]);
 
-    if (!updatedProfile) {
+    if (results[0].length === 0) {
       return {
         ...emptyState,
         error: "That active candidate account was not found in your team.",

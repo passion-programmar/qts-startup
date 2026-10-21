@@ -415,6 +415,24 @@ export type CandidateProfileValues = {
   addressLine1: string | null;
   postalCode: string | null;
   categoryId: string | null;
+  education: {
+    institution: string;
+    degree: string | null;
+    fieldOfStudy: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    isCurrent: boolean;
+    description: string | null;
+  }[];
+  experience: {
+    companyName: string;
+    jobTitle: string;
+    location: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    isCurrent: boolean;
+    description: string | null;
+  }[];
 };
 
 export function EditCandidateProfileForm({
@@ -425,7 +443,15 @@ export function EditCandidateProfileForm({
   categories: { id: string; name: string }[];
 }) {
   const [isOpen, setIsOpen] = useState(false);
-const closeModal = useCallback(() => setIsOpen(false), []);
+  const [educationRows, setEducationRows] = useState(() =>
+    candidate.education.length ? candidate.education.map((_, index) => index) : [0],
+  );
+  const [experienceRows, setExperienceRows] = useState(() =>
+    candidate.experience.length ? candidate.experience.map((_, index) => index) : [0],
+  );
+  const nextEducationRowId = useRef(Math.max(1, candidate.education.length));
+  const nextExperienceRowId = useRef(Math.max(1, candidate.experience.length));
+  const closeModal = useCallback(() => setIsOpen(false), []);
   const [state, formAction, isPending] = useActionState(
     updateCandidateProfileAction,
     initialState,
@@ -552,6 +578,56 @@ const closeModal = useCallback(() => setIsOpen(false), []);
             options={categories}
           />
           </div>
+          <HistorySection
+            addRow={() =>
+              setEducationRows((rows) => [...rows, nextEducationRowId.current++])
+            }
+            onRemove={(rowId) =>
+              setEducationRows((rows) => rows.filter((id) => id !== rowId))
+            }
+            rowIds={educationRows}
+            title="Education"
+          >
+            {(rowId) => {
+              const entry = candidate.education[rowId];
+              return (
+                <>
+                  <TextField autoComplete="off" defaultValue={entry?.institution ?? ""} id={fieldId(`educationInstitution-${rowId}`)} label="Institution" maxLength={120} name="educationInstitution" />
+                  <TextField autoComplete="off" defaultValue={entry?.degree ?? ""} id={fieldId(`educationDegree-${rowId}`)} label="Degree / credential" maxLength={120} name="educationDegree" />
+                  <TextField autoComplete="off" defaultValue={entry?.fieldOfStudy ?? ""} id={fieldId(`educationFieldOfStudy-${rowId}`)} label="Field of study" maxLength={120} name="educationFieldOfStudy" />
+                  <TextField autoComplete="off" defaultValue={entry?.startDate ?? ""} id={fieldId(`educationStartDate-${rowId}`)} label="Start month" maxLength={7} name="educationStartDate" type="month" />
+                  <TextField autoComplete="off" defaultValue={entry?.endDate ?? ""} id={fieldId(`educationEndDate-${rowId}`)} label="End month" maxLength={7} name="educationEndDate" type="month" />
+                  <CurrentStatusSelect defaultValue={entry?.isCurrent ? "true" : "false"} id={fieldId(`educationIsCurrent-${rowId}`)} label="Currently studying here?" name="educationIsCurrent" />
+                  <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`educationDescription-${rowId}`)} label="Description (optional)" maxLength={5000} name="educationDescription" />
+                </>
+              );
+            }}
+          </HistorySection>
+          <HistorySection
+            addRow={() =>
+              setExperienceRows((rows) => [...rows, nextExperienceRowId.current++])
+            }
+            onRemove={(rowId) =>
+              setExperienceRows((rows) => rows.filter((id) => id !== rowId))
+            }
+            rowIds={experienceRows}
+            title="Experience"
+          >
+            {(rowId) => {
+              const entry = candidate.experience[rowId];
+              return (
+                <>
+                  <TextField autoComplete="organization" defaultValue={entry?.companyName ?? ""} id={fieldId(`experienceCompanyName-${rowId}`)} label="Employer" maxLength={160} name="experienceCompanyName" />
+                  <TextField autoComplete="organization-title" defaultValue={entry?.jobTitle ?? ""} id={fieldId(`experienceJobTitle-${rowId}`)} label="Job title" maxLength={160} name="experienceJobTitle" />
+                  <TextField autoComplete="off" defaultValue={entry?.location ?? ""} id={fieldId(`experienceLocation-${rowId}`)} label="Location (optional)" maxLength={160} name="experienceLocation" />
+                  <TextField autoComplete="off" defaultValue={entry?.startDate ?? ""} id={fieldId(`experienceStartDate-${rowId}`)} label="Start month" maxLength={7} name="experienceStartDate" type="month" />
+                  <TextField autoComplete="off" defaultValue={entry?.endDate ?? ""} id={fieldId(`experienceEndDate-${rowId}`)} label="End month" maxLength={7} name="experienceEndDate" type="month" />
+                  <CurrentStatusSelect defaultValue={entry?.isCurrent ? "true" : "false"} id={fieldId(`experienceIsCurrent-${rowId}`)} label="Currently working here?" name="experienceIsCurrent" />
+                  <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`experienceDescription-${rowId}`)} label="Responsibilities / achievements (optional)" maxLength={5000} name="experienceDescription" />
+                </>
+              );
+            }}
+          </HistorySection>
           {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
           {state.success && (
             <FormMessage variant="success">{state.success}</FormMessage>
@@ -985,10 +1061,12 @@ function CurrentStatusSelect({
   id,
   label,
   name,
+  defaultValue = "false",
 }: {
   id: string;
   label: string;
   name: string;
+  defaultValue?: "true" | "false";
 }) {
   return (
     <div>
@@ -1000,7 +1078,7 @@ function CurrentStatusSelect({
       </label>
       <select
         className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
-        defaultValue="false"
+        defaultValue={defaultValue}
         id={id}
         name={name}
       >
@@ -1017,12 +1095,14 @@ function TextAreaField({
   name,
   maxLength,
   className,
+  defaultValue,
 }: {
   id: string;
   label: string;
   name: string;
   maxLength: number;
   className?: string;
+  defaultValue?: string;
 }) {
   return (
     <div className={className}>
@@ -1035,6 +1115,7 @@ function TextAreaField({
       <textarea
         className="min-h-20 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
         id={id}
+        defaultValue={defaultValue}
         maxLength={maxLength}
         name={name}
         rows={3}

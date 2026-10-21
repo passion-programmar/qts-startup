@@ -16,6 +16,12 @@ test('the page launcher is the only user entry point', () => {
   );
 
   assert.ok(scripts.includes('content/page-launcher.js'));
+  assert.ok(scripts.includes('shared/page-exclusions.js'));
+  assert.ok(
+    scripts.indexOf('shared/page-exclusions.js')
+      < scripts.indexOf('content/page-launcher.js'),
+  );
+  assert.ok(serviceWorker.includes("'../shared/page-exclusions.js'"));
   assert.equal(manifest.action.default_popup, undefined);
   assert.equal(serviceWorker.includes('chrome.action.onClicked.addListener'), false);
   assert.ok(manifest.web_accessible_resources.some((entry) => (

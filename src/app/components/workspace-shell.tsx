@@ -8,6 +8,8 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings2,
   Tags,
   UserRound,
@@ -15,7 +17,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { logoutAction } from "@/app/login/actions";
 import type { StaffSession } from "@/lib/session";
 
@@ -41,6 +43,21 @@ export function WorkspaceShell({
   children: ReactNode;
 }) {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      setSidebarCollapsed(localStorage.getItem("qts-sidebar-collapsed") === "true");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  function toggleSidebar() {
+    setSidebarCollapsed((collapsed) => {
+      const next = !collapsed;
+      localStorage.setItem("qts-sidebar-collapsed", String(next));
+      return next;
+    });
+  }
   const navigation = [
     ...baseNavigation.slice(0, 2),
     ...(user.role === "super_admin"
@@ -118,11 +135,28 @@ export function WorkspaceShell({
         />
       )}
       <aside
-        className={`invisible fixed bottom-0 left-0 top-[72px] z-50 flex w-60 -translate-x-full flex-col bg-[#050819] text-white shadow-xl transition-transform duration-200 lg:visible lg:translate-x-0 ${
+        className={`invisible fixed bottom-0 left-0 top-[72px] z-50 flex w-60 -translate-x-full flex-col bg-[#050819] text-white shadow-xl transition-[width,transform] duration-200 lg:visible lg:translate-x-0 ${
+          sidebarCollapsed ? "lg:w-16" : "lg:w-60"
+        } ${
           mobileNavigationOpen ? "visible translate-x-0" : ""
         }`}
         id="workspace-sidebar"
       >
+        <div className={`hidden border-b border-white/10 p-2 lg:flex ${sidebarCollapsed ? "justify-center" : "justify-end"}`}>
+          <button
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="flex size-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-white/10 hover:text-white"
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            type="button"
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen aria-hidden="true" className="size-4" />
+            ) : (
+              <PanelLeftClose aria-hidden="true" className="size-4" />
+            )}
+          </button>
+        </div>
         <nav aria-label="Main navigation" className="flex-1 overflow-y-auto px-2.5 py-3">
           <div className="space-y-1">
             {navigation.map((item) => {
@@ -135,6 +169,8 @@ export function WorkspaceShell({
                 <Link
                   aria-current={active ? "page" : undefined}
                   className={`flex min-h-11 items-center gap-3 rounded-lg px-3.5 text-sm transition-colors ${
+                    sidebarCollapsed ? "lg:justify-center lg:px-0" : ""
+                  } ${
                     active
                       ? "bg-[#0d6efd] font-medium text-white shadow-sm"
                       : "text-slate-300 hover:bg-white/10 hover:text-white"
@@ -142,9 +178,12 @@ export function WorkspaceShell({
                   href={item.href}
                   key={item.href}
                   onClick={() => setMobileNavigationOpen(false)}
+                  title={sidebarCollapsed ? item.label : undefined}
                 >
                   <Icon className="size-4 shrink-0" strokeWidth={1.8} />
-                  {item.label}
+                  <span className={sidebarCollapsed ? "lg:hidden" : undefined}>
+                    {item.label}
+                  </span>
                 </Link>
               );
             })}
@@ -152,7 +191,7 @@ export function WorkspaceShell({
         </nav>
       </aside>
 
-      <div className="min-h-screen pt-[72px] lg:pl-60">
+      <div className={`min-h-screen pt-[72px] transition-[padding] duration-200 ${sidebarCollapsed ? "lg:pl-16" : "lg:pl-60"}`}>
         <div className="mx-auto min-h-[calc(100vh-4.5rem)] max-w-[1600px] px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
           {children}
         </div>

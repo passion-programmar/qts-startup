@@ -1,5 +1,6 @@
 (function initializeGetJdReview() {
   if (globalThis.__qtsGetJdReview) return;
+  if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
 
   const RESULT_MESSAGE = 'QTS_GET_JD_RESULT_UPDATED';
   let host = null;

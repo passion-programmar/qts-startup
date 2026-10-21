@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QTS_Startup",
-  "version": "1.18.1",
+  "version": "1.19.0",
   "description": "Capture job postings with QTS_Startup.",
   "permissions": ["activeTab", "storage", "tabs", "scripting", "webNavigation"],
   "host_permissions": [
@@ -14,6 +14,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "shared/page-exclusions.js",
         "content/page-launcher.js",
         "content/get-jd-review.js"
       ],
