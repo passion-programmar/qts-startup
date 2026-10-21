@@ -57,11 +57,12 @@ function getStructuredJobCountry(jobPosting) {
   const locations = Array.isArray(jobPosting.jobLocation)
     ? jobPosting.jobLocation
     : [jobPosting.jobLocation];
+  const countries = [];
   for (const location of locations) {
     const country = normalizeStructuredCountry(
       location?.address?.addressCountry || location?.addressCountry,
     );
-    if (country) return country;
+    if (country) countries.push(...country.split('; '));
   }
   const applicantLocations = Array.isArray(jobPosting.applicantLocationRequirements)
     ? jobPosting.applicantLocationRequirements
@@ -72,8 +73,10 @@ function getStructuredJobCountry(jobPosting) {
       location?.addressCountry
       || (locationType.includes('country') ? location?.name : ''),
     );
-    if (country) return country;
+    if (country) countries.push(...country.split('; '));
   }
+  const uniqueCountries = [...new Set(countries.filter(Boolean))];
+  if (uniqueCountries.length) return uniqueCountries.join('; ');
   return findLabeledValue(
     'country|work country|country of employment',
     document,
@@ -109,6 +112,13 @@ function normalizeEmploymentType(value) {
   if (typeof value !== 'string') return '';
   const normalized = value.trim();
   if (!normalized) return '';
+  if (/\bfull[\s-]?time\b/i.test(normalized)) return 'Full-time';
+  if (/\bpart[\s-]?time\b/i.test(normalized)) return 'Part-time';
+  if (/\bcontract(?:or)?\b/i.test(normalized)) return 'Contract';
+  if (/\btemporary\b/i.test(normalized)) return 'Temporary';
+  if (/\bintern(?:ship)?\b/i.test(normalized)) return 'Internship';
+  if (/\bvolunteer\b/i.test(normalized)) return 'Volunteer';
+  if (/\bper[\s-]?diem\b/i.test(normalized)) return 'Per diem';
   const labels = {
     FULL_TIME: 'Full-time',
     PART_TIME: 'Part-time',
@@ -132,9 +142,11 @@ function normalizeWorkplaceType(value) {
   if (typeof value !== 'string') return '';
   const normalized = value.trim();
   if (!normalized) return '';
-  if (/^(?:TELECOMMUTE|REMOTE)$/i.test(normalized)) return 'Remote';
-  if (/^(?:HYBRID)$/i.test(normalized)) return 'Hybrid';
-  if (/^(?:ON[-_ ]?SITE|ONSITE)$/i.test(normalized)) return 'On-site';
+  if (/^(?:TELECOMMUTE|REMOTE)\b/i.test(normalized) || /\bremote\b/i.test(normalized)) return 'Remote';
+  if (/^HYBRID\b/i.test(normalized) || /\bhybrid\b/i.test(normalized)) return 'Hybrid';
+  if (/^(?:ON[-_ ]?SITE|ONSITE)\b/i.test(normalized) || /\bon[- ]?site\b|\bonsite\b/i.test(normalized)) {
+    return 'On-site';
+  }
   return normalized;
 }
 
@@ -300,7 +312,9 @@ function findValueAfterHeading(labels, root) {
 function findLabeledValue(labels, root) {
   const scope = root || document;
   const expression = new RegExp(`^(?:${labels})\\s*:?\\s*(.*)$`, 'i');
-  for (const term of scope.querySelectorAll('dt, [role="term"], [aria-label]')) {
+  for (const term of scope.querySelectorAll(
+    'dt, [role="term"], [aria-label], label, strong, b, span',
+  )) {
     const label = (
       term.getAttribute?.('aria-label')
       || term.innerText
@@ -310,12 +324,12 @@ function findLabeledValue(labels, root) {
     const match = expression.exec(label);
     if (!match) continue;
     const sibling = term.nextElementSibling;
-    const value = match?.[1]
-      || (
-        sibling?.tagName?.toLowerCase() === 'dd'
-          ? getReadableElementText(sibling)
-          : getReadableElementText(sibling)
-      );
+    const siblingValue = getReadableElementText(sibling);
+    const parentText = getReadableElementText(term.parentElement, true);
+    const parentMatch = expression.exec(parentText);
+    const value = match[1]
+      || siblingValue
+      || parentMatch?.[1];
     if (value && !expression.test(value)) return value.trim();
   }
   for (const element of scope.querySelectorAll('p, li')) {
@@ -354,7 +368,17 @@ function findEmploymentType(root) {
     'employment type|job type|role type|contract type|schedule|employment',
     root,
   );
-  return normalizeEmploymentType(labeled);
+  if (labeled) return normalizeEmploymentType(labeled);
+  const scope = root || document;
+  for (const heading of scope.querySelectorAll('h1, h2')) {
+    const metadata = getReadableElementText(heading.nextElementSibling, true);
+    if (metadata.length === 0 || metadata.length > 160) continue;
+    const match = metadata.match(
+      /\b(full[\s-]?time|part[\s-]?time|contract(?:or)?|temporary|intern(?:ship)?|volunteer|per[\s-]?diem)\b/i,
+    );
+    if (match) return normalizeEmploymentType(match[1]);
+  }
+  return '';
 }
 
 function findSalary(root) {
@@ -389,12 +413,18 @@ function findJobLocation(root) {
   const schemaLocation = trySelectors(['[itemprop="jobLocation"]'], scope);
   if (schemaLocation) return schemaLocation;
 
-  const locationLabel = /^(?:job\s+|work\s+)?location\s*:?\s*$/i;
+  const locationLabel = /^(?:job\s+|work\s+)?locations?\s*:?\s*$/i;
   for (const element of scope.querySelectorAll('p, li, [role="term"], [aria-label]')) {
     const text = getReadableElementText(element, true);
-    const labeledLocation = text.match(/^(?:job\s+|work\s+)?location\s*:\s*(.{2,160})$/i);
+    const labeledLocation = text.match(/^(?:job\s+|work\s+)?locations?\s*:\s*(.{2,300})$/i);
     if (labeledLocation) return labeledLocation[1].trim();
   }
+
+    const semanticLocation = findLabeledValue(
+      'job\\s+locations?|work\\s+locations?|locations?',
+      scope,
+    );
+    if (semanticLocation) return semanticLocation;
 
   for (const term of scope.querySelectorAll('dt')) {
     const label = (term.innerText || term.textContent || '').replace(/\s+/g, ' ').trim();
@@ -406,7 +436,10 @@ function findJobLocation(root) {
     }
   }
 
-  const labeledLocation = findValueAfterHeading('job\\s+location|work\\s+location|location', scope);
+  const labeledLocation = findValueAfterHeading(
+    'job\\s+locations?|work\\s+locations?|locations?',
+    scope,
+  );
   if (labeledLocation?.value) return labeledLocation.value;
 
   for (const element of scope.querySelectorAll('[aria-label]')) {
@@ -707,12 +740,15 @@ function genericExtract() {
     || getMetaContent('og:description')
     || '';
   const location = ld?.location || findJobLocation(scope);
-  const country = ld?.country || findLabeledValue(
-    'country|work country|country of employment',
-    scope,
-  );
-  const employmentType = ld?.employmentType || findEmploymentType(scope);
-  const workplaceType = ld?.workplaceType || findWorkplaceType(scope);
+  const country = ld?.country
+    || normalizeStructuredCountry(trySelectors(['[itemprop="addressCountry"]'], scope))
+    || findLabeledValue('country|work country|country of employment', scope);
+  const employmentType = ld?.employmentType
+    || normalizeEmploymentType(trySelectors(['[itemprop="employmentType"]'], scope))
+    || findEmploymentType(scope);
+  const workplaceType = ld?.workplaceType
+    || normalizeWorkplaceType(trySelectors(['[itemprop="jobLocationType"]'], scope))
+    || findWorkplaceType(scope);
   const salary = ld?.salary || findSalary(scope);
 
   const canonicalUrl = document.querySelector('link[rel="canonical"]')?.getAttribute('href');

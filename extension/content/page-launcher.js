@@ -282,7 +282,7 @@ function initializeQtsPageLauncher() {
         preview.hidden = true;
         showToast(response.message || 'Signed out.');
         await syncSessionAction();
-      } else if (resolvedAction === 'get_jd' || resolvedAction === 'cancel_status') {
+      } else if (resolvedAction === 'get_jd' || resolvedAction === 'generation' || resolvedAction === 'cancel_status') {
         showToast(response.message || (resolvedAction === 'cancel_status' ? 'Get JD cancelled.' : "Let's start finding Your Remote Job!"));
         await syncModeActions();
       }
@@ -315,6 +315,13 @@ function initializeQtsPageLauncher() {
       }
     }
     if (changes.qtsExtensionStatus) syncModeActions().catch(() => {});
+  });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== 'QTS_GENERATION_PROGRESS') return;
+    showToast(
+      String(message.message || 'Generation updated.'),
+      message.statusType === 'error',
+    );
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {

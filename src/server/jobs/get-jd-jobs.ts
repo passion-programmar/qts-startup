@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { bids, jobs } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getJobBusinessDate, normalizeJobUrl } from "@/server/jobs/job-values";
@@ -19,6 +19,7 @@ export type ManagerJobPresence = {
 };
 
 type NewGetJdJob = GetJdJobIdentity & {
+  description: string;
   location: string | null;
   managerId: string;
   candidateId: string;
@@ -124,6 +125,7 @@ export async function insertGetJdJob(
       jobUrl: normalizeJobUrl(job.jobUrl),
       jobTitle: job.jobTitle.trim(),
       company: job.company.trim(),
+      description: job.description,
       location: job.location,
       managerId: job.managerId,
       candidateId: job.candidateId,
@@ -140,5 +142,16 @@ export async function insertGetJdJob(
     job,
     job.candidateId,
   );
+  if (duplicate === "job_list" && job.description.trim()) {
+    await db
+      .update(jobs)
+      .set({ description: job.description.trim() })
+      .where(and(
+        eq(jobs.managerId, job.managerId),
+        eq(jobs.candidateId, job.candidateId),
+        duplicateConditions(jobs, job),
+        or(isNull(jobs.description), eq(jobs.description, "")),
+      ));
+  }
   return { status: duplicate ?? "job_list" };
 }

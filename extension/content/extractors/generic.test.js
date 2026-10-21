@@ -94,6 +94,39 @@ test('generic extractor reads country, work arrangement, employment type, and sa
   assert.equal(result.salary, 'EUR 60,000-80,000 per year');
 });
 
+test('generic extractor combines countries from structured multi-location postings', () => {
+  const jobPosting = {
+    '@type': 'JobPosting',
+    title: 'Infrastructure Engineer',
+    description: '<p>Build reliable infrastructure.</p>',
+    jobLocation: [
+      { address: { addressCountry: { name: 'NL' } } },
+      { address: { addressCountry: { name: 'PL' } } },
+      { address: { addressCountry: { name: 'NL' } } },
+    ],
+    jobLocationType: 'Remote within EMEA',
+  };
+  const document = {
+    location: { href: 'https://example.com/jobs/infrastructure-engineer' },
+    querySelectorAll: () => [{ textContent: JSON.stringify(jobPosting) }],
+    createElement() {
+      return {
+        set innerHTML(value) {
+          this.innerText = value.replace(/<[^>]*>/g, '');
+        },
+        innerText: '',
+        querySelectorAll: () => [],
+      };
+    },
+  };
+  const window = {};
+  vm.runInNewContext(genericSource, { document, window, URL });
+
+  const result = window.__extractJsonLd();
+  assert.equal(result.country, 'Netherlands; Poland');
+  assert.equal(result.workplaceType, 'Remote');
+});
+
 test('generic extractor reads role type and nearby salary while ignoring Remote as a country', () => {
   const jobPosting = {
     '@type': 'JobPosting',
@@ -128,7 +161,7 @@ test('generic extractor reads role type and nearby salary while ignoring Remote 
       if (selector === 'script[type="application/ld+json"]') {
         return [{ textContent: JSON.stringify(jobPosting) }];
       }
-      if (selector === 'dt, [role="term"], [aria-label]') return facts;
+      if (selector === 'dt, [role="term"], [aria-label], label, strong, b, span') return facts;
       if (selector === 'h1') return [titleElement];
       return [];
     },
@@ -154,6 +187,73 @@ test('generic extractor reads role type and nearby salary while ignoring Remote 
   assert.equal(result.employmentType, 'Contract');
   assert.equal(result.workplaceType, 'Remote');
   assert.equal(result.salary, '$245 - $280/hour pay');
+});
+
+test('generic extractor reads label and value pairs from semantic spans', () => {
+  const labels = [
+    ['Locations:', 'Poland, United Kingdom, Italy'],
+    ['Salary range:', '$50,000 - $100,000 USD'],
+    ['Work arrangement', 'Remote within Europe'],
+  ].map(([label, value]) => {
+    const valueElement = {
+      tagName: 'SPAN',
+      innerText: value,
+      textContent: value,
+    };
+    return {
+      tagName: 'SPAN',
+      innerText: label,
+      textContent: label,
+      nextElementSibling: valueElement,
+      parentElement: {
+        innerText: `${label} ${value}`,
+        textContent: `${label} ${value}`,
+      },
+    };
+  });
+  const titleElement = {
+    tagName: 'H1',
+    innerText: 'DevOps Engineer',
+    textContent: 'DevOps Engineer',
+    nextElementSibling: {
+      innerText: 'Full-time · Remote within Europe',
+      textContent: 'Full-time · Remote within Europe',
+    },
+  };
+  const description = 'Build resilient cloud systems. '.repeat(6);
+  const descriptionElement = { innerHTML: `<p>${description}</p>`, textContent: description };
+  const document = {
+    title: 'DevOps Engineer | Example Company',
+    location: { href: 'https://example.com/jobs/devops-engineer' },
+    querySelectorAll(selector) {
+      if (selector === 'script[type="application/ld+json"]') return [];
+      if (selector === 'dt, [role="term"], [aria-label], label, strong, b, span') return labels;
+      if (selector === 'h1, h2') return [titleElement];
+      return [];
+    },
+    querySelector(selector) {
+      if (selector === 'h1') return titleElement;
+      if (selector === '[itemprop="description"]') return descriptionElement;
+      return null;
+    },
+    createElement() {
+      return {
+        set innerHTML(value) {
+          this.innerText = value.replace(/<[^>]*>/g, '');
+        },
+        innerText: '',
+        querySelectorAll: () => [],
+      };
+    },
+  };
+  const window = {};
+  vm.runInNewContext(genericSource, { document, window, URL });
+
+  const result = window.__genericExtract();
+  assert.equal(result.employmentType, 'Full-time');
+  assert.equal(result.location, 'Poland, United Kingdom, Italy');
+  assert.equal(result.workplaceType, 'Remote');
+  assert.equal(result.salary, '$50,000 - $100,000 USD');
 });
 
 test('generic extractor reads labeled job facts when structured data is unavailable', () => {
@@ -186,7 +286,7 @@ test('generic extractor reads labeled job facts when structured data is unavaila
     location: { href: 'https://example.com/jobs/data-scientist' },
     querySelectorAll(selector) {
       if (selector === 'script[type="application/ld+json"]') return [];
-      if (selector === 'dt, [role="term"], [aria-label]') return facts;
+      if (selector === 'dt, [role="term"], [aria-label], label, strong, b, span') return facts;
       return [];
     },
     querySelector(selector) {
@@ -343,6 +443,9 @@ test('generic extractor reads job details from semantic metadata without site cl
     ['[itemprop="description"]', {
       innerHTML: `<p>${description}</p>`,
     }],
+    ['[itemprop="addressCountry"]', { textContent: 'Poland' }],
+    ['[itemprop="employmentType"]', { textContent: 'Full time' }],
+    ['[itemprop="jobLocationType"]', { textContent: 'Remote within EMEA' }],
     ['link[rel="canonical"]', {
       getAttribute: () => 'https://www.careers.zurich.com/job/1361067157/',
     }],
@@ -369,6 +472,9 @@ test('generic extractor reads job details from semantic metadata without site cl
   assert.equal(result.title, 'Senior AI Engineer - Agentic Workflows');
   assert.equal(result.company, 'Zurich Insurance Company Ltd.');
   assert.match(result.description, /Build agentic workflows/);
+  assert.equal(result.country, 'Poland');
+  assert.equal(result.employmentType, 'Full-time');
+  assert.equal(result.workplaceType, 'Remote');
   assert.equal(result.url, 'https://www.careers.zurich.com/job/1361067157/');
 });
 

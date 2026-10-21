@@ -82,6 +82,29 @@ test('worker permits the authenticated Get JD duplicate check', async () => {
   assert.equal(requests[0].options.headers.Authorization, 'Bearer worker-token');
 });
 
+test('worker permits authenticated Generation endpoints', async () => {
+  const requests = [];
+  const worker = loadApiWorker(async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, generationId: 'generation-id' }),
+    };
+  });
+
+  const result = await worker.workerApiRequest(
+    'POST',
+    '/api/extension/generation/start',
+    { job: { jobDescription: 'JD' } },
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://qts.example.test/api/extension/generation/start');
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer worker-token');
+});
+
 test('worker blocks unfinished API paths before making a request', async () => {
   const requests = [];
   const worker = loadApiWorker(async (...args) => {

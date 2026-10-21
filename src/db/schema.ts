@@ -37,6 +37,12 @@ export const promptPurpose = pgEnum("prompt_purpose", [
   "application_answer",
 ]);
 
+export const generationRunStatus = pgEnum("generation_run_status", [
+  "pending",
+  "completed",
+  "failed",
+]);
+
 export const categories = pgTable(
   "categories",
   {
@@ -233,6 +239,43 @@ export const managerPromptAssignments = pgTable("manager_prompt_assignments", {
     .notNull(),
 });
 
+export const generationRuns = pgTable(
+  "generation_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    jobUrl: text("job_url").notNull(),
+    jobTitle: text("job_title").notNull(),
+    company: text("company").notNull(),
+    location: text("location"),
+    jobDescription: text("job_description").notNull(),
+    promptTemplate: text("prompt_template").notNull(),
+    composedPrompt: text("composed_prompt").notNull(),
+    responseText: text("response_text"),
+    responseJson: jsonb("response_json"),
+    status: generationRunStatus("status").default("pending").notNull(),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("generation_runs_manager_created_at_index").on(
+      table.managerId,
+      table.createdAt,
+    ),
+    index("generation_runs_manager_status_index").on(
+      table.managerId,
+      table.status,
+    ),
+  ],
+);
+
 export const jobs = pgTable(
   "jobs",
   {
@@ -240,6 +283,7 @@ export const jobs = pgTable(
     jobUrl: text("job_url").notNull(),
     jobTitle: text("job_title").notNull(),
     company: text("company").notNull(),
+    description: text("description"),
     location: text("location"),
     candidateId: uuid("candidate_id")
       .notNull()
@@ -504,6 +548,8 @@ export type ManagerPromptAssignment =
   typeof managerPromptAssignments.$inferSelect;
 export type NewManagerPromptAssignment =
   typeof managerPromptAssignments.$inferInsert;
+export type GenerationRun = typeof generationRuns.$inferSelect;
+export type NewGenerationRun = typeof generationRuns.$inferInsert;
 export type Job = typeof jobs.$inferSelect;
 export type NewJob = typeof jobs.$inferInsert;
 export type Bid = typeof bids.$inferSelect;

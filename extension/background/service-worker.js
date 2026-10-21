@@ -8,6 +8,7 @@ importScripts(
   '../shared/api-prefetch.js',
   '../shared/custom-gpt.js',
   '../shared/scanner-chatgpt.js',
+  '../shared/generation-chatgpt.js',
   '../shared/account-auth-storage.js',
   '../shared/apply-session-store.js',
   '../shared/api-worker.js',
@@ -49,6 +50,8 @@ const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
 const getJdInFlightTabs = new Set();
 const getJdLastPageByTab = new Map();
+const generationInFlightTabs = new Set();
+const generationCancellationByTab = new Map();
 let lastSourceTabId = null;
 const lastAutoDetectKeyByTab = new Map();
 const CAPTURE_PANEL_FILE = 'content/capture-panel.js';
@@ -716,6 +719,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
           title: extractedJobDetails.title,
           company: extractedJobDetails.company,
           location: extractedJobDetails.location,
+          description: extractedJobDetails.description,
           country: extractedJobDetails.country,
           employmentType: extractedJobDetails.employmentType,
           workplaceType: extractedJobDetails.workplaceType,
@@ -2056,6 +2060,186 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     return results[0]?.result;
   }
 
+  async function showGenerationPageStatus(jobTabId, message, type = 'info') {
+    if (!Number.isInteger(jobTabId)) return;
+    try {
+      await chrome.tabs.sendMessage(jobTabId, {
+        type: 'QTS_GENERATION_PROGRESS',
+        message,
+        statusType: type,
+      });
+    } catch {
+      // The source page may have navigated while ChatGPT was generating.
+    }
+  }
+
+  function ensureGenerationIsActive(jobTabId, cancellationToken) {
+    if (generationCancellationByTab.get(jobTabId) !== cancellationToken) {
+      throw new Error('Generation cancelled.');
+    }
+  }
+
+  async function runGenerationForTab(jobTabId) {
+    if (generationInFlightTabs.has(jobTabId)) {
+      throw new Error('Generation is already running for this page.');
+    }
+    generationInFlightTabs.add(jobTabId);
+    const cancellationToken = (generationCancellationByTab.get(jobTabId) || 0) + 1;
+    generationCancellationByTab.set(jobTabId, cancellationToken);
+    let generationId = '';
+    let jobDescription = '';
+    try {
+      await showGenerationPageStatus(jobTabId, 'Reading job details for Generation...');
+      const extraction = await extractJobFromTab(jobTabId);
+      if (extraction.error) throw new Error(extraction.error);
+      const details = normalizeDetectedJobData(
+        extraction.data,
+        extraction.url || extraction.tab?.url,
+      );
+      if (!details.title || !details.company || !details.description || !details.url) {
+        throw new Error('Could not extract the job title, company, URL, and job description from this page.');
+      }
+      jobDescription = details.description;
+      ensureGenerationIsActive(jobTabId, cancellationToken);
+      const started = await workerApiRequest('POST', '/api/extension/generation/start', {
+        job: {
+          jobUrl: details.url,
+          jobTitle: details.title,
+          company: details.company,
+          location: details.location || details.country || '',
+          employmentType: details.employmentType || '',
+          workplaceType: details.workplaceType || '',
+          salary: details.salary || '',
+          jobDescription,
+        },
+      });
+      if (!started.success || !started.generationId || !started.prompt) {
+        throw new Error(started.message || 'QTS could not prepare the Generation prompt.');
+      }
+      generationId = started.generationId;
+      ensureGenerationIsActive(jobTabId, cancellationToken);
+      await showGenerationPageStatus(jobTabId, 'Opening ChatGPT and sending the Generation prompt...');
+
+      const chatTab = await chrome.tabs.create({ url: 'https://chatgpt.com/', active: true });
+      if (chatTab?.id == null) throw new Error('Could not open ChatGPT.');
+      await waitForScannerChatGptTab(chatTab.id);
+      ensureGenerationIsActive(jobTabId, cancellationToken);
+      await chrome.scripting.executeScript({
+        target: { tabId: chatTab.id },
+        files: ['shared/chatgpt-composer-handoff.js'],
+      });
+      const handoffResults = await chrome.scripting.executeScript({
+        target: { tabId: chatTab.id },
+        func: async (message) => {
+          const composer = globalThis.__qtsChatGptComposerHandoff;
+          if (!composer?.runUnifiedComposerHandoffAsync) {
+            return { ok: false, error: 'The ChatGPT composer helper is unavailable.' };
+          }
+          const startedAt = Date.now();
+          while (Date.now() - startedAt < 45000) {
+            const editor = composer.findUnifiedComposerEditor?.();
+            if (!editor) {
+              await new Promise((resolve) => setTimeout(resolve, 300));
+              continue;
+            }
+            const generating = Boolean(
+              document.querySelector('[data-testid="stop-button"]')
+              || [...document.querySelectorAll('button')].some((button) =>
+                /stop generating|stop streaming/i.test(button.getAttribute('aria-label') || '')
+              )
+            );
+            if (generating) return { ok: false, error: 'ChatGPT is already generating. Wait for it to finish and retry.' };
+            const messages = composer.findAssistantMessages?.() || [];
+            const baseline = {
+              messageCount: messages.length,
+              lastText: String(messages[messages.length - 1]?.innerText || '').trim(),
+            };
+            const result = await composer.runUnifiedComposerHandoffAsync(message);
+            if (result.phase === 'no_editor') {
+              await new Promise((resolve) => setTimeout(resolve, 300));
+              continue;
+            }
+            return { ...result, baseline };
+          }
+          return { ok: false, error: 'Timed out waiting for the ChatGPT message box. Sign in to ChatGPT and retry.' };
+        },
+        args: [started.prompt],
+      });
+      const handoff = handoffResults[0]?.result;
+      if (!handoff?.ok || !handoff.sent) {
+        throw new Error(handoff?.error || 'ChatGPT did not confirm that the prompt was sent.');
+      }
+
+      await showGenerationPageStatus(jobTabId, 'ChatGPT is generating the résumé and cover letter...');
+      const waitStartedAt = Date.now();
+      let previousText = '';
+      let stableSince = 0;
+      let responseText = '';
+      while (Date.now() - waitStartedAt < 240000) {
+        await sleep(750);
+        ensureGenerationIsActive(jobTabId, cancellationToken);
+        const snapshot = await scannerChatGptSnapshot(chatTab.id, handoff.baseline);
+        if (!snapshot?.isNew || !snapshot.text || snapshot.generating) {
+          previousText = '';
+          stableSince = 0;
+          continue;
+        }
+        if (snapshot.text !== previousText) {
+          previousText = snapshot.text;
+          stableSince = Date.now();
+          continue;
+        }
+        if (Date.now() - stableSince >= 5000) {
+          responseText = snapshot.text;
+          break;
+        }
+      }
+      if (!responseText) throw new Error('Timed out waiting for ChatGPT to finish. Check the ChatGPT tab before retrying.');
+      ensureGenerationIsActive(jobTabId, cancellationToken);
+      const responseJson = self.__qtsGenerationChatGpt?.extractJsonObject?.(responseText) || null;
+      const saved = await workerApiRequest('POST', '/api/extension/generation/complete', {
+        generationId,
+        jobDescription,
+        responseText,
+        responseJson,
+      });
+      if (!saved.success) throw new Error(saved.message || 'QTS could not save the Generation result.');
+      const message = responseJson
+        ? 'Generation completed and saved with the JD.'
+        : 'Generation response and JD saved, but the response was not valid résumé/cover-letter JSON.';
+      await showGenerationPageStatus(jobTabId, message, responseJson ? 'success' : 'error');
+      return { ok: true, status: 'generation', message, generationId, parsed: Boolean(responseJson) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Generation failed.';
+      if (generationId && jobDescription) {
+        try {
+          const failed = await workerApiRequest('POST', '/api/extension/generation/complete', {
+            generationId,
+            jobDescription,
+            failureReason: message,
+          });
+          if (!failed.success) {
+            console.error('[QTS Generation] Could not record the failed run:', failed.message);
+          }
+        } catch (saveError) {
+          console.error('[QTS Generation] Could not record the failed run:', saveError);
+        }
+      }
+      await showGenerationPageStatus(jobTabId, message, 'error');
+      throw error;
+    } finally {
+      generationInFlightTabs.delete(jobTabId);
+      try {
+        const stored = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+        if (stored[EXTENSION_STATUS_KEY] === 'generation') {
+          await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        }
+      } catch (error) {
+        console.error('[QTS Generation] Could not reset the extension action status:', error);
+      }
+    }
+  }
+
   async function runScannerChatGptTask(msg) {
     const taskId = String(msg?.taskId || '').trim();
     const prompt = String(msg?.prompt || '').trim();
@@ -2862,6 +3046,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
         getJdInFlightTabs.clear();
         getJdLastPageByTab.clear();
+        for (const [runningTabId, token] of generationCancellationByTab) {
+          generationCancellationByTab.set(runningTabId, token + 1);
+        }
         sendResponse({ ok: true, message: 'Signed out.' });
         return;
       }
@@ -2871,6 +3058,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
         getJdInFlightTabs.clear();
         getJdLastPageByTab.clear();
+        if (cancelledStatus === 'generation' && tabId != null) {
+          generationCancellationByTab.set(
+            tabId,
+            (generationCancellationByTab.get(tabId) || 0) + 1,
+          );
+        }
         if (cancelledStatus === 'get_jd' && tabId != null) {
           const result = await readGetJdResultForTab(tabId);
           if (result?.status === 'complete') await cancelGetJdReview(tabId);
@@ -2890,11 +3083,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         return;
       }
-      if (action === 'generation' || action === 'apply') {
+      if (action === 'apply') {
         sendResponse({
           ok: false,
           disabled: true,
-          error: `${action === 'generation' ? 'Generation' : 'Apply'} is not enabled yet.`,
+          error: 'Apply is not enabled yet.',
+        });
+        return;
+      }
+      if (action === 'generation') {
+        if (tabId == null) {
+          sendResponse({ ok: false, error: 'Generation must be started from a job page.' });
+          return;
+        }
+        const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
+        if (!token) {
+          sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Generation.' });
+          return;
+        }
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'generation' });
+        sendResponse({
+          ok: true,
+          status: 'generation',
+          message: 'Generation started. Opening ChatGPT...',
+        });
+        runGenerationForTab(tabId).catch((error) => {
+          console.error('[QTS Generation] Could not complete Generation:', error);
         });
         return;
       }

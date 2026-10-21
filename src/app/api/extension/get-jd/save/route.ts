@@ -7,7 +7,7 @@ import {
   findGetJdDuplicate,
   insertGetJdJob,
 } from "@/server/jobs/get-jd-jobs";
-import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
+import { readExtensionSavedJob } from "@/server/jobs/get-jd-save-values";
 
 const maxProfilesPerSave = 100;
 
@@ -39,7 +39,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const job = readJob(body);
+  const job = readExtensionSavedJob(body);
   const profileIds = readProfileIds(body);
   if (!job || !profileIds) {
     return jsonResponse(
@@ -82,6 +82,13 @@ export async function POST(request: Request): Promise<NextResponse> {
         .join(" ") || "Candidate";
       const duplicate = await findGetJdDuplicate(manager.id, job, candidate.id);
       if (duplicate) {
+        if (duplicate === "job_list") {
+          await insertGetJdJob({
+            ...job,
+            managerId: manager.id,
+            candidateId: candidate.id,
+          });
+        }
         results.push({
           profileId: candidate.id,
           name,
@@ -146,34 +153,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       500,
     );
   }
-}
-
-function readJob(
-  value: unknown,
-): { jobUrl: string; jobTitle: string; company: string; location: string | null } | null {
-  if (!isRecord(value) || !isRecord(value.job)) return null;
-  const { job } = value;
-  if (
-    typeof job.jobUrl !== "string" ||
-    typeof job.title !== "string" ||
-    typeof job.company !== "string" ||
-    typeof job.location !== "string" ||
-    job.jobUrl.length > 2048 ||
-    job.title.trim().length === 0 ||
-    job.title.length > 500 ||
-    job.company.trim().length === 0 ||
-    job.company.length > 500 ||
-    job.location.length > 500 ||
-    !isHttpUrl(job.jobUrl)
-  ) {
-    return null;
-  }
-  return {
-    jobUrl: normalizeJobUrl(job.jobUrl),
-    jobTitle: job.title.trim(),
-    company: job.company.trim(),
-    location: job.location.trim() || null,
-  };
 }
 
 function readProfileIds(value: unknown): string[] | null {

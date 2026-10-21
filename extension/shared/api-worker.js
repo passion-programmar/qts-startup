@@ -18,6 +18,7 @@ function workerUnavailableResponse() {
 function workerSupportedApiPath(path) {
   return path === '/api/extension/get-jd/check'
     || path === '/api/extension/get-jd/save'
+    || path.startsWith('/api/extension/generation/')
     || path.startsWith('/api/extension/auth/');
 }
 

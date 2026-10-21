@@ -4,9 +4,24 @@ import { Download, FileText, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { CoverLetterDocument, PdfPackage, ResumeDocument } from "@/app/pdf/document-data";
 import { parsePdfPackage } from "@/app/pdf/document-data";
-import { pdfTemplateLabels, type PdfTemplate } from "@/server/pdf/pdf-templates";
+import {
+  isPdfTemplate,
+  pdfTemplateLabels,
+  pdfTemplateValues,
+  type PdfTemplate,
+} from "@/server/pdf/pdf-templates";
 
-type PdfAccount = { id: string; fullName: string; pdfTemplate: PdfTemplate };
+type PdfSavedJob = {
+  id: string;
+  candidateName: string;
+  jobTitle: string;
+  company: string;
+  jobUrl: string;
+  location: string;
+  description: string;
+  generatedDocument: unknown;
+  pdfTemplate: PdfTemplate;
+};
 
 const example = JSON.stringify({
   resume: {
@@ -28,26 +43,41 @@ const example = JSON.stringify({
 }, null, 2);
 
 export function PdfWorkspace({
-  accounts,
   managerName,
+  savedJobs,
 }: {
-  accounts: PdfAccount[];
   managerName: string;
+  savedJobs: PdfSavedJob[];
 }) {
-  const [source, setSource] = useState(example);
-  const [parsed, setParsed] = useState<PdfPackage | null>(() => parsePdfPackage(example));
-  const [error, setError] = useState<string | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState(savedJobs[0]?.id ?? "");
+  const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>(
+    savedJobs[0]?.pdfTemplate ?? "professional",
+  );
+  const [source, setSource] = useState(() => initialDocumentSource(savedJobs));
+  const [parsed, setParsed] = useState<PdfPackage | null>(
+    () => tryParsePdfPackage(initialDocumentSource(savedJobs)),
+  );
+  const [error, setError] = useState<string | null>(
+    () => initialDocumentError(savedJobs),
+  );
   const [busy, setBusy] = useState(false);
   const prettySize = useMemo(() => new Blob([source]).size.toLocaleString(), [source]);
-  const assignedAccount = useMemo(
-    () => parsed ? findAssignedAccount(accounts, parsed.resume.candidate.fullName) : null,
-    [accounts, parsed],
-  );
-  const assignedTemplate = assignedAccount?.pdfTemplate ?? "professional";
+  const selectedJob = savedJobs.find((job) => job.id === selectedJobId) ?? null;
 
   function updateSource(nextSource: string) {
     setSource(nextSource);
+    if (!nextSource.trim()) {
+      setParsed(null);
+      setError(null);
+      return;
+    }
     try { setParsed(parsePdfPackage(nextSource)); setError(null); } catch (reason) { setParsed(null); setError(reason instanceof Error ? reason.message : "JSON is invalid."); }
+  }
+  function selectSavedJob(jobId: string) {
+    setSelectedJobId(jobId);
+    const job = savedJobs.find((savedJob) => savedJob.id === jobId) ?? null;
+    setSelectedTemplate(job?.pdfTemplate ?? "professional");
+    updateSource(job ? generatedDocumentSource(job) : savedJobs.length ? "" : example);
   }
   async function downloadPair() {
     try {
@@ -58,8 +88,8 @@ export function PdfWorkspace({
         ? await picker.call(window, { mode: "readwrite", startIn: "downloads" })
         : null;
       const [resumeBytes, coverLetterBytes] = await Promise.all([
-        resumePdf(data.resume, assignedTemplate),
-        coverLetterPdf(data.coverLetter, assignedTemplate),
+        resumePdf(data.resume, selectedTemplate),
+        coverLetterPdf(data.coverLetter, selectedTemplate),
       ]);
       const candidateName = safePathPart(data.resume.candidate.fullName);
       const jobTitle = safePathPart(data.resume.targetRole);
@@ -86,14 +116,34 @@ export function PdfWorkspace({
       <header className="mb-7"><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PDF</h1><p className="mt-1 text-sm text-slate-500">Create a matching resume and cover letter from one JSON object. Processing stays in this browser.</p></header>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,.95fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="font-semibold">Document JSON</h2><p className="text-xs text-slate-500">{prettySize} bytes · resume + coverLetter</p><p className="mt-1 text-xs font-semibold text-blue-700">{assignedAccount ? `${assignedAccount.fullName} · ${pdfTemplateLabels[assignedTemplate]} template` : `No matching account · ${pdfTemplateLabels.professional} template`}</p></div><button className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50" onClick={() => updateSource(example)} type="button"><RefreshCw className="size-3.5" />Load example</button></div>
-          <div className="p-5"><label className="text-xs font-semibold text-slate-700" htmlFor="pdf-json">JSON data</label><textarea className="mt-2 min-h-[560px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
+          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="font-semibold">Document package</h2><p className="text-xs text-slate-500">{prettySize} bytes · resume + cover letter</p><p className="mt-1 text-xs font-semibold text-blue-700">{pdfTemplateLabels[selectedTemplate]} template</p></div><button className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50" onClick={() => updateSource(example)} type="button"><RefreshCw className="size-3.5" />Load example</button></div>
+          <div className="space-y-4 p-5">
+            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-saved-job">Saved job from extension
+              <select className={inputClass} id="pdf-saved-job" onChange={(event) => selectSavedJob(event.target.value)} value={selectedJobId}>
+                {!savedJobs.length && <option value="">No saved jobs</option>}
+                {savedJobs.map((job) => <option key={job.id} value={job.id}>{job.candidateName} · {job.jobTitle} · {job.company}</option>)}
+              </select>
+            </label>
+            {selectedJob && <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3">
+              <p className="text-xs font-semibold text-slate-700">Job description captured by the extension</p>
+              <p className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-slate-600">{selectedJob.description || "No saved description is available for this job."}</p>
+              <a className="mt-2 inline-block break-all text-xs text-blue-700 underline" href={selectedJob.jobUrl} rel="noreferrer" target="_blank">{selectedJob.jobUrl}</a>
+              {!selectedJob.generatedDocument && <p className="mt-2 text-xs text-amber-800">No completed extension Generation result is linked to this saved job yet. Start Generation from its job page, then return here to load the generated documents.</p>}
+            </div>}
+            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Built-in PDF template
+              <select className={inputClass} id="pdf-template" onChange={(event) => {
+                if (isPdfTemplate(event.target.value)) setSelectedTemplate(event.target.value);
+              }} value={selectedTemplate}>
+                {pdfTemplateValues.map((template) => <option key={template} value={template}>{pdfTemplateLabels[template]}</option>)}
+              </select>
+            </label>
+            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="min-h-[440px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
-            <p className="mt-3 text-xs text-slate-500">Choose your Downloads folder to save three separate files under: QTS_Resume / {managerName} / candidate / date_time_job title_company</p>
+            <p className="mt-3 text-xs text-slate-500">Choose your Downloads folder to save two files under: QTS_Resume / {managerName} / candidate / date_time_job title_company</p>
             <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !parsed} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : "Save résumé and cover letter"}</button></div>
           </div>
         </section>
-        <section className="space-y-5">{parsed ? <><ResumePreview document={parsed.resume} template={assignedTemplate} /><CoverPreview document={parsed.coverLetter} template={assignedTemplate} /></> : <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500"><FileText className="mx-auto mb-3 size-8" />Enter valid JSON to preview the documents.</div>}</section>
+        <section className="space-y-5">{parsed ? <><ResumePreview document={parsed.resume} template={selectedTemplate} /><CoverPreview document={parsed.coverLetter} template={selectedTemplate} /></> : <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500"><FileText className="mx-auto mb-3 size-8" />Enter valid JSON to preview the documents.</div>}</section>
       </div>
     </main>
   );
@@ -108,6 +158,44 @@ function previewClass(template: PdfTemplate): string {
 function previewLabelClass(template: PdfTemplate): string {
   return `text-[10px] font-bold uppercase tracking-widest ${template === "modern" ? "text-cyan-700" : "text-blue-600"}`;
 }
+
+function initialDocumentSource(savedJobs: PdfSavedJob[]): string {
+  if (!savedJobs.length) return example;
+  return generatedDocumentSource(savedJobs[0]);
+}
+
+function generatedDocumentSource(job: PdfSavedJob): string {
+  if (
+    typeof job.generatedDocument !== "object"
+    || job.generatedDocument === null
+    || Array.isArray(job.generatedDocument)
+  ) {
+    return "";
+  }
+  return JSON.stringify(job.generatedDocument, null, 2);
+}
+
+function tryParsePdfPackage(source: string): PdfPackage | null {
+  if (!source.trim()) return null;
+  try {
+    return parsePdfPackage(source);
+  } catch {
+    return null;
+  }
+}
+
+function initialDocumentError(savedJobs: PdfSavedJob[]): string | null {
+  const source = initialDocumentSource(savedJobs);
+  if (!source.trim()) return null;
+  try {
+    parsePdfPackage(source);
+    return null;
+  } catch (reason) {
+    return reason instanceof Error ? reason.message : "Generated JSON is invalid.";
+  }
+}
+
+const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
 async function resumePdf(document: ResumeDocument, template: PdfTemplate): Promise<Uint8Array> {
   const pdf = await createWriter(template, 2);
@@ -155,14 +243,6 @@ function packageTimestamp(date = new Date()): string {
   const part = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}_${part(date.getHours())}-${part(date.getMinutes())}-${part(date.getSeconds())}`;
 }
-function findAssignedAccount(accounts: PdfAccount[], fullName: string): PdfAccount | null {
-  const normalized = normalizeName(fullName);
-  return accounts.find((account) => normalizeName(account.fullName) === normalized) ?? null;
-}
-function normalizeName(value: string): string {
-  return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toLocaleLowerCase("en");
-}
-
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: (options?: { mode?: "read" | "readwrite"; startIn?: string }) => Promise<FileSystemDirectoryHandle>;
 };
