@@ -241,19 +241,37 @@ function initializeQtsPageLauncher() {
     return signedIn;
   }
 
+  async function syncModeActions() {
+    const stored = await chrome.storage.local.get(['qtsExtensionStatus']);
+    const activeStatus = stored.qtsExtensionStatus;
+    const labels = {
+      get_jd: 'Get JD',
+      generation: 'Generation',
+      apply: 'Apply',
+    };
+    for (const [action, defaultLabel] of Object.entries(labels)) {
+      const button = launcher.querySelector(`[data-action="${action}"]`);
+      if (!button) continue;
+      const active = activeStatus === action;
+      button.dataset.modeAction = active ? 'cancel_status' : action;
+      button.setAttribute('aria-label', active ? `Cancel ${defaultLabel}` : defaultLabel);
+      const icon = button.querySelector('.action-icon');
+      const label = button.querySelector('.action-icon + span');
+      if (icon) icon.textContent = active ? '×' : action === 'get_jd' ? '⌕' : action === 'generation' ? '✦' : '→';
+      if (label) label.textContent = active ? 'Cancel' : defaultLabel;
+    }
+  }
+
   async function runAction(action, button) {
     setOpen(false);
     button.disabled = true;
     try {
       const resolvedAction = action === 'session'
         ? button.dataset.sessionAction || 'sign_in'
-        : action;
+        : button.dataset.modeAction || action;
       if (resolvedAction === 'sign_in') {
         showSignInForm();
         return;
-      }
-      if (resolvedAction === 'get_jd') {
-        showToast("Let's start finding Your Remote Job!");
       }
       const response = await chrome.runtime.sendMessage({
         type: 'QTS_PAGE_ACTION',
@@ -264,6 +282,9 @@ function initializeQtsPageLauncher() {
         preview.hidden = true;
         showToast(response.message || 'Signed out.');
         await syncSessionAction();
+      } else if (resolvedAction === 'get_jd' || resolvedAction === 'cancel_status') {
+        showToast(response.message || (resolvedAction === 'cancel_status' ? 'Get JD cancelled.' : "Let's start finding Your Remote Job!"));
+        await syncModeActions();
       }
     } catch (error) {
       showToast(error?.message || 'Could not run this QTS action.', true);
@@ -284,13 +305,16 @@ function initializeQtsPageLauncher() {
   userInput.addEventListener('change', submitSignIn);
   passwordInput.addEventListener('change', submitSignIn);
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || (!changes.authToken && !changes.authExpiresAt)) return;
-    syncSessionAction().catch(() => {});
-    if (changes.authToken?.newValue) {
-      signInForm.hidden = true;
-      passwordInput.value = '';
-      showToast('Signed in successfully.');
+    if (area !== 'local') return;
+    if (changes.authToken || changes.authExpiresAt) {
+      syncSessionAction().catch(() => {});
+      if (changes.authToken?.newValue) {
+        signInForm.hidden = true;
+        passwordInput.value = '';
+        showToast('Signed in successfully.');
+      }
     }
+    if (changes.qtsExtensionStatus) syncModeActions().catch(() => {});
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
@@ -301,7 +325,8 @@ function initializeQtsPageLauncher() {
   });
 
   syncSessionAction().catch(() => {});
-  globalThis.__qtsPageLauncher = { setOpen, showPreview, syncSessionAction };
+  syncModeActions().catch(() => {});
+  globalThis.__qtsPageLauncher = { setOpen, showPreview, syncSessionAction, syncModeActions };
 }
 
 if (document.readyState === 'complete') {

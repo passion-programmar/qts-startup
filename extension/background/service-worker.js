@@ -516,7 +516,11 @@ async function updateGetJdSelection(tabId, profileIds) {
   ) {
     return { ok: false, error: 'The current job review is no longer available.' };
   }
-  const allowedIds = new Set((result.profiles || []).map((profile) => profile.id));
+  const allowedIds = new Set(
+    (result.profiles || [])
+      .filter((profile) => profile.available !== false)
+      .map((profile) => profile.id),
+  );
   if (profileIds.some((id) => !allowedIds.has(id))) {
     return { ok: false, error: 'One or more selected candidates are unavailable.' };
   }
@@ -571,11 +575,23 @@ async function saveGetJdSelection(tabId, profileIds) {
   }
   if (Number(response.failedCount || 0) > 0) {
     const message = 'Some candidates could not be saved. Please review and retry.';
+    const responseByProfile = new Map(
+      (response.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
+    );
     await saveGetJdResult(tabId, {
       ...result,
       status: 'complete',
       saveError: message,
       saveResponse: response,
+      profiles: (result.profiles || []).map((profile) => {
+        const profileResult = responseByProfile.get(profile.id);
+        return profileResult && profileResult.status !== 'failed'
+          ? { ...profile, available: false, saveResult: profileResult }
+          : { ...profile, saveResult: profileResult || null };
+      }),
+      selectedProfileIds: (response.results || [])
+        .filter((profileResult) => profileResult.status === 'failed')
+        .map((profileResult) => profileResult.profileId),
       updatedAt: Date.now(),
     });
     return { ok: false, error: message };
@@ -655,7 +671,11 @@ async function processGetJdPage(tabId, url, documentId = '') {
     }
     if (!(await isGetJdActive())) return;
 
-    if (result.exists === true) {
+    const profiles = Array.isArray(result.profiles)
+      ? result.profiles.filter((profile) => profile && typeof profile.id === 'string')
+      : [];
+    const availableProfiles = profiles.filter((profile) => profile.available !== false);
+    if (result.allCandidatesAssigned === true || availableProfiles.length === 0) {
       await saveGetJdResult(tabId, {
         ...initialResult,
         pageTitle: extraction.title || tab.title || '',
@@ -673,15 +693,24 @@ async function processGetJdPage(tabId, url, documentId = '') {
     await saveGetJdResult(tabId, {
       ...initialResult,
       pageTitle: extraction.title || tab.title || '',
-      status: 'new',
-      message: result.message || 'This is a new job!',
+      status: 'complete',
+      message: result.message || 'Select candidates to save this job.',
+      hasDuplicates: result.exists === true,
       updatedAt: Date.now(),
-      job: {
-        title: extractedJobDetails.title,
-        company: extractedJobDetails.company,
-        location: extractedJobDetails.location,
-        jobUrl: extractedJobDetails.url,
+      classification: {
+        isJobPage: true,
+        isRemote: /\bremote\b/i.test(extractedJobDetails.location),
+        matchingProfileIds: [],
+        job: {
+          title: extractedJobDetails.title,
+          company: extractedJobDetails.company,
+          location: extractedJobDetails.location,
+          employmentType: '',
+          jobUrl: extractedJobDetails.url,
+        },
       },
+      profiles,
+      selectedProfileIds: [],
       jobDescription: extractedJobDetails.description,
     });
   } catch (error) {
@@ -2820,6 +2849,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         getJdInFlightTabs.clear();
         getJdLastPageByTab.clear();
         sendResponse({ ok: true, message: 'Signed out.' });
+        return;
+      }
+      if (action === 'cancel_status') {
+        const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
+        const cancelledStatus = stored[EXTENSION_STATUS_KEY];
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
+        getJdInFlightTabs.clear();
+        getJdLastPageByTab.clear();
+        if (cancelledStatus === 'get_jd' && tabId != null) {
+          const result = await readGetJdResultForTab(tabId);
+          if (result?.status === 'complete') await cancelGetJdReview(tabId);
+        }
+        const cancelledLabel = cancelledStatus === 'get_jd'
+          ? 'Get JD'
+          : cancelledStatus === 'generation'
+            ? 'Generation'
+            : cancelledStatus === 'apply'
+              ? 'Apply'
+              : 'Current action';
+        sendResponse({
+          ok: true,
+          status: 'cancel',
+          cancelledStatus,
+          message: `${cancelledLabel} cancelled.`,
+        });
         return;
       }
       if (action === 'generation' || action === 'apply') {

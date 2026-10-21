@@ -1,7 +1,12 @@
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { categories, profiles, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { findManagerJobPresence } from "@/server/jobs/get-jd-jobs";
+import { db } from "@/lib/db";
+import { findGetJdDuplicates } from "@/server/jobs/get-jd-jobs";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
+
+const maxManagerAccounts = 100;
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -31,17 +36,73 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const presence = await findManagerJobPresence(manager.id, job);
-    const exists = presence.inJobs || presence.inBids;
+    const candidateRows = await db
+      .select({
+        id: profiles.userId,
+        firstName: profiles.firstName,
+        lastName: profiles.lastName,
+        category: categories.name,
+      })
+      .from(users)
+      .innerJoin(profiles, eq(profiles.userId, users.id))
+      .leftJoin(categories, eq(categories.id, profiles.categoryId))
+      .where(
+        and(
+          eq(users.parentUserId, manager.id),
+          eq(users.role, "account"),
+          isNull(users.blockedAt),
+        ),
+      )
+      .orderBy(asc(profiles.firstName), asc(profiles.lastName))
+      .limit(maxManagerAccounts + 1);
+
+    if (candidateRows.length > maxManagerAccounts) {
+      return jsonResponse(
+        { success: false, message: "This Manager has too many active Accounts to display at once." },
+        413,
+      );
+    }
+    if (candidateRows.length === 0) {
+      return jsonResponse(
+        { success: false, message: "Create an active candidate Account before saving jobs." },
+        409,
+      );
+    }
+
+    const duplicates = await findGetJdDuplicates(
+      manager.id,
+      job,
+      candidateRows.map((candidate) => candidate.id),
+    );
+    const duplicateKinds = [...duplicates.values()];
+    const inJobs = duplicateKinds.includes("job_list");
+    const inBids = duplicateKinds.includes("applied");
+    const allCandidatesAssigned = duplicates.size === candidateRows.length;
+    const candidateProfiles = candidateRows.map((candidate) => {
+      const duplicateKind = duplicates.get(candidate.id) ?? null;
+      return {
+        id: candidate.id,
+        name: [candidate.firstName, candidate.lastName]
+          .filter(Boolean)
+          .join(" ") || "Candidate",
+        category: candidate.category,
+        available: duplicateKind === null,
+        duplicateKind,
+      };
+    });
+
     return jsonResponse({
       success: true,
-      exists,
-      ...presence,
-      message: presence.inBids
-        ? "You have already applied to this job."
-        : presence.inJobs
-          ? "This job already exists in Jobs."
-          : "This is a new job!",
+      exists: duplicates.size > 0,
+      allCandidatesAssigned,
+      inJobs,
+      inBids,
+      profiles: candidateProfiles,
+      message: allCandidatesAssigned
+        ? "This job already exists for every active candidate."
+        : duplicates.size > 0
+          ? "This job already exists for some candidates. Select from the available candidates."
+          : "This is a new job! Select candidates to save it.",
     });
   } catch (error) {
     console.error(

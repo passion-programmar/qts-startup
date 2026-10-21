@@ -49,8 +49,27 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(serviceWorker.includes("'/api/extension/get-jd/check'"));
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'get_jd'"));
   assert.ok(launcher.includes("Let's start finding Your Remote Job!"));
+  assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
+  assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'cancel'"));
   assert.ok(launcher.includes("'Sign In'"));
   assert.ok(launcher.includes("'Sign Out'"));
+});
+
+test('Get JD review lists candidates and reports per-candidate saves', () => {
+  const serviceWorker = fs.readFileSync(
+    path.join(extensionRoot, 'background', 'service-worker.js'),
+    'utf8',
+  );
+  const review = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'get-jd-review.js'),
+    'utf8',
+  );
+
+  assert.ok(serviceWorker.includes('profiles.filter((profile) => profile.available !== false)'));
+  assert.ok(serviceWorker.includes("status: 'complete'"));
+  assert.ok(review.includes("checkbox.disabled = profile.available === false"));
+  assert.ok(review.includes("elements.panel.querySelector('h2').textContent = 'Save result'"));
+  assert.ok(review.includes('Successfully saved ${savedCount}'));
 });
 
 test('the login panel submits completed credentials without a timer or button', () => {

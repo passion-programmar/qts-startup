@@ -43,12 +43,16 @@
       .description { max-height: 130px; overflow: auto; padding: 8px; border-radius: 7px; background: #f8fafc; }
       .profiles { max-height: 220px; overflow: auto; margin: 9px 0 12px; border-top: 1px solid #e2e8f0; }
       .profile { display: flex; gap: 9px; align-items: flex-start; padding: 8px 2px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+      .profile.unavailable { cursor: default; opacity: .72; }
       .profile input { margin: 2px 0 0; accent-color: #4f46e5; }
       .profile small { display: block; margin-top: 2px; color: #64748b; }
+      .profile .saved { color: #166534; }
+      .profile .failed { color: #b91c1c; }
       .message { min-height: 18px; margin: 0 0 8px; color: #b91c1c; }
       .actions { display: flex; gap: 8px; }
       button { min-height: 36px; padding: 0 13px; border: 0; border-radius: 7px; font: 600 12px system-ui, sans-serif; cursor: pointer; }
       button:disabled { opacity: .6; cursor: wait; }
+      button[hidden] { display: none; }
       .save { flex: 1; color: #fff; background: #4f46e5; }
       .cancel { color: #334155; background: #e2e8f0; }
       @media (max-width: 480px) { .panel { top: 8px; right: 8px; width: calc(100vw - 16px); max-height: calc(100vh - 16px); } }
@@ -142,7 +146,8 @@
   function renderReview(result) {
     const elements = host.__qtsElements;
     elements.panel.hidden = false;
-    elements.status.textContent = `Job page: Yes · Remote: ${result.classification.isRemote ? 'Yes' : 'No'}`;
+    elements.panel.querySelector('h2').textContent = 'Review new job';
+    elements.status.textContent = result.message || 'Select candidates to save this job.';
     elements.details.replaceChildren();
     appendDetail(elements.details, 'Title', result.classification.job.title);
     appendDetail(elements.details, 'Company', result.classification.job.company);
@@ -161,15 +166,20 @@
     const selectedIds = Array.isArray(result.selectedProfileIds)
       ? new Set(result.selectedProfileIds)
       : null;
+    const saveResults = new Map(
+      (result.saveResponse?.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
+    );
     for (const profile of candidates) {
       const label = document.createElement('label');
       label.className = 'profile';
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.dataset.profileId = profile.id;
-      checkbox.checked = selectedIds
+      checkbox.disabled = profile.available === false;
+      checkbox.checked = !checkbox.disabled && (selectedIds
         ? selectedIds.has(profile.id)
-        : profile.recommended === true;
+        : profile.recommended === true);
+      if (checkbox.disabled) label.classList.add('unavailable');
       checkbox.addEventListener('change', () => {
         sendSelection().catch((error) => {
           elements.message.textContent = error.message || 'Could not save candidate selection.';
@@ -178,13 +188,24 @@
       const details = document.createElement('span');
       details.textContent = profile.name || 'Candidate';
       const category = document.createElement('small');
-      category.textContent = profile.category || 'Uncategorized';
+      const saveResult = saveResults.get(profile.id) || profile.saveResult;
+      const availability = profile.duplicateKind === 'applied'
+        ? 'Already applied'
+        : profile.duplicateKind === 'job_list'
+          ? 'Already in Jobs'
+          : '';
+      category.textContent = [profile.category || 'Uncategorized', saveResult?.message || availability]
+        .filter(Boolean)
+        .join(' · ');
+      if (saveResult?.status === 'saved') category.classList.add('saved');
+      if (saveResult?.status === 'failed') category.classList.add('failed');
       details.appendChild(category);
       label.append(checkbox, details);
       elements.profiles.appendChild(label);
     }
 
-    elements.save.disabled = candidates.length === 0;
+    elements.save.hidden = false;
+    elements.save.disabled = !candidates.some((profile) => profile.available !== false);
     elements.save.textContent = 'Save';
     elements.cancel.disabled = false;
     elements.cancel.textContent = 'Cancel';
@@ -223,6 +244,45 @@
     };
   }
 
+  function renderSaveResult(result) {
+    const elements = host.__qtsElements;
+    const response = result.saveResponse || {};
+    const savedCount = Number(response.savedCount || 0);
+    const duplicateCount = Number(response.duplicateCount || 0);
+    const failedCount = Number(response.failedCount || 0);
+    elements.panel.hidden = false;
+    elements.panel.querySelector('h2').textContent = 'Save result';
+    elements.status.textContent = savedCount > 0
+      ? `Successfully saved ${savedCount} job${savedCount === 1 ? '' : 's'}.`
+      : 'No new jobs were saved.';
+    elements.details.replaceChildren();
+    appendDetail(elements.details, 'Job', result.classification?.job?.title || 'Job');
+    elements.profiles.replaceChildren();
+    for (const profileResult of response.results || []) {
+      const row = document.createElement('div');
+      row.className = 'profile unavailable';
+      const details = document.createElement('span');
+      details.textContent = profileResult.name || 'Candidate';
+      const status = document.createElement('small');
+      status.className = profileResult.status === 'failed' ? 'failed' : 'saved';
+      status.textContent = [profileResult.category || 'Uncategorized', profileResult.message]
+        .filter(Boolean)
+        .join(' · ');
+      details.appendChild(status);
+      row.appendChild(details);
+      elements.profiles.appendChild(row);
+    }
+    elements.message.textContent = failedCount > 0
+      ? `${failedCount} candidate${failedCount === 1 ? '' : 's'} could not be saved.`
+      : duplicateCount > 0
+        ? `${duplicateCount} candidate${duplicateCount === 1 ? '' : 's'} already had this job.`
+        : '';
+    elements.save.hidden = true;
+    elements.cancel.disabled = false;
+    elements.cancel.textContent = 'Done';
+    elements.cancel.onclick = () => { elements.panel.hidden = true; };
+  }
+
   function applyResult(result) {
     ensureRoot();
     const elements = host.__qtsElements;
@@ -254,10 +314,10 @@
       return;
     }
     if (result.status === 'saved') {
-      elements.panel.hidden = true;
       const failures = result.saveResponse?.failedCount || 0;
+      renderSaveResult(result);
       showToast(
-        failures ? 'Some candidates could not be saved. Please review and retry.' : 'Successfully Saved!',
+        failures ? 'Some candidates could not be saved. Please review and retry.' : 'Successfully saved!',
         failures ? 'error' : 'success',
         toastKey,
       );
@@ -272,7 +332,11 @@
       showToast('This is not Job Page', 'normal', toastKey);
       return;
     }
-    showToast('This is a new job!', 'success', `${result.runId || result.updatedAt}:new-job`);
+    showToast(
+      result.message || 'Select candidates to save this job.',
+      result.hasDuplicates ? 'normal' : 'success',
+      `${result.runId || result.updatedAt}:candidate-review`,
+    );
     renderReview(result);
   }
 
