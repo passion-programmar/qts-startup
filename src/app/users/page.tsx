@@ -7,8 +7,11 @@ import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { categories } from "@/db/schema";
 import {
+  CopyableAccountField,
+  CopyLinkedInUrl,
   CreateUserForm,
   CredentialResetForm,
+  DeleteCandidateAccountForm,
   DeleteStaffUserForm,
   EditCandidateProfileForm,
 } from "@/app/users/user-forms";
@@ -197,70 +200,103 @@ export default async function UsersPage() {
             {actor.role === "manager" ? (
               <PaginatedTable
                 columns={[
-                  { label: "Candidate", className: "min-w-32" },
+                  { label: "No", className: "w-16 text-center" },
+                  { label: "Full name", className: "min-w-40" },
                   { label: "Category", className: "min-w-28" },
                   { label: "Contact", className: "min-w-40" },
-                  { label: "Location", className: "min-w-40" },
-                  { label: "Headline", className: "min-w-40" },
-                  { label: "LinkedIn", className: "min-w-20" },
+                  { label: "Street address", className: "min-w-44" },
+                  { label: "Postal code", className: "min-w-28" },
+                  { label: "LinkedIn", className: "w-24" },
+                  { label: "Edit", className: "w-24 text-center" },
+                  { label: "Delete", className: "w-24 text-center" },
                 ]}
                 emptyMessage="No candidate accounts"
                 rows={result.rows
                   .filter((candidate) => candidate.role === "account")
-                  .map((candidate) => ({
+                  .map((candidate, index) => ({
                     id: candidate.id,
                     cells: [
-                      <div key="candidate">
-                        <div className="font-semibold">{userName(candidate)}</div>
-                        <EditCandidateProfileForm
-                          candidate={{
-                            userId: candidate.id,
-                            firstName: candidate.first_name,
-                            lastName: candidate.last_name,
-                            candidateEmail: candidate.candidate_email,
-                            phone: candidate.phone,
-                            headline: candidate.headline,
-                            linkedinUrl: candidate.linkedin_url,
-                            country: candidate.country,
-                            city: candidate.city,
-                            province: candidate.province,
-                            addressLine1: candidate.address_line_1,
-                            postalCode: candidate.postal_code,
-                            categoryId: candidate.category_id,
-                          }}
-                          categories={categoryOptions}
-                        />
-                      </div>,
-                      candidate.category_name ?? "Uncategorized",
-                      <div key="contact">
+                      <CopyableAccountField
+                        ariaLabel={`Copy row number ${index + 1}`}
+                        className="text-center"
+                        key="number"
+                        value={String(index + 1)}
+                      >
+                        {index + 1}
+                      </CopyableAccountField>,
+                      <CopyableAccountField
+                        ariaLabel={`Copy full name for ${userName(candidate)}`}
+                        className="font-semibold"
+                        key="candidate"
+                        value={userName(candidate)}
+                      >
+                        {userName(candidate)}
+                      </CopyableAccountField>,
+                      <CopyableAccountField
+                        ariaLabel={`Copy category for ${userName(candidate)}`}
+                        key="category"
+                        value={candidate.category_name ?? "Uncategorized"}
+                      >
+                        {candidate.category_name ?? "Uncategorized"}
+                      </CopyableAccountField>,
+                      <CopyableAccountField
+                        ariaLabel={`Copy contact for ${userName(candidate)}`}
+                        key="contact"
+                        value={[candidate.candidate_email, candidate.phone]
+                          .filter(Boolean)
+                          .join("\n") || "—"}
+                      >
                         <div>{candidate.candidate_email ?? "—"}</div>
                         <div className="mt-1 text-slate-500">
                           {candidate.phone ?? "—"}
                         </div>
-                      </div>,
-                      [
-                        candidate.address_line_1,
-                        candidate.city,
-                        candidate.province,
-                        candidate.country,
-                        candidate.postal_code,
-                      ]
-                        .filter(Boolean)
-                        .join(", ") || "—",
-                      candidate.headline ?? "—",
+                      </CopyableAccountField>,
+                      <CopyableAccountField
+                        ariaLabel={`Copy street address for ${userName(candidate)}`}
+                        key="street-address"
+                        value={candidate.address_line_1 || "—"}
+                      >
+                        {candidate.address_line_1 || "—"}
+                      </CopyableAccountField>,
+                      <CopyableAccountField
+                        ariaLabel={`Copy postal code for ${userName(candidate)}`}
+                        key="postal-code"
+                        value={candidate.postal_code || "—"}
+                      >
+                        {candidate.postal_code || "—"}
+                      </CopyableAccountField>,
                       candidate.linkedin_url ? (
-                        <a
-                          className="text-indigo-600 hover:underline"
-                          href={candidate.linkedin_url}
+                        <CopyLinkedInUrl
                           key="linkedin"
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          Open profile
-                        </a>
+                          url={candidate.linkedin_url}
+                        />
                       ) : (
                         "—"
                       ),
+                      <EditCandidateProfileForm
+                        candidate={{
+                          userId: candidate.id,
+                          firstName: candidate.first_name,
+                          lastName: candidate.last_name,
+                          candidateEmail: candidate.candidate_email,
+                          phone: candidate.phone,
+                          headline: candidate.headline,
+                          linkedinUrl: candidate.linkedin_url,
+                          country: candidate.country,
+                          city: candidate.city,
+                          province: candidate.province,
+                          addressLine1: candidate.address_line_1,
+                          postalCode: candidate.postal_code,
+                          categoryId: candidate.category_id,
+                        }}
+                        categories={categoryOptions}
+                        key="edit"
+                      />,
+                      <DeleteCandidateAccountForm
+                        candidateName={userName(candidate)}
+                        key="delete"
+                        userId={candidate.id}
+                      />,
                     ],
                   }))}
               />

@@ -21,6 +21,7 @@ import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import {
   createUserAction,
+  deleteCandidateAccountAction,
   deleteStaffUserAction,
   type UserActionState,
   updateCandidateProfileAction,
@@ -434,12 +435,13 @@ const closeModal = useCallback(() => setIsOpen(false), []);
   return (
     <>
       <button
-        className="mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-indigo-600 transition hover:bg-indigo-50 hover:text-indigo-700"
+        aria-label="Edit candidate profile"
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100"
         onClick={() => setIsOpen(true)}
         type="button"
       >
         <Pencil aria-hidden="true" className="size-3.5" />
-        Edit profile
+        Edit
       </button>
       <Modal
         onClose={closeModal}
@@ -573,6 +575,86 @@ const closeModal = useCallback(() => setIsOpen(false), []);
         </form>
       </Modal>
     </>
+  );
+}
+
+export function DeleteCandidateAccountForm({
+  userId,
+  candidateName,
+}: {
+  userId: string;
+  candidateName: string;
+}) {
+  const [state, formAction, isPending] = useActionState(
+    deleteCandidateAccountAction,
+    initialState,
+  );
+
+  return (
+    <form
+      action={formAction}
+      onSubmit={(event) => {
+        if (
+          !window.confirm(
+            `Permanently delete ${candidateName}? Their profile, Jobs, Bids, education, and experience records will also be deleted.`,
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+    >
+      <input name="userId" type="hidden" value={userId} />
+      <button
+        aria-label={`Delete ${candidateName}`}
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
+        disabled={isPending}
+        type="submit"
+      >
+        <Trash2 aria-hidden="true" className="size-3.5" />
+        {isPending ? "Deleting..." : "Delete"}
+      </button>
+      {state.error && (
+        <span className="mt-1 block max-w-36 text-[10px] leading-tight text-rose-700" role="alert">
+          {state.error}
+        </span>
+      )}
+    </form>
+  );
+}
+
+export function CopyLinkedInUrl({ url }: { url: string }) {
+  return (
+    <CopyableAccountField
+      ariaLabel="Copy LinkedIn URL"
+      className="text-xs font-semibold text-indigo-700 hover:text-indigo-900 hover:underline"
+      value={url}
+    >
+      LinkedIn
+    </CopyableAccountField>
+  );
+}
+
+export function CopyableAccountField({
+  value,
+  ariaLabel,
+  className = "",
+  children,
+}: {
+  value: string;
+  ariaLabel: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      aria-label={ariaLabel}
+      className={`block w-full cursor-copy text-left transition hover:text-indigo-700 ${className}`}
+      onClick={() => void navigator.clipboard.writeText(value)}
+      title="Click to copy"
+      type="button"
+    >
+      {children}
+    </button>
   );
 }
 

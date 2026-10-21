@@ -441,6 +441,77 @@ export async function updateUserCredentialsAction(
   return { error: null, success: "Staff credentials updated." };
 }
 
+export async function deleteCandidateAccountAction(
+  _previousState: UserActionState,
+  formData: FormData,
+): Promise<UserActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") {
+    return {
+      ...emptyState,
+      error: "Only Managers can delete candidate accounts.",
+    };
+  }
+
+  const userId = readText(formData, "userId", 64);
+  if (!isUuid(userId)) {
+    return { ...emptyState, error: "Select a valid candidate account." };
+  }
+
+  try {
+    const results = await neonSql.transaction((tx) => [
+      tx`
+        delete from bids
+        using users as candidate
+        where bids.candidate_id = candidate.id
+          and candidate.id = ${userId}::uuid
+          and candidate.role = 'account'
+          and candidate.parent_user_id = ${actor.id}::uuid
+      `,
+      tx`
+        delete from jobs
+        using users as candidate
+        where jobs.candidate_id = candidate.id
+          and candidate.id = ${userId}::uuid
+          and candidate.role = 'account'
+          and candidate.parent_user_id = ${actor.id}::uuid
+      `,
+      tx`
+        delete from profiles
+        using users as candidate
+        where profiles.user_id = candidate.id
+          and candidate.id = ${userId}::uuid
+          and candidate.role = 'account'
+          and candidate.parent_user_id = ${actor.id}::uuid
+      `,
+      tx`
+        delete from users
+        where users.id = ${userId}::uuid
+          and users.role = 'account'
+          and users.parent_user_id = ${actor.id}::uuid
+        returning users.id
+      `,
+    ]);
+
+    if (results[3].length === 0) {
+      return {
+        ...emptyState,
+        error: "That candidate account was not found in your team.",
+      };
+    }
+  } catch (error) {
+    logUserActionFailure("deleting a candidate account", error);
+    return {
+      ...emptyState,
+      error: "The candidate account could not be deleted. Please try again.",
+    };
+  }
+
+  revalidatePath("/");
+  revalidatePath("/users");
+  return { error: null, success: "Candidate account permanently deleted." };
+}
+
 export async function deleteStaffUserAction(
   _previousState: UserActionState,
   formData: FormData,
