@@ -1,10 +1,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  classifyJobPageUrl,
   mergeJobExtractionSamples,
   mergeMissingJobDetails,
   usablePartialJobDetails,
 } = require('./job-detect');
+
+test('ATS job identifiers classify custom-host pages as job details', () => {
+  assert.equal(
+    classifyJobPageUrl('https://www.sentinelone.com/jobs/?gh_jid=7731266003'),
+    'detail',
+  );
+  assert.equal(
+    classifyJobPageUrl('https://jobs.anyoneai.com/?ashby_jid=e80c2c62-6895-41f5-bf9d-89ae5207d2bf'),
+    'detail',
+  );
+});
 
 test('missing extracted job details are filled without replacing saved values', () => {
   const merged = mergeMissingJobDetails({
@@ -12,6 +24,10 @@ test('missing extracted job details are filled without replacing saved values', 
     company: 'Saved company',
     description: '',
     location: '',
+    country: '',
+    employmentType: '',
+    workplaceType: '',
+    salary: '',
     url: 'https://apply.workable.com/example/j/123',
     source: 'workable',
   }, {
@@ -19,6 +35,10 @@ test('missing extracted job details are filled without replacing saved values', 
     company: 'Detected company',
     description: 'Description extracted from the page.',
     location: 'Riga, Latvia',
+    country: 'Latvia',
+    employmentType: 'Full-time',
+    workplaceType: 'Hybrid',
+    salary: 'EUR 60,000-80,000 per year',
     url: 'https://apply.workable.com/example/j/456',
     source: 'other',
   });
@@ -28,6 +48,10 @@ test('missing extracted job details are filled without replacing saved values', 
     company: 'Saved company',
     description: 'Description extracted from the page.',
     location: 'Riga, Latvia',
+    country: 'Latvia',
+    employmentType: 'Full-time',
+    workplaceType: 'Hybrid',
+    salary: 'EUR 60,000-80,000 per year',
     url: 'https://apply.workable.com/example/j/123',
     source: 'workable',
   });
@@ -39,6 +63,10 @@ test('missing extracted values stay empty when the page did not provide them', (
     company: '',
     description: '',
     location: '',
+    country: '',
+    employmentType: '',
+    workplaceType: '',
+    salary: '',
     url: 'https://apply.workable.com/example/j/123',
     source: '',
   }, {
@@ -46,6 +74,10 @@ test('missing extracted values stay empty when the page did not provide them', (
     company: '',
     description: '',
     location: '',
+    country: '',
+    employmentType: '',
+    workplaceType: '',
+    salary: '',
     url: '',
     source: 'workable',
   });
@@ -55,6 +87,10 @@ test('missing extracted values stay empty when the page did not provide them', (
     company: '',
     description: '',
     location: '',
+    country: '',
+    employmentType: '',
+    workplaceType: '',
+    salary: '',
     url: 'https://apply.workable.com/example/j/123',
     source: 'workable',
   });
@@ -66,6 +102,10 @@ test('progressive page captures retain the most complete job details', () => {
     company: '',
     description: '',
     location: '',
+    country: '',
+    employmentType: '',
+    workplaceType: '',
+    salary: '',
     url: '',
     source: 'workable',
   }, 'https://apply.workable.com/example/j/123');
@@ -81,6 +121,10 @@ test('progressive page captures retain the most complete job details', () => {
   assert.equal(merged.company, 'Resource Innovations');
   assert.equal(merged.description.length, 100);
   assert.equal(merged.location, '');
+  assert.equal(merged.country, '');
+  assert.equal(merged.employmentType, '');
+  assert.equal(merged.workplaceType, '');
+  assert.equal(merged.salary, '');
   assert.equal(merged.url, 'https://apply.workable.com/example/j/123');
   assert.equal(merged.source, 'workable');
 });
@@ -91,6 +135,10 @@ test('partial extraction exposes useful details but filters generic page heading
     company: 'Resource Innovations',
     description: '',
     location: '',
+    country: '',
+    employmentType: '',
+    workplaceType: '',
+    salary: '',
     url: 'https://apply.workable.com/example/j/123',
   }), {
     data: {
@@ -98,6 +146,10 @@ test('partial extraction exposes useful details but filters generic page heading
       company: 'Resource Innovations',
       description: '',
       location: '',
+      country: '',
+      employmentType: '',
+      workplaceType: '',
+      salary: '',
       url: 'https://apply.workable.com/example/j/123',
       source: '',
     },

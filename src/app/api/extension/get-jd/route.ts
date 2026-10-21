@@ -41,14 +41,20 @@ const responseSchema = {
         title: { type: "STRING" },
         company: { type: "STRING" },
         location: { type: "STRING" },
+        country: { type: "STRING" },
         employmentType: { type: "STRING" },
+        workplaceType: { type: "STRING" },
+        salary: { type: "STRING" },
         jobUrl: { type: "STRING" },
       },
       required: [
         "title",
         "company",
         "location",
+        "country",
         "employmentType",
+        "workplaceType",
+        "salary",
         "jobUrl",
       ],
     },
@@ -84,7 +90,10 @@ type GetJdClassification = {
     title: string;
     company: string;
     location: string;
+    country: string;
     employmentType: string;
+    workplaceType: string;
+    salary: string;
     jobUrl: string;
   };
   matchingProfileIds: string[];
@@ -216,7 +225,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       "If this is not one specific job posting, set isJobPage and isRemote to false and return no matchingProfileIds.",
       "For a real job posting, select suitable candidates using only the job details and each candidate's category. Treat the category as the candidate's primary role. Ignore candidate names when deciding suitability.",
       "Return only candidate IDs from the supplied list, at most once each. Never infer qualifications or include IDs not supplied.",
-      "Return exactly these fields: isJobPage, isRemote, job (title, company, location, employmentType, jobUrl), and matchingProfileIds. Do not add confidence, reason, description, or other fields.",
+      "Return exactly these fields: isJobPage, isRemote, job (title, company, location, country, employmentType, workplaceType, salary, jobUrl), and matchingProfileIds. Do not add confidence, reason, description, or other fields.",
       "Use an empty string for unknown job fields.",
       `Job page data:\n${JSON.stringify(jobContext)}`,
       `Candidate accounts (only ID, name, and category):\n${JSON.stringify(candidateContext)}`,
@@ -438,7 +447,10 @@ function validateClassification(
     "title",
     "company",
     "location",
+    "country",
     "employmentType",
+    "workplaceType",
+    "salary",
   ] as const;
   for (const field of stringFields) {
     if (typeof job[field] !== "string") {
@@ -481,7 +493,10 @@ function validateClassification(
       title: String(job.title).slice(0, 500),
       company: String(job.company).slice(0, 500),
       location: String(job.location).slice(0, 500),
+      country: String(job.country).slice(0, 200),
       employmentType: String(job.employmentType).slice(0, 300),
+      workplaceType: String(job.workplaceType).slice(0, 100),
+      salary: String(job.salary).slice(0, 500),
       jobUrl: pageUrl,
     },
     matchingProfileIds: isJobPage ? matchingProfileIds : [],
@@ -495,6 +510,25 @@ function readExtractedJob(value: unknown): Record<string, string> | null {
   for (const field of fields) {
     const fieldValue = value.extractedJobDetails[field];
     if (typeof fieldValue !== "string" || fieldValue.length > maxJobTextLength) {
+      return null;
+    }
+    result[field] = fieldValue.trim();
+  }
+  for (const field of [
+    "country",
+    "employmentType",
+    "workplaceType",
+    "salary",
+  ] as const) {
+    const fieldValue = value.extractedJobDetails[field];
+    if (fieldValue === undefined) {
+      result[field] = "";
+      continue;
+    }
+    if (
+      typeof fieldValue !== "string" ||
+      fieldValue.length > maxJobTextLength
+    ) {
       return null;
     }
     result[field] = fieldValue.trim();

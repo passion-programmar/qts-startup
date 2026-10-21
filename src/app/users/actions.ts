@@ -10,6 +10,8 @@ import {
   passwordLengthError,
 } from "@/lib/password-policy";
 import { requireUser } from "@/lib/session";
+import { isValidBirthday } from "@/server/users/profile-values";
+import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
 export type UserActionState = {
   error: string | null;
@@ -33,6 +35,8 @@ export async function createUserAction(
   const password = readSecret(formData, "password");
   const firstName = readText(formData, "firstName", 120);
   const lastName = readText(formData, "lastName", 120);
+  const birthday = readText(formData, "birthday", 10);
+  const pdfTemplate = readText(formData, "pdfTemplate", 20) || "professional";
   const candidateEmail = readText(formData, "candidateEmail", 320);
   const phone = readText(formData, "phone", 64);
   const headline = readText(formData, "headline", 256);
@@ -84,6 +88,12 @@ export async function createUserAction(
     }
     if (candidateEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidateEmail)) {
       return { ...emptyState, error: "Enter a valid candidate email address." };
+    }
+    if (birthday && !isValidBirthday(birthday)) {
+      return { ...emptyState, error: "Enter a valid birthday that is not in the future." };
+    }
+    if (!isPdfTemplate(pdfTemplate)) {
+      return { ...emptyState, error: "Select a valid PDF template." };
     }
     if (linkedinUrl && !isHttpUrl(linkedinUrl)) {
       return { ...emptyState, error: "Enter a valid LinkedIn profile URL." };
@@ -137,11 +147,12 @@ export async function createUserAction(
         ),
         new_profile as (
           insert into profiles (
-            user_id, category_id, first_name, last_name, candidate_email, phone,
+            user_id, category_id, first_name, last_name, birthday, pdf_template, candidate_email, phone,
             headline, linkedin_url, country, city, province, address_line_1,
             postal_code
           )
           select id, ${categoryId || null}::uuid, ${firstName}, ${lastName},
+            ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
             ${phone || null}, ${headline || null}, ${linkedinUrl || null},
             ${country || null}, ${city || null}, ${province || null},
@@ -241,6 +252,8 @@ export async function updateCandidateProfileAction(
   const limits = {
     firstName: 120,
     lastName: 120,
+    birthday: 10,
+    pdfTemplate: 20,
     candidateEmail: 320,
     phone: 64,
     headline: 256,
@@ -255,6 +268,8 @@ export async function updateCandidateProfileAction(
   const values = {
     firstName: readText(formData, "firstName", limits.firstName),
     lastName: readText(formData, "lastName", limits.lastName),
+    birthday: readText(formData, "birthday", limits.birthday),
+    pdfTemplate: readText(formData, "pdfTemplate", limits.pdfTemplate) || "professional",
     candidateEmail: readText(formData, "candidateEmail", limits.candidateEmail),
     phone: readText(formData, "phone", limits.phone),
     headline: readText(formData, "headline", limits.headline),
@@ -311,6 +326,12 @@ export async function updateCandidateProfileAction(
   ) {
     return { ...emptyState, error: "Enter a valid candidate email address." };
   }
+  if (values.birthday && !isValidBirthday(values.birthday)) {
+    return { ...emptyState, error: "Enter a valid birthday that is not in the future." };
+  }
+  if (!isPdfTemplate(values.pdfTemplate)) {
+    return { ...emptyState, error: "Select a valid PDF template." };
+  }
   if (values.linkedinUrl && !isHttpUrl(values.linkedinUrl)) {
     return { ...emptyState, error: "Enter a valid LinkedIn profile URL." };
   }
@@ -366,6 +387,8 @@ export async function updateCandidateProfileAction(
         update profiles
         set category_id = ${values.categoryId || null}::uuid,
           first_name = ${values.firstName}, last_name = ${values.lastName},
+          birthday = ${values.birthday || null}::date,
+          pdf_template = ${values.pdfTemplate},
           candidate_email = ${values.candidateEmail ? values.candidateEmail.toLowerCase() : null},
           phone = ${values.phone || null}, headline = ${values.headline || null},
           linkedin_url = ${values.linkedinUrl || null}, country = ${values.country || null},

@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
+import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
 import {
   createUserAction,
   deleteCandidateAccountAction,
@@ -91,6 +92,15 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               name="lastName"
               required
             />
+            <TextField
+              autoComplete="bday"
+              id="birthday"
+              label="Birthday (optional)"
+              maxLength={10}
+              name="birthday"
+              type="date"
+            />
+            <PdfTemplateField id="pdfTemplate" />
             <div className="sm:col-span-2">
               <TextField
                 autoComplete="email"
@@ -405,6 +415,8 @@ export type CandidateProfileValues = {
   userId: string;
   firstName: string | null;
   lastName: string | null;
+  birthday: string | null;
+  pdfTemplate: PdfTemplate;
   candidateEmail: string | null;
   phone: string | null;
   headline: string | null;
@@ -496,6 +508,16 @@ export function EditCandidateProfileForm({
             name="lastName"
             required
           />
+          <TextField
+            autoComplete="bday"
+            defaultValue={candidate.birthday ?? ""}
+            id={fieldId("birthday")}
+            label="Birthday (optional)"
+            maxLength={10}
+            name="birthday"
+            type="date"
+          />
+          <PdfTemplateField defaultValue={candidate.pdfTemplate} id={fieldId("pdfTemplate")} />
           <TextField
             autoComplete="email"
             defaultValue={candidate.candidateEmail ?? ""}
@@ -1084,6 +1106,34 @@ function CurrentStatusSelect({
       >
         <option value="false">No</option>
         <option value="true">Yes</option>
+      </select>
+    </div>
+  );
+}
+
+function PdfTemplateField({
+  id,
+  defaultValue = "professional",
+}: {
+  id: string;
+  defaultValue?: PdfTemplate;
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor={id}>
+        PDF template
+      </label>
+      <select
+        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+        defaultValue={defaultValue}
+        id={id}
+        name="pdfTemplate"
+      >
+        {pdfTemplateValues.map((template) => (
+          <option key={template} value={template}>
+            {pdfTemplateLabels[template]}
+          </option>
+        ))}
       </select>
     </div>
   );

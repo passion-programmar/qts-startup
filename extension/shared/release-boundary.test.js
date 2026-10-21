@@ -73,6 +73,9 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes("? 'Already applied.'"));
   assert.ok(review.includes("? 'Already added.'"));
   assert.ok(review.includes("result.toastMessage || 'New job.'"));
+  assert.ok(serviceWorker.includes('result.exists === true || result.allCandidatesAssigned === true'));
+  assert.ok(serviceWorker.includes('savedCount !== profileIds.length'));
+  assert.ok(serviceWorker.includes('duplicateCount > 0'));
 });
 
 test('the login panel submits completed credentials without a timer or button', () => {

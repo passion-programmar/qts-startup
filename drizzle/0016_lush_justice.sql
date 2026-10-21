@@ -1,0 +1,2 @@
+ALTER TABLE "profiles" ADD COLUMN "pdf_template" text DEFAULT 'professional' NOT NULL;--> statement-breakpoint
+ALTER TABLE "profiles" ADD CONSTRAINT "profiles_pdf_template_check" CHECK ("profiles"."pdf_template" in ('professional', 'modern', 'compact'));

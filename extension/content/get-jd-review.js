@@ -152,6 +152,10 @@
     appendDetail(elements.details, 'Title', result.classification.job.title);
     appendDetail(elements.details, 'Company', result.classification.job.company);
     appendDetail(elements.details, 'Location', result.classification.job.location);
+    appendDetail(elements.details, 'Country', result.classification.job.country);
+    appendDetail(elements.details, 'Employment type', result.classification.job.employmentType);
+    appendDetail(elements.details, 'Work arrangement', result.classification.job.workplaceType);
+    appendDetail(elements.details, 'Salary', result.classification.job.salary);
     appendDetail(elements.details, 'URL', result.classification.job.jobUrl);
     appendDetail(elements.details, 'Job description', result.jobDescription, 'description');
     elements.profiles.replaceChildren();

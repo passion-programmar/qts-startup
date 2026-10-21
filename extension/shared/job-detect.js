@@ -47,6 +47,10 @@ function normalizeDetectedJobData(data, pageUrl) {
     company: String(data?.company || '').trim(),
     description: String(data?.description || '').trim(),
     location: String(data?.location || '').trim(),
+    country: String(data?.country || '').trim(),
+    employmentType: String(data?.employmentType || '').trim(),
+    workplaceType: String(data?.workplaceType || '').trim(),
+    salary: String(data?.salary || '').trim(),
     url: normalizeJobUrl(rawUrl),
     source: String(data?.source || '').trim(),
   };
@@ -54,7 +58,18 @@ function normalizeDetectedJobData(data, pageUrl) {
 
 function mergeMissingJobDetails(current, detected) {
   const merged = { ...current };
-  for (const key of ['title', 'company', 'description', 'location', 'url', 'source']) {
+  for (const key of [
+    'title',
+    'company',
+    'description',
+    'location',
+    'country',
+    'employmentType',
+    'workplaceType',
+    'salary',
+    'url',
+    'source',
+  ]) {
     const currentValue = String(current?.[key] || '').trim();
     const detectedValue = String(detected?.[key] || '').trim();
     merged[key] = currentValue ? current[key] : detectedValue;
@@ -78,6 +93,10 @@ function mergeJobExtractionSamples(previous, next, pageUrl) {
       ? candidate.description
       : current.description,
     location: current.location || candidate.location,
+    country: current.country || candidate.country,
+    employmentType: current.employmentType || candidate.employmentType,
+    workplaceType: current.workplaceType || candidate.workplaceType,
+    salary: current.salary || candidate.salary,
     url: normalizeJobUrl(pageUrl || current.url || candidate.url),
     source: current.source || candidate.source,
   };
@@ -232,6 +251,10 @@ function classifyJobPageUrl(pageUrl) {
   const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   const path = parsed.pathname.toLowerCase();
 
+  if (parsed.searchParams.get('gh_jid')?.trim() || parsed.searchParams.get('ashby_jid')?.trim()) {
+    return 'detail';
+  }
+
   if (host.includes('linkedin.com')) {
     if (isLinkedInJobDetailUrl(parsed)) return 'detail';
     if (isLinkedInJobListUrl(parsed)) return 'list';
@@ -377,6 +400,7 @@ async function removeDetectedJobForTab(tabId) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    classifyJobPageUrl,
     mergeJobExtractionSamples,
     mergeMissingJobDetails,
     usablePartialJobDetails,

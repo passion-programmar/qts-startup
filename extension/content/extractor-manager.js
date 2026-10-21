@@ -24,7 +24,17 @@ function extractJobData() {
     if (extractor !== window.__genericExtract && window.__genericExtract) {
       try {
         const fallback = window.__genericExtract();
-        for (const field of ['title', 'company', 'description', 'location', 'url']) {
+        for (const field of [
+          'title',
+          'company',
+          'description',
+          'location',
+          'country',
+          'employmentType',
+          'workplaceType',
+          'salary',
+          'url',
+        ]) {
           if (!data[field]?.trim() && fallback[field]?.trim()) data[field] = fallback[field];
         }
       } catch (e) {
@@ -35,7 +45,7 @@ function extractJobData() {
     if (window.__normalizeJobUrl) {
       data.url = window.__normalizeJobUrl(data.url);
     }
-    if (!data.source) data.source = detectSource(hostname);
+    if (!data.source) data.source = detectSource(hostname, window.location.search);
     return data;
   } catch (e) {
     console.error('[QTS_Startup] Extraction error:', e);
@@ -43,7 +53,10 @@ function extractJobData() {
   }
 }
 
-function detectSource(hostname) {
+function detectSource(hostname, search = '') {
+  const params = new URLSearchParams(search);
+  if (params.get('gh_jid')?.trim()) return 'greenhouse';
+  if (params.get('ashby_jid')?.trim()) return 'ashby';
   if (hostname.includes('linkedin')) return 'linkedin';
   if (hostname.includes('indeed')) return 'indeed';
   if (hostname.includes('glassdoor')) return 'glassdoor';

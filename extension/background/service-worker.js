@@ -573,8 +573,13 @@ async function saveGetJdSelection(tabId, profileIds) {
       error: response.message || 'Could not save selected candidates.',
     };
   }
-  if (Number(response.failedCount || 0) > 0) {
-    const message = 'Some candidates could not be saved. Please review and retry.';
+  const savedCount = Number(response.savedCount || 0);
+  const failedCount = Number(response.failedCount || 0);
+  const duplicateCount = Number(response.duplicateCount || 0);
+  if (failedCount > 0 || duplicateCount > 0 || savedCount !== profileIds.length) {
+    const message = failedCount > 0
+      ? 'Some candidates could not be saved. Please review and retry.'
+      : 'Some selected candidates already have this job. Only new records were saved.';
     const responseByProfile = new Map(
       (response.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
     );
@@ -675,7 +680,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
       ? result.profiles.filter((profile) => profile && typeof profile.id === 'string')
       : [];
     const availableProfiles = profiles.filter((profile) => profile.available !== false);
-    if (result.allCandidatesAssigned === true || availableProfiles.length === 0) {
+    if (result.exists === true || result.allCandidatesAssigned === true || availableProfiles.length === 0) {
       await saveGetJdResult(tabId, {
         ...initialResult,
         pageTitle: extraction.title || tab.title || '',
@@ -703,13 +708,18 @@ async function processGetJdPage(tabId, url, documentId = '') {
       updatedAt: Date.now(),
       classification: {
         isJobPage: true,
-        isRemote: /\bremote\b/i.test(extractedJobDetails.location),
+        isRemote: /\bremote\b/i.test(
+          `${extractedJobDetails.workplaceType} ${extractedJobDetails.location}`,
+        ),
         matchingProfileIds: [],
         job: {
           title: extractedJobDetails.title,
           company: extractedJobDetails.company,
           location: extractedJobDetails.location,
-          employmentType: '',
+          country: extractedJobDetails.country,
+          employmentType: extractedJobDetails.employmentType,
+          workplaceType: extractedJobDetails.workplaceType,
+          salary: extractedJobDetails.salary,
           jobUrl: extractedJobDetails.url,
         },
       },
@@ -2940,6 +2950,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           company: details.company,
           jobUrl: details.url,
           description: details.description,
+          country: details.country,
+          employmentType: details.employmentType,
+          workplaceType: details.workplaceType,
+          salary: details.salary,
         },
       });
     })().catch((error) => sendResponse({

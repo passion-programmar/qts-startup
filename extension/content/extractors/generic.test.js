@@ -52,6 +52,170 @@ test('generic extractor finds JobPosting in nested JSON-LD graphs', () => {
   assert.equal(result.url, 'https://example.com/jobs/123');
 });
 
+test('generic extractor reads country, work arrangement, employment type, and salary from JobPosting data', () => {
+  const jobPosting = {
+    '@type': 'JobPosting',
+    title: 'Applied AI Engineer',
+    hiringOrganization: { name: 'Example Company' },
+    description: '<p>Build AI systems.</p>',
+    jobLocation: {
+      address: {
+        addressLocality: 'Riga',
+        addressCountry: { name: 'LV' },
+      },
+    },
+    jobLocationType: 'TELECOMMUTE',
+    employmentType: ['FULL_TIME', 'CONTRACTOR'],
+    baseSalary: {
+      currency: 'EUR',
+      value: { minValue: 60000, maxValue: 80000, unitText: 'YEAR' },
+    },
+    url: 'https://example.com/jobs/ai-engineer',
+  };
+  const document = {
+    querySelectorAll: () => [{ textContent: JSON.stringify(jobPosting) }],
+    createElement() {
+      return {
+        set innerHTML(value) {
+          this.innerText = value.replace(/<[^>]*>/g, '');
+        },
+        innerText: '',
+        querySelectorAll: () => [],
+      };
+    },
+  };
+  const window = {};
+  vm.runInNewContext(genericSource, { document, window, URL });
+
+  const result = window.__extractJsonLd();
+  assert.equal(result.country, 'Latvia');
+  assert.equal(result.workplaceType, 'Remote');
+  assert.equal(result.employmentType, 'Full-time, Contract');
+  assert.equal(result.salary, 'EUR 60,000-80,000 per year');
+});
+
+test('generic extractor reads labeled job facts when structured data is unavailable', () => {
+  const description = 'Build analytics systems and partner with product teams. '.repeat(3);
+  let facts = [
+    ['Country', 'United States'],
+    ['Employment type', 'Full-time'],
+    ['Work arrangement', 'Hybrid'],
+    ['Salary range', '$120,000-$150,000 per year'],
+  ].map(([label, value]) => ({
+    innerText: label,
+    textContent: label,
+    nextElementSibling: {
+      tagName: 'DD',
+      innerText: value,
+      textContent: value,
+    },
+  }));
+  const titleElement = {
+    tagName: 'H1',
+    innerText: 'Senior Data Scientist',
+    textContent: 'Senior Data Scientist',
+  };
+  const descriptionElement = {
+    innerHTML: `<p>${description}</p>`,
+    textContent: description,
+  };
+  const document = {
+    title: 'Senior Data Scientist | Example Company',
+    location: { href: 'https://example.com/jobs/data-scientist' },
+    querySelectorAll(selector) {
+      if (selector === 'script[type="application/ld+json"]') return [];
+      if (selector === 'dt, [role="term"], [aria-label]') return facts;
+      return [];
+    },
+    querySelector(selector) {
+      if (selector === 'h1') return titleElement;
+      if (selector === '[itemprop="description"]') return descriptionElement;
+      if (selector === 'link[rel="canonical"]') {
+        return { getAttribute: () => 'https://example.com/jobs/data-scientist' };
+      }
+      return null;
+    },
+    createElement() {
+      return {
+        set innerHTML(value) {
+          this.innerText = value.replace(/<[^>]*>/g, '');
+        },
+        innerText: '',
+        querySelectorAll: () => [],
+      };
+    },
+  };
+  const window = {};
+  vm.runInNewContext(genericSource, { document, window, URL });
+
+  const result = window.__genericExtract();
+  assert.equal(result.title, 'Senior Data Scientist');
+  assert.equal(result.company, 'Example Company');
+  assert.equal(result.description, description);
+  assert.equal(result.country, 'United States');
+  assert.equal(result.employmentType, 'Full-time');
+  assert.equal(result.workplaceType, 'Hybrid');
+  assert.equal(result.salary, '$120,000-$150,000 per year');
+
+  facts = [{
+    innerText: 'Work modality',
+    textContent: 'Work modality',
+    nextElementSibling: {
+      tagName: 'DD',
+      innerText: 'Remote',
+      textContent: 'Remote',
+    },
+  }];
+  assert.equal(window.__genericExtract().workplaceType, 'Remote');
+});
+
+test('generic extractor prefers a complete page description over a short structured summary', () => {
+  const structuredDescription = 'A short job summary.';
+  const pageDescription = 'Detailed responsibilities and requirements. '.repeat(12);
+  const jobPosting = {
+    '@type': 'JobPosting',
+    title: 'Staff Backend Engineer',
+    description: structuredDescription,
+  };
+  const descriptionElement = {
+    innerHTML: `<p>${pageDescription}</p>`,
+    textContent: pageDescription,
+  };
+  const titleElement = {
+    tagName: 'H1',
+    innerText: 'Staff Backend Engineer',
+    textContent: 'Staff Backend Engineer',
+  };
+  const document = {
+    title: 'Staff Backend Engineer | Example Company',
+    location: { href: 'https://example.com/jobs/staff-backend-engineer' },
+    querySelectorAll(selector) {
+      return selector === 'script[type="application/ld+json"]'
+        ? [{ textContent: JSON.stringify(jobPosting) }]
+        : [];
+    },
+    querySelector(selector) {
+      if (selector === 'h1') return titleElement;
+      if (selector === '[class*="job-content"]') return descriptionElement;
+      return null;
+    },
+    createElement() {
+      return {
+        set innerHTML(value) {
+          this.innerText = value.replace(/<[^>]*>/g, '');
+        },
+        innerText: '',
+        querySelectorAll: () => [],
+      };
+    },
+  };
+  const window = {};
+  vm.runInNewContext(genericSource, { document, window, URL });
+
+  const result = window.__genericExtract();
+  assert.equal(result.description, pageDescription);
+});
+
 test('generic extractor decodes HTML-escaped JobPosting descriptions into readable text', () => {
   const encodedDescription = '&lt;p&gt;&lt;strong&gt;About the role:&lt;/strong&gt;&lt;/p&gt;'
     + '&lt;p&gt;We&amp;#39;re looking for a &lt;strong&gt;Staff Data Scientist&lt;/strong&gt;'

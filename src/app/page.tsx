@@ -4,6 +4,7 @@ import {
   Users,
 } from "lucide-react";
 import { sql } from "drizzle-orm";
+import { redirect } from "next/navigation";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { db } from "@/lib/db";
@@ -82,6 +83,7 @@ function formatDateTime(value: Date | string): string {
 
 export default async function Home() {
   const currentUser = await requireUser();
+  if (currentUser.role === "manager") redirect("/jobs");
   const canViewBlocked = currentUser.role === "super_admin";
 
   const visibleResult = await db.execute<WorkspaceUserRow>(sql`

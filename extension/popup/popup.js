@@ -6529,6 +6529,10 @@ async function startGetJdPreview() {
     'get-jd-preview-title',
     'get-jd-preview-company',
     'get-jd-preview-url',
+    'get-jd-preview-country',
+    'get-jd-preview-employment-type',
+    'get-jd-preview-workplace-type',
+    'get-jd-preview-salary',
     'get-jd-preview-description',
   ]) {
     const field = document.getElementById(id);
@@ -6548,6 +6552,12 @@ async function startGetJdPreview() {
     document.getElementById('get-jd-preview-title').textContent = response.job.title || 'Not detected';
     document.getElementById('get-jd-preview-company').textContent = response.job.company || 'Not detected';
     document.getElementById('get-jd-preview-url').textContent = response.job.jobUrl || 'Not detected';
+    document.getElementById('get-jd-preview-country').textContent = response.job.country || 'Not detected';
+    document.getElementById('get-jd-preview-employment-type').textContent =
+      response.job.employmentType || 'Not detected';
+    document.getElementById('get-jd-preview-workplace-type').textContent =
+      response.job.workplaceType || 'Not detected';
+    document.getElementById('get-jd-preview-salary').textContent = response.job.salary || 'Not detected';
     document.getElementById('get-jd-preview-description').textContent =
       response.job.description || 'Not detected';
     setGetJdPreviewMessage('Review these details, then click Check to activate Get JD.');

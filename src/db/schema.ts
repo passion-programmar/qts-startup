@@ -117,6 +117,8 @@ export const profiles = pgTable(
     resumePdfId: uuid("resume_pdf_id"),
     firstName: text("first_name"),
     lastName: text("last_name"),
+    birthday: date("birthday", { mode: "string" }),
+    pdfTemplate: text("pdf_template").default("professional").notNull(),
     candidateEmail: text("candidate_email"),
     phone: text("phone"),
     headline: text("headline"),
@@ -138,6 +140,10 @@ export const profiles = pgTable(
     uniqueIndex("profiles_candidate_email_normalized_unique")
       .on(sql`lower(btrim(${table.candidateEmail}))`)
       .where(sql`${table.candidateEmail} is not null`),
+    check(
+      "profiles_pdf_template_check",
+      sql`${table.pdfTemplate} in ('professional', 'modern', 'compact')`,
+    ),
   ],
 );
 

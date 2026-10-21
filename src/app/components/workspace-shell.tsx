@@ -4,6 +4,8 @@ import {
   Activity,
   BriefcaseBusiness,
   ChevronDown,
+  FileCheck2,
+  FileText,
   X,
   LayoutDashboard,
   LogOut,
@@ -59,7 +61,14 @@ export function WorkspaceShell({
     });
   }
   const navigation = [
-    ...baseNavigation.slice(0, 2),
+    ...(user.role === "manager"
+      ? [
+          { label: "Jobs", href: "/jobs", icon: BriefcaseBusiness },
+          { label: "Bids", href: "/bids", icon: FileCheck2 },
+          { label: "PDF", href: "/pdf", icon: FileText },
+          baseNavigation[1],
+        ]
+      : baseNavigation.slice(0, 2)),
     ...(user.role === "super_admin"
       ? [
           { label: "Categories", href: "/categories", icon: Tags },

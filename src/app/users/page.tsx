@@ -43,6 +43,8 @@ type UserRow = {
   created_at: Date | string;
   first_name: string | null;
   last_name: string | null;
+  birthday: string | null;
+  pdf_template: "professional" | "modern" | "compact";
   candidate_email: string | null;
   phone: string | null;
   headline: string | null;
@@ -95,6 +97,8 @@ export default async function UsersPage() {
       visible_users.created_at,
       profiles.first_name,
       profiles.last_name,
+      profiles.birthday,
+      profiles.pdf_template,
       profiles.candidate_email,
       profiles.phone,
       profiles.headline,
@@ -308,6 +312,8 @@ export default async function UsersPage() {
                           userId: candidate.id,
                           firstName: candidate.first_name,
                           lastName: candidate.last_name,
+                          birthday: candidate.birthday,
+                          pdfTemplate: candidate.pdf_template,
                           candidateEmail: candidate.candidate_email,
                           phone: candidate.phone,
                           headline: candidate.headline,
