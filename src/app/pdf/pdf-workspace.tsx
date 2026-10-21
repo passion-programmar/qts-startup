@@ -1,17 +1,12 @@
 "use client";
 
-import { Download, FileText, RefreshCw } from "lucide-react";
-import { useMemo, useState } from "react";
-import type {
-  CoverLetterDocument,
-  PdfPackage,
-  ResumeDocument,
-} from "@/app/pdf/document-data";
+import { Download, FileText } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import type { PdfPackage } from "@/app/pdf/document-data";
 import { parsePdfPackage } from "@/app/pdf/document-data";
 import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import {
   isPdfTemplate,
-  pdfTemplateDesigns,
   pdfTemplateLabels,
   pdfTemplateValues,
   type PdfTemplate,
@@ -48,6 +43,17 @@ const example = JSON.stringify({
   },
 }, null, 2);
 
+const samplePreviewData = parsePdfPackage(example);
+
+type RenderedPreview = {
+  data: PdfPackage;
+  template: PdfTemplate;
+  resumeUrl: string;
+  coverLetterUrl: string;
+  resumeBytes: Uint8Array;
+  coverLetterBytes: Uint8Array;
+};
+
 export function PdfWorkspace({
   managerName,
   savedJobs,
@@ -66,9 +72,66 @@ export function PdfWorkspace({
   const [error, setError] = useState<string | null>(
     () => initialDocumentError(savedJobs),
   );
+  const [previewError, setPreviewError] = useState<{
+    data: PdfPackage;
+    template: PdfTemplate;
+    message: string;
+  } | null>(null);
+  const [renderedPreview, setRenderedPreview] = useState<RenderedPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const prettySize = useMemo(() => new Blob([source]).size.toLocaleString(), [source]);
   const selectedJob = savedJobs.find((job) => job.id === selectedJobId) ?? null;
+  const previewData = parsed ?? samplePreviewData;
+  const currentPreview = renderedPreview?.data === previewData
+    && renderedPreview.template === selectedTemplate
+    ? renderedPreview
+    : null;
+  const currentPreviewError = previewError?.data === previewData
+    && previewError.template === selectedTemplate
+    ? previewError.message
+    : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrls: string[] = [];
+
+    void renderPdfPackage(previewData, selectedTemplate).then((pdfs) => {
+      if (cancelled) return;
+      const resumeUrl = URL.createObjectURL(new Blob([
+        Uint8Array.from(pdfs.resume).buffer,
+      ], { type: "application/pdf" }));
+      const coverLetterUrl = URL.createObjectURL(new Blob([
+        Uint8Array.from(pdfs.coverLetter).buffer,
+      ], { type: "application/pdf" }));
+      objectUrls = [resumeUrl, coverLetterUrl];
+      setPreviewError(null);
+      setRenderedPreview({
+        data: previewData,
+        template: selectedTemplate,
+        resumeUrl,
+        coverLetterUrl,
+        resumeBytes: pdfs.resume,
+        coverLetterBytes: pdfs.coverLetter,
+      });
+    }).catch((reason: unknown) => {
+      if (!cancelled) {
+        setPreviewError(
+          {
+            data: previewData,
+            template: selectedTemplate,
+            message: reason instanceof Error
+              ? reason.message
+              : "The PDF preview could not be rendered.",
+          },
+        );
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [previewData, selectedTemplate]);
 
   function updateSource(nextSource: string) {
     setSource(nextSource);
@@ -88,17 +151,19 @@ export function PdfWorkspace({
   async function downloadPair() {
     try {
       if (!selectedJob) throw new Error("Select a saved extension job before downloading.");
-      const data = parsePdfPackage(source);
-      setParsed(data); setError(null); setBusy(true);
-      const { resume: resumeBytes, coverLetter: coverLetterBytes } =
-        await renderPdfPackage(data, selectedTemplate);
+      if (!parsed) throw new Error("Enter valid résumé and cover-letter JSON before downloading.");
+      if (!currentPreview) {
+        throw new Error("Wait for the preview of the selected template to finish rendering.");
+      }
+      const data = parsed;
+      setError(null); setBusy(true);
       const candidateName = safePathPart(data.resume.candidate.fullName);
       const jobTitle = safePathPart(data.resume.targetRole);
       const company = safePathPart(data.resume.targetCompany ?? data.coverLetter.targetCompany);
       const folder = `QTS_Resume/${safePathPart(managerName)}/${candidateName}/${packageTimestamp()}_${jobTitle}_${company}`;
       await requestExtensionDownloads([
-        { downloadPath: `${folder}/${candidateName}.pdf`, mimeType: "application/pdf", base64: bytesToBase64(resumeBytes) },
-        { downloadPath: `${folder}/${candidateName}_Cover_Letter.pdf`, mimeType: "application/pdf", base64: bytesToBase64(coverLetterBytes) },
+        { downloadPath: `${folder}/${candidateName}.pdf`, mimeType: "application/pdf", base64: bytesToBase64(currentPreview.resumeBytes) },
+        { downloadPath: `${folder}/${candidateName}_Cover_Letter.pdf`, mimeType: "application/pdf", base64: bytesToBase64(currentPreview.coverLetterBytes) },
         { downloadPath: `${folder}/JD.txt`, mimeType: "text/plain;charset=utf-8", base64: bytesToBase64(new TextEncoder().encode(selectedJob.description)) },
       ]);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "PDF pair could not be created."); } finally { setBusy(false); }
@@ -109,7 +174,7 @@ export function PdfWorkspace({
       <header className="mb-7"><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PDF</h1><p className="mt-1 text-sm text-slate-500">Create a matching resume and cover letter from one JSON object. Processing stays in this browser.</p></header>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,.95fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="font-semibold">Document package</h2><p className="text-xs text-slate-500">{prettySize} bytes · resume + cover letter</p><p className="mt-1 text-xs font-semibold text-blue-700">{pdfTemplateLabels[selectedTemplate]} template</p></div><button className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50" onClick={() => updateSource(example)} type="button"><RefreshCw className="size-3.5" />Load example</button></div>
+          <div className="border-b border-slate-100 px-5 py-4"><h2 className="font-semibold">Document package</h2><p className="text-xs text-slate-500">{prettySize} bytes · resume + cover letter</p><p className="mt-1 text-xs font-semibold text-blue-700">{pdfTemplateLabels[selectedTemplate]} template</p></div>
           <div className="space-y-4 p-5">
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-saved-job">Saved job from extension
               <select className={inputClass} id="pdf-saved-job" onChange={(event) => selectSavedJob(event.target.value)} value={selectedJobId}>
@@ -133,158 +198,29 @@ export function PdfWorkspace({
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="min-h-[440px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
             <p className="mt-3 text-xs text-slate-500">Files save automatically under Downloads / QTS_Resume / {managerName} / candidate / date_time_job title_company. No folder selection is required.</p>
-            <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !parsed} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : "Save résumé and cover letter"}</button></div>
+            <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !parsed || !currentPreview} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : "Save résumé and cover letter"}</button></div>
           </div>
         </section>
-        <section className="space-y-5">{parsed ? <><ResumePreview document={parsed.resume} template={selectedTemplate} /><CoverPreview document={parsed.coverLetter} template={selectedTemplate} /></> : <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500"><FileText className="mx-auto mb-3 size-8" />Enter valid JSON to preview the documents.</div>}</section>
+        <section className="space-y-5">
+          {!parsed && <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
+          {currentPreviewError && <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{currentPreviewError}</p>}
+          {currentPreview ? <>
+            <PdfPreviewFrame title={`Resume preview · ${pdfTemplateLabels[selectedTemplate]}`} url={currentPreview.resumeUrl} />
+            <PdfPreviewFrame title={`Cover letter preview · ${pdfTemplateLabels[selectedTemplate]}`} url={currentPreview.coverLetterUrl} />
+          </> : !currentPreviewError && <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500"><FileText className="mx-auto mb-3 size-8" />Rendering template preview…</div>}
+        </section>
       </div>
     </main>
   );
 }
 
-function ResumePreview({ document, template }: { document: ResumeDocument; template: PdfTemplate }) {
-  if (template === "vellum") return <VellumResumePreview document={document} />;
-  const design = pdfTemplateDesigns[template];
-  return <article className="overflow-hidden rounded-xl border bg-white shadow-sm" style={previewStyle(template)}>
-    <div className={previewHeaderClass(template)} style={previewHeaderStyle(template)}>
-      <p className="text-[10px] font-bold uppercase tracking-[.18em] opacity-75">Resume preview · {pdfTemplateLabels[template]}</p>
-      <h2 className="mt-3 text-2xl font-bold tracking-wide">{document.candidate.fullName}</h2>
-      <p className="text-sm font-medium opacity-80">{document.candidate.headline ?? document.targetRole}</p>
-      <p className="mt-1 text-xs opacity-65">{[document.candidate.email, document.candidate.phone, document.candidate.location].filter(Boolean).join(" · ")}</p>
+function PdfPreviewFrame({ title, url }: { title: string; url: string }) {
+  return <section className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-lg shadow-slate-900/15">
+    <h2 className="border-b border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">{title}</h2>
+    <div className="bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 p-4 sm:p-6">
+      <iframe className="h-[900px] w-full rounded-md bg-slate-700 shadow-xl shadow-black/30" src={url} title={title} />
     </div>
-    <div className={design.compact ? "p-4" : "p-6"}>
-      {document.summary && <p className="text-sm leading-6 text-slate-700">{document.summary}</p>}
-      {document.sections.map((section, index) => <section className={design.compact ? "mt-3" : "mt-5"} key={`${section.title}-${index}`}>
-        <h3 className={previewSectionClass(template)} style={previewSectionStyle(template)}>{section.title}</h3>
-        {section.items.map((item, itemIndex) => <div className="mt-3" key={itemIndex}><div className="flex justify-between gap-3 text-sm"><strong>{item.heading}</strong><span className="shrink-0 text-xs text-slate-500">{item.dateRange}</span></div>{item.subheading && <p className="text-xs text-slate-600">{item.subheading}</p>}<ul className="mt-1 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-700">{item.bullets?.map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet.replaceAll("**", "")}</li>)}</ul></div>)}
-      </section>)}
-    </div>
-  </article>;
-}
-
-function VellumResumePreview({ document }: { document: ResumeDocument }) {
-  const contact = [
-    document.candidate.email,
-    document.candidate.phone,
-    document.candidate.linkedinUrl,
-    document.candidate.location,
-  ].filter(Boolean).join(" · ");
-  return <article className="overflow-hidden rounded-xl border border-slate-300 bg-white p-6 text-left font-sans text-slate-900 shadow-sm">
-    <header className="border-t border-slate-400 pt-2 text-center">
-      <h2 className="text-xl font-bold">{document.candidate.fullName}</h2>
-      <p className="mt-0.5 text-sm text-slate-700">{document.candidate.headline ?? document.targetRole}</p>
-      <div className="mt-2 border-b-4 border-double border-slate-800" />
-      {contact && <p className="mt-2 break-words text-[10px] text-slate-600">{contact}</p>}
-    </header>
-    <div className="mt-5 space-y-4 text-xs leading-5">
-      {document.summary && <section>
-        <VellumSectionHeading title="Summary" />
-        <p className="mt-2 text-slate-700">{document.summary}</p>
-      </section>}
-      {document.sections.map((section, index) => {
-        const isSkills = /^(skills|technical skills|core skills|languages)$/i.test(section.title);
-        const skillItems = section.items.flatMap((item) => [
-          item.heading,
-          item.subheading,
-          item.dateRange,
-          ...(item.bullets ?? []),
-        ].filter((value): value is string => Boolean(value)));
-        return <section key={`${section.title}-${index}`}>
-          <VellumSectionHeading title={section.title} />
-          {isSkills ? <p className="mt-2 text-slate-700">{skillItems.map((item, itemIndex) => (
-            <span key={`${item}-${itemIndex}`}>{itemIndex > 0 && <span className="mx-1.5">·</span>}{item.replaceAll("**", "")}</span>
-          ))}</p> : section.items.map((item, itemIndex) => <div className="mt-2.5" key={itemIndex}>
-            <div className="flex items-baseline justify-between gap-3">
-              <strong className="min-w-0">{item.heading}</strong>
-              <span className="shrink-0 text-[10px] text-slate-500">{item.dateRange}</span>
-            </div>
-            {item.subheading && <p className="text-slate-600">{item.subheading}</p>}
-            {item.bullets?.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4 text-slate-700">
-              {item.bullets.map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet.replaceAll("**", "")}</li>)}
-            </ul> : null}
-          </div>)}
-        </section>;
-      })}
-    </div>
-  </article>;
-}
-
-function VellumSectionHeading({ title }: { title: string }) {
-  return <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-    <span aria-hidden="true" className="h-px flex-1 bg-slate-400" />
-    <span>{title}</span>
-    <span aria-hidden="true" className="h-px flex-1 bg-slate-400" />
-  </h3>;
-}
-
-function CoverPreview({ document, template }: { document: CoverLetterDocument; template: PdfTemplate }) {
-  const design = pdfTemplateDesigns[template];
-  if (template === "vellum") return <article className="overflow-hidden rounded-xl border border-slate-300 bg-white p-6 text-left font-sans text-slate-900 shadow-sm">
-    <header className="border-t border-slate-400 pt-2 text-center">
-      <p className="text-[10px] font-bold uppercase tracking-[.18em] text-slate-500">Cover letter preview · {pdfTemplateLabels[template]}</p>
-      <h2 className="mt-2 text-xl font-bold">{document.candidate.fullName}</h2>
-      <p className="text-xs text-slate-600">{[document.candidate.email, document.candidate.phone, document.candidate.linkedinUrl].filter(Boolean).join(" · ")}</p>
-      <div className="mt-2 border-b-4 border-double border-slate-800" />
-    </header>
-    <div className="pt-5 text-sm">
-      <p>{document.date}</p>
-      <p className="mt-5">{document.salutation ?? "Dear Hiring Manager,"}</p>
-      {document.bodyParagraphs.map((paragraph, index) => <p className="mt-4 leading-6 text-slate-700" key={index}>{paragraph}</p>)}
-      <p className="mt-5">{document.closing ?? "Sincerely,"}<br />{document.signatureName ?? document.candidate.fullName}</p>
-    </div>
-  </article>;
-  return <article className="overflow-hidden rounded-xl border bg-white shadow-sm" style={previewStyle(template)}>
-    <div className={previewHeaderClass(template)} style={previewHeaderStyle(template)}><p className="text-[10px] font-bold uppercase tracking-[.18em] opacity-75">Cover letter preview · {pdfTemplateLabels[template]}</p><h2 className="mt-3 text-xl font-bold">{document.candidate.fullName}</h2><p className="text-xs opacity-65">{document.candidate.email}{document.candidate.phone ? ` · ${document.candidate.phone}` : ""}</p></div>
-    <div className={design.compact ? "p-4" : "p-6"}><p className="text-sm">{document.date}</p><p className="mt-5 text-sm">{document.salutation ?? "Dear Hiring Manager,"}</p>{document.bodyParagraphs.map((paragraph, index) => <p className="mt-4 text-sm leading-6 text-slate-700" key={index}>{paragraph}</p>)}<p className="mt-5 text-sm">{document.closing ?? "Sincerely,"}<br />{document.signatureName ?? document.candidate.fullName}</p></div>
-  </article>;
-}
-
-function previewStyle(template: PdfTemplate) {
-  const design = pdfTemplateDesigns[template];
-  const accent = rgbCss(design.accent);
-  return {
-    borderColor: `${accent}55`,
-    borderTopWidth: design.header === "rule" || design.header === "double-rule" ? 4 : 1,
-    borderTopColor: accent,
-    fontFamily: design.font === "serif" ? "Georgia, serif" : design.font === "mono" ? "ui-monospace, monospace" : "Arial, sans-serif",
-    textAlign: design.align,
-  } as const;
-}
-
-function previewHeaderClass(template: PdfTemplate): string {
-  const header = pdfTemplateDesigns[template].header;
-  return `p-6 ${header === "card" ? "m-3 rounded-lg" : ""}`;
-}
-
-function previewSectionClass(template: PdfTemplate): string {
-  const section = pdfTemplateDesigns[template].section;
-  return `pb-1 text-xs font-bold uppercase tracking-wider ${section === "band" || section === "card" ? "rounded px-2 py-1" : section === "pill" ? "inline-block rounded-full px-3 py-1" : section === "marker" ? "border-l-4 pl-2" : section === "plain" ? "" : "border-b"}`;
-}
-
-function previewHeaderStyle(template: PdfTemplate) {
-  const design = pdfTemplateDesigns[template];
-  const accent = rgbCss(design.accent);
-  const dark = design.header === "band" || design.header === "card";
-  return {
-    backgroundColor: dark ? (template === "onyx" || template === "terminal" ? "#202329" : template === "amber-crest" || template === "sentinel" ? "#101f38" : accent) : design.header === "soft" ? "#f1f5f9" : "white",
-    color: dark && !["onyx", "amber-crest", "terminal"].includes(template) ? "white" : accent,
-    borderBottom: design.header === "double-rule" ? `4px double ${accent}` : design.header === "rule" ? `2px solid ${accent}` : undefined,
-  } as const;
-}
-
-function previewSectionStyle(template: PdfTemplate) {
-  const design = pdfTemplateDesigns[template];
-  const accent = rgbCss(design.accent);
-  return {
-    color: design.section === "band" ? "white" : accent,
-    backgroundColor: design.section === "band" ? accent : design.section === "card" || design.section === "pill" ? `${accent}18` : undefined,
-    borderColor: accent,
-    borderBottomStyle: design.section === "double-rule" ? "double" : undefined,
-  } as const;
-}
-
-function rgbCss(value: readonly [number, number, number]): string {
-  return `rgb(${value.map((part) => Math.round(part * 255)).join(", ")})`;
+  </section>;
 }
 
 function initialDocumentSource(savedJobs: PdfSavedJob[]): string {
