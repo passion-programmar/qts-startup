@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
+import type { PdfTemplate } from "@/server/pdf/pdf-templates";
 
 export const instant = false;
 
@@ -44,7 +45,7 @@ type UserRow = {
   first_name: string | null;
   last_name: string | null;
   birthday: string | null;
-  pdf_template: "professional" | "modern" | "compact";
+  pdf_template: PdfTemplate;
   candidate_email: string | null;
   phone: string | null;
   headline: string | null;

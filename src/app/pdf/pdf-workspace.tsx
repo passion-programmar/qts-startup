@@ -11,6 +11,7 @@ import { parsePdfPackage } from "@/app/pdf/document-data";
 import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import {
   isPdfTemplate,
+  pdfTemplateDesigns,
   pdfTemplateLabels,
   pdfTemplateValues,
   type PdfTemplate,
@@ -56,7 +57,7 @@ export function PdfWorkspace({
 }) {
   const [selectedJobId, setSelectedJobId] = useState(savedJobs[0]?.id ?? "");
   const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>(
-    savedJobs[0]?.pdfTemplate ?? "professional",
+    savedJobs[0]?.pdfTemplate ?? "heritage",
   );
   const [source, setSource] = useState(() => initialDocumentSource(savedJobs));
   const [parsed, setParsed] = useState<PdfPackage | null>(
@@ -81,7 +82,7 @@ export function PdfWorkspace({
   function selectSavedJob(jobId: string) {
     setSelectedJobId(jobId);
     const job = savedJobs.find((savedJob) => savedJob.id === jobId) ?? null;
-    setSelectedTemplate(job?.pdfTemplate ?? "professional");
+    setSelectedTemplate(job?.pdfTemplate ?? "heritage");
     updateSource(job ? generatedDocumentSource(job) : savedJobs.length ? "" : example);
   }
   async function downloadPair() {
@@ -152,14 +153,79 @@ export function PdfWorkspace({
   );
 }
 
-function ResumePreview({ document, template }: { document: ResumeDocument; template: PdfTemplate }) { return <article className={previewClass(template)}><p className={previewLabelClass(template)}>Resume preview · {pdfTemplateLabels[template]}</p><h2 className="mt-3 text-2xl font-bold">{document.candidate.fullName}</h2><p className="text-sm font-medium text-slate-600">{document.candidate.headline ?? document.targetRole}</p><p className="mt-1 text-xs text-slate-500">{[document.candidate.email, document.candidate.phone, document.candidate.location].filter(Boolean).join(" · ")}</p>{document.summary && <p className="mt-5 text-sm leading-6 text-slate-700">{document.summary}</p>}{document.sections.map((section, index) => <section className={template === "compact" ? "mt-3" : "mt-5"} key={`${section.title}-${index}`}><h3 className={`border-b pb-1 text-xs font-bold uppercase tracking-wider ${template === "modern" ? "border-cyan-600 text-cyan-800" : "border-slate-200"}`}>{section.title}</h3>{section.items.map((item, itemIndex) => <div className="mt-3" key={itemIndex}><div className="flex justify-between gap-3 text-sm"><strong>{item.heading}</strong><span className="shrink-0 text-xs text-slate-500">{item.dateRange}</span></div>{item.subheading && <p className="text-xs text-slate-600">{item.subheading}</p>}<ul className="mt-1 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-700">{item.bullets?.map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet.replaceAll("**", "")}</li>)}</ul></div>)}</section>)}</article>; }
-function CoverPreview({ document, template }: { document: CoverLetterDocument; template: PdfTemplate }) { return <article className={previewClass(template)}><p className={previewLabelClass(template)}>Cover letter preview · {pdfTemplateLabels[template]}</p><h2 className="mt-3 text-xl font-bold">{document.candidate.fullName}</h2><p className="text-xs text-slate-500">{document.candidate.email}{document.candidate.phone ? ` · ${document.candidate.phone}` : ""}</p><p className="mt-5 text-sm">{document.date}</p><p className="mt-5 text-sm">{document.salutation ?? "Dear Hiring Manager,"}</p>{document.bodyParagraphs.map((paragraph, index) => <p className="mt-4 text-sm leading-6 text-slate-700" key={index}>{paragraph}</p>)}<p className="mt-5 text-sm">{document.closing ?? "Sincerely,"}<br />{document.signatureName ?? document.candidate.fullName}</p></article>; }
-
-function previewClass(template: PdfTemplate): string {
-  return `rounded-xl border bg-white shadow-sm ${template === "modern" ? "border-cyan-200 border-l-4 border-l-cyan-700 p-6" : template === "compact" ? "border-slate-300 p-4" : "border-slate-200 p-6"}`;
+function ResumePreview({ document, template }: { document: ResumeDocument; template: PdfTemplate }) {
+  const design = pdfTemplateDesigns[template];
+  return <article className="overflow-hidden rounded-xl border bg-white shadow-sm" style={previewStyle(template)}>
+    <div className={previewHeaderClass(template)} style={previewHeaderStyle(template)}>
+      <p className="text-[10px] font-bold uppercase tracking-[.18em] opacity-75">Resume preview · {pdfTemplateLabels[template]}</p>
+      <h2 className="mt-3 text-2xl font-bold tracking-wide">{document.candidate.fullName}</h2>
+      <p className="text-sm font-medium opacity-80">{document.candidate.headline ?? document.targetRole}</p>
+      <p className="mt-1 text-xs opacity-65">{[document.candidate.email, document.candidate.phone, document.candidate.location].filter(Boolean).join(" · ")}</p>
+    </div>
+    <div className={design.compact ? "p-4" : "p-6"}>
+      {document.summary && <p className="text-sm leading-6 text-slate-700">{document.summary}</p>}
+      {document.sections.map((section, index) => <section className={design.compact ? "mt-3" : "mt-5"} key={`${section.title}-${index}`}>
+        <h3 className={previewSectionClass(template)} style={previewSectionStyle(template)}>{section.title}</h3>
+        {section.items.map((item, itemIndex) => <div className="mt-3" key={itemIndex}><div className="flex justify-between gap-3 text-sm"><strong>{item.heading}</strong><span className="shrink-0 text-xs text-slate-500">{item.dateRange}</span></div>{item.subheading && <p className="text-xs text-slate-600">{item.subheading}</p>}<ul className="mt-1 list-disc space-y-1 pl-5 text-xs leading-5 text-slate-700">{item.bullets?.map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet.replaceAll("**", "")}</li>)}</ul></div>)}
+      </section>)}
+    </div>
+  </article>;
 }
-function previewLabelClass(template: PdfTemplate): string {
-  return `text-[10px] font-bold uppercase tracking-widest ${template === "modern" ? "text-cyan-700" : "text-blue-600"}`;
+
+function CoverPreview({ document, template }: { document: CoverLetterDocument; template: PdfTemplate }) {
+  const design = pdfTemplateDesigns[template];
+  return <article className="overflow-hidden rounded-xl border bg-white shadow-sm" style={previewStyle(template)}>
+    <div className={previewHeaderClass(template)} style={previewHeaderStyle(template)}><p className="text-[10px] font-bold uppercase tracking-[.18em] opacity-75">Cover letter preview · {pdfTemplateLabels[template]}</p><h2 className="mt-3 text-xl font-bold">{document.candidate.fullName}</h2><p className="text-xs opacity-65">{document.candidate.email}{document.candidate.phone ? ` · ${document.candidate.phone}` : ""}</p></div>
+    <div className={design.compact ? "p-4" : "p-6"}><p className="text-sm">{document.date}</p><p className="mt-5 text-sm">{document.salutation ?? "Dear Hiring Manager,"}</p>{document.bodyParagraphs.map((paragraph, index) => <p className="mt-4 text-sm leading-6 text-slate-700" key={index}>{paragraph}</p>)}<p className="mt-5 text-sm">{document.closing ?? "Sincerely,"}<br />{document.signatureName ?? document.candidate.fullName}</p></div>
+  </article>;
+}
+
+function previewStyle(template: PdfTemplate) {
+  const design = pdfTemplateDesigns[template];
+  const accent = rgbCss(design.accent);
+  return {
+    borderColor: `${accent}55`,
+    borderTopWidth: design.header === "rule" || design.header === "double-rule" ? 4 : 1,
+    borderTopColor: accent,
+    fontFamily: design.font === "serif" ? "Georgia, serif" : design.font === "mono" ? "ui-monospace, monospace" : "Arial, sans-serif",
+    textAlign: design.align,
+  } as const;
+}
+
+function previewHeaderClass(template: PdfTemplate): string {
+  const header = pdfTemplateDesigns[template].header;
+  return `p-6 ${header === "card" ? "m-3 rounded-lg" : ""}`;
+}
+
+function previewSectionClass(template: PdfTemplate): string {
+  const section = pdfTemplateDesigns[template].section;
+  return `pb-1 text-xs font-bold uppercase tracking-wider ${section === "band" || section === "card" ? "rounded px-2 py-1" : section === "pill" ? "inline-block rounded-full px-3 py-1" : section === "marker" ? "border-l-4 pl-2" : section === "plain" ? "" : "border-b"}`;
+}
+
+function previewHeaderStyle(template: PdfTemplate) {
+  const design = pdfTemplateDesigns[template];
+  const accent = rgbCss(design.accent);
+  const dark = design.header === "band" || design.header === "card";
+  return {
+    backgroundColor: dark ? (template === "onyx" || template === "terminal" ? "#202329" : template === "amber-crest" || template === "sentinel" ? "#101f38" : accent) : design.header === "soft" ? "#f1f5f9" : "white",
+    color: dark && !["onyx", "amber-crest", "terminal"].includes(template) ? "white" : accent,
+    borderBottom: design.header === "double-rule" ? `4px double ${accent}` : design.header === "rule" ? `2px solid ${accent}` : undefined,
+  } as const;
+}
+
+function previewSectionStyle(template: PdfTemplate) {
+  const design = pdfTemplateDesigns[template];
+  const accent = rgbCss(design.accent);
+  return {
+    color: design.section === "band" ? "white" : accent,
+    backgroundColor: design.section === "band" ? accent : design.section === "card" || design.section === "pill" ? `${accent}18` : undefined,
+    borderColor: accent,
+    borderBottomStyle: design.section === "double-rule" ? "double" : undefined,
+  } as const;
+}
+
+function rgbCss(value: readonly [number, number, number]): string {
+  return `rgb(${value.map((part) => Math.round(part * 255)).join(", ")})`;
 }
 
 function initialDocumentSource(savedJobs: PdfSavedJob[]): string {

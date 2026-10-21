@@ -1113,7 +1113,7 @@ function CurrentStatusSelect({
 
 function PdfTemplateField({
   id,
-  defaultValue = "professional",
+  defaultValue = "heritage",
 }: {
   id: string;
   defaultValue?: PdfTemplate;

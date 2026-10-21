@@ -3,9 +3,13 @@ import type {
   PdfPackage,
   ResumeDocument,
 } from "@/app/pdf/document-data";
-import type { PdfTemplate } from "@/server/pdf/pdf-templates";
+import {
+  pdfTemplateDesigns,
+  type PdfTemplate,
+} from "@/server/pdf/pdf-templates";
 
 type PdfWriter = {
+  header(title: string, detail: string, size?: number): void;
   line(text: string, size?: number, color?: "black" | "gray"): void;
   heading(text: string, size?: number): void;
   paragraph(text: string, size?: number): void;
@@ -31,14 +35,13 @@ async function renderResumePdf(
   template: PdfTemplate,
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 2);
-  pdf.heading(document.candidate.fullName, 19);
-  pdf.line([
+  pdf.header(document.candidate.fullName, [
     document.candidate.headline ?? document.targetRole,
     document.candidate.email,
     document.candidate.phone,
     document.candidate.linkedinUrl,
     document.candidate.location,
-  ].filter(Boolean).join(" | "), 9, "gray");
+  ].filter(Boolean).join(" | "), 19);
   if (document.summary) {
     pdf.section("Professional Summary");
     pdf.paragraph(document.summary);
@@ -66,12 +69,11 @@ async function renderCoverLetterPdf(
   template: PdfTemplate,
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 1);
-  pdf.heading(document.candidate.fullName, 17);
-  pdf.line([
+  pdf.header(document.candidate.fullName, [
     document.candidate.email,
     document.candidate.phone,
     document.candidate.linkedinUrl,
-  ].filter(Boolean).join(" | "), 9, "gray");
+  ].filter(Boolean).join(" | "), 17);
   pdf.space(22);
   pdf.line(
     document.date
@@ -97,16 +99,22 @@ async function createWriter(
 ): Promise<PdfWriter> {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const document = await PDFDocument.create();
-  const regular = await document.embedFont(StandardFonts.Helvetica);
-  const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  const design = pdfTemplateDesigns[template];
+  const fontNames = design.font === "serif"
+    ? [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold]
+    : design.font === "mono"
+      ? [StandardFonts.Courier, StandardFonts.CourierBold]
+      : [StandardFonts.Helvetica, StandardFonts.HelveticaBold];
+  const regular = await document.embedFont(fontNames[0]);
+  const bold = await document.embedFont(fontNames[1]);
   const width = 595.28;
   const height = 841.89;
-  const style = template === "modern"
-    ? { margin: 48, heading: rgb(.04, .36, .55), text: rgb(.08, .12, .18), sectionGap: 10, lineGap: 4 }
-    : template === "compact"
-      ? { margin: 42, heading: rgb(.12, .15, .2), text: rgb(.08, .1, .13), sectionGap: 4, lineGap: 2 }
-      : { margin: 54, heading: rgb(.05, .09, .18), text: rgb(.08, .1, .13), sectionGap: 8, lineGap: 4 };
-  const margin = style.margin;
+  const accent = rgb(...design.accent);
+  const ink = rgb(...design.ink);
+  const muted = rgb(...design.muted);
+  const margin = design.margin;
+  const sectionGap = design.compact ? 4 : 9;
+  const lineGap = design.compact ? 2 : 4;
   let page = document.addPage([width, height]);
   let y = height - margin;
   const clean = (text: string) => text.normalize("NFKD")
@@ -139,47 +147,132 @@ async function createWriter(
     if (line) lines.push(line);
     return lines;
   };
-  const line = (
+  const drawWrapped = (
     text: string,
     size = 10,
     color: "black" | "gray" = "black",
+    centered = false,
+    inset = 0,
   ) => {
-    for (const part of wrap(text, size, width - margin * 2)) {
+    for (const part of wrap(text, size, width - margin * 2 - inset * 2)) {
       ensure(size + 5);
+      const textWidth = regular.widthOfTextAtSize(part, size);
       page.drawText(part, {
-        x: margin,
+        x: centered ? Math.max(margin, (width - textWidth) / 2) : margin + inset,
         y,
         size,
         font: regular,
-        color: color === "gray" ? rgb(.35, .39, .44) : style.text,
+        color: color === "gray" ? muted : ink,
       });
-      y -= size + style.lineGap;
+      y -= size + lineGap;
     }
+  };
+  const line = (text: string, size = 10, color: "black" | "gray" = "black") => {
+    drawWrapped(text, size, color, false);
   };
   const heading = (text: string, size = 12) => {
     ensure(size + 7);
+    const cleaned = clean(text);
+    const textWidth = bold.widthOfTextAtSize(cleaned, size);
     page.drawText(clean(text), {
-      x: margin,
+      x: design.align === "center" ? Math.max(margin, (width - textWidth) / 2) : margin,
       y,
       size,
       font: bold,
-      color: style.heading,
+      color: accent,
       maxWidth: width - margin * 2,
     });
     y -= size + 6;
   };
+  const header = (title: string, detail: string, size = 19) => {
+    const headerTop = y + 16;
+    const blockHeight = detail ? 68 : 48;
+    const darkHeader = design.header === "band" || design.header === "card";
+    const headerFill = template === "orchid"
+      ? rgb(.38, .08, .28)
+      : template === "amber-crest"
+        ? rgb(.07, .12, .22)
+        : template === "terminal"
+          ? rgb(.08, .11, .14)
+          : template === "onyx"
+            ? rgb(.12, .13, .15)
+            : template === "basalt"
+              ? rgb(.15, .18, .23)
+              : template === "sentinel"
+                ? rgb(.03, .13, .28)
+                : accent;
+    if (design.header === "band" || design.header === "soft" || design.header === "card") {
+      const x = design.header === "card" ? margin - 10 : 0;
+      const blockWidth = design.header === "card" ? width - (margin - 10) * 2 : width;
+      page.drawRectangle({
+        x,
+        y: headerTop - blockHeight,
+        width: blockWidth,
+        height: blockHeight,
+        color: design.header === "soft" ? rgb(.93, .95, .97) : headerFill,
+      });
+    }
+    const cleanedTitle = clean(title);
+    const titleWidth = bold.widthOfTextAtSize(cleanedTitle, size);
+    const centered = design.align === "center";
+    page.drawText(cleanedTitle, {
+      x: centered ? Math.max(margin, (width - titleWidth) / 2) : margin,
+      y,
+      size,
+      font: bold,
+      color: darkHeader && !["onyx", "amber-crest", "terminal"].includes(template)
+        ? rgb(1, 1, 1)
+        : accent,
+      maxWidth: width - margin * 2,
+    });
+    y -= size + 7;
+    for (const part of wrap(detail, 9, width - margin * 2)) {
+      const detailWidth = regular.widthOfTextAtSize(part, 9);
+      page.drawText(part, {
+        x: centered ? Math.max(margin, (width - detailWidth) / 2) : margin,
+        y,
+        size: 9,
+        font: regular,
+        color: darkHeader ? rgb(.92, .94, .97) : muted,
+      });
+      y -= 12;
+    }
+    if (design.header === "rule" || design.header === "double-rule") {
+      const ruleCount = design.header === "double-rule" ? 2 : 1;
+      for (let index = 0; index < ruleCount; index += 1) {
+        page.drawLine({ start: { x: margin, y: y - index * 3 }, end: { x: width - margin, y: y - index * 3 }, thickness: index ? .5 : 1.2, color: accent });
+      }
+      y -= ruleCount === 2 ? 8 : 5;
+    }
+    y -= design.compact ? 5 : 9;
+  };
   const paragraph = (text: string, size = 10) => line(text, size);
   const section = (text: string) => {
-    y -= style.sectionGap;
-    ensure(24);
-    heading(text.toUpperCase(), 11);
-    page.drawLine({
-      start: { x: margin, y: y + 3 },
-      end: { x: width - margin, y: y + 3 },
-      thickness: template === "modern" ? 1.5 : .7,
-      color: template === "modern" ? style.heading : rgb(.75, .79, .84),
+    y -= sectionGap;
+    ensure(28);
+    const label = clean(text.toUpperCase());
+    const labelSize = 10.5;
+    const labelWidth = bold.widthOfTextAtSize(label, labelSize);
+    if (design.section === "band" || design.section === "card") {
+      page.drawRectangle({ x: margin, y: y - 4, width: width - margin * 2, height: 18, color: design.section === "card" ? rgb(.94, .95, .97) : accent });
+    } else if (design.section === "pill") {
+      page.drawRectangle({ x: margin, y: y - 4, width: labelWidth + 22, height: 18, color: rgb(.91, .94, .97) });
+    } else if (design.section === "marker") {
+      page.drawRectangle({ x: margin, y: y - 2, width: 5, height: 14, color: accent });
+    }
+    page.drawText(label, {
+      x: margin + (design.section === "marker" ? 12 : design.section === "pill" ? 10 : 0),
+      y,
+      size: labelSize,
+      font: bold,
+      color: design.section === "band" ? rgb(1, 1, 1) : accent,
     });
-    y -= 5;
+    y -= 15;
+    if (design.section === "rule" || design.section === "double-rule") {
+      page.drawLine({ start: { x: margin, y: y + 3 }, end: { x: width - margin, y: y + 3 }, thickness: 1, color: accent });
+      if (design.section === "double-rule") page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: .4, color: accent });
+      y -= design.section === "double-rule" ? 5 : 3;
+    }
   };
   const bullet = (text: string) => {
     const parts = wrap(text, 9.5, width - margin * 2 - 15);
@@ -190,12 +283,13 @@ async function createWriter(
         y,
         size: 9.5,
         font: regular,
-        color: rgb(.12, .15, .2),
+        color: ink,
       });
       y -= 13;
     });
   };
   return {
+    header,
     line,
     heading,
     paragraph,

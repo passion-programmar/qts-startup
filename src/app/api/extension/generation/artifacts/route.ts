@@ -53,7 +53,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
 
     const data = parsePdfPackage(JSON.stringify(row.responseJson));
-    const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "professional";
+    const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "heritage";
     const pdfs = await renderPdfPackage(data, template);
     const resumeLocalPath = generatedResumeLocalPath(row.firstName, row.lastName);
     const resumeFilename = resumeLocalPath.split("/").at(-1) ?? "Candidate_Resume.pdf";
