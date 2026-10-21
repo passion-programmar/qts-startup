@@ -81,6 +81,7 @@ export function PdfWorkspace({
   const [busy, setBusy] = useState(false);
   const prettySize = useMemo(() => new Blob([source]).size.toLocaleString(), [source]);
   const selectedJob = savedJobs.find((job) => job.id === selectedJobId) ?? null;
+  const sampleSourceSelected = source === example && !selectedJob?.generatedDocument;
   const previewData = parsed ?? samplePreviewData;
   const currentPreview = renderedPreview?.data === previewData
     && renderedPreview.template === selectedTemplate
@@ -146,7 +147,7 @@ export function PdfWorkspace({
     setSelectedJobId(jobId);
     const job = savedJobs.find((savedJob) => savedJob.id === jobId) ?? null;
     setSelectedTemplate(job?.pdfTemplate ?? "heritage");
-    updateSource(job ? generatedDocumentSource(job) : savedJobs.length ? "" : example);
+    updateSource(job ? generatedDocumentSource(job) || example : example);
   }
   async function downloadPair() {
     try {
@@ -172,7 +173,7 @@ export function PdfWorkspace({
   return (
     <main className="py-1">
       <header className="mb-7"><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PDF</h1><p className="mt-1 text-sm text-slate-500">Create a matching resume and cover letter from one JSON object. Processing stays in this browser.</p></header>
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,.95fr)]">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,3.5fr)_minmax(0,6fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 px-5 py-4"><h2 className="font-semibold">Document package</h2><p className="text-xs text-slate-500">{prettySize} bytes · resume + cover letter</p><p className="mt-1 text-xs font-semibold text-blue-700">{pdfTemplateLabels[selectedTemplate]} template</p></div>
           <div className="space-y-4 p-5">
@@ -198,7 +199,8 @@ export function PdfWorkspace({
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="min-h-[440px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
             <p className="mt-3 text-xs text-slate-500">Files save automatically under Downloads / QTS_Resume / {managerName} / candidate / date_time_job title_company. No folder selection is required.</p>
-            <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !parsed || !currentPreview} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : "Save résumé and cover letter"}</button></div>
+            {sampleSourceSelected && <p className="text-xs text-amber-800">Sample template JSON is prefilled for preview. Replace it with your generated resume data before saving files.</p>}
+            <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !parsed || !currentPreview || sampleSourceSelected} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : "Save résumé and cover letter"}</button></div>
           </div>
         </section>
         <section className="space-y-5">
@@ -215,17 +217,16 @@ export function PdfWorkspace({
 }
 
 function PdfPreviewFrame({ title, url }: { title: string; url: string }) {
-  return <section className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-lg shadow-slate-900/15">
-    <h2 className="border-b border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">{title}</h2>
-    <div className="bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 p-4 sm:p-6">
-      <iframe className="h-[900px] w-full rounded-md bg-slate-700 shadow-xl shadow-black/30" src={url} title={title} />
+  return <section aria-label={title} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-5">
+    <div className="mx-auto max-w-[820px] overflow-hidden rounded-sm bg-white shadow-xl shadow-slate-900/15">
+      <iframe className="block h-[1100px] w-full border-0 bg-white" src={`${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} title={title} />
     </div>
   </section>;
 }
 
 function initialDocumentSource(savedJobs: PdfSavedJob[]): string {
   if (!savedJobs.length) return example;
-  return generatedDocumentSource(savedJobs[0]);
+  return generatedDocumentSource(savedJobs[0]) || example;
 }
 
 function generatedDocumentSource(job: PdfSavedJob): string {
