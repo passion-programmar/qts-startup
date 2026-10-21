@@ -13,8 +13,9 @@ type PdfWriter = {
   line(text: string, size?: number, color?: "black" | "gray"): void;
   heading(text: string, size?: number): void;
   paragraph(text: string, size?: number): void;
-  section(text: string): void;
-  inlineBullets(items: string[]): void;
+  section(text: string, minimumContentHeight?: number): void;
+  skillsHeight(items: ResumeSectionItem[]): number;
+  skills(items: ResumeSectionItem[]): void;
   entry(
     heading: string,
     dateRange?: string,
@@ -26,6 +27,8 @@ type PdfWriter = {
   space(amount: number): void;
   save(): Promise<Uint8Array>;
 };
+
+type ResumeSectionItem = ResumeDocument["sections"][number]["items"][number];
 
 export async function renderPdfPackage(
   data: PdfPackage,
@@ -59,16 +62,13 @@ async function renderResumePdf(
     pdf.paragraph(document.summary);
   }
   for (const section of document.sections) {
-    pdf.section(section.title);
-    const inlineItems = /^(skills|technical skills|core skills|languages)$/i.test(section.title);
-    if (inlineItems) {
-      pdf.inlineBullets(section.items.flatMap((item) => [
-        item.heading,
-        item.subheading,
-        item.dateRange,
-        ...(item.bullets ?? []),
-      ].filter((value): value is string => Boolean(value))
-        .map((item) => item.replaceAll("**", ""))));
+    const skillsSection = /^(skills|technical skills|core skills|core technical skills|languages)$/i.test(section.title);
+    pdf.section(
+      section.title,
+      skillsSection ? pdf.skillsHeight(section.items) : 42,
+    );
+    if (skillsSection) {
+      pdf.skills(section.items);
       continue;
     }
     section.items.forEach((item, index) => {
@@ -158,13 +158,18 @@ async function createWriter(
       y = height - margin;
     }
   };
-  const wrap = (text: string, size: number, maxWidth: number) => {
+  const wrap = (
+    text: string,
+    size: number,
+    maxWidth: number,
+    font: typeof regular = regular,
+  ) => {
     const words = clean(text).split(/\s+/);
     const lines: string[] = [];
     let line = "";
     for (const word of words) {
       const next = line ? `${line} ${word}` : word;
-      if (regular.widthOfTextAtSize(next, size) <= maxWidth || !line) {
+      if (font.widthOfTextAtSize(next, size) <= maxWidth || !line) {
         line = next;
       } else {
         lines.push(line);
@@ -328,13 +333,14 @@ async function createWriter(
     }
   };
   const paragraph = (text: string, size = 10) => line(text, size);
-  const section = (text: string) => {
+  const section = (text: string, minimumContentHeight = 42) => {
     y -= sectionBefore;
-    ensure(42);
-    const label = clean(template === "vellum" ? text : text.toUpperCase());
+    ensure(24 + minimumContentHeight);
+    const layout = design.sectionHeadingLayout;
+    const label = clean(text.toUpperCase());
     const labelSize = 10.5;
     const labelWidth = bold.widthOfTextAtSize(label, labelSize);
-    if (template === "vellum") {
+    if (layout === "centered-rules") {
       const center = width / 2;
       const gap = 8;
       const labelLeft = center - labelWidth / 2;
@@ -361,25 +367,45 @@ async function createWriter(
       y -= 10.5 + sectionAfter;
       return;
     }
-    if (design.section === "band" || design.section === "card") {
-      page.drawRectangle({ x: margin, y: y - 4, width: width - margin * 2, height: 18, color: design.section === "card" ? rgb(.94, .95, .97) : accent });
-    } else if (design.section === "pill") {
+    if (layout === "band" || layout === "card") {
+      page.drawRectangle({ x: margin, y: y - 4, width: width - margin * 2, height: 18, color: layout === "card" ? rgb(.94, .95, .97) : accent });
+    } else if (layout === "pill") {
       page.drawRectangle({ x: margin, y: y - 4, width: labelWidth + 22, height: 18, color: rgb(.91, .94, .97) });
-    } else if (design.section === "marker") {
+    } else if (layout === "marker") {
       page.drawRectangle({ x: margin, y: y - 2, width: 5, height: 14, color: accent });
     }
     page.drawText(label, {
-      x: margin + (design.section === "marker" ? 12 : design.section === "pill" ? 10 : 0),
+      x: margin + (layout === "marker" ? 12 : layout === "pill" ? 10 : 0),
       y,
       size: labelSize,
       font: bold,
-      color: design.section === "band" ? rgb(1, 1, 1) : accent,
+      color: layout === "band" ? rgb(1, 1, 1) : accent,
     });
+    if (layout === "left-full-rule") {
+      page.drawLine({
+        start: { x: Math.min(width - margin, margin + labelWidth + 12), y: y + 3 },
+        end: { x: width - margin, y: y + 3 },
+        thickness: .8,
+        color: accent,
+      });
+      y -= labelSize + sectionAfter;
+      return;
+    }
+    if (layout === "compact-underline") {
+      page.drawLine({
+        start: { x: margin, y: y - 4 },
+        end: { x: Math.min(width - margin, margin + labelWidth + 16), y: y - 4 },
+        thickness: 1.1,
+        color: accent,
+      });
+      y -= labelSize + sectionAfter;
+      return;
+    }
     y -= 14;
-    if (design.section === "rule" || design.section === "double-rule") {
+    if (layout === "rule" || layout === "double-rule") {
       page.drawLine({ start: { x: margin, y: y + 3 }, end: { x: width - margin, y: y + 3 }, thickness: 1, color: accent });
-      if (design.section === "double-rule") page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: .4, color: accent });
-      y -= design.section === "double-rule" ? sectionAfter + 3 : sectionAfter;
+      if (layout === "double-rule") page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: .4, color: accent });
+      y -= layout === "double-rule" ? sectionAfter + 3 : sectionAfter;
     } else {
       y -= sectionAfter;
     }
@@ -474,7 +500,7 @@ async function createWriter(
     }
     if (hasFollowingEntry) y -= entryGap;
   };
-  const inlineBullets = (items: string[]) => {
+  const drawFlatSkills = (items: string[]) => {
     const size = 9.5;
     const maxX = width - margin;
     const startX = margin;
@@ -492,13 +518,240 @@ async function createWriter(
     }
     y -= bulletLeading;
   };
+  const skillsHeight = (items: ResumeSectionItem[]) => {
+    const groups = items.map((item) => ({
+      heading: item.heading?.replaceAll("**", "").trim() ?? "",
+      skills: [item.subheading, item.dateRange, ...(item.bullets ?? [])]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.replaceAll("**", "").trim())
+        .filter(Boolean),
+    }));
+    const contentWidth = width - margin * 2;
+    const grouped = groups.some((group) => Boolean(group.heading));
+    if (!grouped) {
+      let rows = 1;
+      let rowWidth = 0;
+      for (const item of groups.flatMap((group) => group.skills)) {
+        const tokenWidth = regular.widthOfTextAtSize(`• ${clean(item)}`, 9.5) + 10;
+        if (rowWidth && rowWidth + tokenWidth > contentWidth) {
+          rows += 1;
+          rowWidth = 0;
+        }
+        rowWidth += tokenWidth;
+      }
+      return rows * (bulletLeading + bulletGap);
+    }
+    const layout = design.skillsLayout === "flat-inline"
+      ? "grouped-inline"
+      : design.skillsLayout;
+    const measureStackedGroup = (group: (typeof groups)[number], availableWidth: number) => {
+      const headingLines = group.heading ? wrap(group.heading, 10, availableWidth, bold).length : 0;
+      const body = group.skills.join(", ");
+      const bodyLines = body ? wrap(body, 9.5, availableWidth).length : 0;
+      return headingLines * 13.5 + (headingLines && bodyLines ? 4 : 0) + bodyLines * bulletLeading + 10;
+    };
+    let measured: number;
+    if (layout === "grouped-columns" && groups.length > 1) {
+      const columnWidth = (contentWidth - 24) / 2;
+      const heights = groups.map((group) => measureStackedGroup(group, columnWidth));
+      measured = Number.POSITIVE_INFINITY;
+      for (let index = 1; index < groups.length; index += 1) {
+        measured = Math.min(measured, Math.max(
+          heights.slice(0, index).reduce((sum, value) => sum + value, 0),
+          heights.slice(index).reduce((sum, value) => sum + value, 0),
+        ));
+      }
+    } else if (layout === "grouped-stacked") {
+      measured = groups.reduce(
+        (sum, group) => sum + measureStackedGroup(group, contentWidth),
+        0,
+      );
+    } else {
+      measured = groups.reduce((sum, group) => {
+        const labelWidth = bold.widthOfTextAtSize(`${clean(group.heading)}:`, 10);
+        const body = group.skills.join(", ");
+        const inline = Boolean(body) && labelWidth <= contentWidth * .45;
+        if (inline) {
+          return sum + Math.max(1, wrap(body, 9.5, contentWidth - labelWidth - 6).length)
+            * bulletLeading + 4;
+        }
+        return sum + wrap(group.heading, 10, contentWidth, bold).length * 13.5
+          + (body ? 4 + wrap(body, 9.5, contentWidth).length * bulletLeading : 0)
+          + 4;
+      }, 0);
+    }
+    return Math.min(measured, height - margin * 2 - 60);
+  };
+  const skills = (items: ResumeSectionItem[]) => {
+    const groups = items.map((item) => ({
+      heading: item.heading?.replaceAll("**", "").trim() ?? "",
+      skills: [
+        item.subheading,
+        item.dateRange,
+        ...(item.bullets ?? []),
+      ].filter((value): value is string => Boolean(value))
+        .map((value) => value.replaceAll("**", "").trim())
+        .filter(Boolean),
+    }));
+    const grouped = groups.some((group) => Boolean(group.heading));
+    if (!grouped) {
+      drawFlatSkills(groups.flatMap((group) => group.skills));
+      return;
+    }
+
+    const layout = design.skillsLayout === "flat-inline"
+      ? "grouped-inline"
+      : design.skillsLayout;
+    const contentWidth = width - margin * 2;
+    const skillSize = 9.5;
+    const groupHeadingSize = 10;
+    const groupGap = 10;
+    const contentGap = 4;
+
+    const groupBody = (group: (typeof groups)[number]) => group.skills.join(", ");
+    const groupHeight = (group: (typeof groups)[number], availableWidth: number) => {
+      const headingLines = group.heading
+        ? wrap(group.heading, groupHeadingSize, availableWidth, bold).length
+        : 0;
+      const bodyLines = groupBody(group)
+        ? wrap(groupBody(group), skillSize, availableWidth).length
+        : 0;
+      return headingLines * 13.5
+        + (headingLines && bodyLines ? contentGap : 0)
+        + bodyLines * bulletLeading
+        + groupGap;
+    };
+    const drawStacked = () => {
+      groups.forEach((group, groupIndex) => {
+        const needed = Math.min(
+          groupHeight(group, contentWidth),
+          groupHeadingSize * 1.35 + contentGap + bulletLeading * 2,
+        );
+        ensure(needed);
+        if (group.heading) {
+          for (const part of wrap(group.heading, groupHeadingSize, contentWidth, bold)) {
+            page.drawText(part, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
+            y -= 13.5;
+          }
+        }
+        const body = groupBody(group);
+        if (body) {
+          if (group.heading) y -= contentGap;
+          for (const part of wrap(body, skillSize, contentWidth)) {
+            ensure(bulletLeading);
+            page.drawText(part, { x: margin, y, size: skillSize, font: regular, color: ink });
+            y -= bulletLeading;
+          }
+        }
+        if (groupIndex < groups.length - 1) y -= groupGap;
+      });
+    };
+    const drawInline = () => {
+      groups.forEach((group, groupIndex) => {
+        const label = group.heading ? `${clean(group.heading)}:` : "";
+        const body = groupBody(group);
+        const labelWidth = label
+          ? bold.widthOfTextAtSize(label, groupHeadingSize)
+          : 0;
+        const labelFitsInline = Boolean(body) && labelWidth <= contentWidth * .45;
+        ensure(bulletLeading * 2 + (groupIndex < groups.length - 1 ? 4 : 0));
+        if (!labelFitsInline) {
+          if (label) {
+            page.drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
+            y -= 13.5 + (body ? contentGap : 0);
+          }
+          for (const part of wrap(body, skillSize, contentWidth)) {
+            ensure(bulletLeading);
+            page.drawText(part, { x: margin, y, size: skillSize, font: regular, color: ink });
+            y -= bulletLeading;
+          }
+        } else {
+          page.drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
+          const firstLineWidth = contentWidth - labelWidth - 6;
+          const parts = wrap(body, skillSize, firstLineWidth);
+          const continuationInset = Math.min(labelWidth + 6, 120);
+          parts.forEach((part, index) => {
+            page.drawText(part, {
+              x: margin + (index === 0 ? labelWidth + 6 : continuationInset),
+              y,
+              size: skillSize,
+              font: regular,
+              color: ink,
+            });
+            y -= bulletLeading;
+          });
+        }
+        if (groupIndex < groups.length - 1) y -= 4;
+      });
+    };
+    const drawColumns = () => {
+      if (groups.length < 2) {
+        drawStacked();
+        return;
+      }
+      const gutter = 24;
+      const columnWidth = (contentWidth - gutter) / 2;
+      const heights = groups.map((group) => groupHeight(group, columnWidth));
+      let splitIndex = 1;
+      let bestDifference = Number.POSITIVE_INFINITY;
+      for (let index = 1; index < groups.length; index += 1) {
+        const leftHeight = heights.slice(0, index).reduce((sum, value) => sum + value, 0);
+        const rightHeight = heights.slice(index).reduce((sum, value) => sum + value, 0);
+        const difference = Math.abs(leftHeight - rightHeight);
+        if (difference < bestDifference) {
+          bestDifference = difference;
+          splitIndex = index;
+        }
+      }
+      const columns = [groups.slice(0, splitIndex), groups.slice(splitIndex)];
+      const columnHeights = [
+        heights.slice(0, splitIndex).reduce((sum, value) => sum + value, 0),
+        heights.slice(splitIndex).reduce((sum, value) => sum + value, 0),
+      ];
+      const totalHeight = Math.max(...columnHeights);
+      if (totalHeight > y - margin || columnWidth < 210) {
+        drawStacked();
+        return;
+      }
+      const startY = y;
+      let lowestY = y;
+      columns.forEach((column, columnIndex) => {
+        const x = margin + columnIndex * (columnWidth + gutter);
+        let columnY = startY;
+        column.forEach((group) => {
+          if (group.heading) {
+            for (const part of wrap(group.heading, groupHeadingSize, columnWidth, bold)) {
+              page.drawText(part, { x, y: columnY, size: groupHeadingSize, font: bold, color: ink });
+              columnY -= 13.5;
+            }
+          }
+          const body = groupBody(group);
+          if (body) {
+            if (group.heading) columnY -= contentGap;
+            for (const part of wrap(body, skillSize, columnWidth)) {
+              page.drawText(part, { x, y: columnY, size: skillSize, font: regular, color: ink });
+              columnY -= bulletLeading;
+            }
+          }
+          columnY -= groupGap;
+        });
+        lowestY = Math.min(lowestY, columnY);
+      });
+      y = lowestY + groupGap;
+    };
+
+    if (layout === "grouped-columns") drawColumns();
+    else if (layout === "grouped-stacked") drawStacked();
+    else drawInline();
+  };
   return {
     header,
     line,
     heading,
     paragraph,
     section,
-    inlineBullets,
+    skillsHeight,
+    skills,
     entry,
     centeredLine,
     space(amount) {

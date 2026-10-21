@@ -19,6 +19,8 @@ test('prompt includes assigned instructions, scoped task context, and package co
   assert.match(prompt, /never copy sample names\/contact details/);
   assert.match(prompt, /Original Title \| two relevant keywords/);
   assert.match(prompt, /double asterisks/);
+  assert.match(prompt, /one item per supported category/);
+  assert.match(prompt, /Do not flatten named categories/);
   assert.match(prompt, /Always return both resume and coverLetter/);
 });
 

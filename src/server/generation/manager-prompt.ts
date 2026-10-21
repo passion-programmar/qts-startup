@@ -82,6 +82,7 @@ export function composeGenerationPrompt(
     "The root object must contain exactly two properties: resume and coverLetter. Never include the job description or a JD property in the output JSON.",
     "Use the supplied candidate profile as the only source of candidate facts. Keep every factual claim grounded in that profile. Leave unsupported fields empty instead of inventing facts.",
     "The resume and coverLetter objects must follow the QTS document JSON contract: resume.candidate and coverLetter.candidate must include the same fullName and email; resume.targetRole and coverLetter.targetRole must match; resume.sections must contain at least one section with at least one item; coverLetter.bodyParagraphs must contain 1 to 6 paragraphs.",
+    "For a Skills, Technical Skills, Core Skills, or Core Technical Skills section, preserve supported skill categories as separate items: use item.heading for the category and item.bullets for its verified skills. Do not invent categories or flatten named groups. When no category names are supported by the candidate profile, use one heading-free item with a flat verified skill list.",
     "Candidate profile:",
     candidateContext,
     "Job data:",

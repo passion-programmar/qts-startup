@@ -3,7 +3,11 @@ import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
-import { pdfTemplateLabels, pdfTemplateValues } from "@/server/pdf/pdf-templates";
+import {
+  pdfTemplateDesigns,
+  pdfTemplateLabels,
+  pdfTemplateValues,
+} from "@/server/pdf/pdf-templates";
 
 const data: PdfPackage = {
   resume: {
@@ -101,14 +105,14 @@ test("full resume sections and bullets fit without exceeding two pages", async (
           }],
         },
         {
-          title: "Skills",
-          items: [{
-            bullets: [
-              "JavaScript", "TypeScript", "React", "Node.js", "Express",
-              "REST APIs", "PostgreSQL", "MongoDB", "Jest", "Cypress",
-              "Git", "CI/CD", "AWS", "Docker", "Agile delivery",
-            ],
-          }],
+          title: "Core Technical Skills",
+          items: [
+            { heading: "Experimentation & Analytics", bullets: ["A/B Testing", "Causal Inference", "Hypothesis Testing", "Statistical Validation"] },
+            { heading: "Programming & Data Stack", bullets: ["Python", "pandas", "NumPy", "SQL", "FastAPI", "REST APIs", "Data Processing"] },
+            { heading: "LLM & GenAI", bullets: ["LLMs", "Prompt Engineering", "RAG Workflows", "Embeddings", "NLP", "Model Integration"] },
+            { heading: "Data Engineering Collaboration", bullets: ["Pipeline Validation", "PostgreSQL", "Data Quality Checks", "ETL Collaboration"] },
+            { heading: "Delivery & Communication", bullets: ["Technical Communication", "Cross-functional Collaboration", "Documentation"] },
+          ],
         },
       ],
     },
@@ -119,4 +123,36 @@ test("full resume sections and bullets fit without exceeding two pages", async (
     const resume = await PDFDocument.load(rendered.resume);
     assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 2, template);
   }
+});
+
+test("template matrix assigns varied section and skills layouts", () => {
+  const sectionLayouts = new Set(pdfTemplateValues.map(
+    (template) => pdfTemplateDesigns[template].sectionHeadingLayout,
+  ));
+  const skillsLayouts = new Set(pdfTemplateValues.map(
+    (template) => pdfTemplateDesigns[template].skillsLayout,
+  ));
+  assert.ok(sectionLayouts.has("left-full-rule"));
+  assert.ok(sectionLayouts.has("compact-underline"));
+  assert.ok(sectionLayouts.has("centered-rules"));
+  assert.deepEqual(
+    [...skillsLayouts].sort(),
+    ["flat-inline", "grouped-columns", "grouped-inline", "grouped-stacked"],
+  );
+});
+
+test("flat skills render through the safe inline fallback", async () => {
+  const flatSkills: PdfPackage = {
+    ...data,
+    resume: {
+      ...data.resume,
+      sections: [{
+        title: "Core Technical Skills",
+        items: [{ bullets: ["Python", "SQL", "Machine Learning", "REST APIs"] }],
+      }],
+    },
+  };
+  const rendered = await renderPdfPackage(flatSkills, "portrait");
+  const resume = await PDFDocument.load(rendered.resume);
+  assert.equal(resume.getPageCount(), 1);
 });
