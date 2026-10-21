@@ -55,6 +55,30 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(launcher.includes("'Sign Out'"));
 });
 
+test('Generation launcher shows a document icon and can cancel an active run', () => {
+  const launcher = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'page-launcher.js'),
+    'utf8',
+  );
+  const serviceWorker = fs.readFileSync(
+    path.join(extensionRoot, 'background', 'service-worker.js'),
+    'utf8',
+  );
+  const cancelRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'generation', 'cancel', 'route.ts'),
+    'utf8',
+  );
+
+  assert.ok(launcher.includes("['generation', 'Generation', '▤', 'generation']"));
+  assert.ok(launcher.includes("button.dataset.modeAction = active ? 'cancel_status' : action"));
+  assert.ok(serviceWorker.includes("'/api/extension/generation/cancel'"));
+  assert.ok(serviceWorker.includes('ACTIVE_GENERATION_JOB_KEY'));
+  assert.ok(serviceWorker.includes('removeQueuedGenerationDownloads(downloadIds)'));
+  assert.ok(cancelRoute.includes('generationStatus: "not_queued"'));
+  assert.ok(cancelRoute.includes('resumeLocalPath: null'));
+  assert.ok(cancelRoute.includes('status: "todo"'));
+});
+
 test('Get JD review lists candidates and reports per-candidate saves', () => {
   const serviceWorker = fs.readFileSync(
     path.join(extensionRoot, 'background', 'service-worker.js'),

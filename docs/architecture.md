@@ -20,8 +20,9 @@ The supported browser-extension workflow is deliberately narrow:
    Generation cancellation resets the application status to `todo` and
    clears the resume path, and attempts to remove files already downloaded by
    that run. Generation does not mark the job as applied; `applied` means the
-   application was submitted successfully. The extension launcher's Generation
-   and Apply buttons remain placeholders.
+   application was submitted successfully. The extension's Generation action
+   can cancel an active run, including a queued run; Apply remains a release
+   placeholder.
 6. Sign Out clears persisted extension authentication and Get JD status.
 
 Gemini evaluation is disabled by the `geminiEvaluation` runtime feature flag.

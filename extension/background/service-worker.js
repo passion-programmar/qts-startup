@@ -48,6 +48,7 @@ const capturePanelOpenPromisesByTab = new Map();
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
 const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
+const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
 const getJdInFlightTabs = new Set();
 const getJdLastPageByTab = new Map();
 const generationInFlightTabs = new Set();
@@ -2308,7 +2309,13 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       generationInFlightTabs.delete(jobTabId);
       try {
         const stored = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
-        if (stored[EXTENSION_STATUS_KEY] === 'generation') {
+        if (
+          !queuedJob
+          && (
+            stored[EXTENSION_STATUS_KEY] === 'generation'
+            || stored[EXTENSION_STATUS_KEY] === 'cancel'
+          )
+        ) {
           await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
         }
       } catch (error) {
@@ -2474,6 +2481,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (typeof queuedJob.id !== 'string' || typeof queuedJob.jobUrl !== 'string') {
             throw new Error('QTS returned an invalid queued job.');
           }
+          await chrome.storage.local.set({
+            [EXTENSION_STATUS_KEY]: 'generation',
+            [ACTIVE_GENERATION_JOB_KEY]: queuedJob.id,
+          });
           const jobTab = await chrome.tabs.create({
             url: queuedJob.jobUrl,
             active: false,
@@ -2537,6 +2548,24 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (Number.isInteger(chatTabId)) await chrome.tabs.remove(chatTabId).catch(() => {});
           if (!isGenerationCancelled(handledError)) {
             console.error('[QTS Generation] Queued job failed:', queuedJob.id, reason);
+          }
+        } finally {
+          try {
+            const activeGeneration = await chrome.storage.local.get([
+              EXTENSION_STATUS_KEY,
+              ACTIVE_GENERATION_JOB_KEY,
+            ]);
+            if (activeGeneration[ACTIVE_GENERATION_JOB_KEY] === queuedJob.id) {
+              await chrome.storage.local.remove(ACTIVE_GENERATION_JOB_KEY);
+              if (
+                activeGeneration[EXTENSION_STATUS_KEY] === 'generation'
+                || activeGeneration[EXTENSION_STATUS_KEY] === 'cancel'
+              ) {
+                await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+              }
+            }
+          } catch (storageError) {
+            console.error('[QTS Generation] Could not clear the active queue status:', storageError);
           }
         }
       }
@@ -3358,16 +3387,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'cancel_status') {
-        const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
+        const stored = await chrome.storage.local.get([
+          EXTENSION_STATUS_KEY,
+          ACTIVE_GENERATION_JOB_KEY,
+        ]);
         const cancelledStatus = stored[EXTENSION_STATUS_KEY];
+        const activeGenerationJobId = stored[ACTIVE_GENERATION_JOB_KEY];
+        if (cancelledStatus === 'generation' && activeGenerationJobId) {
+          const cancellation = await workerApiRequest(
+            'POST',
+            '/api/extension/generation/cancel',
+            { jobId: activeGenerationJobId },
+          );
+          if (!cancellation.success) {
+            sendResponse({
+              ok: false,
+              error: cancellation.message || 'Could not cancel queued Generation.',
+            });
+            return;
+          }
+        }
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
         getJdInFlightTabs.clear();
         getJdLastPageByTab.clear();
-        if (cancelledStatus === 'generation' && tabId != null) {
-          generationCancellationByTab.set(
-            tabId,
-            (generationCancellationByTab.get(tabId) || 0) + 1,
-          );
+        if (cancelledStatus === 'generation') {
+          for (const [runningTabId, token] of generationCancellationByTab) {
+            generationCancellationByTab.set(runningTabId, token + 1);
+          }
         }
         if (cancelledStatus === 'get_jd' && tabId != null) {
           const result = await readGetJdResultForTab(tabId);

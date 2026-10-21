@@ -70,7 +70,7 @@ function initializeQtsPageLauncher() {
 
   const actions = [
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
-    ['generation', 'Generation', '✦', 'generation'],
+    ['generation', 'Generation', '▤', 'generation'],
     ['apply', 'Apply', '→', 'apply'],
     ['session', 'Sign In', '↪', 'logout'],
   ];
@@ -257,7 +257,7 @@ function initializeQtsPageLauncher() {
       button.setAttribute('aria-label', active ? `Cancel ${defaultLabel}` : defaultLabel);
       const icon = button.querySelector('.action-icon');
       const label = button.querySelector('.action-icon + span');
-      if (icon) icon.textContent = active ? '×' : action === 'get_jd' ? '⌕' : action === 'generation' ? '✦' : '→';
+      if (icon) icon.textContent = active ? '×' : action === 'get_jd' ? '⌕' : action === 'generation' ? '▤' : '→';
       if (label) label.textContent = active ? 'Cancel' : defaultLabel;
     }
   }

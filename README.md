@@ -126,7 +126,9 @@ Jobs row records the expected resume path relative to local Downloads. Cancellin
 Generation clears that path and resets the application status to `todo`;
 Generation itself never marks the job as applied. `applied` is reserved for a
 successfully submitted job application.
-Generation and Apply in the extension radial menu remain release placeholders.
+The extension's Generation action can be toggled to cancel an active run;
+Apply remains a release placeholder. While the extension processes a queued
+Generation, the same action cancels that queued run.
 Sign Out clears the stored extension session and Get JD mode. The legacy popup
 Gemini mode is hard-disabled by the shared runtime feature configuration so an
 old stored mode cannot start background classification.
