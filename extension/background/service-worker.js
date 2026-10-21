@@ -2324,6 +2324,47 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
   }
 
+  function validateApplicationDownloadFiles(files) {
+    if (!Array.isArray(files) || files.length < 1 || files.length > 3) {
+      throw new Error('One to three application files are required.');
+    }
+    return files.map((file) => {
+      const downloadPath = String(file?.downloadPath || '').replaceAll('\\', '/');
+      const mimeType = String(file?.mimeType || '');
+      const base64 = String(file?.base64 || '');
+      if (
+        !downloadPath.startsWith('QTS_Resume/')
+        || downloadPath.startsWith('/')
+        || downloadPath.split('/').some((part) => !part || part === '.' || part === '..')
+        || downloadPath.length > 500
+        || !['application/pdf', 'text/plain;charset=utf-8'].includes(mimeType)
+        || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)
+        || base64.length > 20_000_000
+      ) {
+        throw new Error('An application download file is invalid.');
+      }
+      return { downloadPath, mimeType, base64 };
+    });
+  }
+
+  async function startApplicationFileDownload(file) {
+    return new Promise((resolve, reject) => {
+      chrome.downloads.download({
+        url: `data:${file.mimeType};base64,${file.base64}`,
+        filename: file.downloadPath,
+        saveAs: false,
+        conflictAction: 'uniquify',
+      }, (downloadId) => {
+        const error = chrome.runtime.lastError;
+        if (error || typeof downloadId !== 'number') {
+          reject(new Error(`Chrome could not start a file download: ${error?.message || 'unknown error'}`));
+        } else {
+          resolve(downloadId);
+        }
+      });
+    });
+  }
+
   async function downloadQueuedGenerationFiles(generationId, jobId, downloadIds) {
     await ensureQueuedGenerationIsActive(jobId);
     const artifactResult = await workerApiRequest(
@@ -2337,31 +2378,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     ) {
       throw new Error(artifactResult.message || 'QTS could not prepare the three download files.');
     }
-    for (const file of artifactResult.files) {
+    const files = validateApplicationDownloadFiles(artifactResult.files);
+    for (const file of files) {
       await ensureQueuedGenerationIsActive(jobId);
-      if (
-        typeof file.filename !== 'string'
-        || typeof file.mimeType !== 'string'
-        || typeof file.base64 !== 'string'
-      ) {
-        throw new Error('QTS returned an invalid download file.');
-      }
-      const downloadId = await new Promise((resolve, reject) => {
-        chrome.downloads.download({
-          url: `data:${file.mimeType};base64,${file.base64}`,
-          filename: `QTS_Resume/${file.filename}`,
-          saveAs: false,
-          conflictAction: 'uniquify',
-        }, (downloadId) => {
-          const error = chrome.runtime.lastError;
-          if (error || typeof downloadId !== 'number') {
-            reject(new Error(`Chrome could not start a file download: ${error?.message || 'unknown error'}`));
-          } else {
-            downloadIds.push(downloadId);
-            resolve(downloadId);
-          }
-        });
-      });
+      const downloadId = await startApplicationFileDownload(file);
+      downloadIds.push(downloadId);
       await waitForQueuedDownload(downloadId, jobId);
     }
     await ensureQueuedGenerationIsActive(jobId);
@@ -3321,6 +3342,44 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       error: `${disabledFeature} is not enabled in this QTS release.`,
     });
     return false;
+  }
+  if (msg.type === 'QTS_DOWNLOAD_APPLICATION_FILES') {
+    (async () => {
+      const serverUrl = await self.__qtsRuntimeConfig.getServerUrl();
+      let trustedOrigin = '';
+      let senderOrigin = '';
+      try {
+        const trustedUrl = new URL(serverUrl);
+        const senderUrl = new URL(sender.tab?.url || '');
+        trustedOrigin = trustedUrl.origin;
+        senderOrigin = senderUrl.origin;
+        const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+        if (
+          loopbackHosts.has(trustedUrl.hostname)
+          && loopbackHosts.has(senderUrl.hostname)
+          && trustedUrl.protocol === senderUrl.protocol
+          && trustedUrl.port === senderUrl.port
+        ) {
+          senderOrigin = trustedOrigin;
+        }
+      } catch {
+        // Invalid origins are rejected below.
+      }
+      if (!trustedOrigin || senderOrigin !== trustedOrigin) {
+        sendResponse({ ok: false, error: 'Downloads can only be started from the QTS server.' });
+        return;
+      }
+      const files = validateApplicationDownloadFiles(msg.files);
+      const downloadIds = [];
+      for (const file of files) {
+        downloadIds.push(await startApplicationFileDownload(file));
+      }
+      sendResponse({ ok: true, downloadIds });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not start the application downloads.',
+    }));
+    return true;
   }
   if (msg.type === 'GET_QTS_RUNTIME_CONFIG') {
     self.__qtsRuntimeConfig.getServerUrl()

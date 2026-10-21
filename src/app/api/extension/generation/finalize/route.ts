@@ -4,7 +4,7 @@ import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
-import { generatedResumeLocalPath } from "@/server/generation/generation-artifacts";
+import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -40,6 +40,9 @@ export async function POST(request: Request): Promise<NextResponse> {
         id: generationRuns.id,
         firstName: profiles.firstName,
         lastName: profiles.lastName,
+        jobTitle: jobs.jobTitle,
+        company: jobs.company,
+        createdAt: generationRuns.createdAt,
       })
       .from(generationRuns)
       .innerJoin(jobs, eq(jobs.id, generationRuns.jobId))
@@ -58,13 +61,21 @@ export async function POST(request: Request): Promise<NextResponse> {
         { status: 404 },
       );
     }
+    const candidateName = [run.firstName, run.lastName].filter(Boolean).join(" ") || "Candidate";
+    const downloadPaths = generationDownloadPaths({
+      managerName: manager.displayName,
+      candidateName,
+      jobTitle: run.jobTitle,
+      company: run.company,
+      createdAt: run.createdAt,
+    });
     const [job] = await db
       .update(jobs)
       .set({
         generationStatus: "completed",
         generationError: null,
         generationLeaseExpiresAt: null,
-        resumeLocalPath: generatedResumeLocalPath(run.firstName, run.lastName),
+        resumeLocalPath: downloadPaths.resume,
         updatedAt: new Date(),
       })
       .where(and(

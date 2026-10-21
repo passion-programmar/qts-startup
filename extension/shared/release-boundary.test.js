@@ -132,3 +132,22 @@ test('page Sign In uses the two-field top-right form instead of the embedded pan
   assert.ok(launcher.includes("passwordInput.addEventListener('change', submitSignIn)"));
   assert.equal(signInBranch.includes('openCapturePanel'), false);
 });
+
+test('PDF downloads use the extension bridge without a directory picker', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
+  const workspace = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'pdf', 'pdf-workspace.tsx'),
+    'utf8',
+  );
+  const worker = fs.readFileSync(
+    path.join(extensionRoot, 'background', 'service-worker.js'),
+    'utf8',
+  );
+  const contentScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
+
+  assert.ok(contentScripts.includes('content/pdf-download-bridge.js'));
+  assert.equal(workspace.includes('showDirectoryPicker'), false);
+  assert.ok(workspace.includes('QTS_DOWNLOAD_APPLICATION_FILES'));
+  assert.ok(worker.includes("filename: file.downloadPath"));
+  assert.ok(worker.includes('saveAs: false'));
+});

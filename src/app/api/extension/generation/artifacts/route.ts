@@ -5,7 +5,7 @@ import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { generatedResumeLocalPath } from "@/server/generation/generation-artifacts";
+import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
 export async function GET(request: Request): Promise<NextResponse> {
@@ -34,6 +34,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         firstName: profiles.firstName,
         lastName: profiles.lastName,
         pdfTemplate: profiles.pdfTemplate,
+        createdAt: generationRuns.createdAt,
       })
       .from(generationRuns)
       .innerJoin(jobs, eq(jobs.id, generationRuns.jobId))
@@ -55,24 +56,32 @@ export async function GET(request: Request): Promise<NextResponse> {
     const data = parsePdfPackage(JSON.stringify(row.responseJson));
     const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "heritage";
     const pdfs = await renderPdfPackage(data, template);
-    const resumeLocalPath = generatedResumeLocalPath(row.firstName, row.lastName);
-    const resumeFilename = resumeLocalPath.split("/").at(-1) ?? "Candidate_Resume.pdf";
-    const fileStem = resumeFilename.replace(/_Resume\.pdf$/, "");
+    const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
+    const paths = generationDownloadPaths({
+      managerName: manager.displayName,
+      candidateName,
+      jobTitle: row.jobTitle,
+      company: row.company,
+      createdAt: row.createdAt,
+    });
     return NextResponse.json({
       success: true,
       files: [
         {
-          filename: resumeFilename,
+          filename: paths.resume.split("/").at(-1),
+          downloadPath: paths.resume,
           mimeType: "application/pdf",
           base64: Buffer.from(pdfs.resume).toString("base64"),
         },
         {
-          filename: `${fileStem}_Cover_Letter.pdf`,
+          filename: paths.coverLetter.split("/").at(-1),
+          downloadPath: paths.coverLetter,
           mimeType: "application/pdf",
           base64: Buffer.from(pdfs.coverLetter).toString("base64"),
         },
         {
-          filename: `${fileStem}_Job_Description.txt`,
+          filename: "JD.txt",
+          downloadPath: paths.jobDescription,
           mimeType: "text/plain;charset=utf-8",
           base64: Buffer.from(row.jobDescription, "utf8").toString("base64"),
         },

@@ -87,31 +87,20 @@ export function PdfWorkspace({
   }
   async function downloadPair() {
     try {
+      if (!selectedJob) throw new Error("Select a saved extension job before downloading.");
       const data = parsePdfPackage(source);
       setParsed(data); setError(null); setBusy(true);
-      const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
-      const downloads = picker
-        ? await picker.call(window, { mode: "readwrite", startIn: "downloads" })
-        : null;
       const { resume: resumeBytes, coverLetter: coverLetterBytes } =
         await renderPdfPackage(data, selectedTemplate);
       const candidateName = safePathPart(data.resume.candidate.fullName);
       const jobTitle = safePathPart(data.resume.targetRole);
       const company = safePathPart(data.resume.targetCompany ?? data.coverLetter.targetCompany);
-      const fileStem = safeFileStem(data.resume.candidate.fullName);
-      if (downloads) {
-        const qtsFolder = await downloads.getDirectoryHandle("QTS_Resume", { create: true });
-        const managerFolder = await qtsFolder.getDirectoryHandle(safePathPart(managerName), { create: true });
-        const candidateFolder = await managerFolder.getDirectoryHandle(candidateName, { create: true });
-        const jobFolder = await candidateFolder.getDirectoryHandle(`${packageTimestamp()}_${jobTitle}_${company}`, { create: true });
-        await Promise.all([
-          writeFile(jobFolder, `${fileStem}_Resume.pdf`, resumeBytes),
-          writeFile(jobFolder, `${fileStem}_Cover_Letter.pdf`, coverLetterBytes),
-        ]);
-      } else {
-        saveBlob(new Blob([new Uint8Array(resumeBytes)], { type: "application/pdf" }), `${fileStem}_Resume.pdf`);
-        saveBlob(new Blob([new Uint8Array(coverLetterBytes)], { type: "application/pdf" }), `${fileStem}_Cover_Letter.pdf`);
-      }
+      const folder = `QTS_Resume/${safePathPart(managerName)}/${candidateName}/${packageTimestamp()}_${jobTitle}_${company}`;
+      await requestExtensionDownloads([
+        { downloadPath: `${folder}/${candidateName}.pdf`, mimeType: "application/pdf", base64: bytesToBase64(resumeBytes) },
+        { downloadPath: `${folder}/${candidateName}_Cover_Letter.pdf`, mimeType: "application/pdf", base64: bytesToBase64(coverLetterBytes) },
+        { downloadPath: `${folder}/JD.txt`, mimeType: "text/plain;charset=utf-8", base64: bytesToBase64(new TextEncoder().encode(selectedJob.description)) },
+      ]);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "PDF pair could not be created."); } finally { setBusy(false); }
   }
 
@@ -143,7 +132,7 @@ export function PdfWorkspace({
             </label>
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="min-h-[440px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
-            <p className="mt-3 text-xs text-slate-500">Choose your Downloads folder to save two files under: QTS_Resume / {managerName} / candidate / date_time_job title_company</p>
+            <p className="mt-3 text-xs text-slate-500">Files save automatically under Downloads / QTS_Resume / {managerName} / candidate / date_time_job title_company. No folder selection is required.</p>
             <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !parsed} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : "Save résumé and cover letter"}</button></div>
           </div>
         </section>
@@ -266,19 +255,46 @@ function initialDocumentError(savedJobs: PdfSavedJob[]): string | null {
 
 const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
-function saveBlob(blob: Blob, fileName: string) { const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = fileName; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function safePathPart(value: string): string { return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").replace(/[. ]+$/g, "").trim() || "Unknown"; }
-function safeFileStem(value: string): string { return safePathPart(value).replace(/\s+/g, "_"); }
 function packageTimestamp(date = new Date()): string {
   const part = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}_${part(date.getHours())}-${part(date.getMinutes())}-${part(date.getSeconds())}`;
 }
-type DirectoryPickerWindow = Window & {
-  showDirectoryPicker?: (options?: { mode?: "read" | "readwrite"; startIn?: string }) => Promise<FileSystemDirectoryHandle>;
+type ExtensionDownloadFile = {
+  downloadPath: string;
+  mimeType: "application/pdf" | "text/plain;charset=utf-8";
+  base64: string;
 };
-async function writeFile(directory: FileSystemDirectoryHandle, name: string, data: Uint8Array | string): Promise<void> {
-  const handle = await directory.getFileHandle(name, { create: true });
-  const writable = await handle.createWritable();
-  await writable.write(typeof data === "string" ? data : new Uint8Array(data));
-  await writable.close();
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function requestExtensionDownloads(files: ExtensionDownloadFile[]): Promise<void> {
+  const requestId = crypto.randomUUID();
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      reject(new Error("The QTS extension did not answer. Reload the updated extension, refresh this page, and try again."));
+    }, 10_000);
+    function onMessage(event: MessageEvent) {
+      if (
+        event.source !== window
+        || event.origin !== window.location.origin
+        || event.data?.type !== "QTS_DOWNLOAD_APPLICATION_FILES_RESULT"
+        || event.data.requestId !== requestId
+      ) return;
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("message", onMessage);
+      if (event.data.ok) resolve();
+      else reject(new Error(event.data.error || "The QTS extension could not start the downloads."));
+    }
+    window.addEventListener("message", onMessage);
+    window.postMessage({ type: "QTS_DOWNLOAD_APPLICATION_FILES", requestId, files }, window.location.origin);
+  });
 }
