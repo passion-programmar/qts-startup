@@ -143,6 +143,7 @@ export function PdfWorkspace({
 }
 
 function ResumePreview({ document, template }: { document: ResumeDocument; template: PdfTemplate }) {
+  if (template === "vellum") return <VellumResumePreview document={document} />;
   const design = pdfTemplateDesigns[template];
   return <article className="overflow-hidden rounded-xl border bg-white shadow-sm" style={previewStyle(template)}>
     <div className={previewHeaderClass(template)} style={previewHeaderStyle(template)}>
@@ -161,8 +162,77 @@ function ResumePreview({ document, template }: { document: ResumeDocument; templ
   </article>;
 }
 
+function VellumResumePreview({ document }: { document: ResumeDocument }) {
+  const contact = [
+    document.candidate.email,
+    document.candidate.phone,
+    document.candidate.linkedinUrl,
+    document.candidate.location,
+  ].filter(Boolean).join(" · ");
+  return <article className="overflow-hidden rounded-xl border border-slate-300 bg-white p-6 text-left font-sans text-slate-900 shadow-sm">
+    <header className="border-t border-slate-400 pt-2 text-center">
+      <h2 className="text-xl font-bold">{document.candidate.fullName}</h2>
+      <p className="mt-0.5 text-sm text-slate-700">{document.candidate.headline ?? document.targetRole}</p>
+      <div className="mt-2 border-b-4 border-double border-slate-800" />
+      {contact && <p className="mt-2 break-words text-[10px] text-slate-600">{contact}</p>}
+    </header>
+    <div className="mt-5 space-y-4 text-xs leading-5">
+      {document.summary && <section>
+        <VellumSectionHeading title="Summary" />
+        <p className="mt-2 text-slate-700">{document.summary}</p>
+      </section>}
+      {document.sections.map((section, index) => {
+        const isSkills = /^(skills|technical skills|core skills|languages)$/i.test(section.title);
+        const skillItems = section.items.flatMap((item) => [
+          item.heading,
+          item.subheading,
+          item.dateRange,
+          ...(item.bullets ?? []),
+        ].filter((value): value is string => Boolean(value)));
+        return <section key={`${section.title}-${index}`}>
+          <VellumSectionHeading title={section.title} />
+          {isSkills ? <p className="mt-2 text-slate-700">{skillItems.map((item, itemIndex) => (
+            <span key={`${item}-${itemIndex}`}>{itemIndex > 0 && <span className="mx-1.5">·</span>}{item.replaceAll("**", "")}</span>
+          ))}</p> : section.items.map((item, itemIndex) => <div className="mt-2.5" key={itemIndex}>
+            <div className="flex items-baseline justify-between gap-3">
+              <strong className="min-w-0">{item.heading}</strong>
+              <span className="shrink-0 text-[10px] text-slate-500">{item.dateRange}</span>
+            </div>
+            {item.subheading && <p className="text-slate-600">{item.subheading}</p>}
+            {item.bullets?.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4 text-slate-700">
+              {item.bullets.map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet.replaceAll("**", "")}</li>)}
+            </ul> : null}
+          </div>)}
+        </section>;
+      })}
+    </div>
+  </article>;
+}
+
+function VellumSectionHeading({ title }: { title: string }) {
+  return <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+    <span aria-hidden="true" className="h-px flex-1 bg-slate-400" />
+    <span>{title}</span>
+    <span aria-hidden="true" className="h-px flex-1 bg-slate-400" />
+  </h3>;
+}
+
 function CoverPreview({ document, template }: { document: CoverLetterDocument; template: PdfTemplate }) {
   const design = pdfTemplateDesigns[template];
+  if (template === "vellum") return <article className="overflow-hidden rounded-xl border border-slate-300 bg-white p-6 text-left font-sans text-slate-900 shadow-sm">
+    <header className="border-t border-slate-400 pt-2 text-center">
+      <p className="text-[10px] font-bold uppercase tracking-[.18em] text-slate-500">Cover letter preview · {pdfTemplateLabels[template]}</p>
+      <h2 className="mt-2 text-xl font-bold">{document.candidate.fullName}</h2>
+      <p className="text-xs text-slate-600">{[document.candidate.email, document.candidate.phone, document.candidate.linkedinUrl].filter(Boolean).join(" · ")}</p>
+      <div className="mt-2 border-b-4 border-double border-slate-800" />
+    </header>
+    <div className="pt-5 text-sm">
+      <p>{document.date}</p>
+      <p className="mt-5">{document.salutation ?? "Dear Hiring Manager,"}</p>
+      {document.bodyParagraphs.map((paragraph, index) => <p className="mt-4 leading-6 text-slate-700" key={index}>{paragraph}</p>)}
+      <p className="mt-5">{document.closing ?? "Sincerely,"}<br />{document.signatureName ?? document.candidate.fullName}</p>
+    </div>
+  </article>;
   return <article className="overflow-hidden rounded-xl border bg-white shadow-sm" style={previewStyle(template)}>
     <div className={previewHeaderClass(template)} style={previewHeaderStyle(template)}><p className="text-[10px] font-bold uppercase tracking-[.18em] opacity-75">Cover letter preview · {pdfTemplateLabels[template]}</p><h2 className="mt-3 text-xl font-bold">{document.candidate.fullName}</h2><p className="text-xs opacity-65">{document.candidate.email}{document.candidate.phone ? ` · ${document.candidate.phone}` : ""}</p></div>
     <div className={design.compact ? "p-4" : "p-6"}><p className="text-sm">{document.date}</p><p className="mt-5 text-sm">{document.salutation ?? "Dear Hiring Manager,"}</p>{document.bodyParagraphs.map((paragraph, index) => <p className="mt-4 text-sm leading-6 text-slate-700" key={index}>{paragraph}</p>)}<p className="mt-5 text-sm">{document.closing ?? "Sincerely,"}<br />{document.signatureName ?? document.candidate.fullName}</p></div>

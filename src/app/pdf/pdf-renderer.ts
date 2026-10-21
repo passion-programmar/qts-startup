@@ -15,6 +15,9 @@ type PdfWriter = {
   paragraph(text: string, size?: number): void;
   section(text: string): void;
   bullet(text: string): void;
+  inlineBullets(items: string[]): void;
+  entry(heading: string, dateRange?: string, subheading?: string): void;
+  centeredLine(text: string, size?: number): void;
   space(amount: number): void;
   save(): Promise<Uint8Array>;
 };
@@ -35,27 +38,51 @@ async function renderResumePdf(
   template: PdfTemplate,
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 2);
-  pdf.header(document.candidate.fullName, [
-    document.candidate.headline ?? document.targetRole,
+  const headline = document.candidate.headline ?? document.targetRole;
+  const contact = [
     document.candidate.email,
     document.candidate.phone,
     document.candidate.linkedinUrl,
     document.candidate.location,
+  ].filter(Boolean).join("  |  ");
+  pdf.header(document.candidate.fullName, [
+    ...(template === "vellum" ? [headline] : [headline, contact]),
   ].filter(Boolean).join(" | "), 19);
+  if (template === "vellum" && contact) pdf.centeredLine(contact, 8.5);
   if (document.summary) {
-    pdf.section("Professional Summary");
+    pdf.section(template === "vellum" ? "Summary" : "Professional Summary");
     pdf.paragraph(document.summary);
   }
   for (const section of document.sections) {
     pdf.section(section.title);
+    const inlineItems = template === "vellum"
+      && /^(skills|technical skills|core skills|languages)$/i.test(section.title);
+    if (inlineItems) {
+      pdf.inlineBullets(section.items.flatMap((item) => [
+        item.heading,
+        item.subheading,
+        item.dateRange,
+        ...(item.bullets ?? []),
+      ].filter((value): value is string => Boolean(value))
+        .map((item) => item.replaceAll("**", ""))));
+      continue;
+    }
     for (const item of section.items) {
       if (item.heading) {
-        pdf.heading(
-          `${item.heading}${item.dateRange ? `  |  ${item.dateRange}` : ""}`,
-          11,
-        );
+        if (template === "vellum") {
+          pdf.entry(item.heading, item.dateRange, item.subheading);
+        } else {
+          pdf.heading(
+            `${item.heading}${item.dateRange ? `  |  ${item.dateRange}` : ""}`,
+            11,
+          );
+          if (item.subheading) pdf.line(item.subheading, 9, "gray");
+        }
+      } else if (template === "vellum" && (item.dateRange || item.subheading)) {
+        pdf.entry("", item.dateRange, item.subheading);
+      } else if (item.subheading) {
+        pdf.line(item.subheading, 9, "gray");
       }
-      if (item.subheading) pdf.line(item.subheading, 9, "gray");
       for (const bullet of item.bullets ?? []) {
         pdf.bullet(bullet.replaceAll("**", ""));
       }
@@ -119,7 +146,7 @@ async function createWriter(
   let y = height - margin;
   const clean = (text: string) => text.normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E\xA0-\xFF]/g, "?");
+    .replace(/[^\x20-\x7E\xA0-\xFF\u2022]/g, "?");
   const ensure = (needed = 18) => {
     if (y < margin + needed) {
       if (document.getPageCount() >= maxPages) {
@@ -184,7 +211,58 @@ async function createWriter(
     });
     y -= size + 6;
   };
+  const centeredLine = (text: string, size = 10) => {
+    drawWrapped(text, size, "gray", true);
+  };
   const header = (title: string, detail: string, size = 19) => {
+    if (template === "vellum") {
+      ensure(size + 42);
+      page.drawLine({
+        start: { x: margin, y: y + 10 },
+        end: { x: width - margin, y: y + 10 },
+        thickness: 0.55,
+        color: muted,
+      });
+      const titleWidth = bold.widthOfTextAtSize(clean(title), size);
+      page.drawText(clean(title), {
+        x: Math.max(margin, (width - titleWidth) / 2),
+        y,
+        size,
+        font: bold,
+        color: ink,
+        maxWidth: width - margin * 2,
+      });
+      y -= size + 4;
+      if (detail) {
+        for (const part of wrap(detail, 10, width - margin * 2)) {
+          ensure(15);
+          const textWidth = regular.widthOfTextAtSize(part, 10);
+          page.drawText(part, {
+            x: Math.max(margin, (width - textWidth) / 2),
+            y,
+            size: 10,
+            font: regular,
+            color: muted,
+            maxWidth: width - margin * 2,
+          });
+          y -= 13;
+        }
+      }
+      page.drawLine({
+        start: { x: margin, y: y - 1 },
+        end: { x: width - margin, y: y - 1 },
+        thickness: 1.15,
+        color: ink,
+      });
+      page.drawLine({
+        start: { x: margin, y: y - 4 },
+        end: { x: width - margin, y: y - 4 },
+        thickness: 0.45,
+        color: ink,
+      });
+      y -= 16;
+      return;
+    }
     const headerTop = y + 16;
     const blockHeight = detail ? 68 : 48;
     const darkHeader = design.header === "band" || design.header === "card";
@@ -250,9 +328,36 @@ async function createWriter(
   const section = (text: string) => {
     y -= sectionGap;
     ensure(28);
-    const label = clean(text.toUpperCase());
+    const label = clean(template === "vellum" ? text : text.toUpperCase());
     const labelSize = 10.5;
     const labelWidth = bold.widthOfTextAtSize(label, labelSize);
+    if (template === "vellum") {
+      const center = width / 2;
+      const gap = 8;
+      const labelLeft = center - labelWidth / 2;
+      const labelRight = center + labelWidth / 2;
+      page.drawLine({
+        start: { x: margin, y: y + 3 },
+        end: { x: Math.max(margin, labelLeft - gap), y: y + 3 },
+        thickness: 0.55,
+        color: muted,
+      });
+      page.drawLine({
+        start: { x: Math.min(width - margin, labelRight + gap), y: y + 3 },
+        end: { x: width - margin, y: y + 3 },
+        thickness: 0.55,
+        color: muted,
+      });
+      page.drawText(label, {
+        x: labelLeft,
+        y,
+        size: labelSize,
+        font: bold,
+        color: ink,
+      });
+      y -= 18;
+      return;
+    }
     if (design.section === "band" || design.section === "card") {
       page.drawRectangle({ x: margin, y: y - 4, width: width - margin * 2, height: 18, color: design.section === "card" ? rgb(.94, .95, .97) : accent });
     } else if (design.section === "pill") {
@@ -273,6 +378,43 @@ async function createWriter(
       if (design.section === "double-rule") page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: .4, color: accent });
       y -= design.section === "double-rule" ? 5 : 3;
     }
+  };
+  const entry = (title: string, dateRange?: string, subheading?: string) => {
+    const titleSize = 10.5;
+    const dateSize = 9;
+    const cleanedTitle = clean(title);
+    const cleanedDate = dateRange ? clean(dateRange) : "";
+    const dateWidth = cleanedDate ? regular.widthOfTextAtSize(cleanedDate, dateSize) : 0;
+    const availableTitleWidth = width - margin * 2 - dateWidth - (cleanedDate ? 10 : 0);
+    const titleLines = wrap(cleanedTitle, titleSize, availableTitleWidth);
+    titleLines.forEach((part, index) => {
+      ensure(titleSize + lineGap + 3);
+      page.drawText(part, {
+        x: margin,
+        y,
+        size: titleSize,
+        font: bold,
+        color: ink,
+        maxWidth: index === 0 ? availableTitleWidth : width - margin * 2,
+      });
+      if (index === 0 && cleanedDate) {
+        page.drawText(cleanedDate, {
+          x: width - margin - dateWidth,
+          y,
+          size: dateSize,
+          font: regular,
+          color: muted,
+          maxWidth: dateWidth,
+        });
+      }
+      y -= titleSize + lineGap;
+    });
+    if (subheading) drawWrapped(subheading, 9, "gray");
+    y -= 2;
+  };
+  const inlineBullets = (items: string[]) => {
+    const text = items.map((item) => `• ${item}`).join("    ");
+    drawWrapped(text, 9.5);
   };
   const bullet = (text: string) => {
     const parts = wrap(text, 9.5, width - margin * 2 - 15);
@@ -295,6 +437,9 @@ async function createWriter(
     paragraph,
     section,
     bullet,
+    inlineBullets,
+    entry,
+    centeredLine,
     space(amount) {
       y -= amount;
     },

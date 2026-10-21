@@ -14,7 +14,7 @@ export function isPdfTemplate(value: string): value is PdfTemplate {
 export const pdfTemplateLabels: Record<PdfTemplate, string> = {
   heritage: "Heritage",
   laurel: "Laurel",
-  vellum: "Vellum",
+  vellum: "QTS_Template_1",
   pewter: "Pewter",
   regent: "Regent",
   orchid: "Orchid",
@@ -62,7 +62,7 @@ const muted = [0.34, 0.38, 0.43] as const;
 export const pdfTemplateDesigns: Record<PdfTemplate, PdfTemplateDesign> = {
   heritage: design([0.15, 0.17, 0.2], "serif", "center", "double-rule", "double-rule", 52),
   laurel: design([0.25, 0.31, 0.27], "serif", "center", "rule", "rule", 54),
-  vellum: design([0.24, 0.26, 0.29], "sans", "center", "plain", "rule", 58),
+  vellum: design([0.12, 0.13, 0.15], "sans", "center", "double-rule", "rule", 54),
   pewter: design([0.32, 0.38, 0.44], "sans", "left", "soft", "pill", 50),
   regent: design([0.12, 0.18, 0.28], "serif", "center", "rule", "rule", 52),
   orchid: design([0.38, 0.08, 0.28], "sans", "center", "band", "rule", 48),

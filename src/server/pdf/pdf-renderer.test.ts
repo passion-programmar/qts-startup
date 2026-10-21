@@ -3,7 +3,7 @@ import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
-import { pdfTemplateValues } from "@/server/pdf/pdf-templates";
+import { pdfTemplateLabels, pdfTemplateValues } from "@/server/pdf/pdf-templates";
 
 const data: PdfPackage = {
   resume: {
@@ -49,4 +49,8 @@ test("every one-column template renders a valid resume and cover letter PDF", as
     assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 2, template);
     assert.equal(coverLetter.getPageCount(), 1, template);
   }
+});
+
+test("Vellum is named QTS_Template_1 in the template selector", () => {
+  assert.equal(pdfTemplateLabels.vellum, "QTS_Template_1");
 });
