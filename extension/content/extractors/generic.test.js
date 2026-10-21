@@ -94,6 +94,68 @@ test('generic extractor reads country, work arrangement, employment type, and sa
   assert.equal(result.salary, 'EUR 60,000-80,000 per year');
 });
 
+test('generic extractor reads role type and nearby salary while ignoring Remote as a country', () => {
+  const jobPosting = {
+    '@type': 'JobPosting',
+    title: 'Senior Software Engineer',
+    description: '<p>Evaluate AI-generated code and provide technical feedback.</p>',
+    jobLocation: { address: { addressCountry: 'Remote' } },
+    jobLocationType: 'TELECOMMUTE',
+  };
+  const titleElement = {
+    tagName: 'H1',
+    innerText: 'Senior Software Engineer',
+    textContent: 'Senior Software Engineer',
+  };
+  const salaryElement = {
+    innerText: '$245 - $280/hour pay',
+    textContent: '$245 - $280/hour pay',
+  };
+  titleElement.parentElement = { children: [titleElement, salaryElement] };
+  const facts = [{
+    innerText: 'Role Type',
+    textContent: 'Role Type',
+    nextElementSibling: {
+      tagName: 'DD',
+      innerText: 'Contractor',
+      textContent: 'Contractor',
+    },
+  }];
+  const document = {
+    title: 'Senior Software Engineer | micro1',
+    location: { href: 'https://jobs.micro1.ai/post/example' },
+    querySelectorAll(selector) {
+      if (selector === 'script[type="application/ld+json"]') {
+        return [{ textContent: JSON.stringify(jobPosting) }];
+      }
+      if (selector === 'dt, [role="term"], [aria-label]') return facts;
+      if (selector === 'h1') return [titleElement];
+      return [];
+    },
+    querySelector(selector) {
+      if (selector === 'h1') return titleElement;
+      return null;
+    },
+    createElement() {
+      return {
+        set innerHTML(value) {
+          this.innerText = value.replace(/<[^>]*>/g, '');
+        },
+        innerText: '',
+        querySelectorAll: () => [],
+      };
+    },
+  };
+  const window = {};
+  vm.runInNewContext(genericSource, { document, window, URL });
+
+  const result = window.__genericExtract();
+  assert.equal(result.country, '');
+  assert.equal(result.employmentType, 'Contract');
+  assert.equal(result.workplaceType, 'Remote');
+  assert.equal(result.salary, '$245 - $280/hour pay');
+});
+
 test('generic extractor reads labeled job facts when structured data is unavailable', () => {
   const description = 'Build analytics systems and partner with product teams. '.repeat(3);
   let facts = [
