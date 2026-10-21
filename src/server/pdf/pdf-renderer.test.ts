@@ -55,8 +55,10 @@ test("every one-column template renders a valid resume and cover letter PDF", as
   }
 });
 
-test("Vellum is named QTS_Template_1 in the template selector", () => {
-  assert.equal(pdfTemplateLabels.vellum, "QTS_Template_1");
+test("template selector labels are numbered in display order", () => {
+  pdfTemplateValues.forEach((template, index) => {
+    assert.equal(pdfTemplateLabels[template], `Template_${index + 1}`);
+  });
 });
 
 test("full resume sections and bullets fit without exceeding two pages", async () => {
