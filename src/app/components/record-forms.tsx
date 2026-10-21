@@ -3,18 +3,58 @@
 import { Pencil, Trash2, X } from "lucide-react";
 import { useActionState, useState } from "react";
 import { deleteBidAction, updateBidAction } from "@/app/bids/actions";
-import { deleteJobAction, initialRecordState, updateJobAction } from "@/app/jobs/actions";
+import {
+  deleteJobAction,
+  initialRecordState,
+  setJobGenerationQueueAction,
+  updateJobAction,
+} from "@/app/jobs/actions";
 
 export type CandidateOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };
-export type EditableJob = CommonRecord & { date: string; status: string; failureReason: string | null };
+export type EditableJob = CommonRecord & { date: string; status: string; failureReason: string | null; generationStatus: string; generationError: string | null };
 export type EditableBid = CommonRecord & { employmentType: string | null; resumeLocalPath: string; googleDrivePath: string | null; appliedAt: string };
 
 export function JobActions({ record, candidates }: { record: EditableJob; candidates: CandidateOption[] }) {
-  return <RecordActions kind="job" record={record} candidates={candidates} />;
+  return <div className="flex flex-wrap items-start gap-2"><GenerationQueueAction record={record} /><RecordActions kind="job" record={record} candidates={candidates} /></div>;
 }
 export function BidActions({ record, candidates }: { record: EditableBid; candidates: CandidateOption[] }) {
   return <RecordActions kind="bid" record={record} candidates={candidates} />;
+}
+
+function GenerationQueueAction({ record }: { record: EditableJob }) {
+  const [state, action, pending] = useActionState(
+    setJobGenerationQueueAction,
+    initialRecordState,
+  );
+  const queued = record.generationStatus === "queued";
+  const processing = record.generationStatus === "processing";
+  const cancellable = queued || processing;
+  const label = cancellable
+    ? processing ? "Cancel Generation" : "Cancel queue"
+    : record.generationStatus === "failed"
+        ? "Retry Generation"
+        : record.generationStatus === "completed"
+          ? "Queue again"
+          : "Queue Generation";
+  return (
+    <form action={action}>
+      <input name="id" type="hidden" value={record.id} />
+      <input name="intent" type="hidden" value={cancellable ? "cancel" : "queue"} />
+      <button
+        className="inline-flex h-8 items-center rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60"
+        disabled={pending}
+        type="submit"
+      >
+        {pending ? "Updating…" : label}
+      </button>
+      {(state.error || state.success) && (
+        <p className={`mt-1 max-w-40 text-[10px] ${state.error ? "text-rose-700" : "text-emerald-700"}`} role={state.error ? "alert" : "status"}>
+          {state.error || state.success}
+        </p>
+      )}
+    </form>
+  );
 }
 
 function RecordActions({ kind, record, candidates }: { kind: "job"; record: EditableJob; candidates: CandidateOption[] } | { kind: "bid"; record: EditableBid; candidates: CandidateOption[] }) {

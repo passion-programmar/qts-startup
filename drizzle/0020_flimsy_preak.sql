@@ -1,0 +1,1 @@
+ALTER TABLE "jobs" ADD COLUMN "resume_local_path" text;

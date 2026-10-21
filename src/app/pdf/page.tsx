@@ -5,7 +5,6 @@ import { PdfWorkspace } from "@/app/pdf/pdf-workspace";
 import { requireUser } from "@/lib/session";
 import { generationRuns, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
-import { normalizeJobUrl } from "@/server/jobs/job-values";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
 export const instant = false;
@@ -39,11 +38,10 @@ export default async function PdfPage() {
     )
     .orderBy(desc(jobs.createdAt))
     .limit(250);
-  const jobUrls = [...new Set(jobRows.map((job) => normalizeJobUrl(job.jobUrl)))];
-  const generationRows = jobUrls.length
+  const generationRows = jobRows.length
     ? await db
         .select({
-          jobUrl: generationRuns.jobUrl,
+          jobId: generationRuns.jobId,
           jobDescription: generationRuns.jobDescription,
           responseJson: generationRuns.responseJson,
         })
@@ -53,29 +51,22 @@ export default async function PdfPage() {
             eq(generationRuns.managerId, currentUser.id),
             eq(generationRuns.status, "completed"),
             isNotNull(generationRuns.responseJson),
-            inArray(generationRuns.jobUrl, jobUrls),
+            inArray(generationRuns.jobId, jobRows.map((job) => job.id)),
           ),
         )
         .orderBy(desc(generationRuns.createdAt))
         .limit(250)
     : [];
-  const generationByUrl = new Map<
-    string,
-    (typeof generationRows)[number][]
-  >();
+  const generationByJob = new Map<string, (typeof generationRows)[number]>();
   for (const run of generationRows) {
-    const key = normalizeJobUrl(run.jobUrl);
-    const matchingRuns = generationByUrl.get(key) ?? [];
-    matchingRuns.push(run);
-    generationByUrl.set(key, matchingRuns);
+    if (run.jobId && !generationByJob.has(run.jobId)) {
+      generationByJob.set(run.jobId, run);
+    }
   }
   const savedJobs = jobRows.map((job) => {
-    const matchingRuns = generationByUrl.get(normalizeJobUrl(job.jobUrl)) ?? [];
+    const generation = generationByJob.get(job.id);
     const candidateName =
       [job.firstName, job.lastName].filter(Boolean).join(" ") || "Candidate";
-    const generation = matchingRuns.find((run) =>
-      generatedCandidateMatches(run.responseJson, candidateName),
-    );
     return {
       id: job.id,
       candidateName,
@@ -83,7 +74,7 @@ export default async function PdfPage() {
       company: job.company,
       jobUrl: job.jobUrl,
       location: job.location ?? "",
-      description: job.description || matchingRuns[0]?.jobDescription || "",
+      description: job.description || generation?.jobDescription || "",
       generatedDocument: generation?.responseJson ?? null,
       pdfTemplate: isPdfTemplate(job.pdfTemplate) ? job.pdfTemplate : "professional",
     };
@@ -96,24 +87,4 @@ export default async function PdfPage() {
       />
     </WorkspaceShell>
   );
-}
-
-function generatedCandidateMatches(value: unknown, expectedName: string): boolean {
-  if (!isRecord(value) || !isRecord(value.resume) || !isRecord(value.resume.candidate)) {
-    return false;
-  }
-  const name = value.resume.candidate.fullName;
-  return typeof name === "string" && normalizeName(name) === normalizeName(expectedName);
-}
-
-function normalizeName(value: string): string {
-  return value.normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLocaleLowerCase("en");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

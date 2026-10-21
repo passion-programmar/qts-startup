@@ -13,7 +13,15 @@ The supported browser-extension workflow is deliberately narrow:
 4. Get JD enables persistent monitoring. Each loaded page is extracted locally,
    checked against the Manager's Jobs and Bids, and reported in a page toast.
    It does not invoke Gemini.
-5. Generation and Apply are visible but disabled release placeholders.
+5. Managers can queue Generation from a Jobs row. The signed-in extension
+   processes queued jobs sequentially through the job page and ChatGPT, then
+   downloads résumé PDF, cover-letter PDF, and JD text files locally, and
+   records the expected local resume path on the Jobs row.
+   Generation cancellation resets the application status to `todo` and
+   clears the resume path, and attempts to remove files already downloaded by
+   that run. Generation does not mark the job as applied; `applied` means the
+   application was submitted successfully. The extension launcher's Generation
+   and Apply buttons remain placeholders.
 6. Sign Out clears persisted extension authentication and Get JD status.
 
 Gemini evaluation is disabled by the `geminiEvaluation` runtime feature flag.
@@ -21,10 +29,11 @@ The server classification and idempotent save endpoints remain implemented for
 a later release, but the current extension calls only the non-Gemini duplicate
 check while Get JD monitoring is active.
 
-Scanner, application-session, ChatGPT document, text-highlight, Gmail, and
-automatic-application code remains in the repository as unfinished product
-work. Runtime capabilities prevent those paths from calling server routes that
-do not exist in this application. A feature must not be enabled until its API,
+Application-session, text-highlight, Gmail, and automatic-application code
+remains in the repository as unfinished product work. The Jobs-table
+Generation queue is supported; its generated files are rendered in memory and
+downloaded by the extension rather than persisted as server files. Generation
+run data remains in the database. A feature must not be enabled until its API,
 authorization checks, migrations, integration tests, and user-facing recovery
 behavior are present.
 

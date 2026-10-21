@@ -1,9 +1,10 @@
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { generationRuns } from "@/db/schema";
+import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
+import { parsePdfPackage } from "@/app/pdf/document-data";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const maxResponseLength = 1_000_000;
@@ -34,21 +35,75 @@ export async function POST(request: Request): Promise<NextResponse> {
   const responseText = readText(body.responseText, maxResponseLength);
   const failureReason = readText(body.failureReason, 2000);
   const responseJson = isRecord(body.responseJson) ? body.responseJson : null;
-  const completed = Boolean(responseText);
-  if (!uuidPattern.test(generationId) || !jobDescription || (!completed && !failureReason)) {
-    return NextResponse.json(
-      { success: false, message: "A valid Generation ID, JD, and response or failure reason are required." },
-      { status: 400 },
-    );
+  let validPackage = false;
+  let parsedPackage: ReturnType<typeof parsePdfPackage> | null = null;
+  if (responseJson) {
+    try {
+      parsedPackage = parsePdfPackage(JSON.stringify(responseJson));
+      validPackage = true;
+    } catch {
+      validPackage = false;
+    }
   }
-  if (responseJson && (!isRecord(responseJson.resume) || !isRecord(responseJson.coverLetter))) {
+  const completed = Boolean(responseText && validPackage);
+  if (
+    !uuidPattern.test(generationId)
+    || !jobDescription
+    || (completed && !validPackage)
+    || (!completed && !failureReason)
+  ) {
     return NextResponse.json(
-      { success: false, message: "Parsed JSON must contain resume and coverLetter objects." },
+      { success: false, message: "A valid Generation ID, JD, and a valid document package or failure reason are required." },
       { status: 400 },
     );
   }
 
   try {
+    if (completed) {
+      const [run] = await db
+        .select({ jobId: generationRuns.jobId })
+        .from(generationRuns)
+        .where(and(
+          eq(generationRuns.id, generationId),
+          eq(generationRuns.managerId, manager.id),
+          eq(generationRuns.status, "pending"),
+        ))
+        .limit(1);
+      if (!run) {
+        return NextResponse.json(
+          { success: false, message: "This Generation run was not found or was already completed." },
+          { status: 404 },
+        );
+      }
+      if (run.jobId && parsedPackage) {
+        const [candidate] = await db
+          .select({
+            firstName: profiles.firstName,
+            lastName: profiles.lastName,
+            email: profiles.candidateEmail,
+          })
+          .from(jobs)
+          .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
+          .where(and(
+            eq(jobs.id, run.jobId),
+            eq(jobs.managerId, manager.id),
+          ))
+          .limit(1);
+        const expectedName = [candidate?.firstName, candidate?.lastName]
+          .filter(Boolean)
+          .join(" ");
+        if (
+          !candidate
+          || normalizeIdentity(expectedName) !== normalizeIdentity(parsedPackage.resume.candidate.fullName)
+          || normalizeIdentity(candidate.email ?? "") !== normalizeIdentity(parsedPackage.resume.candidate.email)
+        ) {
+          return NextResponse.json(
+            { success: false, message: "The generated documents must use the candidate's saved name and email." },
+            { status: 422 },
+          );
+        }
+      }
+    }
     const [updated] = await db
       .update(generationRuns)
       .set({
@@ -64,12 +119,27 @@ export async function POST(request: Request): Promise<NextResponse> {
         eq(generationRuns.managerId, manager.id),
         eq(generationRuns.status, "pending"),
       ))
-      .returning({ id: generationRuns.id });
+      .returning({ id: generationRuns.id, jobId: generationRuns.jobId });
     if (!updated) {
       return NextResponse.json(
         { success: false, message: "This Generation run was not found or was already completed." },
         { status: 404 },
       );
+    }
+    if (updated.jobId && !completed) {
+      await db
+        .update(jobs)
+        .set({
+          generationStatus: "failed",
+          generationError: failureReason,
+          generationLeaseExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(jobs.id, updated.jobId),
+          eq(jobs.managerId, manager.id),
+          eq(jobs.generationStatus, "processing"),
+        ));
     }
     return NextResponse.json({
       success: true,
@@ -84,4 +154,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 500 },
     );
   }
+}
+
+function normalizeIdentity(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en")
+    : "";
 }

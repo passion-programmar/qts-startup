@@ -43,6 +43,14 @@ export const generationRunStatus = pgEnum("generation_run_status", [
   "failed",
 ]);
 
+export const generationQueueStatus = pgEnum("generation_queue_status", [
+  "not_queued",
+  "queued",
+  "processing",
+  "completed",
+  "failed",
+]);
+
 export const categories = pgTable(
   "categories",
   {
@@ -243,6 +251,7 @@ export const generationRuns = pgTable(
   "generation_runs",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
     managerId: uuid("manager_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -294,6 +303,15 @@ export const jobs = pgTable(
     date: date("date", { mode: "string" }).notNull(),
     status: jobStatus("status").default("todo").notNull(),
     failureReason: text("failure_reason"),
+    resumeLocalPath: text("resume_local_path"),
+    generationStatus: generationQueueStatus("generation_status")
+      .default("not_queued")
+      .notNull(),
+    generationError: text("generation_error"),
+    generationLeaseExpiresAt: timestamp("generation_lease_expires_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),

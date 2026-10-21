@@ -3,7 +3,7 @@
   "name": "QTS_Startup",
   "version": "1.20.0",
   "description": "Capture job postings with QTS_Startup.",
-  "permissions": ["activeTab", "storage", "tabs", "scripting", "webNavigation"],
+  "permissions": ["activeTab", "storage", "tabs", "scripting", "webNavigation", "alarms", "downloads"],
   "host_permissions": [
     "<all_urls>"
   ],

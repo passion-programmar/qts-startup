@@ -118,10 +118,18 @@ panel inside the current page and the panel closes after a successful login.
 Get JD stores persistent `get_jd` status, extracts job identity whenever a page
 loads, and checks the authenticated Manager's Jobs and Bids for a duplicate.
 The result appears in a top-left page toast. This flow does not call Gemini.
-Generation and Apply remain visible release placeholders and report that they
-are not enabled. Sign Out clears the stored extension session and Get JD mode.
-The legacy popup Gemini mode is hard-disabled by the shared runtime feature
-configuration so an old stored mode cannot start background classification.
+Managers start document generation with **Queue Generation** on a Jobs row;
+the signed-in extension processes queued jobs one at a time and downloads a
+résumé PDF, cover-letter PDF, and JD text file to the local Downloads folder.
+Generated files are rendered in memory and are not stored on the server. The
+Jobs row records the expected resume path relative to local Downloads. Cancelling
+Generation clears that path and resets the application status to `todo`;
+Generation itself never marks the job as applied. `applied` is reserved for a
+successfully submitted job application.
+Generation and Apply in the extension radial menu remain release placeholders.
+Sign Out clears the stored extension session and Get JD mode. The legacy popup
+Gemini mode is hard-disabled by the shared runtime feature configuration so an
+old stored mode cannot start background classification.
 
 ## Users and candidate profiles
 
@@ -153,7 +161,13 @@ The initial database schema contains:
   restores the normal global/private selection without deleting the Manager's
   private prompt. Managers must not be allowed to read or change Gemini prompts.
 - `jobs`: Manager-owned, candidate-specific daily application tasks with
-  `todo`, `pending`, `applied`, and `failed` statuses.
+  `todo`, `pending`, `applied`, and `failed` application statuses, plus a
+  separate Generation queue status, processing lease, and nullable local resume
+  path. Generation completion does not change the application status to
+  `applied`.
+- `generation_runs`: Generation prompts, job descriptions, and response data
+  associated with the Manager and (for queued work) the exact Jobs row. PDF
+  and JD download files are assembled transiently and are not persisted.
 - `bids`: durable successful-application snapshots containing job, candidate,
   Manager, resume-path, and application timestamp details. A unique source job
   ID prevents duplicate archive rows when applying a job is retried.
