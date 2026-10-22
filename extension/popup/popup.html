@@ -638,7 +638,7 @@
           <div class="action-buttons">
             <button class="btn btn-primary" id="btn-get-jd" type="button" aria-pressed="false">Get JD</button>
             <button class="btn btn-ghost btn-text-highlights hidden" type="button" aria-controls="page-highlights" aria-expanded="false">Text Highlight</button>
-            <button class="btn btn-ghost btn-page-exclusions hidden" type="button" aria-controls="page-exclusions" aria-expanded="false">Excluded URLs</button>
+            <button class="btn btn-ghost btn-page-exclusions hidden" type="button" aria-controls="page-exclusions" aria-expanded="false">URL Settings</button>
             <button class="btn btn-primary" id="btn-custom-apply" type="button" aria-pressed="false">Custom Apply</button>
             <button class="btn btn-ghost" id="btn-action-logout" type="button">Sign Out</button>
           </div>
@@ -686,19 +686,43 @@
 
     <section id="page-exclusions" class="page-highlights page-exclusions hidden" aria-labelledby="page-exclusions-title">
       <div class="page-highlights-header">
-        <h2 id="page-exclusions-title">Websites excluded from QTS</h2>
+        <h2 id="page-exclusions-title">URL Settings</h2>
         <button class="btn btn-ghost btn-sm" id="btn-close-page-exclusions" type="button">Back</button>
       </div>
-      <p class="page-highlights-hint">Pages matching these URLs will not show QTS buttons or run extension features. Enter a domain to exclude the whole site, or include a path to exclude that path and its subpages. Only Managers assigned by Super can edit this list.</p>
-      <form id="page-exclusion-form" class="page-exclusions-form">
-        <label class="page-exclusion-field">
-          <span>Website or URL path</span>
-          <input id="page-exclusion-url" type="text" maxlength="2048" placeholder="example.com or example.com/careers" required>
-        </label>
-        <button class="btn btn-primary btn-sm" id="page-exclusion-submit" type="submit">Exclude URL</button>
-      </form>
-      <p id="page-exclusions-status" class="page-highlights-status" role="status" aria-live="polite"></p>
-      <ul id="page-exclusion-list" class="page-highlight-list"></ul>
+      <section id="job-detection-url-settings" class="url-settings-group hidden" aria-labelledby="job-detection-url-title">
+        <h3 id="job-detection-url-title">Job-detail URL rules</h3>
+        <p class="page-highlights-hint">Matching URLs are treated as a job-detail hint; the page still needs a job title and relevant description content. Enter a domain or path prefix, for example jobs.example.com/openings. Subdomains and pages under the path are included.</p>
+        <form id="job-detection-url-form" class="page-exclusions-form">
+          <label class="page-exclusion-field">
+            <span>Job-detail domain or URL path</span>
+            <input id="job-detection-url" type="text" maxlength="2048" placeholder="jobs.example.com/openings" required>
+          </label>
+          <div class="page-exclusion-actions">
+            <button class="btn btn-primary btn-sm" id="job-detection-url-submit" type="submit">Add rule</button>
+            <button class="btn btn-ghost btn-sm hidden" id="job-detection-url-cancel" type="button">Cancel edit</button>
+            <button class="btn btn-ghost btn-sm hidden" id="job-detection-url-delete" type="button">Delete rule</button>
+          </div>
+        </form>
+        <p id="job-detection-url-status" class="page-highlights-status" role="status" aria-live="polite"></p>
+        <ul id="job-detection-url-list" class="page-highlight-list"></ul>
+      </section>
+      <section id="page-exclusion-settings" class="url-settings-group hidden" aria-labelledby="page-exclusion-settings-title">
+        <h3 id="page-exclusion-settings-title">Excluded URLs</h3>
+        <p class="page-highlights-hint">Pages matching these URLs will not show QTS buttons or run extension features. Enter a domain to exclude the whole site, or include a path to exclude that path and its subpages.</p>
+        <form id="page-exclusion-form" class="page-exclusions-form">
+          <label class="page-exclusion-field">
+            <span>Website or URL path</span>
+            <input id="page-exclusion-url" type="text" maxlength="2048" placeholder="example.com or example.com/careers" required>
+          </label>
+          <div class="page-exclusion-actions">
+            <button class="btn btn-primary btn-sm" id="page-exclusion-submit" type="submit">Exclude URL</button>
+            <button class="btn btn-ghost btn-sm hidden" id="page-exclusion-cancel" type="button">Cancel edit</button>
+            <button class="btn btn-ghost btn-sm hidden" id="page-exclusion-delete" type="button">Delete URL</button>
+          </div>
+        </form>
+        <p id="page-exclusions-status" class="page-highlights-status" role="status" aria-live="polite"></p>
+        <ul id="page-exclusion-list" class="page-highlight-list"></ul>
+      </section>
     </section>
 
     <dialog id="get-jd-confirmation" aria-labelledby="get-jd-confirmation-title">
@@ -740,7 +764,7 @@
         <span class="job-mode-indicator">Get JD mode</span>
         <div class="job-mode-feature-actions">
           <button class="btn btn-ghost btn-sm btn-text-highlights hidden" type="button" aria-controls="page-highlights" aria-expanded="false">Text Highlight</button>
-          <button class="btn btn-ghost btn-sm btn-page-exclusions hidden" type="button" aria-controls="page-exclusions" aria-expanded="false">Excluded URLs</button>
+          <button class="btn btn-ghost btn-sm btn-page-exclusions hidden" type="button" aria-controls="page-exclusions" aria-expanded="false">URL Settings</button>
           <button type="button" class="btn btn-ghost btn-sm" id="btn-change-mode">Change mode</button>
         </div>
       </div>

@@ -10,6 +10,7 @@
     applicationAutomation: false,
     textHighlights: true,
     pageExclusions: true,
+    jobDetectionUrlRules: true,
   });
 
   function normalizeServerUrl(value) {

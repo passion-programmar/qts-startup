@@ -19,6 +19,7 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(scripts.includes('content/page-launcher.js'));
   assert.ok(scripts.includes('content/text-highlighter.js'));
   assert.ok(scripts.includes('shared/page-exclusions.js'));
+  assert.ok(serviceWorker.includes("'../shared/job-detection-url-rules.js'"));
   assert.ok(scripts.includes('shared/text-highlighting.js'));
   assert.ok(
     scripts.indexOf('shared/page-exclusions.js')
@@ -113,6 +114,25 @@ test('manager URL exclusions are permission-gated and applied before page UI run
   assert.ok(serviceWorker.includes("'/api/extension/page-exclusions'"));
   assert.ok(featureRoute.includes('canManagePageExclusions'));
   assert.ok(exclusionsRoute.includes('managerCanManagePageExclusions(manager.id)'));
+  const jobDetectionRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'job-detection-url-rules', 'route.ts'),
+    'utf8',
+  );
+  const jobDetectionItemRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'job-detection-url-rules', '[ruleId]', 'route.ts'),
+    'utf8',
+  );
+  const managerSettings = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'page.tsx'),
+    'utf8',
+  );
+  assert.ok(jobDetectionRoute.includes('managerCanManageJobDetectionUrlRules(manager.id)'));
+  assert.ok(jobDetectionRoute.includes('export async function POST'));
+  assert.ok(jobDetectionItemRoute.includes('export async function PUT'));
+  assert.ok(jobDetectionItemRoute.includes('export async function DELETE'));
+  assert.ok(managerSettings.includes('ManagerJobDetectionUrlAccessForm'));
+  assert.ok(serviceWorker.includes('configuredDetailUrl'));
+  assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_PAGE_EXCLUSION'"));
 });
 
 test('manager URL exclusions update UI and workflows across SPA navigation', () => {

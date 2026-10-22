@@ -7,6 +7,7 @@ import {
   saveGlobalPromptAction,
   updateManagerTextHighlightAccessAction,
   updateManagerPageExclusionAccessAction,
+  updateManagerJobDetectionUrlAccessAction,
   unassignPromptAction,
   updatePromptModeAction,
   type PromptActionState,
@@ -274,6 +275,43 @@ export function ManagerPageExclusionAccessForm({
         <input name="enabled" type="hidden" value={String(!canManage)} />
         <span className={`text-xs font-medium ${canManage ? "text-emerald-700" : "text-slate-500"}`}>
           {canManage ? "Can manage excluded URLs" : "No URL exclusions"}
+        </span>
+        <button
+          className={`inline-flex h-8 items-center rounded-lg px-3 text-[11px] font-semibold disabled:opacity-60 ${
+            canManage
+              ? "border border-rose-200 text-rose-700 hover:bg-rose-50"
+              : "bg-indigo-600 text-white hover:bg-indigo-700"
+          }`}
+          disabled={isPending}
+          type="submit"
+        >
+          {isPending ? "Saving..." : canManage ? "Remove access" : "Assign access"}
+        </button>
+      </form>
+      <ActionFeedback state={state} />
+    </div>
+  );
+}
+
+export function ManagerJobDetectionUrlAccessForm({
+  managerId,
+  canManage,
+}: {
+  managerId: string;
+  canManage: boolean;
+}) {
+  const [state, formAction, isPending] = useActionState(
+    updateManagerJobDetectionUrlAccessAction,
+    initialState,
+  );
+
+  return (
+    <div className="min-w-0 space-y-2">
+      <form action={formAction} className="flex flex-wrap items-center gap-2">
+        <input name="managerId" type="hidden" value={managerId} />
+        <input name="enabled" type="hidden" value={String(!canManage)} />
+        <span className={`text-xs font-medium ${canManage ? "text-emerald-700" : "text-slate-500"}`}>
+          {canManage ? "Can manage job-detection URLs" : "No job-detection URL access"}
         </span>
         <button
           className={`inline-flex h-8 items-center rounded-lg px-3 text-[11px] font-semibold disabled:opacity-60 ${

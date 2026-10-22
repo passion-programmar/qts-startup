@@ -129,6 +129,26 @@ test('worker permits manager extension feature and shared highlight requests', a
     'DELETE',
     '/api/extension/page-exclusions/123e4567-e89b-42d3-a456-426614174000',
   );
+  const jobDetectionRules = await worker.workerApiRequest('GET', '/api/extension/job-detection-url-rules');
+  const addedJobDetectionRule = await worker.workerApiRequest(
+    'POST',
+    '/api/extension/job-detection-url-rules',
+    { url: 'jobs.example.test/openings' },
+  );
+  const updatedJobDetectionRule = await worker.workerApiRequest(
+    'PUT',
+    '/api/extension/job-detection-url-rules/123e4567-e89b-42d3-a456-426614174000',
+    { url: 'jobs.example.test/careers' },
+  );
+  const deletedJobDetectionRule = await worker.workerApiRequest(
+    'DELETE',
+    '/api/extension/job-detection-url-rules/123e4567-e89b-42d3-a456-426614174000',
+  );
+  const updatedExclusion = await worker.workerApiRequest(
+    'PUT',
+    '/api/extension/page-exclusions/123e4567-e89b-42d3-a456-426614174000',
+    { url: 'example.test/careers' },
+  );
 
   assert.equal(features.features.canManageTextHighlights, true);
   assert.deepEqual(rules.rules, []);
@@ -136,7 +156,12 @@ test('worker permits manager extension feature and shared highlight requests', a
   assert.equal(exclusions.success, true);
   assert.equal(addedExclusion.success, true);
   assert.equal(deletedExclusion.success, true);
-  assert.equal(requests.length, 6);
+  assert.equal(jobDetectionRules.success, true);
+  assert.equal(addedJobDetectionRule.success, true);
+  assert.equal(updatedJobDetectionRule.success, true);
+  assert.equal(deletedJobDetectionRule.success, true);
+  assert.equal(updatedExclusion.success, true);
+  assert.equal(requests.length, 11);
   assert.equal(requests[0].url, 'https://qts.example.test/api/extension/features/me');
   assert.equal(requests[1].url, 'https://qts.example.test/api/extension/highlights');
   assert.equal(
@@ -147,6 +172,20 @@ test('worker permits manager extension feature and shared highlight requests', a
   assert.equal(requests[4].url, 'https://qts.example.test/api/extension/page-exclusions');
   assert.equal(
     requests[5].url,
+    'https://qts.example.test/api/extension/page-exclusions/123e4567-e89b-42d3-a456-426614174000',
+  );
+  assert.equal(requests[6].url, 'https://qts.example.test/api/extension/job-detection-url-rules');
+  assert.equal(requests[7].url, 'https://qts.example.test/api/extension/job-detection-url-rules');
+  assert.equal(
+    requests[8].url,
+    'https://qts.example.test/api/extension/job-detection-url-rules/123e4567-e89b-42d3-a456-426614174000',
+  );
+  assert.equal(
+    requests[9].url,
+    'https://qts.example.test/api/extension/job-detection-url-rules/123e4567-e89b-42d3-a456-426614174000',
+  );
+  assert.equal(
+    requests[10].url,
     'https://qts.example.test/api/extension/page-exclusions/123e4567-e89b-42d3-a456-426614174000',
   );
   assert.ok(requests.every(({ options }) => options.headers.Authorization === 'Bearer worker-token'));

@@ -91,7 +91,7 @@ async function initializeQtsPageLauncher() {
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
     ['generation', 'Generation', '▤', 'generation'],
     ['text_highlights', 'Text Highlight', '✎', 'text-highlights'],
-    ['page_exclusions', 'Excluded URLs', '⊘', 'page-exclusions'],
+    ['page_exclusions', 'URL Settings', '⊘', 'page-exclusions'],
     ['apply', 'Apply', '→', 'apply'],
     ['session', 'Sign In', '↪', 'logout'],
   ];
@@ -224,7 +224,8 @@ async function initializeQtsPageLauncher() {
       highlightButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
     }
     if (exclusionsButton) {
-      exclusionsButton.hidden = response?.ok !== true || response.canManagePageExclusions !== true;
+      exclusionsButton.hidden = response?.ok !== true
+        || (response.canManagePageExclusions !== true && response.canManageJobDetectionUrlRules !== true);
       exclusionsButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
     }
   }
@@ -237,7 +238,10 @@ async function initializeQtsPageLauncher() {
         type: 'GET_MANAGER_EXTENSION_FEATURES',
         refresh: true,
       });
-      if (!response?.ok || response[permissionKey] !== true) {
+      const hasPermission = Array.isArray(permissionKey)
+        ? permissionKey.some((key) => response?.[key] === true)
+        : response?.[permissionKey] === true;
+      if (!response?.ok || !hasPermission) {
         button.hidden = true;
         throw new Error(response?.error || `Super must assign ${permissionName} to this Manager account.`);
       }
@@ -270,8 +274,8 @@ async function initializeQtsPageLauncher() {
     await openManagerPanel(
       button,
       'page-exclusions',
-      'canManagePageExclusions',
-      'page exclusion management',
+      ['canManagePageExclusions', 'canManageJobDetectionUrlRules'],
+      'URL settings access',
     );
   }
 

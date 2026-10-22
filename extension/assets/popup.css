@@ -1056,6 +1056,25 @@
   font-size: 12px;
 }
 
+.popup-app .url-settings-group {
+  margin-top: 22px;
+}
+
+.popup-app .url-settings-group h3 {
+  margin: 0 0 8px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.popup-app .page-exclusion-actions,
+.popup-app .page-exclusion-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .popup-app .page-exclusion-list-item {
   display: flex;
   align-items: center;

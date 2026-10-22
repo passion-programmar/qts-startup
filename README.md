@@ -13,7 +13,8 @@ Gemini.
 - Gmail mailbox OAuth is deferred until the candidate-consent flow is defined.
 - The browser extension provides an in-page launcher before sign-in. Get JD
   first checks the page locally, then contacts the server only for likely job
-  pages. Managers can manage excluded URLs when a Super Admin grants access.
+  pages. Super Admins can separately assign Managers access to job-detection
+  URL rules and excluded URLs in the extension's URL Settings panel.
 - Shared text highlights are applied automatically. Only Managers explicitly
   granted access by a Super Admin can edit their shared rules in the extension.
 - Scanner, application-session, Gmail, and automatic-application workflows
@@ -132,9 +133,11 @@ structured metadata to reject non-job pages before extraction or any
 job-existence server request. Confirmed job pages are checked against the
 authenticated Manager's Jobs and Bids for existing matches. Non-job pages show
 only a toast. This flow does not call Gemini. Managers can maintain URL
-exclusions from the launcher when a Super Admin grants them the
-`canManagePageExclusions` permission; excluded pages do not render QTS controls
-or run extension workflows. Exclusion updates also apply to already-open pages.
+exclusions and job-detection URL rules from URL Settings when a Super Admin
+grants the matching permissions. Detection rules match a domain and optional
+path prefix and act as a URL hint; page content must still look like a job
+posting. Excluded pages do not render QTS controls or run extension workflows.
+Exclusion updates also apply to already-open pages.
 Text highlights from the shared rule set render automatically, while the
 launcher editor is available only to Managers granted `canManageTextHighlights`
 by a Super Admin.

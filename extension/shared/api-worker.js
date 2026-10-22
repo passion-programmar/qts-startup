@@ -23,8 +23,10 @@ function workerSupportedApiPath(path) {
     || path === '/api/extension/features/me'
     || path === '/api/extension/highlights'
     || path === '/api/extension/page-exclusions'
+    || path === '/api/extension/job-detection-url-rules'
     || /^\/api\/extension\/highlights\/[0-9a-f-]+$/i.test(path)
     || /^\/api\/extension\/page-exclusions\/[0-9a-f-]+$/i.test(path)
+    || /^\/api\/extension\/job-detection-url-rules\/[0-9a-f-]+$/i.test(path)
     || path.startsWith('/api/extension/generation/')
     || path.startsWith('/api/extension/auth/');
 }

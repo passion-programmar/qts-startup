@@ -32,11 +32,12 @@
 
   function classifyJobPageEvidence(evidence) {
     const data = evidence && typeof evidence === 'object' ? evidence : {};
-    if (data.urlType === 'list') {
-      return { isJobPage: false, reason: 'job_listing_index' };
-    }
     if (data.hasJobPosting === true) {
       return { isJobPage: true, reason: 'structured_job_posting' };
+    }
+    const urlType = data.configuredDetailUrl === true ? 'detail' : data.urlType;
+    if (urlType === 'list') {
+      return { isJobPage: false, reason: 'job_listing_index' };
     }
 
     const title = String(data.title || '').trim();
@@ -51,7 +52,7 @@
     const descriptionLength = description.trim().length;
 
     if (
-      data.urlType === 'detail'
+      urlType === 'detail'
       && hasTitle
       && descriptionLength >= 80
       && signalCount >= 1

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { managerCanManagePageExclusions } from "@/server/page-exclusions";
+import { managerCanManageJobDetectionUrlRules } from "@/server/job-detection-url-rules";
 import { managerCanManageTextHighlights } from "@/server/text-highlights";
 
 export async function GET(request: Request): Promise<NextResponse> {
@@ -12,9 +13,10 @@ export async function GET(request: Request): Promise<NextResponse> {
     );
   }
   try {
-    const [canManageTextHighlights, canManagePageExclusions] = await Promise.all([
+    const [canManageTextHighlights, canManagePageExclusions, canManageJobDetectionUrlRules] = await Promise.all([
       managerCanManageTextHighlights(manager.id),
       managerCanManagePageExclusions(manager.id),
+      managerCanManageJobDetectionUrlRules(manager.id),
     ]);
     return NextResponse.json(
       {
@@ -22,6 +24,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         features: {
           canManageTextHighlights,
           canManagePageExclusions,
+          canManageJobDetectionUrlRules,
           canUseScanner: false,
           canUseApply: false,
         },

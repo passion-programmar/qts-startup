@@ -33,6 +33,23 @@ test('job-list URLs are rejected unless structured job data exists', () => {
   }).isJobPage, false);
 });
 
+test('manager-configured detail URL rules can classify custom URL shapes using job content', () => {
+  assert.equal(classifyJobPageEvidence({
+    urlType: 'list',
+    configuredDetailUrl: true,
+    title: 'Platform Engineer',
+    headings: ['About the role'],
+    description: 'A'.repeat(120),
+  }).isJobPage, true);
+  assert.equal(classifyJobPageEvidence({
+    urlType: 'list',
+    configuredDetailUrl: true,
+    title: 'Platform Engineer',
+    headings: ['About the role'],
+    description: 'Too short',
+  }).isJobPage, false);
+});
+
 test('custom job pages can be identified from title, description, and multiple signals', () => {
   assert.equal(classifyJobPageEvidence({
     urlType: 'unknown',

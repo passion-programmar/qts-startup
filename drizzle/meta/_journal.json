@@ -204,6 +204,13 @@
       "when": 1792657093255,
       "tag": "0028_local_gemini_token_estimation",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792659000000,
+      "tag": "0029_small_tomorrow_man",
+      "breakpoints": true
     }
   ]
 }

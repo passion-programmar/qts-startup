@@ -4,6 +4,7 @@ import {
   GlobalPromptForm,
   ManagerTextHighlightAccessForm,
   ManagerPageExclusionAccessForm,
+  ManagerJobDetectionUrlAccessForm,
   PromptAssignmentForm,
   PromptModeForm,
 } from "@/app/settings/prompt-forms";
@@ -71,6 +72,7 @@ export default async function SettingsPage() {
         assignedPromptName: prompts.name,
         canManageTextHighlights: users.canManageTextHighlights,
         canManagePageExclusions: users.canManagePageExclusions,
+        canManageJobDetectionUrlRules: users.canManageJobDetectionUrlRules,
       })
       .from(users)
       .leftJoin(
@@ -178,10 +180,11 @@ export default async function SettingsPage() {
           </div>
           <PaginatedTable
             columns={[
-              { label: "Manager", className: "w-[25%]" },
-              { label: "Prompt assignment", className: "w-[35%]" },
-              { label: "Text highlight access", className: "w-[20%]" },
-              { label: "Excluded URL access", className: "w-[20%]" },
+              { label: "Manager", className: "w-[20%]" },
+              { label: "Prompt assignment", className: "w-[28%]" },
+              { label: "Text highlight access", className: "w-[17%]" },
+              { label: "Excluded URL access", className: "w-[17%]" },
+              { label: "Job-detection URL rules", className: "w-[18%]" },
             ]}
             emptyMessage="No active managers"
             rows={managerRows.map((manager) => ({
@@ -214,6 +217,11 @@ export default async function SettingsPage() {
                 <ManagerPageExclusionAccessForm
                   canManage={manager.canManagePageExclusions}
                   key="page-exclusion-access"
+                  managerId={manager.id}
+                />,
+                <ManagerJobDetectionUrlAccessForm
+                  canManage={manager.canManageJobDetectionUrlRules}
+                  key="job-detection-url-access"
                   managerId={manager.id}
                 />,
               ],

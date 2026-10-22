@@ -111,6 +111,9 @@ export const users = pgTable(
     canManagePageExclusions: boolean("can_manage_page_exclusions")
       .default(false)
       .notNull(),
+    canManageJobDetectionUrlRules: boolean("can_manage_job_detection_url_rules")
+      .default(false)
+      .notNull(),
     authVersion: integer("auth_version").default(0).notNull(),
     blockedAt: timestamp("blocked_at", { withTimezone: true, mode: "date" }),
     blockedBy: uuid("blocked_by").references((): AnyPgColumn => users.id, {
@@ -248,6 +251,30 @@ export const extensionPageExclusions = pgTable(
       table.urlRule,
     ),
     index("extension_page_exclusions_manager_id_index").on(table.managerId),
+  ],
+);
+
+export const extensionJobDetectionUrlRules = pgTable(
+  "extension_job_detection_url_rules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    urlRule: text("url_rule").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("extension_job_detection_url_rules_manager_url_unique").on(
+      table.managerId,
+      table.urlRule,
+    ),
+    index("extension_job_detection_url_rules_manager_id_index").on(table.managerId),
   ],
 );
 

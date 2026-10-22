@@ -401,6 +401,53 @@ export async function updateManagerPageExclusionAccessAction(
   };
 }
 
+export async function updateManagerJobDetectionUrlAccessAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can assign extension permissions." };
+  }
+  const managerId = readText(formData, "managerId", 36);
+  const enabledValue = formData.get("enabled");
+  if (!isUuid(managerId) || (enabledValue !== "true" && enabledValue !== "false")) {
+    return { ...emptyState, error: "Select a valid Manager and permission value." };
+  }
+
+  try {
+    const [manager] = await db
+      .update(users)
+      .set({
+        canManageJobDetectionUrlRules: enabledValue === "true",
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(users.id, managerId),
+        eq(users.role, "manager"),
+        isNull(users.blockedAt),
+      ))
+      .returning({ id: users.id });
+    if (!manager) {
+      return { ...emptyState, error: "That active Manager was not found." };
+    }
+  } catch (error) {
+    logPromptActionFailure("updating job-detection URL access", error);
+    return {
+      ...emptyState,
+      error: "The Manager's job-detection URL permission could not be updated.",
+    };
+  }
+
+  revalidatePath("/settings");
+  return {
+    error: null,
+    success: enabledValue === "true"
+      ? "Job-detection URL management was assigned to the Manager."
+      : "Job-detection URL management was removed from the Manager.",
+  };
+}
+
 function readText(formData: FormData, name: string, maxLength: number): string {
   const value = formData.get(name);
   return typeof value === "string" && value.length <= maxLength

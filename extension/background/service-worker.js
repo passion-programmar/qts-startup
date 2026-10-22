@@ -6,6 +6,7 @@ importScripts(
   '../shared/application-flow.js',
   '../shared/job-detect.js',
   '../shared/job-page-classifier.js',
+  '../shared/job-detection-url-rules.js',
   '../shared/get-jd-save-payload.js',
   '../shared/api-prefetch.js',
   '../shared/custom-gpt.js',
@@ -72,6 +73,10 @@ const PAGE_EXCLUSIONS_UPDATED_AT_KEY = 'qtsManagerPageExclusionsUpdatedAt';
 const PAGE_EXCLUSIONS_MANAGER_ID_KEY = 'qtsManagerPageExclusionsManagerId';
 const PAGE_EXCLUSIONS_REFRESH_TTL_MS = 5 * 60_000;
 let pageExclusionsRefreshPromise = null;
+const JOB_DETECTION_URL_RULES_STORAGE_KEY = 'qtsManagerJobDetectionUrlRules';
+const JOB_DETECTION_URL_RULES_UPDATED_AT_KEY = 'qtsManagerJobDetectionUrlRulesUpdatedAt';
+const JOB_DETECTION_URL_RULES_MANAGER_ID_KEY = 'qtsManagerJobDetectionUrlRulesManagerId';
+let jobDetectionUrlRulesRefreshPromise = null;
 const MANAGER_FEATURES_STORAGE_KEY = 'qtsManagerExtensionFeatures';
 const MANAGER_FEATURES_UPDATED_AT_KEY = 'qtsManagerExtensionFeaturesUpdatedAt';
 const MANAGER_FEATURES_MANAGER_ID_KEY = 'qtsManagerExtensionFeaturesManagerId';
@@ -235,6 +240,68 @@ async function isPageExcludedForManager(url) {
   if (!result.success) return false;
   const rules = (result.exclusions || []).map((entry) => entry.url);
   return self.__qtsPageExclusions.shouldSkipPage(url, rules);
+}
+
+async function refreshManagerJobDetectionUrlRules() {
+  if (jobDetectionUrlRulesRefreshPromise) return jobDetectionUrlRulesRefreshPromise;
+  jobDetectionUrlRulesRefreshPromise = (async () => {
+    const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+    if (!manager?.id || manager.role !== 'manager') {
+      return { success: false, message: 'Sign in as a Manager to load job-detection URL rules.' };
+    }
+    const result = await workerApiRequest('GET', '/api/extension/job-detection-url-rules');
+    if (result.success !== true || result.managerId !== manager.id || !Array.isArray(result.rules)) {
+      return result.success === true
+        ? { success: false, message: 'The URL-rule response belongs to a different Manager.' }
+        : result;
+    }
+    const rules = result.rules.filter((entry) =>
+      entry && typeof entry.id === 'string' && typeof entry.url === 'string',
+    );
+    await chrome.storage.local.set({
+      [JOB_DETECTION_URL_RULES_STORAGE_KEY]: rules,
+      [JOB_DETECTION_URL_RULES_UPDATED_AT_KEY]: Date.now(),
+      [JOB_DETECTION_URL_RULES_MANAGER_ID_KEY]: manager.id,
+      qtsCanManageJobDetectionUrlRules: result.canManageJobDetectionUrlRules === true,
+    });
+    return { ...result, rules };
+  })();
+  try {
+    return await jobDetectionUrlRulesRefreshPromise;
+  } finally {
+    jobDetectionUrlRulesRefreshPromise = null;
+  }
+}
+
+async function getCachedManagerJobDetectionUrlRules() {
+  const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+  if (!manager?.id || manager.role !== 'manager') return [];
+  const stored = await chrome.storage.local.get([
+    JOB_DETECTION_URL_RULES_STORAGE_KEY,
+    JOB_DETECTION_URL_RULES_MANAGER_ID_KEY,
+  ]);
+  if (stored[JOB_DETECTION_URL_RULES_MANAGER_ID_KEY] !== manager.id) return [];
+  return Array.isArray(stored[JOB_DETECTION_URL_RULES_STORAGE_KEY])
+    ? stored[JOB_DETECTION_URL_RULES_STORAGE_KEY]
+    : [];
+}
+
+async function saveManagerJobDetectionUrlRulesResponse(result) {
+  if (result.success !== true || !Array.isArray(result.rules)) return result;
+  const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+  if (!manager?.id || result.managerId !== manager.id) {
+    return { success: false, message: 'The URL-rule response belongs to a different Manager.' };
+  }
+  const rules = result.rules.filter((entry) =>
+    entry && typeof entry.id === 'string' && typeof entry.url === 'string',
+  );
+  await chrome.storage.local.set({
+    [JOB_DETECTION_URL_RULES_STORAGE_KEY]: rules,
+    [JOB_DETECTION_URL_RULES_UPDATED_AT_KEY]: Date.now(),
+    [JOB_DETECTION_URL_RULES_MANAGER_ID_KEY]: manager.id,
+    qtsCanManageJobDetectionUrlRules: result.canManageJobDetectionUrlRules === true,
+  });
+  return { ...result, rules };
 }
 
 async function notifyPageUrlAccess(tabId, url) {
@@ -838,11 +905,16 @@ async function processGetJdPage(tabId, url, documentId = '') {
     const tab = await getTab(tabId);
     if (!tab?.id || tab.url !== url) return;
 
+    const managerUrlRules = await getCachedManagerJobDetectionUrlRules();
+    const configuredDetailUrl = managerUrlRules.some((rule) =>
+      self.__qtsJobDetectionUrlRules.jobDetectionUrlRuleMatches(url, rule.url),
+    );
     let pageEvidence = await collectGetJdPageEvidence(tabId);
     if (!(await isGetJdActive())) return;
     let pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
       ...pageEvidence,
       urlType: classifyJobPageUrl(url),
+      configuredDetailUrl,
     });
     if (!pageClassification.isJobPage && !pageEvidence.documentReady) {
       await waitForGetJdPageContent(tabId);
@@ -852,6 +924,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
       pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
         ...pageEvidence,
         urlType: classifyJobPageUrl(url),
+        configuredDetailUrl,
       });
     }
     if (!pageClassification.isJobPage) {
@@ -4209,7 +4282,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return false;
     }
     getManagerPageExclusions()
-      .then((result) => {
+      .then(async (result) => {
         if (!result.success) {
           sendResponse({
             ok: false,
@@ -4217,11 +4290,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
           return;
         }
+        const features = await getManagerExtensionFeatures();
         const rules = (result.exclusions || []).map((entry) => entry.url);
         sendResponse({
           ok: true,
           excluded: self.__qtsPageExclusions.shouldSkipPage(sender.tab.url, rules),
           canManagePageExclusions: result.canManagePageExclusions === true,
+          canManageJobDetectionUrlRules: features.success === true
+            && features.features?.canManageJobDetectionUrlRules === true,
         });
       })
       .catch((error) => sendResponse({
@@ -4291,12 +4367,132 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }));
     return true;
   }
+  if (msg.type === 'UPDATE_MANAGER_PAGE_EXCLUSION') {
+    (async () => {
+      const exclusionId = String(msg.exclusionId || '');
+      const url = self.__qtsPageExclusions.normalizePageExclusion(msg.url);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(exclusionId)) {
+        sendResponse({ ok: false, error: 'Invalid excluded URL.' });
+        return;
+      }
+      if (!url) {
+        sendResponse({ ok: false, error: 'Enter a valid website domain or http(s) URL path.' });
+        return;
+      }
+      const result = await workerApiRequest(
+        'PUT',
+        `/api/extension/page-exclusions/${exclusionId}`,
+        { url },
+      );
+      const saved = await savePageExclusionsResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        exclusions: saved.exclusions || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not update this excluded URL.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not update this excluded URL.',
+    }));
+    return true;
+  }
+  if (msg.type === 'GET_MANAGER_JOB_DETECTION_URL_RULES') {
+    refreshManagerJobDetectionUrlRules()
+      .then((result) => sendResponse({
+        ok: result.success === true,
+        rules: result.rules || [],
+        canManageJobDetectionUrlRules: result.canManageJobDetectionUrlRules === true,
+        error: result.success === true
+          ? undefined
+          : result.message || 'Could not load job-detection URL rules.',
+      }))
+      .catch((error) => sendResponse({
+        ok: false,
+        rules: [],
+        canManageJobDetectionUrlRules: false,
+        error: error instanceof Error ? error.message : 'Could not load job-detection URL rules.',
+      }));
+    return true;
+  }
+  if (msg.type === 'ADD_MANAGER_JOB_DETECTION_URL_RULE') {
+    (async () => {
+      const url = self.__qtsJobDetectionUrlRules.normalizeJobDetectionUrlRule(msg.url);
+      if (!url) {
+        sendResponse({ ok: false, error: 'Enter a valid website domain or http(s) URL path without query parameters.' });
+        return;
+      }
+      const result = await workerApiRequest('POST', '/api/extension/job-detection-url-rules', { url });
+      const saved = await saveManagerJobDetectionUrlRulesResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        rules: saved.rules || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not save this job-detection URL rule.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not save this job-detection URL rule.',
+    }));
+    return true;
+  }
+  if (msg.type === 'UPDATE_MANAGER_JOB_DETECTION_URL_RULE') {
+    (async () => {
+      const ruleId = String(msg.ruleId || '');
+      const url = self.__qtsJobDetectionUrlRules.normalizeJobDetectionUrlRule(msg.url);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ruleId)) {
+        sendResponse({ ok: false, error: 'Invalid job-detection URL rule.' });
+        return;
+      }
+      if (!url) {
+        sendResponse({ ok: false, error: 'Enter a valid website domain or http(s) URL path without query parameters.' });
+        return;
+      }
+      const result = await workerApiRequest(
+        'PUT',
+        `/api/extension/job-detection-url-rules/${ruleId}`,
+        { url },
+      );
+      const saved = await saveManagerJobDetectionUrlRulesResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        rules: saved.rules || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not update this job-detection URL rule.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not update this job-detection URL rule.',
+    }));
+    return true;
+  }
+  if (msg.type === 'DELETE_MANAGER_JOB_DETECTION_URL_RULE') {
+    (async () => {
+      const ruleId = String(msg.ruleId || '');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ruleId)) {
+        sendResponse({ ok: false, error: 'Invalid job-detection URL rule.' });
+        return;
+      }
+      const result = await workerApiRequest(
+        'DELETE',
+        `/api/extension/job-detection-url-rules/${ruleId}`,
+      );
+      const saved = await saveManagerJobDetectionUrlRulesResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        rules: saved.rules || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not delete this job-detection URL rule.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not delete this job-detection URL rule.',
+    }));
+    return true;
+  }
   if (msg.type === 'GET_MANAGER_EXTENSION_FEATURES') {
     getManagerExtensionFeatures(msg.refresh === true)
       .then((result) => sendResponse({
         ok: result.success === true,
         canManageTextHighlights: result.features?.canManageTextHighlights === true,
         canManagePageExclusions: result.features?.canManagePageExclusions === true,
+        canManageJobDetectionUrlRules: result.features?.canManageJobDetectionUrlRules === true,
         tabId: sender.tab?.id ?? null,
         error: result.success === true
           ? undefined
@@ -4306,6 +4502,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ok: false,
         canManageTextHighlights: false,
         canManagePageExclusions: false,
+        canManageJobDetectionUrlRules: false,
         error: error instanceof Error ? error.message : 'Could not verify text highlight permissions.',
       }));
     return true;
