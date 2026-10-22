@@ -11,6 +11,7 @@ import {
 import { requireUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
+import { TokenComparisonForm } from "./token-comparison-form";
 
 export const instant = false;
 
@@ -96,7 +97,7 @@ export default async function GeminiUsagePage() {
               { label: "API key", className: "w-[17%]" },
               { label: "Requests / 60 sec", className: "w-[17%]" },
               { label: "Requests today", className: "w-[16%]" },
-              { label: "Input tokens / 60 sec", className: "w-[20%]" },
+              { label: "Estimated input / 60 sec", className: "w-[20%]" },
               { label: "Status", className: "w-[14%]" },
               { label: "Last call", className: "w-[16%]" },
             ]}
@@ -160,6 +161,11 @@ export default async function GeminiUsagePage() {
             })}
           />
         )}
+        {process.env.VERCEL === "1" &&
+        process.env.VERCEL_ENV === "preview" &&
+        process.env.ENABLE_GEMINI_TOKEN_COMPARISON === "true" ? (
+          <TokenComparisonForm />
+        ) : null}
       </div>
     </main>
     </WorkspaceShell>

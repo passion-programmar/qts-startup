@@ -64,15 +64,16 @@ one key, `GEMINI_API_KEY` is still supported; the older
 `JD_READ_PROMPT_GEMINI_API_KEY_1` variable is also accepted for compatibility.
 QTS enforces these per-key caps: 9 Gemini API requests in any rolling
 60-second window, 200 requests per day (resetting at midnight Pacific), and
-25,000 input tokens per rolling 60 seconds. A Get JD evaluation first calls
-Gemini's `countTokens` endpoint,
-then sends at most one `generateContent` request using the same key. Both API
-calls count toward the request limits; token usage from the generation prompt
-counts toward the token limit. This allows up to four successful evaluations
-per key in a rolling minute and 100 per key per day when each uses both calls;
-preflight calls that cannot proceed still count as requests. If no key has
-capacity, QTS does not generate the evaluation. QTS also does not retry
-another key after a Gemini API error.
+25,000 estimated input tokens per rolling 60 seconds. Before a Get JD
+evaluation, the server estimates input tokens locally using Google's published
+rules of roughly four characters or 0.75 English words per token. It uses the
+larger result, counts non-ASCII code points conservatively, includes the
+generation configuration and response schema, and adds a ten-percent safety
+margin plus a small fixed request allowance. This estimate protects local
+capacity but is not an exact tokenizer result. QTS then sends at most one
+`generateContent` request. The local estimate and that one request are recorded
+only when generation is reserved. If no key has capacity, QTS does not generate
+the evaluation. QTS also does not retry another key after a Gemini API error.
 
 Gemini keys are reserved atomically in Neon while a Get JD evaluation is
 running. A concurrent request skips a busy key and tries another free key.
@@ -91,6 +92,13 @@ in the server environment, never in client-side code or source control.
 Restart the QTS server after changing `.env.local`. The server-side Gemini job
 evaluation endpoint requires an active default `job_description_evaluation`
 prompt, although the current extension keeps that endpoint disabled.
+
+For temporary token-estimator calibration, set
+`ENABLE_GEMINI_TOKEN_COMPARISON=true` only in the Vercel Preview environment.
+The Super Admin Gemini usage page then shows a comparison form that runs the
+local estimate and Google's `countTokens` request on Vercel for the same prompt.
+The route is unavailable on localhost and Vercel Production. Remove the Preview
+environment variable after calibration to disable the form and endpoint.
 
 ## Browser extension sign-in
 

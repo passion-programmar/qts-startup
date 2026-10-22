@@ -17,12 +17,13 @@ import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import {
   acquireGeminiKey,
-  countGeminiInputTokens,
   geminiModel,
   getGeminiApiKeys,
   releaseGeminiKey,
   reserveGeminiGeneration,
 } from "@/lib/gemini-usage";
+import { estimateGeminiInputTokens } from "@/server/gemini/gemini-request";
+import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
 import { findGetJdDuplicates } from "@/server/jobs/get-jd-jobs";
 
 const maxPageUrlLength = 2048;
@@ -31,52 +32,7 @@ const maxJobTextLength = 30000;
 const maxManagerAccounts = 100;
 const maxGeminiResponseBytes = 1_000_000;
 
-const responseSchema = {
-  type: "OBJECT",
-  properties: {
-    isJobPage: { type: "BOOLEAN" },
-    isRemote: { type: "BOOLEAN" },
-    job: {
-      type: "OBJECT",
-      properties: {
-        title: { type: "STRING" },
-        company: { type: "STRING" },
-        location: { type: "STRING" },
-        country: { type: "STRING" },
-        employmentType: { type: "STRING" },
-        workplaceType: { type: "STRING" },
-        salary: { type: "STRING" },
-        jobUrl: { type: "STRING" },
-      },
-      required: [
-        "title",
-        "company",
-        "location",
-        "country",
-        "employmentType",
-        "workplaceType",
-        "salary",
-        "jobUrl",
-      ],
-    },
-    matchingProfileIds: {
-      type: "ARRAY",
-      items: { type: "STRING" },
-    },
-  },
-  required: [
-    "isJobPage",
-    "isRemote",
-    "job",
-    "matchingProfileIds",
-  ],
-} as const;
-
-const generationConfig = {
-  responseMimeType: "application/json",
-  responseSchema,
-  temperature: 0.2,
-} as const;
+const generationConfig = geminiJobEvaluationGenerationConfig;
 
 type CandidateProfileForEvaluation = {
   id: string;
@@ -298,6 +254,7 @@ async function selectAvailableGeminiApiKey(
   prompt: string,
   config: typeof generationConfig,
 ): Promise<{ apiKey: string; leaseId: string } | null> {
+  const inputTokens = estimateGeminiInputTokens(prompt, config);
   const shuffledKeys = [...apiKeys];
   for (let index = shuffledKeys.length - 1; index > 0; index -= 1) {
     const swapIndex = randomInt(index + 1);
@@ -311,7 +268,6 @@ async function selectAvailableGeminiApiKey(
     const leaseId = await acquireGeminiKey(apiKey);
     if (!leaseId) continue;
     try {
-      const inputTokens = await countGeminiInputTokens(apiKey, prompt, config);
       if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens)) {
         return { apiKey, leaseId };
       }
@@ -633,7 +589,7 @@ function getGetJdFailureMessage(
   code: string,
   providerMessage?: string,
 ): string {
-  const httpStatus = /^gemini_(?:count_tokens_)?http_(\d{3})$/.exec(code)?.[1];
+  const httpStatus = /^gemini_http_(\d{3})$/.exec(code)?.[1];
   if (httpStatus === "400") {
     if (
       providerMessage?.toLowerCase().includes("user location is not supported")
@@ -662,9 +618,6 @@ function getGetJdFailureMessage(
       ? ` Google reported: ${providerMessage}`
       : "";
     return `Gemini rate limit or quota was reached (HTTP 429). Check the API quota and billing configuration.${explanation} Diagnostic: ${code}.`;
-  }
-  if (code === "gemini_count_tokens_invalid_response") {
-    return "QTS could not verify this request's Gemini token count, so it did not send the job-evaluation request. Try again later.";
   }
   if (httpStatus && Number(httpStatus) >= 500) {
     const explanation = providerMessage

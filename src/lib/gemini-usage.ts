@@ -3,10 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import {
-  buildGeminiCountTokensRequest,
-  geminiModel,
-} from "@/server/gemini/gemini-request";
+import { geminiModel } from "@/server/gemini/gemini-request";
 
 export { geminiModel };
 
@@ -72,89 +69,4 @@ export async function releaseGeminiKey(
   await db.execute(sql`
     select release_gemini_key(${keyHash}, ${leaseId}::uuid)
   `);
-}
-
-export async function countGeminiInputTokens(
-  apiKey: string,
-  prompt: string,
-  generationConfig: Record<string, unknown>,
-): Promise<number> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:countTokens`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify(
-        buildGeminiCountTokensRequest(prompt, generationConfig),
-      ),
-      signal: AbortSignal.timeout(15_000),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const providerMessage = await readGeminiErrorMessage(response, apiKey);
-    throw Object.assign(
-      new Error(`Gemini CountTokens returned HTTP ${response.status}.`),
-      {
-        code: `gemini_count_tokens_http_${response.status}`,
-        providerMessage,
-      },
-    );
-  }
-
-  let data: unknown;
-  try {
-    data = await response.json();
-  } catch {
-    throw Object.assign(
-      new Error("Gemini CountTokens returned an invalid response."),
-      { code: "gemini_count_tokens_invalid_response" },
-    );
-  }
-  if (
-    typeof data !== "object" ||
-    data === null ||
-    !("totalTokens" in data) ||
-    typeof data.totalTokens !== "number" ||
-    !Number.isSafeInteger(data.totalTokens) ||
-    data.totalTokens < 0
-  ) {
-    throw Object.assign(
-      new Error("Gemini CountTokens response did not contain a valid token count."),
-      { code: "gemini_count_tokens_invalid_response" },
-    );
-  }
-  return data.totalTokens;
-}
-
-async function readGeminiErrorMessage(
-  response: Response,
-  apiKey: string,
-): Promise<string | undefined> {
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return undefined;
-  }
-  if (
-    typeof body !== "object" ||
-    body === null ||
-    !("error" in body) ||
-    typeof body.error !== "object" ||
-    body.error === null ||
-    !("message" in body.error) ||
-    typeof body.error.message !== "string"
-  ) {
-    return undefined;
-  }
-  return body.error.message
-    .replaceAll(apiKey, "[redacted]")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 400);
 }
