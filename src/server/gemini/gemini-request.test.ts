@@ -29,8 +29,9 @@ test("uses the larger word-based estimate for short English words", () => {
   const prompt = Array.from({ length: 100 }, () => "a").join(" ");
   const estimate = estimateGeminiInputTokens(prompt, {});
 
-  // 100 / 0.75, plus a 10% safety margin and 16 request-overhead tokens.
-  assert.equal(estimate, 165);
+  // 101 whitespace groups including serialized config, then 15% headroom and
+  // 16 request-overhead tokens.
+  assert.equal(estimate, 172);
 });
 
 test("counts non-ASCII code points conservatively", () => {
