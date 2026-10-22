@@ -52,6 +52,9 @@ export async function POST(request: Request): Promise<NextResponse> {
           jobTitle: jobs.jobTitle,
           company: jobs.company,
           location: jobs.location,
+          employmentType: jobs.employmentType,
+          workplaceType: jobs.workplaceType,
+          salary: jobs.salary,
           description: jobs.description,
           candidateId: profiles.userId,
           firstName: profiles.firstName,
@@ -65,6 +68,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           province: profiles.province,
           addressLine1: profiles.addressLine1,
           postalCode: profiles.postalCode,
+          jdMatching: profiles.jdMatching,
         })
         .from(jobs)
         .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -128,6 +132,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           savedJob.country,
           savedJob.postalCode,
         ].filter(Boolean).join(", "),
+        jdMatching: savedJob.jdMatching,
         education,
         experience,
       };
@@ -137,6 +142,9 @@ export async function POST(request: Request): Promise<NextResponse> {
         jobTitle: savedJob.jobTitle,
         company: savedJob.company,
         location: savedJob.location || job.location,
+        employmentType: job.employmentType || savedJob.employmentType || "",
+        workplaceType: job.workplaceType || savedJob.workplaceType || "",
+        salary: job.salary || savedJob.salary || "",
         jobDescription: job.jobDescription || savedJob.description || "",
       };
       if (!normalizedJob.jobDescription) {

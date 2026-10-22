@@ -20,6 +20,9 @@ export default async function JobsPage() {
       title: jobs.jobTitle,
       company: jobs.company,
       location: jobs.location,
+      employmentType: jobs.employmentType,
+      workplaceType: jobs.workplaceType,
+      salary: jobs.salary,
       url: jobs.jobUrl,
       date: jobs.date,
       status: jobs.status,
@@ -58,6 +61,8 @@ export default async function JobsPage() {
             { label: "Category", className: "min-w-36" },
             { label: "Job", className: "min-w-56" },
             { label: "Location", className: "min-w-40" },
+            { label: "Work type", className: "min-w-36" },
+            { label: "Salary", className: "min-w-36" },
             { label: "Date", className: "min-w-28" },
             { label: "Status", className: "min-w-24" },
             { label: "Resume path (Downloads)", className: "min-w-52" },
@@ -77,6 +82,8 @@ export default async function JobsPage() {
               row.category ?? "Uncategorized",
               <div key="job"><span className="block font-medium">{row.title}</span><span className="mt-1 block text-xs text-slate-500">{row.company}</span></div>,
               row.location ?? "—",
+              [row.employmentType, row.workplaceType].filter(Boolean).join(" · ") || "—",
+              row.salary ?? "—",
               row.date,
               <span className="capitalize" key="status">{row.status.replaceAll("_", " ")}</span>,
               row.resumeLocalPath
@@ -87,7 +94,7 @@ export default async function JobsPage() {
               <a aria-label={`Open ${row.title}`} className="inline-flex size-8 items-center justify-center rounded border border-blue-200 text-blue-600 hover:bg-blue-50" href={row.url} key="link" rel="noreferrer" target="_blank"><ExternalLink className="size-4" /></a>,
               row.createdAt.toLocaleString(),
               row.updatedAt.toLocaleString(),
-              <JobActions candidates={candidateOptions} key="actions" record={{ id: row.id, candidateId: row.candidateId, title: row.title, company: row.company, location: row.location, url: row.url, date: row.date, status: row.status, failureReason: row.failureReason, generationStatus: row.generationStatus, generationError: row.generationError }} />,
+              <JobActions candidates={candidateOptions} key="actions" record={{ id: row.id, candidateId: row.candidateId, title: row.title, company: row.company, location: row.location, employmentType: row.employmentType, workplaceType: row.workplaceType, salary: row.salary, url: row.url, date: row.date, status: row.status, failureReason: row.failureReason, generationStatus: row.generationStatus, generationError: row.generationError }} />,
             ],
           }))}
         />

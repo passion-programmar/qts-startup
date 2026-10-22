@@ -10,6 +10,9 @@ test("extension job saves preserve the extracted description", () => {
       company: "Example",
       description: "Build reliable services.",
       location: "Remote",
+      employmentType: "Full-time",
+      workplaceType: "Hybrid",
+      salary: "$120,000-$150,000 per year",
     },
   });
 
@@ -19,7 +22,26 @@ test("extension job saves preserve the extracted description", () => {
     company: "Example",
     description: "Build reliable services.",
     location: "Remote",
+    employmentType: "Full-time",
+    workplaceType: "Hybrid",
+    salary: "$120,000-$150,000 per year",
   });
+});
+
+test("extension job saves default optional job details to null", () => {
+  const job = readExtensionSavedJob({
+    job: {
+      jobUrl: "https://example.com/jobs/123",
+      title: "Senior Engineer",
+      company: "Example",
+      description: "Build reliable services.",
+      location: "",
+    },
+  });
+
+  assert.equal(job?.employmentType, null);
+  assert.equal(job?.workplaceType, null);
+  assert.equal(job?.salary, null);
 });
 
 test("extension job saves reject a missing or oversized description", () => {

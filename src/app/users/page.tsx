@@ -57,6 +57,7 @@ type UserRow = {
   province: string | null;
   address_line_1: string | null;
   postal_code: string | null;
+  jd_matching: string | null;
   category_id: string | null;
   category_name: string | null;
 };
@@ -111,6 +112,7 @@ export default async function UsersPage() {
       profiles.province,
       profiles.address_line_1,
       profiles.postal_code,
+      profiles.jd_matching,
       profiles.category_id,
       categories.name as category_name
     from visible_users
@@ -329,6 +331,7 @@ export default async function UsersPage() {
                           province: candidate.province,
                           addressLine1: candidate.address_line_1,
                           postalCode: candidate.postal_code,
+                          jdMatching: candidate.jd_matching,
                           categoryId: candidate.category_id,
                           education: (educationByCandidate.get(candidate.id) ?? []).map(
                             (entry) => ({

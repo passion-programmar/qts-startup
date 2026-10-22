@@ -1,4 +1,22 @@
 (function initQtsGenerationChatGpt(global) {
+  function buildTaskMarker(generationId) {
+    const id = String(generationId || '').trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return '';
+    return `QTS_GENERATION_ID: ${id}`;
+  }
+
+  function buildTaskPrompt(prompt, generationId) {
+    const source = String(prompt || '').trim();
+    const marker = buildTaskMarker(generationId);
+    if (!source || !marker) return '';
+    return [
+      marker,
+      'The identifier above is transport metadata. Do not include it in the output JSON.',
+      '',
+      source,
+    ].join('\n');
+  }
+
   function extractJsonObject(text) {
     const source = String(text || '').trim();
     const candidates = [];
@@ -31,5 +49,9 @@
     }
   }
 
-  global.__qtsGenerationChatGpt = { extractJsonObject };
+  global.__qtsGenerationChatGpt = {
+    buildTaskMarker,
+    buildTaskPrompt,
+    extractJsonObject,
+  };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

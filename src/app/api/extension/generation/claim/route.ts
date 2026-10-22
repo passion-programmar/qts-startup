@@ -39,6 +39,9 @@ export async function POST(request: Request): Promise<NextResponse> {
           jobTitle: jobs.jobTitle,
           company: jobs.company,
           location: jobs.location,
+          employmentType: jobs.employmentType,
+          workplaceType: jobs.workplaceType,
+          salary: jobs.salary,
           description: jobs.description,
         })
         .from(jobs)
@@ -81,6 +84,9 @@ export async function POST(request: Request): Promise<NextResponse> {
           jobTitle: candidate.jobTitle,
           company: candidate.company,
           location: candidate.location ?? "",
+          employmentType: candidate.employmentType ?? "",
+          workplaceType: candidate.workplaceType ?? "",
+          salary: candidate.salary ?? "",
           description: candidate.description ?? "",
         },
       });

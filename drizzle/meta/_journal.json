@@ -169,6 +169,13 @@
       "when": 1792628966610,
       "tag": "0023_dashing_mach_iv",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792631913091,
+      "tag": "0024_fixed_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

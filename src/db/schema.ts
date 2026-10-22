@@ -142,6 +142,7 @@ export const profiles = pgTable(
     province: text("province"),
     addressLine1: text("address_line_1"),
     postalCode: text("postal_code"),
+    jdMatching: text("jd_matching"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -294,6 +295,9 @@ export const jobs = pgTable(
     company: text("company").notNull(),
     description: text("description"),
     location: text("location"),
+    employmentType: text("employment_type"),
+    workplaceType: text("workplace_type"),
+    salary: text("salary"),
     candidateId: uuid("candidate_id")
       .notNull()
       .references(() => profiles.userId, { onDelete: "restrict" }),
@@ -364,6 +368,8 @@ export const bids = pgTable(
     company: text("company").notNull(),
     location: text("location"),
     employmentType: text("employment_type"),
+    workplaceType: text("workplace_type"),
+    salary: text("salary"),
     resumeLocalPath: text("resume_local_path").notNull(),
     googleDrivePath: text("googledriver_path"),
     appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" })

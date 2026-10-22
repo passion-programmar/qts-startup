@@ -23,6 +23,9 @@ export async function updateJobAction(
   const jobTitle = text(formData, "jobTitle", 500);
   const company = text(formData, "company", 500);
   const location = text(formData, "location", 500);
+  const employmentType = text(formData, "employmentType", 200);
+  const workplaceType = text(formData, "workplaceType", 200);
+  const salary = text(formData, "salary", 500);
   const date = text(formData, "date", 10);
   const status = text(formData, "status", 20);
   const failureReason = text(formData, "failureReason", 5000);
@@ -39,7 +42,11 @@ export async function updateJobAction(
 
   const updated = await db.update(jobs).set({
     candidateId, jobUrl: normalizeJobUrl(jobUrl), jobTitle, company,
-    location: location || null, date, status: status as "todo" | "pending" | "applied" | "failed",
+    location: location || null,
+    employmentType: employmentType || null,
+    workplaceType: workplaceType || null,
+    salary: salary || null,
+    date, status: status as "todo" | "pending" | "applied" | "failed",
     failureReason: failureReason || null, updatedAt: new Date(),
   }).where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).returning({ id: jobs.id });
   if (!updated.length) return { error: "Job was not found.", success: null };

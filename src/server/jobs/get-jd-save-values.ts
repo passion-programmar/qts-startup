@@ -6,6 +6,9 @@ export type ExtensionSavedJob = {
   company: string;
   description: string;
   location: string | null;
+  employmentType: string | null;
+  workplaceType: string | null;
+  salary: string | null;
 };
 
 export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null {
@@ -17,6 +20,9 @@ export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null 
     typeof job.company !== "string" ||
     typeof job.description !== "string" ||
     typeof job.location !== "string" ||
+    !optionalTextWithinLimit(job.employmentType, 200) ||
+    !optionalTextWithinLimit(job.workplaceType, 200) ||
+    !optionalTextWithinLimit(job.salary, 500) ||
     job.jobUrl.length > 2048 ||
     job.title.trim().length === 0 ||
     job.title.length > 500 ||
@@ -35,7 +41,18 @@ export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null 
     company: job.company.trim(),
     description: job.description.trim(),
     location: job.location.trim() || null,
+    employmentType: optionalText(job.employmentType),
+    workplaceType: optionalText(job.workplaceType),
+    salary: optionalText(job.salary),
   };
+}
+
+function optionalTextWithinLimit(value: unknown, max: number): boolean {
+  return value === undefined || (typeof value === "string" && value.length <= max);
+}
+
+function optionalText(value: unknown): string | null {
+  return typeof value === "string" ? value.trim() || null : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

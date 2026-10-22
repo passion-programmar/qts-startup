@@ -426,6 +426,7 @@ export type CandidateProfileValues = {
   province: string | null;
   addressLine1: string | null;
   postalCode: string | null;
+  jdMatching: string | null;
   categoryId: string | null;
   education: {
     institution: string;
@@ -542,6 +543,14 @@ export function EditCandidateProfileForm({
             label="Professional headline"
             maxLength={256}
             name="headline"
+          />
+          <TextAreaField
+            className="sm:col-span-2 lg:col-span-3"
+            defaultValue={candidate.jdMatching ?? ""}
+            id={fieldId("jdMatching")}
+            label="JD matching notes (optional)"
+            maxLength={5000}
+            name="jdMatching"
           />
           <TextField
             autoComplete="url"

@@ -18,6 +18,8 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   const company = text(formData, "company", 500);
   const location = text(formData, "location", 500);
   const employmentType = text(formData, "employmentType", 200);
+  const workplaceType = text(formData, "workplaceType", 200);
+  const salary = text(formData, "salary", 500);
   const resumeLocalPath = text(formData, "resumeLocalPath", 2048);
   const googleDrivePath = text(formData, "googleDrivePath", 2048);
   const appliedAtText = text(formData, "appliedAt", 32);
@@ -31,7 +33,10 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   if (!candidate) return { error: "Select one of your candidate accounts.", success: null };
   const updated = await db.update(bids).set({
     candidateId, jobUrl: normalizeJobUrl(jobUrl), jobTitle, company,
-    location: location || null, employmentType: employmentType || null,
+    location: location || null,
+    employmentType: employmentType || null,
+    workplaceType: workplaceType || null,
+    salary: salary || null,
     resumeLocalPath, googleDrivePath: googleDrivePath || null, appliedAt, updatedAt: new Date(),
   }).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).returning({ id: bids.id });
   if (!updated.length) return { error: "Bid was not found.", success: null };

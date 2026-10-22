@@ -63,22 +63,24 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
   class FakeButton extends FakeHTMLElement {
     click() {
       sendClickCount += 1;
-      sentMessages.push(editor.textContent);
+      const submittedText = editor.textContent;
+      sentMessages.push(submittedText);
       if (!acceptSend || ignoreSendClick) return;
       setTimeout(() => {
         editor.textContent = '';
         editor.innerText = '';
-        if (addUserMessage) userMessages.push({});
+        if (addUserMessage) userMessages.push({ innerText: submittedText });
       }, 20);
     }
   }
   class FakeForm extends FakeHTMLElement {
     requestSubmit() {
       if (!acceptFormSubmit) return;
+      const submittedText = editor.textContent;
       setTimeout(() => {
         editor.textContent = '';
         editor.innerText = '';
-        if (addUserMessage) userMessages.push({});
+        if (addUserMessage) userMessages.push({ innerText: submittedText });
       }, 20);
     }
 
@@ -166,7 +168,7 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
 
   try {
     const composer = require('./chatgpt-composer-handoff');
-    assert.equal(composer.version, 6);
+    assert.equal(composer.version, 7);
     assert.equal(composer.findUnifiedComposerEditor(), editor);
     assert.deepEqual(composer.findAssistantMessages(), assistantMessages);
     let sendingStatusShown = false;
@@ -179,7 +181,7 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
 
     assert.equal(sendingStatusShown, true);
     assert.equal(result.sent, true);
-    assert.equal(result.method, 'user_message_added');
+    assert.equal(result.method, 'matching_user_message_added');
     assert.equal(sendClickCount, 1);
     assert.equal(userMessages.length, 1);
 
@@ -187,7 +189,7 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
     editor.innerText = editor.textContent;
     const replacedDraft = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text');
     assert.equal(replacedDraft.sent, true);
-    assert.equal(replacedDraft.method, 'user_message_added');
+    assert.equal(replacedDraft.method, 'matching_user_message_added');
     assert.equal(sendClickCount, 2);
     assert.equal(sentMessages[1], 'Scanner prompt text');
     assert.equal(userMessages.length, 2);
@@ -211,8 +213,9 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
     acceptSend = true;
     addUserMessage = false;
     const composerCleared = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text');
-    assert.equal(composerCleared.sent, true);
-    assert.equal(composerCleared.method, 'composer_cleared');
+    assert.equal(composerCleared.sent, false);
+    assert.equal(composerCleared.needsManualSend, true);
+    assert.equal(composerCleared.method, 'send_uncertain');
     assert.equal(sendClickCount, 4);
     assert.equal(keyboardEventCount, 0);
 
@@ -224,7 +227,7 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
     addUserMessage = true;
     const formFallback = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text');
     assert.equal(formFallback.sent, true);
-    assert.equal(formFallback.method, 'form_user_message_added');
+    assert.equal(formFallback.method, 'form_matching_user_message_added');
     assert.equal(sendClickCount, 5);
     assert.equal(userMessages.length, 3);
   } finally {

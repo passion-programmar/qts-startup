@@ -1,7 +1,7 @@
 // Shared ChatGPT unified-composer handoff (ProseMirror #prompt-textarea).
 // Loaded in content scripts and service worker (importScripts).
 (function initQtsChatGptComposerHandoff(global) {
-  const HANDOFF_VERSION = 6;
+  const HANDOFF_VERSION = 7;
   if (global.__qtsChatGptComposerHandoff?.version === HANDOFF_VERSION) return;
 
   function cleanText(value) {
@@ -387,7 +387,7 @@
     );
   }
 
-  function countUserMessages() {
+  function findUserMessages() {
     const selectors = [
       '[data-message-author-role="user"]',
       '[data-markdown-text-tone="user-message"]',
@@ -399,29 +399,59 @@
     for (const selector of selectors) {
       document.querySelectorAll(selector).forEach((message) => messages.add(message));
     }
-    return messages.size;
+    return [...messages];
   }
 
-  async function waitForSubmission(editor, initialUserMessageCount, timeoutMs) {
+  function countUserMessages() {
+    return findUserMessages().length;
+  }
+
+  function messageContainsExpectedText(message, expectedText) {
+    const actual = cleanText(message?.innerText || message?.textContent || '');
+    const expected = cleanText(expectedText);
+    return Boolean(actual && expected && actual.includes(expected));
+  }
+
+  function findAssistantResponseForTask(generationId) {
+    const marker = `QTS_GENERATION_ID: ${String(generationId || '').trim()}`;
+    if (!/^QTS_GENERATION_ID: [0-9a-f-]{36}$/i.test(marker)) return null;
+    const userMessage = findUserMessages().find((message) =>
+      messageContainsExpectedText(message, marker),
+    );
+    if (!userMessage) return null;
+    return findAssistantMessages()
+      .filter((message) => Boolean(
+        userMessage.compareDocumentPosition(message)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+      ))
+      .sort((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      )[0] || null;
+  }
+
+  async function waitForSubmission(editor, initialUserMessageCount, timeoutMs, expectedText) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-      if (isGenerating()) return { sent: true, method: 'chatgpt_generating' };
-      if (countUserMessages() > initialUserMessageCount) {
-        return { sent: true, method: 'user_message_added' };
-      }
-      if (editor?.isConnected && !readEditorText(editor)) {
-        return { sent: true, method: 'composer_cleared' };
+      const userMessages = findUserMessages();
+      const newMessages = userMessages.slice(initialUserMessageCount);
+      if (newMessages.some((message) => messageContainsExpectedText(message, expectedText))) {
+        return { sent: true, method: 'matching_user_message_added' };
       }
       await new Promise((resolve) => window.setTimeout(resolve, 100));
     }
     return null;
   }
 
-  async function trySubmitAsync(editor, initialUserMessageCount) {
+  async function trySubmitAsync(editor, initialUserMessageCount, expectedText) {
     const sendBtn = findSendButton(editor);
     if (sendBtn) {
       sendBtn.click();
-      const clickSubmission = await waitForSubmission(editor, initialUserMessageCount, 1500);
+      const clickSubmission = await waitForSubmission(
+        editor,
+        initialUserMessageCount,
+        2500,
+        expectedText,
+      );
       if (clickSubmission) return clickSubmission;
 
       const form = editor.closest('form[data-chatgpt-composer], form[data-type="unified-composer"]')
@@ -444,7 +474,12 @@
             console.warn('[QTS Scanner] ChatGPT form submission without a button failed:', fallbackError);
           }
         }
-        const formSubmission = await waitForSubmission(editor, initialUserMessageCount, 3000);
+        const formSubmission = await waitForSubmission(
+          editor,
+          initialUserMessageCount,
+          3000,
+          expectedText,
+        );
         if (formSubmission) {
           return { ...formSubmission, method: `form_${formSubmission.method}` };
         }
@@ -472,7 +507,7 @@
         composed: true,
       }));
     }
-    return await waitForSubmission(editor, initialUserMessageCount, 3000)
+    return await waitForSubmission(editor, initialUserMessageCount, 3000, expectedText)
       || {
         sent: false,
         method: 'manual_send_required',
@@ -541,7 +576,7 @@
         console.warn('[QTS Scanner] Could not show the sending progress update:', error);
       }
     }
-    const submit = await trySubmitAsync(editor, initialUserMessageCount);
+    const submit = await trySubmitAsync(editor, initialUserMessageCount, message);
     if (!submit.sent) {
       return {
         ok: true,
@@ -653,6 +688,8 @@
     runUnifiedComposerHandoffAsync,
     findUnifiedComposerEditor,
     findAssistantMessages,
+    findUserMessages,
+    findAssistantResponseForTask,
     insertIntoProseMirror,
     activateComposer,
     readEditorText,

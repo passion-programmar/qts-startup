@@ -263,6 +263,7 @@ export async function updateCandidateProfileAction(
     province: 120,
     addressLine1: 256,
     postalCode: 32,
+    jdMatching: 5000,
     categoryId: 36,
   } as const;
   const values = {
@@ -279,6 +280,7 @@ export async function updateCandidateProfileAction(
     province: readText(formData, "province", limits.province),
     addressLine1: readText(formData, "addressLine1", limits.addressLine1),
     postalCode: readText(formData, "postalCode", limits.postalCode),
+    jdMatching: readText(formData, "jdMatching", limits.jdMatching),
     categoryId: readText(formData, "categoryId", limits.categoryId),
   };
   const educationRows = readHistoryRows(formData, "education", {
@@ -394,6 +396,7 @@ export async function updateCandidateProfileAction(
           linkedin_url = ${values.linkedinUrl || null}, country = ${values.country || null},
           city = ${values.city || null}, province = ${values.province || null},
           address_line_1 = ${values.addressLine1 || null}, postal_code = ${values.postalCode || null},
+          jd_matching = ${values.jdMatching || null},
           updated_at = now()
         where profiles.user_id = ${userId}::uuid
           and exists (

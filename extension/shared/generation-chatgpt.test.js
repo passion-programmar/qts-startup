@@ -24,3 +24,12 @@ test('rejects JSON without both document objects', () => {
   const helper = loadHelper();
   assert.equal(helper.extractJsonObject('{"resume":{}}'), null);
 });
+
+test('builds a task-specific prompt without asking ChatGPT to return transport metadata', () => {
+  const helper = loadHelper();
+  const id = '807bc8f8-64c3-4072-936a-598ffe85af8b';
+  const prompt = helper.buildTaskPrompt('Return the document package.', id);
+  assert.match(prompt, /^QTS_GENERATION_ID: 807bc8f8/);
+  assert.match(prompt, /Do not include it in the output JSON/);
+  assert.match(prompt, /Return the document package\.$/);
+});

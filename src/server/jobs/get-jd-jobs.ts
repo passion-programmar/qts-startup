@@ -21,6 +21,9 @@ export type ManagerJobPresence = {
 type NewGetJdJob = GetJdJobIdentity & {
   description: string;
   location: string | null;
+  employmentType: string | null;
+  workplaceType: string | null;
+  salary: string | null;
   managerId: string;
   candidateId: string;
 };
@@ -127,6 +130,9 @@ export async function insertGetJdJob(
       company: job.company.trim(),
       description: job.description,
       location: job.location,
+      employmentType: job.employmentType,
+      workplaceType: job.workplaceType,
+      salary: job.salary,
       managerId: job.managerId,
       candidateId: job.candidateId,
       date: getJobBusinessDate(),
