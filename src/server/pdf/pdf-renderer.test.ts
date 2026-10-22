@@ -168,3 +168,28 @@ test("flat skills render through the safe inline fallback", async () => {
   const resume = await PDFDocument.load(rendered.resume);
   assert.equal(resume.getPageCount(), 1);
 });
+
+test("Template_30 embeds Alegreya and renders Romanian Unicode punctuation", async () => {
+  const unicodePackage: PdfPackage = {
+    ...data,
+    resume: {
+      ...data.resume,
+      candidate: {
+        ...data.resume.candidate,
+        location: "Iași, România",
+      },
+      sections: [{
+        title: "Education",
+        items: [{
+          heading: "Bachelor’s Degree in Computer Science",
+          subheading: "Universitatea Tehnică din Cluj-Napoca",
+          dateRange: "2011 – 2015",
+        }],
+      }],
+    },
+  };
+  const rendered = await renderPdfPackage(unicodePackage, "flowcv");
+  const resume = await PDFDocument.load(rendered.resume);
+  assert.equal(resume.getPageCount(), 1);
+  assert.ok(rendered.resume.length > 20_000);
+});

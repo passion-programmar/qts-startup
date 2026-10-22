@@ -60,7 +60,7 @@ export const pdfTemplateDesigns: Record<PdfTemplate, PdfTemplateDesign> = {
   ember: design([0.87, 0.32, 0.08], "sans", "left", "plain", "marker", "grouped-stacked", 48),
   terminal: design([0.18, 0.72, 0.47], "mono", "left", "card", "compact-underline", "grouped-inline", 44),
   meridian: design([0.3, 0.3, 0.32], "serif", "center", "plain", "plain", "flat-inline", 62),
-  flowcv: design([0, 0, 0], "serif", "center", "plain", "rule", "grouped-inline", 52),
+  flowcv: design([0, 0, 0], "serif", "center", "plain", "rule", "grouped-inline", 51),
 };
 
 function design(

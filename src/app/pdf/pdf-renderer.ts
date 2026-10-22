@@ -7,6 +7,7 @@ import {
   pdfTemplateDesigns,
   type PdfTemplate,
 } from "@/server/pdf/pdf-templates";
+import type { PDFFont } from "pdf-lib";
 
 type PdfWriter = {
   header(title: string, detail: string, size?: number): void;
@@ -47,7 +48,7 @@ async function renderResumePdf(
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 2);
   const headline = document.candidate.headline ?? document.targetRole;
-  const contact = (template === "flowcv" ? [
+  const contactParts = template === "flowcv" ? [
     document.candidate.location,
     document.candidate.email,
     document.candidate.phone,
@@ -57,7 +58,10 @@ async function renderResumePdf(
     document.candidate.phone,
     document.candidate.linkedinUrl,
     document.candidate.location,
-  ]).filter(Boolean).join("  |  ");
+  ];
+  const contact = template === "flowcv"
+    ? contactParts.map((value) => value ?? "").join(" | ")
+    : contactParts.filter(Boolean).join("  |  ");
   pdf.header(document.candidate.fullName, [
     ...(template === "vellum" ? [headline] : [headline, contact]),
   ].filter(Boolean).join(template === "flowcv" ? "\n" : " | "), 19);
@@ -94,11 +98,14 @@ async function renderCoverLetterPdf(
   template: PdfTemplate,
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 1);
-  const coverContact = [
+  const coverContactParts = [
     document.candidate.email,
     document.candidate.phone,
     document.candidate.linkedinUrl,
-  ].filter(Boolean).join(" | ");
+  ];
+  const coverContact = template === "flowcv"
+    ? ["", ...coverContactParts].map((value) => value ?? "").join(" | ")
+    : coverContactParts.filter(Boolean).join(" | ");
   pdf.header(
     document.candidate.fullName,
     template === "flowcv" ? `\n${coverContact}` : coverContact,
@@ -130,31 +137,57 @@ async function createWriter(
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const document = await PDFDocument.create();
   const design = pdfTemplateDesigns[template];
+  const isFlowCv = template === "flowcv";
   const fontNames = design.font === "serif"
     ? [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold]
     : design.font === "mono"
       ? [StandardFonts.Courier, StandardFonts.CourierBold]
       : [StandardFonts.Helvetica, StandardFonts.HelveticaBold];
-  const regular = await document.embedFont(fontNames[0]);
-  const bold = await document.embedFont(fontNames[1]);
-  const italic = await document.embedFont(
-    design.font === "serif" ? StandardFonts.TimesRomanItalic : StandardFonts.HelveticaOblique,
-  );
+  let regular: PDFFont;
+  let bold: PDFFont;
+  let italic: PDFFont;
+  if (isFlowCv) {
+    const [{ default: fontkit }, { loadAlegreyaFonts }] = await Promise.all([
+      import("@pdf-lib/fontkit"),
+      import("@/app/pdf/alegreya-fonts"),
+    ]);
+    const fonts = await loadAlegreyaFonts();
+    document.registerFontkit(fontkit);
+    [regular, bold, italic] = await Promise.all([
+      document.embedFont(fonts.regular, { subset: true }),
+      document.embedFont(fonts.bold, { subset: true }),
+      document.embedFont(fonts.italic, { subset: true }),
+    ]);
+  } else {
+    regular = await document.embedFont(fontNames[0]);
+    bold = await document.embedFont(fontNames[1]);
+    italic = await document.embedFont(
+      design.font === "serif" ? StandardFonts.TimesRomanItalic : StandardFonts.HelveticaOblique,
+    );
+  }
   const width = 595.28;
   const height = 841.89;
   const accent = rgb(...design.accent);
   const ink = rgb(...design.ink);
   const muted = rgb(...design.muted);
   const margin = design.margin;
-  const bodyLeading = 13.8;
-  const bulletLeading = 13;
-  const bulletGap = 2.5;
-  const entryGap = design.compact ? 10 : 12;
-  const sectionBefore = design.compact ? 8 : 10;
-  const sectionAfter = design.compact ? 8 : 9;
+  const bodyLeading = isFlowCv ? 13.5 : 13.8;
+  const bulletLeading = isFlowCv ? 13.5 : 13;
+  const bulletGap = isFlowCv ? 0 : 2.5;
+  const entryGap = isFlowCv ? 7 : design.compact ? 10 : 12;
+  const sectionBefore = isFlowCv ? 14.25 : design.compact ? 8 : 10;
+  const sectionAfter = isFlowCv ? 8.5 : design.compact ? 8 : 9;
   let page = document.addPage([width, height]);
   let y = height - margin;
-  const clean = (text: string) => text.normalize("NFKD")
+  const clean = (text: string) => isFlowCv
+    ? text.normalize("NFC")
+      .replaceAll("â€“", "–")
+      .replaceAll("â€”", "—")
+      .replaceAll("â€™", "’")
+      .replaceAll("â€œ", "“")
+      .replaceAll("â€", "”")
+      .replace(/[\u0000-\u001F\u007F]/g, " ")
+    : text.normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[—−]/g, "–")
     .replace(/[‘’]/g, "'")
@@ -192,6 +225,29 @@ async function createWriter(
     if (line) lines.push(line);
     return lines;
   };
+  const wrapWithFirstLineWidth = (
+    text: string,
+    size: number,
+    firstLineWidth: number,
+    remainingLineWidth: number,
+    font: PDFFont = regular,
+  ) => {
+    const words = clean(text).split(/\s+/);
+    const lines: string[] = [];
+    let line = "";
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      const availableWidth = lines.length === 0 ? firstLineWidth : remainingLineWidth;
+      if (font.widthOfTextAtSize(next, size) <= availableWidth || !line) {
+        line = next;
+      } else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
+  };
   const drawWrapped = (
     text: string,
     size = 10,
@@ -209,7 +265,7 @@ async function createWriter(
         font: regular,
         color: color === "gray" ? muted : ink,
       });
-      y -= size === 10 ? bodyLeading : Math.max(size * 1.35, size + 3);
+      y -= isFlowCv ? bodyLeading : size === 10 ? bodyLeading : Math.max(size * 1.35, size + 3);
     }
   };
   const line = (text: string, size = 10, color: "black" | "gray" = "black") => {
@@ -232,22 +288,101 @@ async function createWriter(
   const centeredLine = (text: string, size = 10) => {
     drawWrapped(text, size, "gray", true);
   };
+  const drawFlowCvContactRow = (text: string, preferredSize: number) => {
+    const items = text.split(/\s*\|\s*/).map((value, iconIndex) => ({
+      value,
+      iconIndex,
+    })).filter((item) => Boolean(item.value));
+    const iconSize = 8;
+    const iconTextGap = 4;
+    const itemGap = 13;
+    const availableWidth = width - margin * 2;
+    const measure = (fontSize: number) => items.reduce(
+      (total, item) => total + iconSize + iconTextGap
+        + regular.widthOfTextAtSize(clean(item.value), fontSize),
+      Math.max(0, items.length - 1) * itemGap,
+    );
+    let fontSize = preferredSize;
+    if (measure(fontSize) > availableWidth) {
+      fontSize = Math.max(8.5, fontSize * availableWidth / measure(fontSize));
+    }
+    const rowWidth = measure(fontSize);
+    let x = Math.max(margin, (width - rowWidth) / 2);
+    items.forEach((item) => {
+      drawFlowCvContactIcon(item.iconIndex, x, y + 1, iconSize);
+      x += iconSize + iconTextGap;
+      const cleaned = clean(item.value);
+      page.drawText(cleaned, { x, y, size: fontSize, font: regular, color: ink });
+      x += regular.widthOfTextAtSize(cleaned, fontSize) + itemGap;
+    });
+  };
+  const drawFlowCvContactIcon = (
+    index: number,
+    x: number,
+    iconY: number,
+    size: number,
+  ) => {
+    if (index === 0) {
+      page.drawCircle({
+        x: x + size / 2,
+        y: iconY + size * .62,
+        size: size * .32,
+        borderColor: ink,
+        borderWidth: 1.2,
+      });
+      page.drawCircle({ x: x + size / 2, y: iconY + size * .62, size: 1.15, color: ink });
+      page.drawLine({
+        start: { x: x + size * .3, y: iconY + size * .42 },
+        end: { x: x + size / 2, y: iconY },
+        thickness: 1.2,
+        color: ink,
+      });
+      page.drawLine({
+        start: { x: x + size * .7, y: iconY + size * .42 },
+        end: { x: x + size / 2, y: iconY },
+        thickness: 1.2,
+        color: ink,
+      });
+      return;
+    }
+    if (index === 1) {
+      page.drawRectangle({ x, y: iconY + .5, width: size, height: size * .68, borderColor: ink, borderWidth: 1.1 });
+      page.drawLine({ start: { x, y: iconY + size * .68 }, end: { x: x + size / 2, y: iconY + size * .32 }, thickness: 1, color: ink });
+      page.drawLine({ start: { x: x + size, y: iconY + size * .68 }, end: { x: x + size / 2, y: iconY + size * .32 }, thickness: 1, color: ink });
+      return;
+    }
+    if (index === 2) {
+      page.drawLine({ start: { x: x + 1, y: iconY + size }, end: { x: x + 2.5, y: iconY + 2 }, thickness: 2.2, color: ink });
+      page.drawLine({ start: { x: x + 2.5, y: iconY + 2 }, end: { x: x + size - 1, y: iconY + .5 }, thickness: 2.2, color: ink });
+      return;
+    }
+    page.drawRectangle({ x, y: iconY, width: size, height: size, color: ink });
+    page.drawText("in", {
+      x: x + 1.25,
+      y: iconY + 1.6,
+      size: 5.2,
+      font: bold,
+      color: rgb(1, 1, 1),
+    });
+  };
   const header = (title: string, detail: string, size = 19) => {
     if (template === "flowcv") {
-      ensure(size + 56);
+      const nameSize = 22;
+      const headlineSize = 16;
+      const contactSize = 11;
+      ensure(102);
       const cleanedTitle = clean(title);
-      const titleWidth = bold.widthOfTextAtSize(cleanedTitle, size);
+      const titleWidth = bold.widthOfTextAtSize(cleanedTitle, nameSize);
       page.drawText(cleanedTitle, {
         x: Math.max(margin, (width - titleWidth) / 2),
         y,
-        size,
+        size: nameSize,
         font: bold,
         color: ink,
       });
-      y -= size + 8;
+      y -= 23.25;
       const [headline = "", contact = ""] = detail.split("\n", 2);
       if (headline) {
-        const headlineSize = 11.5;
         for (const part of wrap(headline, headlineSize, width - margin * 2, italic)) {
           const partWidth = italic.widthOfTextAtSize(part, headlineSize);
           page.drawText(part, {
@@ -257,24 +392,14 @@ async function createWriter(
             font: italic,
             color: ink,
           });
-          y -= 15;
+          y -= 19;
         }
+        y -= 6.5;
       }
       if (contact) {
-        y -= 4;
-        for (const part of wrap(contact, 8.5, width - margin * 2)) {
-          const partWidth = regular.widthOfTextAtSize(part, 8.5);
-          page.drawText(part, {
-            x: Math.max(margin, (width - partWidth) / 2),
-            y,
-            size: 8.5,
-            font: regular,
-            color: ink,
-          });
-          y -= 12;
-        }
+        drawFlowCvContactRow(contact, contactSize);
+        y -= 18;
       }
-      y -= 6;
       return;
     }
     if (template === "vellum") {
@@ -383,14 +508,31 @@ async function createWriter(
       y = Math.min(y, headerTop - blockHeight - 8);
     }
   };
-  const paragraph = (text: string, size = 10) => line(text, size);
+  const paragraph = (text: string, size = isFlowCv ? 11 : 10) => line(text, size);
   const section = (text: string, minimumContentHeight = 42) => {
     y -= sectionBefore;
     ensure(24 + minimumContentHeight);
     const layout = design.sectionHeadingLayout;
     const label = clean(text.toUpperCase());
-    const labelSize = 10.5;
+    const labelSize = isFlowCv ? 14 : 10.5;
     const labelWidth = bold.widthOfTextAtSize(label, labelSize);
+    if (isFlowCv) {
+      page.drawText(label, {
+        x: margin,
+        y,
+        size: labelSize,
+        font: bold,
+        color: ink,
+      });
+      page.drawLine({
+        start: { x: margin, y: y - 4.5 },
+        end: { x: width - margin, y: y - 4.5 },
+        thickness: 1.5,
+        color: ink,
+      });
+      y -= 22.5;
+      return;
+    }
     if (layout === "centered-rules") {
       const center = width / 2;
       const gap = 8;
@@ -454,7 +596,7 @@ async function createWriter(
     }
     y -= 14;
     if (layout === "rule" || layout === "double-rule") {
-      page.drawLine({ start: { x: margin, y: y + 3 }, end: { x: width - margin, y: y + 3 }, thickness: 1, color: accent });
+      page.drawLine({ start: { x: margin, y: y + 3 }, end: { x: width - margin, y: y + 3 }, thickness: isFlowCv ? 1.5 : 1, color: accent });
       if (layout === "double-rule") page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: .4, color: accent });
       y -= layout === "double-rule" ? sectionAfter + 3 : sectionAfter;
     } else {
@@ -468,8 +610,10 @@ async function createWriter(
     bullets: string[] = [],
     hasFollowingEntry = false,
   ) => {
-    const titleSize = 10.5;
-    const detailSize = 9;
+    const titleSize = isFlowCv ? 11 : 10.5;
+    const detailSize = isFlowCv ? 11 : 9;
+    const titleLeading = isFlowCv ? 13.5 : 14.2;
+    const bulletSize = isFlowCv ? 11 : 9.5;
     const cleanedDate = dateRange
       ? clean(dateRange).replace(/\s+(?:\?|-)\s+/g, " – ")
       : "";
@@ -479,10 +623,14 @@ async function createWriter(
     const titleWidth = width - margin * 2 - dateWidth - (dateWidth ? 12 : 0);
     const titleLines = title ? wrap(title, titleSize, titleWidth) : [];
     const firstBulletLines = bullets[0]
-      ? wrap(bullets[0], 9.5, width - margin * 2 - 22).length
+      ? wrap(
+        bullets[0],
+        bulletSize,
+        width - margin * 2 - (isFlowCv ? 10 : 22),
+      ).length
       : 0;
     ensure(
-      Math.max(34, titleLines.length * 14.2 + (subheading ? 13 : 0)
+      Math.max(34, titleLines.length * titleLeading + (subheading ? 13 : 0)
         + Math.min(firstBulletLines, 2) * bulletLeading),
     );
 
@@ -491,7 +639,7 @@ async function createWriter(
       titleLines.forEach((part, index) => {
         page.drawText(part, {
           x: margin,
-          y: rowY - index * 14.2,
+          y: rowY - index * titleLeading,
           size: titleSize,
           font: template === "vellum" ? regular : bold,
           color: ink,
@@ -507,7 +655,7 @@ async function createWriter(
           color: template === "flowcv" ? ink : muted,
         });
       }
-      y -= Math.max(1, titleLines.length) * 14.2;
+      y -= Math.max(1, titleLines.length) * titleLeading;
     }
     if (subheading) {
       for (const part of wrap(subheading, detailSize, width - margin * 2)) {
@@ -518,30 +666,34 @@ async function createWriter(
           font: template === "flowcv" ? italic : regular,
           color: template === "flowcv" ? ink : muted,
         });
-        y -= 12.2;
+        y -= isFlowCv ? 13.5 : 12.2;
       }
-      y -= 3.5;
+      if (!isFlowCv) y -= 3.5;
     } else if (titleLines.length || cleanedDate) {
-      y -= 3.5;
+      if (!isFlowCv) y -= 3.5;
     }
 
     for (const bulletText of bullets) {
-      const parts = wrap(bulletText, 9.5, width - margin * 2 - 22);
+      const parts = wrap(
+        bulletText,
+        bulletSize,
+        width - margin * 2 - (isFlowCv ? 10 : 22),
+      );
       parts.forEach((part, index) => {
         ensure(bulletLeading + bulletGap);
         if (index === 0) {
           page.drawText("•", {
-            x: margin + 5,
+            x: margin + (isFlowCv ? 1 : 5),
             y,
-            size: 9.5,
+            size: bulletSize,
             font: regular,
             color: ink,
           });
         }
         page.drawText(part, {
-          x: margin + 17,
+          x: margin + (isFlowCv ? 10 : 17),
           y,
-          size: 9.5,
+          size: bulletSize,
           font: regular,
           color: ink,
         });
@@ -570,6 +722,9 @@ async function createWriter(
     y -= bulletLeading;
   };
   const skillsHeight = (items: ResumeSectionItem[]) => {
+    const measuredSkillSize = isFlowCv ? 11 : 9.5;
+    const measuredHeadingSize = isFlowCv ? 11 : 10;
+    const measuredGroupGap = isFlowCv ? 0 : 4;
     const groups = items.map((item) => ({
       heading: item.heading?.replaceAll("**", "").trim() ?? "",
       skills: [item.subheading, item.dateRange, ...(item.bullets ?? [])]
@@ -583,7 +738,7 @@ async function createWriter(
       let rows = 1;
       let rowWidth = 0;
       for (const item of groups.flatMap((group) => group.skills)) {
-        const tokenWidth = regular.widthOfTextAtSize(`• ${clean(item)}`, 9.5) + 10;
+        const tokenWidth = regular.widthOfTextAtSize(`• ${clean(item)}`, measuredSkillSize) + 10;
         if (rowWidth && rowWidth + tokenWidth > contentWidth) {
           rows += 1;
           rowWidth = 0;
@@ -596,9 +751,11 @@ async function createWriter(
       ? "grouped-inline"
       : design.skillsLayout;
     const measureStackedGroup = (group: (typeof groups)[number], availableWidth: number) => {
-      const headingLines = group.heading ? wrap(group.heading, 10, availableWidth, bold).length : 0;
+      const headingLines = group.heading
+        ? wrap(group.heading, measuredHeadingSize, availableWidth, bold).length
+        : 0;
       const body = group.skills.join(", ");
-      const bodyLines = body ? wrap(body, 9.5, availableWidth).length : 0;
+      const bodyLines = body ? wrap(body, measuredSkillSize, availableWidth).length : 0;
       return headingLines * 13.5 + (headingLines && bodyLines ? 4 : 0) + bodyLines * bulletLeading + 10;
     };
     let measured: number;
@@ -619,16 +776,20 @@ async function createWriter(
       );
     } else {
       measured = groups.reduce((sum, group) => {
-        const labelWidth = bold.widthOfTextAtSize(`${clean(group.heading)}:`, 10);
+        const labelWidth = bold.widthOfTextAtSize(`${clean(group.heading)}:`, measuredHeadingSize);
         const body = group.skills.join(", ");
         const inline = Boolean(body) && labelWidth <= contentWidth * .45;
         if (inline) {
-          return sum + Math.max(1, wrap(body, 9.5, contentWidth - labelWidth - 6).length)
-            * bulletLeading + 4;
+          return sum + Math.max(1, wrapWithFirstLineWidth(
+            body,
+            measuredSkillSize,
+            contentWidth - labelWidth - 4,
+            contentWidth,
+          ).length) * bulletLeading + measuredGroupGap;
         }
-        return sum + wrap(group.heading, 10, contentWidth, bold).length * 13.5
-          + (body ? 4 + wrap(body, 9.5, contentWidth).length * bulletLeading : 0)
-          + 4;
+        return sum + wrap(group.heading, measuredHeadingSize, contentWidth, bold).length * 13.5
+          + (body ? 4 + wrap(body, measuredSkillSize, contentWidth).length * bulletLeading : 0)
+          + measuredGroupGap;
       }, 0);
     }
     return Math.min(measured, height - margin * 2 - 60);
@@ -654,10 +815,10 @@ async function createWriter(
       ? "grouped-inline"
       : design.skillsLayout;
     const contentWidth = width - margin * 2;
-    const skillSize = 9.5;
-    const groupHeadingSize = 10;
-    const groupGap = 10;
-    const contentGap = 4;
+    const skillSize = isFlowCv ? 11 : 9.5;
+    const groupHeadingSize = isFlowCv ? 11 : 10;
+    const groupGap = isFlowCv ? 0 : 10;
+    const contentGap = isFlowCv ? 0 : 4;
 
     const groupBody = (group: (typeof groups)[number]) => group.skills.join(", ");
     const groupHeight = (group: (typeof groups)[number], availableWidth: number) => {
@@ -718,14 +879,20 @@ async function createWriter(
           }
         } else {
           page.drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
-          const firstLineWidth = contentWidth - labelWidth - 6;
-          const parts = wrap(body, skillSize, firstLineWidth);
+          const inlineGap = isFlowCv ? 2.5 : 6;
+          const firstLineWidth = contentWidth - labelWidth - inlineGap;
+          const parts = wrapWithFirstLineWidth(
+            body,
+            skillSize,
+            firstLineWidth,
+            contentWidth,
+          );
           const continuationInset = template === "flowcv"
             ? 0
             : Math.min(labelWidth + 6, 120);
           parts.forEach((part, index) => {
             page.drawText(part, {
-              x: margin + (index === 0 ? labelWidth + 6 : continuationInset),
+              x: margin + (index === 0 ? labelWidth + inlineGap : continuationInset),
               y,
               size: skillSize,
               font: regular,
@@ -734,7 +901,7 @@ async function createWriter(
             y -= bulletLeading;
           });
         }
-        if (groupIndex < groups.length - 1) y -= 4;
+        if (groupIndex < groups.length - 1 && !isFlowCv) y -= 4;
       });
     };
     const drawColumns = () => {
