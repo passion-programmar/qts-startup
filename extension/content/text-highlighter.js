@@ -11,6 +11,18 @@ async function startPageTextHighlighter() {
   let refreshQueued = false;
   let pageExcluded = false;
 
+  function waitForDocumentBody() {
+    if (document.body) return Promise.resolve();
+    return new Promise((resolve) => {
+      const bodyObserver = new MutationObserver(() => {
+        if (!document.body) return;
+        bodyObserver.disconnect();
+        resolve();
+      });
+      bodyObserver.observe(document, { childList: true, subtree: true });
+    });
+  }
+
   function unwrapHighlights() {
     const marks = document.querySelectorAll('mark[data-qts-text-highlight]');
     for (const mark of marks) {
@@ -88,6 +100,7 @@ async function startPageTextHighlighter() {
       return;
     }
     pageExcluded = false;
+    await waitForDocumentBody();
     currentStorageKey = highlighting.getGlobalStorageKey();
     const stored = await chrome.storage.local.get([
       currentStorageKey,

@@ -838,12 +838,22 @@ async function processGetJdPage(tabId, url, documentId = '') {
     const tab = await getTab(tabId);
     if (!tab?.id || tab.url !== url) return;
 
-    const pageEvidence = await collectGetJdPageEvidence(tabId);
+    let pageEvidence = await collectGetJdPageEvidence(tabId);
     if (!(await isGetJdActive())) return;
-    const pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
+    let pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
       ...pageEvidence,
       urlType: classifyJobPageUrl(url),
     });
+    if (!pageClassification.isJobPage && !pageEvidence.documentReady) {
+      await waitForGetJdPageContent(tabId);
+      const currentTab = await getTab(tabId);
+      if (!currentTab?.id || currentTab.url !== url || !(await isGetJdActive())) return;
+      pageEvidence = await collectGetJdPageEvidence(tabId);
+      pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
+        ...pageEvidence,
+        urlType: classifyJobPageUrl(url),
+      });
+    }
     if (!pageClassification.isJobPage) {
       await saveGetJdResult(tabId, {
         ...initialResult,
@@ -1068,6 +1078,7 @@ async function collectGetJdPageEvidence(tabId) {
         headings,
         description,
         hasJobPosting,
+        documentReady: document.readyState !== 'loading',
       };
     },
   });
@@ -1076,7 +1087,20 @@ async function collectGetJdPageEvidence(tabId) {
     headings: [],
     description: '',
     hasJobPosting: false,
+    documentReady: false,
   };
+}
+
+async function waitForGetJdPageContent(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (document.readyState !== 'loading') return;
+      return new Promise((resolve) => {
+        document.addEventListener('DOMContentLoaded', resolve, { once: true });
+      });
+    },
+  });
 }
 
 async function enableGetJdForTab(tabId) {

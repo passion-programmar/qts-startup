@@ -112,8 +112,10 @@ Developer mode, select **Load unpacked**, and choose the repository's
 `extension/` folder. After pulling extension changes, use **Reload** on the
 extension's card.
 
-The extension renders a floating QTS icon directly on every supported web
-page, including before sign-in. Clicking it opens a radial menu with **Get
+The extension content scripts start at `document_start`, so the floating QTS
+icon and page features can initialize while the page is still loading. The
+extension renders the icon directly on every supported web page, including
+before sign-in. Clicking it opens a radial menu with **Get
 JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
 toolbar icon has no click behavior. Sign In opens the existing Manager login
 panel inside the current page and the panel closes after a successful login.

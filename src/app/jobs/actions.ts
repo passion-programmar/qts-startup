@@ -4,7 +4,7 @@ import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
-import { requireUser } from "@/lib/session";
+import { getCurrentUser, requireUser } from "@/lib/session";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 
 export type RecordActionState = { error: string | null; success: string | null };
@@ -162,7 +162,17 @@ export async function deleteJobAction(
   _state: RecordActionState,
   formData: FormData,
 ): Promise<RecordActionState> {
-  const manager = await requireUser();
+  let manager: Awaited<ReturnType<typeof getCurrentUser>>;
+  try {
+    manager = await getCurrentUser();
+  } catch (error) {
+    console.error("Could not verify the session before deleting a manager job.", error);
+    return {
+      error: "Your session could not be verified. Refresh the page and try again.",
+      success: null,
+    };
+  }
+  if (!manager) return { error: "Your session has expired. Sign in again.", success: null };
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
   const id = text(formData, "id", 36);
   if (!uuid(id)) return { error: "Invalid job.", success: null };

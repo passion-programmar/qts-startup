@@ -1,7 +1,7 @@
 "use client";
 
 import { Pencil, Trash2, X } from "lucide-react";
-import { useActionState, useState } from "react";
+import { useActionState, useId, useState } from "react";
 import { deleteBidAction, updateBidAction } from "@/app/bids/actions";
 import {
   deleteJobAction,
@@ -81,6 +81,8 @@ function RecordActions({
   | { kind: "bid"; record: EditableBid; candidates: CandidateOption[] }
 ) & { showEdit?: boolean; showDelete?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const deleteDialogId = useId();
   const updateAction = kind === "job" ? updateJobAction : updateBidAction;
   const deleteAction = kind === "job" ? deleteJobAction : deleteBidAction;
   const [updateState, updateFormAction, updating] = useActionState(updateAction, initialRecordState);
@@ -89,11 +91,93 @@ function RecordActions({
   return (
     <div className="flex min-w-0 items-start gap-2">
       {showEdit && <button aria-label={`Edit ${record.title}`} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setOpen(true)} title={`Edit ${record.title}`} type="button"><Pencil aria-hidden="true" className="size-4" /></button>}
-      {showDelete && <form action={deleteFormAction} onSubmit={(event) => { if (!window.confirm(`Permanently delete this ${kind}?`)) event.preventDefault(); }}>
-        <input name="id" type="hidden" value={record.id} />
-        <button aria-label={`Delete ${record.title}`} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60" disabled={deleting} title={deleting ? "Deleting job" : `Delete ${record.title}`} type="submit"><Trash2 aria-hidden="true" className="size-4" /></button>
-        {(deleteState.error || deleteState.success) && <p className={`mt-2 max-w-48 rounded-md border px-2 py-1 text-[11px] ${deleteState.error ? "border-rose-200 bg-rose-50 text-rose-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`} role={deleteState.error ? "alert" : "status"}>{deleteState.error ?? deleteState.success}</p>}
-      </form>}
+      {showDelete && (
+        <form action={deleteFormAction}>
+          <input name="id" type="hidden" value={record.id} />
+          <button
+            aria-label={`Delete ${record.title}`}
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+            disabled={deleting}
+            onClick={() => setConfirmingDelete(true)}
+            title={`Delete ${record.title}`}
+            type="button"
+          >
+            <Trash2 aria-hidden="true" className="size-4" />
+          </button>
+          {!confirmingDelete && (deleteState.error || deleteState.success) && (
+            <p
+              className={`mt-2 max-w-48 rounded-md border px-2 py-1 text-[11px] ${deleteState.error ? "border-rose-200 bg-rose-50 text-rose-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}
+              role={deleteState.error ? "alert" : "status"}
+            >
+              {deleteState.error ?? deleteState.success}
+            </p>
+          )}
+          {confirmingDelete && (
+            <div
+              aria-describedby={`${deleteDialogId}-description`}
+              aria-labelledby={`${deleteDialogId}-title`}
+              aria-modal="true"
+              className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4"
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && !deleting) setConfirmingDelete(false);
+              }}
+              role="alertdialog"
+            >
+              <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+                <h2 className="text-lg font-semibold text-slate-900" id={`${deleteDialogId}-title`}>
+                  Delete this {kind}?
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600" id={`${deleteDialogId}-description`}>
+                  This will permanently delete “{record.title}”. This action cannot be undone.
+                </p>
+                {deleteState.success ? (
+                  <>
+                    <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700" role="status">
+                      {deleteState.success}
+                    </p>
+                    <div className="mt-6 flex justify-end">
+                      <button
+                        autoFocus
+                        className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        onClick={() => setConfirmingDelete(false)}
+                        type="button"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {deleteState.error && (
+                  <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700" role="alert">
+                    {deleteState.error}
+                  </p>
+                    )}
+                    <div className="mt-6 flex justify-end gap-3">
+                      <button
+                        autoFocus
+                        className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                        disabled={deleting}
+                        onClick={() => setConfirmingDelete(false)}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-wait disabled:opacity-60"
+                        disabled={deleting}
+                        type="submit"
+                      >
+                        {deleting ? "Deleting…" : `Delete ${kind}`}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </form>
+      )}
       {open && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true">
           <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">

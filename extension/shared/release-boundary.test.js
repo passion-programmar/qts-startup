@@ -10,6 +10,7 @@ test('the page launcher is the only user entry point', () => {
     fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'),
   );
   const scripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
+  assert.ok(manifest.content_scripts.some((entry) => entry.run_at === 'document_start'));
   const serviceWorker = fs.readFileSync(
     path.join(extensionRoot, 'background', 'service-worker.js'),
     'utf8',
@@ -85,6 +86,7 @@ test('Get JD locally rejects non-job pages before duplicate checks and profile r
   assert.ok(serviceWorker.includes("msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED'"));
   assert.ok(review.includes("result.status === 'not_job_page'"));
   assert.equal(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"), false);
+  assert.ok(serviceWorker.includes("document.addEventListener('DOMContentLoaded', resolve, { once: true })"));
 });
 
 test('manager URL exclusions are permission-gated and applied before page UI runs', () => {
@@ -258,6 +260,8 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(jobsPage.includes('target="_blank"'));
   assert.ok(actions.includes('export async function updateJobAction'));
   assert.ok(actions.includes('export async function deleteJobAction'));
+  assert.ok(actions.includes('Could not verify the session before deleting a manager job.'));
+  assert.ok(actions.includes('Your session has expired. Sign in again.'));
   assert.ok(actions.includes('eq(jobs.managerId, manager.id)'));
   assert.ok(actions.includes('eq(users.parentUserId, manager.id)'));
   assert.ok(actions.includes('description: description || null'));
@@ -269,6 +273,9 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(actions.includes('Job deleted. Refresh the page if it is still visible.'));
   assert.ok(forms.includes('aria-label={`Edit ${record.title}`}'));
   assert.ok(forms.includes('aria-label={`Delete ${record.title}`}'));
+  assert.ok(forms.includes('role="alertdialog"'));
+  assert.ok(forms.includes('This action cannot be undone.'));
+  assert.equal(forms.includes('window.confirm('), false);
   assert.ok(forms.includes('whitespace-nowrap'));
 });
 
