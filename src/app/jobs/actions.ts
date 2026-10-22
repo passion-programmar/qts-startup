@@ -6,9 +6,7 @@ import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
-
-export type RecordActionState = { error: string | null; success: string | null };
-export const initialRecordState: RecordActionState = { error: null, success: null };
+import type { RecordActionState } from "@/app/record-action-state";
 
 export async function updateJobAction(
   _state: RecordActionState,

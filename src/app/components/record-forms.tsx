@@ -5,10 +5,10 @@ import { useActionState, useId, useState } from "react";
 import { deleteBidAction, updateBidAction } from "@/app/bids/actions";
 import {
   deleteJobAction,
-  initialRecordState,
   setJobGenerationQueueAction,
   updateJobAction,
 } from "@/app/jobs/actions";
+import { initialRecordState } from "@/app/record-action-state";
 
 export type CandidateOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };

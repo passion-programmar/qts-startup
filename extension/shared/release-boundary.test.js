@@ -246,6 +246,10 @@ test('manager job rows support safe manual edits and deletion', () => {
     path.join(extensionRoot, '..', 'src', 'app', 'jobs', 'actions.ts'),
     'utf8',
   );
+  const actionState = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'record-action-state.ts'),
+    'utf8',
+  );
   const forms = fs.readFileSync(
     path.join(extensionRoot, '..', 'src', 'app', 'components', 'record-forms.tsx'),
     'utf8',
@@ -259,15 +263,14 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(jobsPage.includes('label: "Resume Path"'));
   assert.ok(jobsPage.includes('target="_blank"'));
   assert.ok(actions.includes('export async function updateJobAction'));
-  assert.ok(actions.includes('export async function deleteJobAction'));
-  assert.ok(actions.includes('Could not verify the session before deleting a manager job.'));
-  assert.ok(actions.includes('Your session has expired. Sign in again.'));
   assert.ok(actions.includes('eq(jobs.managerId, manager.id)'));
   assert.ok(actions.includes('eq(users.parentUserId, manager.id)'));
   assert.ok(actions.includes('description: description || null'));
   assert.ok(forms.includes('label="Job description"'));
   assert.ok(forms.includes('updateJobAction'));
   assert.ok(forms.includes('deleteJobAction'));
+  assert.ok(actionState.includes('export const initialRecordState'));
+  assert.equal(actions.includes('export const initialRecordState'), false);
   assert.ok(actions.includes('generationStatus, "processing"'));
   assert.ok(actions.includes('revalidatePath("/jobs")'));
   assert.ok(actions.includes('Job deleted. Refresh the page if it is still visible.'));

@@ -6,7 +6,7 @@ import { bids, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
-import type { RecordActionState } from "@/app/jobs/actions";
+import type { RecordActionState } from "@/app/record-action-state";
 
 export async function updateBidAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
   const manager = await requireUser();
