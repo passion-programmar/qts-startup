@@ -44,7 +44,7 @@ const data: PdfPackage = {
 };
 
 test("every one-column template renders a valid resume and cover letter PDF", async () => {
-  assert.equal(pdfTemplateValues.length, 15);
+  assert.equal(pdfTemplateValues.length, 16);
   for (const template of pdfTemplateValues) {
     const rendered = await renderPdfPackage(data, template);
     assert.equal(Buffer.from(rendered.resume).subarray(0, 4).toString(), "%PDF", template);
@@ -63,9 +63,11 @@ test("template selector preserves the retained original numbers", () => {
       "Template_1", "Template_2", "Template_3", "Template_4", "Template_5",
       "Template_7", "Template_8", "Template_13", "Template_14", "Template_15",
       "Template_16", "Template_17", "Template_23", "Template_24", "Template_29",
+      "Template_30",
     ],
   );
   assert.equal(isPdfTemplate("meridian"), true);
+  assert.equal(isPdfTemplate("flowcv"), true);
   assert.equal(isPdfTemplate("orchid"), false);
 });
 

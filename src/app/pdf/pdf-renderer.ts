@@ -47,18 +47,23 @@ async function renderResumePdf(
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 2);
   const headline = document.candidate.headline ?? document.targetRole;
-  const contact = [
+  const contact = (template === "flowcv" ? [
+    document.candidate.location,
+    document.candidate.email,
+    document.candidate.phone,
+    document.candidate.linkedinUrl,
+  ] : [
     document.candidate.email,
     document.candidate.phone,
     document.candidate.linkedinUrl,
     document.candidate.location,
-  ].filter(Boolean).join("  |  ");
+  ]).filter(Boolean).join("  |  ");
   pdf.header(document.candidate.fullName, [
     ...(template === "vellum" ? [headline] : [headline, contact]),
-  ].filter(Boolean).join(" | "), 19);
+  ].filter(Boolean).join(template === "flowcv" ? "\n" : " | "), 19);
   if (template === "vellum" && contact) pdf.centeredLine(contact, 8.5);
   if (document.summary) {
-    pdf.section(template === "vellum" ? "Summary" : "Professional Summary");
+    pdf.section(["vellum", "flowcv"].includes(template) ? "Summary" : "Professional Summary");
     pdf.paragraph(document.summary);
   }
   for (const section of document.sections) {
@@ -89,11 +94,16 @@ async function renderCoverLetterPdf(
   template: PdfTemplate,
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 1);
-  pdf.header(document.candidate.fullName, [
+  const coverContact = [
     document.candidate.email,
     document.candidate.phone,
     document.candidate.linkedinUrl,
-  ].filter(Boolean).join(" | "), 17);
+  ].filter(Boolean).join(" | ");
+  pdf.header(
+    document.candidate.fullName,
+    template === "flowcv" ? `\n${coverContact}` : coverContact,
+    17,
+  );
   pdf.space(22);
   pdf.line(
     document.date
@@ -127,6 +137,9 @@ async function createWriter(
       : [StandardFonts.Helvetica, StandardFonts.HelveticaBold];
   const regular = await document.embedFont(fontNames[0]);
   const bold = await document.embedFont(fontNames[1]);
+  const italic = await document.embedFont(
+    design.font === "serif" ? StandardFonts.TimesRomanItalic : StandardFonts.HelveticaOblique,
+  );
   const width = 595.28;
   const height = 841.89;
   const accent = rgb(...design.accent);
@@ -220,6 +233,50 @@ async function createWriter(
     drawWrapped(text, size, "gray", true);
   };
   const header = (title: string, detail: string, size = 19) => {
+    if (template === "flowcv") {
+      ensure(size + 56);
+      const cleanedTitle = clean(title);
+      const titleWidth = bold.widthOfTextAtSize(cleanedTitle, size);
+      page.drawText(cleanedTitle, {
+        x: Math.max(margin, (width - titleWidth) / 2),
+        y,
+        size,
+        font: bold,
+        color: ink,
+      });
+      y -= size + 8;
+      const [headline = "", contact = ""] = detail.split("\n", 2);
+      if (headline) {
+        const headlineSize = 11.5;
+        for (const part of wrap(headline, headlineSize, width - margin * 2, italic)) {
+          const partWidth = italic.widthOfTextAtSize(part, headlineSize);
+          page.drawText(part, {
+            x: Math.max(margin, (width - partWidth) / 2),
+            y,
+            size: headlineSize,
+            font: italic,
+            color: ink,
+          });
+          y -= 15;
+        }
+      }
+      if (contact) {
+        y -= 4;
+        for (const part of wrap(contact, 8.5, width - margin * 2)) {
+          const partWidth = regular.widthOfTextAtSize(part, 8.5);
+          page.drawText(part, {
+            x: Math.max(margin, (width - partWidth) / 2),
+            y,
+            size: 8.5,
+            font: regular,
+            color: ink,
+          });
+          y -= 12;
+        }
+      }
+      y -= 6;
+      return;
+    }
     if (template === "vellum") {
       ensure(size + 42);
       page.drawLine({
@@ -447,7 +504,7 @@ async function createWriter(
           y: rowY,
           size: detailSize,
           font: regular,
-          color: muted,
+          color: template === "flowcv" ? ink : muted,
         });
       }
       y -= Math.max(1, titleLines.length) * 14.2;
@@ -458,8 +515,8 @@ async function createWriter(
           x: margin,
           y,
           size: detailSize,
-          font: regular,
-          color: muted,
+          font: template === "flowcv" ? italic : regular,
+          color: template === "flowcv" ? ink : muted,
         });
         y -= 12.2;
       }
@@ -663,7 +720,9 @@ async function createWriter(
           page.drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
           const firstLineWidth = contentWidth - labelWidth - 6;
           const parts = wrap(body, skillSize, firstLineWidth);
-          const continuationInset = Math.min(labelWidth + 6, 120);
+          const continuationInset = template === "flowcv"
+            ? 0
+            : Math.min(labelWidth + 6, 120);
           parts.forEach((part, index) => {
             page.drawText(part, {
               x: margin + (index === 0 ? labelWidth + 6 : continuationInset),
