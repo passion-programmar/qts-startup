@@ -65,6 +65,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
         Add {roleLabel}
       </button>
       <Modal
+        confirmOnDismiss={isAccount}
         onClose={closeModal}
         open={isOpen}
         subtitle={
@@ -122,13 +123,15 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               placeholder="+1 (555) 123-4567"
               type="tel"
             />
-            <TextField
-              autoComplete="organization-title"
-              id="headline"
-              label="Professional headline"
-              maxLength={256}
-              name="headline"
-            />
+            <div className="sm:col-span-2 xl:col-span-3">
+              <TextField
+                autoComplete="organization-title"
+                id="headline"
+                label="Professional headline"
+                maxLength={256}
+                name="headline"
+              />
+            </div>
             <TextField
               autoComplete="url"
               id="linkedinUrl"
@@ -488,6 +491,7 @@ export function EditCandidateProfileForm({
         Edit
       </button>
       <Modal
+        confirmOnDismiss
         onClose={closeModal}
         open={isOpen}
         subtitle="Update the candidate's contact information and profile details."
@@ -543,14 +547,16 @@ export function EditCandidateProfileForm({
             placeholder="+1 (555) 123-4567"
             type="tel"
           />
-          <TextField
-            autoComplete="organization-title"
-            defaultValue={candidate.headline ?? ""}
-            id={fieldId("headline")}
-            label="Professional headline"
-            maxLength={256}
-            name="headline"
-          />
+          <div className="sm:col-span-2 lg:col-span-3">
+            <TextField
+              autoComplete="organization-title"
+              defaultValue={candidate.headline ?? ""}
+              id={fieldId("headline")}
+              label="Professional headline"
+              maxLength={256}
+              name="headline"
+            />
+          </div>
           <TextAreaField
             className="sm:col-span-2 lg:col-span-3"
             defaultValue={candidate.jdMatching ?? ""}
@@ -778,17 +784,44 @@ function Modal({
   onClose,
   title,
   subtitle,
+  confirmOnDismiss = false,
   children,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   subtitle: string;
+  confirmOnDismiss?: boolean;
   children: React.ReactNode;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const leaveConfirmationRef = useRef<HTMLDivElement>(null);
+  const showLeaveConfirmationRef = useRef(false);
+  const [showLeaveConfirmation, setShowLeaveConfirmation] = useState(false);
   const titleId = useId();
   const subtitleId = useId();
+
+  const updateLeaveConfirmation = useCallback((show: boolean) => {
+    showLeaveConfirmationRef.current = show;
+    setShowLeaveConfirmation(show);
+  }, []);
+  const requestClose = useCallback(() => {
+    if (confirmOnDismiss) {
+      updateLeaveConfirmation(true);
+    } else {
+      onClose();
+    }
+  }, [confirmOnDismiss, onClose, updateLeaveConfirmation]);
+  const cancelAndClose = useCallback(() => {
+    updateLeaveConfirmation(false);
+    onClose();
+  }, [onClose, updateLeaveConfirmation]);
+  const continueEditing = useCallback(() => {
+    updateLeaveConfirmation(false);
+    dialogRef.current
+      ?.querySelector<HTMLButtonElement>('button[aria-label="Close dialog"]')
+      ?.focus();
+  }, [updateLeaveConfirmation]);
 
   useEffect(() => {
     if (!open) return;
@@ -796,7 +829,10 @@ function Modal({
     const previousFocus = document.activeElement;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
+    const initialFocusScope = showLeaveConfirmationRef.current
+      ? leaveConfirmationRef.current
+      : dialogRef.current;
+    const firstFocusable = initialFocusScope?.querySelector<HTMLElement>(
       'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
     );
     (firstFocusable ?? dialogRef.current)?.focus();
@@ -804,12 +840,19 @@ function Modal({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        if (showLeaveConfirmationRef.current) {
+          continueEditing();
+        } else {
+          requestClose();
+        }
         return;
       }
 
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
+      const focusScope = showLeaveConfirmationRef.current
+        ? leaveConfirmationRef.current
+        : dialogRef.current;
+      if (event.key !== "Tab" || !focusScope) return;
+      const focusableElements = focusScope.querySelectorAll<HTMLElement>(
         'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
       );
       const first = focusableElements[0];
@@ -831,7 +874,15 @@ function Modal({
       document.removeEventListener("keydown", handleKeyDown);
       if (previousFocus instanceof HTMLElement) previousFocus.focus();
     };
-  }, [onClose, open]);
+  }, [continueEditing, open, requestClose, updateLeaveConfirmation]);
+
+  useEffect(() => {
+    if (showLeaveConfirmation) {
+      leaveConfirmationRef.current
+        ?.querySelector<HTMLButtonElement>("button")
+        ?.focus();
+    }
+  }, [showLeaveConfirmation]);
 
   if (!open) return null;
 
@@ -839,19 +890,22 @@ function Modal({
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-[2px] sm:p-6"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
     >
       <div
         aria-describedby={subtitleId}
         aria-labelledby={titleId}
         aria-modal="true"
-        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
+        className="relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
         ref={dialogRef}
         role="dialog"
         tabIndex={-1}
       >
-        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-7 sm:py-5">
+        <div
+          className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-7 sm:py-5"
+          inert={showLeaveConfirmation}
+        >
           <div>
             <h2
               className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl"
@@ -866,15 +920,60 @@ function Modal({
           <button
             aria-label="Close dialog"
             className="flex size-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-            onClick={onClose}
+            onClick={requestClose}
             type="button"
           >
             <X aria-hidden="true" className="size-4" />
           </button>
         </div>
-        <div className="overflow-y-auto px-5 py-5 sm:px-7 sm:py-6">
+        <div
+          className="overflow-y-auto px-5 py-5 sm:px-7 sm:py-6"
+          inert={showLeaveConfirmation}
+        >
           {children}
         </div>
+        {showLeaveConfirmation && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/35 p-4">
+            <div
+              aria-describedby={`${titleId}-leave-description`}
+              aria-labelledby={`${titleId}-leave-title`}
+              aria-modal="true"
+              className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"
+              ref={leaveConfirmationRef}
+              role="alertdialog"
+            >
+              <h3
+                className="text-base font-semibold text-slate-900"
+                id={`${titleId}-leave-title`}
+              >
+                Do you want to continue editing this profile?
+              </h3>
+              <p
+                className="mt-2 text-sm leading-6 text-slate-600"
+                id={`${titleId}-leave-description`}
+              >
+                Choose Continue to keep this form open. Choose Cancel to close it
+                and discard unsaved changes.
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                  onClick={cancelAndClose}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700"
+                  onClick={continueEditing}
+                  type="button"
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
