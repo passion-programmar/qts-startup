@@ -23,12 +23,12 @@ export async function createCategoryAction(
   const name = readName(formData);
   if (!name) return failure("Enter a category name up to 120 characters.");
 
-  try {
-    await db.insert(categories).values({ name });
-  } catch (error) {
-    if (isUniqueViolation(error)) return failure("A category with that name already exists.");
-    throw error;
-  }
+  const [created] = await db
+    .insert(categories)
+    .values({ name })
+    .onConflictDoNothing()
+    .returning({ id: categories.id });
+  if (!created) return failure("A category with that name already exists.");
 
   revalidateCategoryPages();
   return success("Category added.");
@@ -97,13 +97,20 @@ export async function createSubCategoryAction(
   const name = readName(formData);
   if (!categoryId || !name) return failure("Choose a category and enter a subcategory name.");
 
+  let created: { id: string } | undefined;
   try {
-    await db.insert(subCategories).values({ categoryId, name });
+    [created] = await db
+      .insert(subCategories)
+      .values({ categoryId, name })
+      .onConflictDoNothing()
+      .returning({ id: subCategories.id });
   } catch (error) {
-    if (isForeignKeyViolation(error)) return failure("That category no longer exists. Refresh and try again.");
-    if (isUniqueViolation(error)) return failure("That subcategory already exists in this category.");
+    if (isForeignKeyViolation(error)) {
+      return failure("That category no longer exists. Refresh and try again.");
+    }
     throw error;
   }
+  if (!created) return failure("That subcategory already exists in this category.");
 
   revalidateCategoryPages();
   return success("Subcategory added.");
