@@ -44,6 +44,7 @@ test("profile phone validation accepts formatted international numbers", () => {
   assert.equal(isValidProfilePhone("12345"), false);
   assert.equal(isValidProfilePhone("+1 555 CALL-NOW"), false);
   assert.equal(isValidProfilePhone("++15551234567"), false);
+  assert.equal(isValidProfilePhone("1234567) (8"), false);
 });
 
 test("LinkedIn profile input normalizes URLs and plain-text profile paths", () => {

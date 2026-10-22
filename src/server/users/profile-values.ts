@@ -41,10 +41,21 @@ export function isValidProfileEmail(value: string): boolean {
 export function isValidProfilePhone(value: string): boolean {
   if (!/^\+?[0-9][0-9().\s-]*[0-9]$/.test(value)) return false;
   const digits = value.replace(/\D/g, "");
-  const parenthesesAreBalanced =
-    (value.match(/\(/g)?.length ?? 0) === (value.match(/\)/g)?.length ?? 0);
-  return digits.length >= 7 && digits.length <= 15 &&
-    parenthesesAreBalanced && !/\(\s*\)/.test(value);
+  let inParentheses = false;
+  let digitsInParentheses = 0;
+  for (const character of value) {
+    if (character === "(") {
+      if (inParentheses) return false;
+      inParentheses = true;
+      digitsInParentheses = 0;
+    } else if (character === ")") {
+      if (!inParentheses || digitsInParentheses === 0) return false;
+      inParentheses = false;
+    } else if (inParentheses && /\d/.test(character)) {
+      digitsInParentheses += 1;
+    }
+  }
+  return digits.length >= 7 && digits.length <= 15 && !inParentheses;
 }
 
 export function normalizeLinkedInProfile(value: string): string | null {
