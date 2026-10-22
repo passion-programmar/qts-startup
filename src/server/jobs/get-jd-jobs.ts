@@ -7,6 +7,11 @@ import { getJobBusinessDate, normalizeJobUrl } from "@/server/jobs/job-values";
 
 export type GetJdDuplicateKind = "applied" | "job_list";
 
+export type GetJdDuplicate = {
+  kind: GetJdDuplicateKind;
+  jobStatus: string | null;
+};
+
 export type GetJdJobIdentity = {
   jobUrl: string;
   jobTitle: string;
@@ -75,12 +80,12 @@ export async function findGetJdDuplicate(
   job: GetJdJobIdentity,
   candidateId: string,
 ): Promise<GetJdDuplicateKind | null> {
-  const duplicates = await findGetJdDuplicates(
+  const duplicates = await findGetJdDuplicateDetails(
     managerId,
     job,
     [candidateId],
   );
-  return duplicates.get(candidateId) ?? null;
+  return duplicates.get(candidateId)?.kind ?? null;
 }
 
 export async function findGetJdDuplicates(
@@ -88,11 +93,23 @@ export async function findGetJdDuplicates(
   job: GetJdJobIdentity,
   candidateIds: string[],
 ): Promise<Map<string, GetJdDuplicateKind>> {
+  const details = await findGetJdDuplicateDetails(managerId, job, candidateIds);
+  return new Map([...details].map(([candidateId, duplicate]) => [
+    candidateId,
+    duplicate.kind,
+  ]));
+}
+
+export async function findGetJdDuplicateDetails(
+  managerId: string,
+  job: GetJdJobIdentity,
+  candidateIds: string[],
+): Promise<Map<string, GetJdDuplicate>> {
   if (candidateIds.length === 0) return new Map();
 
   const [jobRows, bidRows] = await Promise.all([
     db
-      .select({ candidateId: jobs.candidateId })
+      .select({ candidateId: jobs.candidateId, status: jobs.status })
       .from(jobs)
       .where(
         and(
@@ -113,9 +130,19 @@ export async function findGetJdDuplicates(
       ),
   ]);
 
-  const duplicates = new Map<string, GetJdDuplicateKind>();
-  for (const row of jobRows) duplicates.set(row.candidateId, "job_list");
-  for (const row of bidRows) duplicates.set(row.candidateId, "applied");
+  const duplicates = new Map<string, GetJdDuplicate>();
+  for (const row of jobRows) {
+    const current = duplicates.get(row.candidateId);
+    if (!current || (current.kind === "job_list" && current.jobStatus === "todo")) {
+      duplicates.set(row.candidateId, {
+        kind: "job_list",
+        jobStatus: row.status,
+      });
+    }
+  }
+  for (const row of bidRows) {
+    duplicates.set(row.candidateId, { kind: "applied", jobStatus: null });
+  }
   return duplicates;
 }
 

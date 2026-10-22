@@ -11,13 +11,15 @@ let cachedAuthToken = null;
 function experimentalApisEnabled() {
   const features = runtimeConfig.features;
   return features.scanner === true
-    || features.applicationAutomation === true
-    || features.textHighlights === true;
+    || features.applicationAutomation === true;
 }
 
 function isSupportedApiPath(path) {
   return path.startsWith('/api/extension/auth/')
-    || path === '/api/extension/get-jd/save';
+    || path === '/api/extension/get-jd/save'
+    || path === '/api/extension/features/me'
+    || path === '/api/extension/highlights'
+    || /^\/api\/extension\/highlights\/[0-9a-f-]+$/i.test(path);
 }
 
 function unavailableApiResponse() {
@@ -258,7 +260,7 @@ window.api = {
     `/api/auth/extension-bootstrap${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ''}`
   ),
   getAssignedCustomGpt: () => apiRequest('GET', '/api/v2/auth/custom-gpt-assignment'),
-  getManagerExtensionFeatures: () => apiRequest('GET', '/api/v2/extension-features/me'),
+  getManagerExtensionFeatures: () => apiRequest('GET', '/api/extension/features/me'),
   startAccountMailboxGoogleConnect: (accountUserId) =>
     apiRequest('POST', '/api/v2/account-mailboxes/google/connect', { accountUserId }),
   getAccountMailboxStatus: (accountUserId) =>
@@ -276,12 +278,12 @@ window.api = {
       `/api/v2/account-mailboxes/accounts/${encodeURIComponent(String(accountUserId))}/confirmation?${params}`
     );
   },
-  getGlobalTextHighlights: () => apiRequest('GET', '/api/v2/extension-features/highlights'),
-  createGlobalTextHighlight: (rule) => apiRequest('POST', '/api/v2/extension-features/highlights', rule),
+  getGlobalTextHighlights: () => apiRequest('GET', '/api/extension/highlights'),
+  createGlobalTextHighlight: (rule) => apiRequest('POST', '/api/extension/highlights', rule),
   updateGlobalTextHighlight: (ruleId, rule) =>
-    apiRequest('PUT', `/api/v2/extension-features/highlights/${encodeURIComponent(ruleId)}`, rule),
+    apiRequest('PUT', `/api/extension/highlights/${encodeURIComponent(ruleId)}`, rule),
   deleteGlobalTextHighlight: (ruleId) =>
-    apiRequest('DELETE', `/api/v2/extension-features/highlights/${encodeURIComponent(ruleId)}`),
+    apiRequest('DELETE', `/api/extension/highlights/${encodeURIComponent(ruleId)}`),
   getManagerApplicationProfile: () => apiRequest('GET', '/api/v2/manager-application-profile'),
   getManagerScannerRules: (templateId) =>
     apiRequest('GET', `/api/v2/manager-application-profile/scanner-rules/${encodeURIComponent(String(templateId))}`),

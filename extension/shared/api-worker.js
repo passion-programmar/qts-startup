@@ -4,7 +4,8 @@ const qtsRoot = typeof globalThis !== 'undefined' ? globalThis : self;
 
 function workerExperimentalApisEnabled() {
   const features = qtsRoot.__qtsRuntimeConfig?.features || {};
-  return features.scanner === true || features.applicationAutomation === true;
+  return features.scanner === true
+    || features.applicationAutomation === true;
 }
 
 function workerUnavailableResponse() {
@@ -19,12 +20,18 @@ function workerSupportedApiPath(path) {
   return path === '/api/extension/get-jd/check'
     || path === '/api/extension/get-jd/profiles'
     || path === '/api/extension/get-jd/save'
+    || path === '/api/extension/features/me'
+    || path === '/api/extension/highlights'
+    || path === '/api/extension/page-exclusions'
+    || /^\/api\/extension\/highlights\/[0-9a-f-]+$/i.test(path)
+    || /^\/api\/extension\/page-exclusions\/[0-9a-f-]+$/i.test(path)
     || path.startsWith('/api/extension/generation/')
     || path.startsWith('/api/extension/auth/');
 }
 
 async function workerReadAuth() {
-  const auth = qtsRoot.__qtsAccountAuth;  const token = auth?.getWorkerAuthToken
+  const auth = qtsRoot.__qtsAccountAuth;
+  const token = auth?.getWorkerAuthToken
     ? await auth.getWorkerAuthToken()
     : (await chrome.storage.local.get(['authToken', 'authExpiresAt'])).authToken || '';
   return {

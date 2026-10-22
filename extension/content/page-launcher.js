@@ -1,6 +1,11 @@
-function initializeQtsPageLauncher() {
+async function initializeQtsPageLauncher() {
   if (globalThis.__qtsPageLauncher) return;
   if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
+  const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
+  if (!pageAccess?.ok || pageAccess.excluded) {
+    globalThis.__qtsPageLauncher = { excluded: true };
+    return;
+  }
 
   const host = document.createElement('div');
   host.setAttribute('data-qts-page-launcher', '');
@@ -19,6 +24,7 @@ function initializeQtsPageLauncher() {
     .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
     .brand-icon { display: block; width: 40px; height: 40px; object-fit: contain; object-position: center; }
     .action { --x: 0px; --y: 0px; position: absolute; top: -7px; left: -7px; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 72px; padding: 7px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; color: #1e293b; box-shadow: 0 9px 24px #0f172a30; font: 700 10px/1.05 system-ui, sans-serif; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.45); transition: transform .2s ease, opacity .16s ease, visibility .2s; }
+    .action[hidden] { display: none; }
     .action:hover { color: #3730a3; background: #eef2ff; border-color: #818cf8; }
     .action-icon { color: #4f46e5; font-size: 20px; line-height: 1; }
     .launcher.open .action { opacity: 1; visibility: visible; transform: translate(var(--x), var(--y)) scale(1); }
@@ -26,6 +32,8 @@ function initializeQtsPageLauncher() {
     .generation { --x: -80px; --y: -82px; }
     .apply { --x: 0px; --y: -116px; }
     .logout { --x: 82px; --y: -82px; }
+    .text-highlights { --x: 112px; --y: 0px; }
+    .page-exclusions { --x: 78px; --y: 84px; }
     .toast { position: fixed; top: 16px; left: 16px; max-width: min(360px, calc(100vw - 32px)); padding: 11px 14px; border-radius: 9px; background: #172554; color: #fff; box-shadow: 0 9px 28px #0f172a38; font: 600 13px/1.4 system-ui, sans-serif; pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .16s ease, transform .16s ease; }
     .toast.visible { opacity: 1; transform: translateY(0); }
     .toast.error { background: #991b1b; }
@@ -46,11 +54,18 @@ function initializeQtsPageLauncher() {
     .details dt { color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .details dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .description { max-height: 180px; overflow: auto; padding: 9px; border-radius: 8px; background: #f8fafc; }
+    .highlight-panel { position: fixed; top: 16px; right: 16px; z-index: 10; width: min(420px, calc(100vw - 32px)); height: min(620px, calc(100vh - 32px)); overflow: hidden; border: 1px solid #cbd5e1; border-radius: 16px; background: #fff; box-shadow: 0 20px 55px #0f172a40; pointer-events: auto; }
+    .highlight-panel[hidden] { display: none; }
+    .highlight-panel iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+    .highlight-panel-close { position: absolute; top: 8px; right: 8px; z-index: 2; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #cbd5e1; border-radius: 50%; background: #fff; color: #334155; box-shadow: 0 2px 8px #0f172a24; font: 20px/1 system-ui, sans-serif; cursor: pointer; }
+    .highlight-panel-close:hover { background: #f1f5f9; }
     .launcher.get-jd-active { right: calc(min(400px, 48vw) + 112px); }
     @media (max-width: 520px) {
       .launcher { right: 96px; bottom: 24px; }
       .action { width: 66px; height: 66px; }
       .logout { --x: 68px; --y: -78px; }
+      .text-highlights { --x: 96px; }
+      .page-exclusions { --x: 70px; --y: 78px; }
       .get-jd { --x: -96px; }
       .launcher.get-jd-active { right: calc(min(400px, 48vw) + 96px); }
     }
@@ -75,6 +90,8 @@ function initializeQtsPageLauncher() {
   const actions = [
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
     ['generation', 'Generation', '▤', 'generation'],
+    ['text_highlights', 'Text Highlight', '✎', 'text-highlights'],
+    ['page_exclusions', 'Excluded URLs', '⊘', 'page-exclusions'],
     ['apply', 'Apply', '→', 'apply'],
     ['session', 'Sign In', '↪', 'logout'],
   ];
@@ -97,6 +114,19 @@ function initializeQtsPageLauncher() {
   toast.className = 'toast';
   toast.setAttribute('role', 'status');
   toast.setAttribute('aria-live', 'polite');
+
+  const highlightPanel = document.createElement('section');
+  highlightPanel.className = 'highlight-panel';
+  highlightPanel.hidden = true;
+  highlightPanel.setAttribute('aria-label', 'Manager extension settings');
+  const highlightFrame = document.createElement('iframe');
+  highlightFrame.title = 'Manager extension settings';
+  const highlightClose = document.createElement('button');
+  highlightClose.className = 'highlight-panel-close';
+  highlightClose.type = 'button';
+  highlightClose.setAttribute('aria-label', 'Close Manager extension settings');
+  highlightClose.textContent = '×';
+  highlightPanel.append(highlightFrame, highlightClose);
 
   const signInForm = document.createElement('form');
   signInForm.className = 'sign-in-form';
@@ -147,7 +177,7 @@ function initializeQtsPageLauncher() {
   details.className = 'details';
   preview.append(previewHeader, localNote, details);
 
-  root.append(style, launcher, toast, signInForm, preview);
+  root.append(style, launcher, toast, signInForm, preview, highlightPanel);
   (document.documentElement || document.body).appendChild(host);
 
   let toastTimer = null;
@@ -170,6 +200,79 @@ function initializeQtsPageLauncher() {
     setOpen(false);
     signInForm.hidden = false;
     userInput.focus();
+  }
+
+  function closeHighlightPanel() {
+    highlightPanel.hidden = true;
+    highlightFrame.src = 'about:blank';
+  }
+
+  async function syncTextHighlightAction() {
+    const highlightButton = launcher.querySelector('[data-action="text_highlights"]');
+    const exclusionsButton = launcher.querySelector('[data-action="page_exclusions"]');
+    if (!highlightButton && !exclusionsButton) return;
+    const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
+    const signedIn = Boolean(stored.authToken && Number(stored.authExpiresAt) > Date.now());
+    if (!signedIn) {
+      if (highlightButton) highlightButton.hidden = true;
+      if (exclusionsButton) exclusionsButton.hidden = true;
+      return;
+    }
+    const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_EXTENSION_FEATURES' });
+    if (highlightButton) {
+      highlightButton.hidden = response?.ok !== true || response.canManageTextHighlights !== true;
+      highlightButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
+    }
+    if (exclusionsButton) {
+      exclusionsButton.hidden = response?.ok !== true || response.canManagePageExclusions !== true;
+      exclusionsButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
+    }
+  }
+
+  async function openManagerPanel(button, panel, permissionKey, permissionName) {
+    setOpen(false);
+    button.disabled = true;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_MANAGER_EXTENSION_FEATURES',
+        refresh: true,
+      });
+      if (!response?.ok || response[permissionKey] !== true) {
+        button.hidden = true;
+        throw new Error(response?.error || `Super must assign ${permissionName} to this Manager account.`);
+      }
+      if (!Number.isInteger(response.tabId)) {
+        throw new Error('The current page is unavailable for Manager settings.');
+      }
+      const url = new URL(chrome.runtime.getURL('popup/popup.html'));
+      url.searchParams.set('embedded', '1');
+      url.searchParams.set('panel', panel);
+      url.searchParams.set('tabId', String(response.tabId));
+      highlightFrame.src = url.href;
+      highlightPanel.hidden = false;
+    } catch (error) {
+      showToast(error?.message || 'Could not open Manager settings.', true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function openHighlightPanel(button) {
+    await openManagerPanel(
+      button,
+      'text-highlights',
+      'canManageTextHighlights',
+      'text highlight management',
+    );
+  }
+
+  async function openPageExclusionPanel(button) {
+    await openManagerPanel(
+      button,
+      'page-exclusions',
+      'canManagePageExclusions',
+      'page exclusion management',
+    );
   }
 
   async function submitSignIn() {
@@ -268,6 +371,14 @@ function initializeQtsPageLauncher() {
   }
 
   async function runAction(action, button) {
+    if (action === 'text_highlights') {
+      await openHighlightPanel(button);
+      return;
+    }
+    if (action === 'page_exclusions') {
+      await openPageExclusionPanel(button);
+      return;
+    }
     setOpen(false);
     button.disabled = true;
     try {
@@ -302,6 +413,12 @@ function initializeQtsPageLauncher() {
   launcher.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
   });
+  highlightClose.addEventListener('click', closeHighlightPanel);
+  window.addEventListener('message', (event) => {
+    if (event.source === highlightFrame.contentWindow && event.data?.type === 'QTS_CLOSE_TEXT_HIGHLIGHTS') {
+      closeHighlightPanel();
+    }
+  });
   close.addEventListener('click', () => { preview.hidden = true; });
   signInForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -311,8 +428,25 @@ function initializeQtsPageLauncher() {
   passwordInput.addEventListener('change', submitSignIn);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (changes.qtsManagerPageExclusions) {
+      chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
+        .then((response) => {
+          if (!response?.ok) return;
+          if (response.excluded) {
+            globalThis.__qtsPageLauncher?.disable?.();
+          } else if (globalThis.__qtsPageLauncher?.excluded) {
+            globalThis.__qtsPageLauncher = null;
+            initializeQtsPageLauncher().catch((error) => {
+              console.error('[QTS extension] Could not restore page actions:', error);
+            });
+          }
+        })
+        .catch((error) => console.error('[QTS extension] Could not apply URL exclusions:', error));
+    }
     if (changes.authToken || changes.authExpiresAt) {
       syncSessionAction().catch(() => {});
+      syncTextHighlightAction().catch(() => {});
+      if (changes.authToken && !changes.authToken.newValue) closeHighlightPanel();
       if (changes.authToken?.newValue) {
         signInForm.hidden = true;
         passwordInput.value = '';
@@ -338,7 +472,46 @@ function initializeQtsPageLauncher() {
 
   syncSessionAction().catch(() => {});
   syncModeActions().catch(() => {});
-  globalThis.__qtsPageLauncher = { setOpen, showPreview, syncSessionAction, syncModeActions };
+  syncTextHighlightAction().catch((error) => {
+    console.warn('[QTS text highlights] Could not verify Manager access:', error);
+  });
+  globalThis.__qtsPageLauncher = {
+    excluded: false,
+    setOpen,
+    showPreview,
+    syncSessionAction,
+    syncModeActions,
+    syncTextHighlightAction,
+    openPageExclusionPanel,
+    disable() {
+      setOpen(false);
+      highlightPanel.hidden = true;
+      preview.hidden = true;
+      signInForm.hidden = true;
+      host.remove();
+      globalThis.__qtsPageLauncher = { excluded: true };
+    },
+  };
 }
 
-initializeQtsPageLauncher();
+globalThis.__qtsInitializePageLauncher = initializeQtsPageLauncher;
+if (!globalThis.__qtsPageLauncherNavigationListener) {
+  globalThis.__qtsPageLauncherNavigationListener = true;
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== 'QTS_PAGE_URL_CHANGED') return;
+    if (message.excluded) {
+      globalThis.__qtsPageLauncher?.disable?.();
+      return;
+    }
+    if (globalThis.__qtsPageLauncher?.excluded) {
+      globalThis.__qtsPageLauncher = null;
+      initializeQtsPageLauncher().catch((error) => {
+        console.error('[QTS extension] Could not restore page actions:', error);
+      });
+    }
+  });
+}
+
+initializeQtsPageLauncher().catch((error) => {
+  console.error('[QTS extension] Could not verify page access:', error);
+});

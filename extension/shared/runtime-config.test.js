@@ -29,11 +29,12 @@ test('runtime config gives popup and worker callers one normalized server URL', 
   assert.equal(await config.getServerUrl(), 'http://localhost:3000');
 });
 
-test('unfinished automation features are disabled in the release boundary', () => {
+test('Get JD and shared text highlights are enabled while unfinished automation stays disabled', () => {
   const config = loadRuntimeConfig();
   assert.equal(config.isFeatureEnabled('getJd'), true);
   assert.equal(config.isFeatureEnabled('geminiEvaluation'), false);
   assert.equal(config.isFeatureEnabled('scanner'), false);
   assert.equal(config.isFeatureEnabled('applicationAutomation'), false);
-  assert.equal(config.isFeatureEnabled('textHighlights'), false);
+  assert.equal(config.isFeatureEnabled('textHighlights'), true);
+  assert.equal(config.isFeatureEnabled('pageExclusions'), true);
 });

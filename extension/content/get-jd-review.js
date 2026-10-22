@@ -1,6 +1,11 @@
-(function initializeGetJdReview() {
+async function initializeGetJdReview() {
   if (globalThis.__qtsGetJdReview) return;
   if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
+  const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
+  if (!pageAccess?.ok || pageAccess.excluded) {
+    globalThis.__qtsGetJdReview = { excluded: true };
+    return;
+  }
 
   const RESULT_MESSAGE = 'QTS_GET_JD_RESULT_UPDATED';
   let host = null;
@@ -13,7 +18,6 @@
   let signedIn = false;
   let profilesLoaded = false;
   let profileLoadError = '';
-  let profileLoadRequestId = 0;
   let panelHideTimer = null;
 
   function ensureRoot() {
@@ -282,7 +286,9 @@
       const availability = profile.duplicateKind === 'applied'
         ? 'Already applied'
         : profile.duplicateKind === 'job_list'
-          ? 'Already in Jobs'
+          ? profile.jobStatus === 'todo'
+            ? 'In Jobs · To do'
+            : `In Jobs · ${profile.jobStatus || 'not editable'}`
           : '';
       category.textContent = [
         profile.category || 'Uncategorized',
@@ -297,7 +303,7 @@
         checkbox.type = 'checkbox';
         checkbox.dataset.profileId = profile.id;
         checkbox.disabled = !selectionEnabled || profile.available === false;
-        checkbox.checked = !checkbox.disabled && selectedIds.has(profile.id);
+        checkbox.checked = selectedIds.has(profile.id);
         if (profile.available === false) label.classList.add('unavailable');
         else if (checkbox.disabled) label.classList.add('inactive');
         checkbox.addEventListener('change', () => {
@@ -359,17 +365,24 @@
     appendDetail(elements.details, 'Job description', result.jobDescription, 'description');
     elements.message.textContent = result.saveError || '';
 
-    const selectedIds = result.selectionModified === true
-      ? new Set(Array.isArray(result.selectedProfileIds) ? result.selectedProfileIds : [])
-      : new Set([
-        ...(Array.isArray(result.selectedProfileIds) ? result.selectedProfileIds : []),
-        ...(Array.isArray(result.classification.matchingProfileIds)
-          ? result.classification.matchingProfileIds
-          : []),
-        (result.profiles || [])
-          .filter((profile) => profile.recommended === true)
-          .map((profile) => profile.id),
-      ].flat());
+    const selectedIds = new Set([
+      ...(Array.isArray(result.selectedProfileIds) ? result.selectedProfileIds : []),
+      ...(Array.isArray(result.profiles)
+        ? result.profiles
+          .filter((profile) => profile.available === false)
+          .map((profile) => profile.id)
+        : []),
+      ...(result.selectionModified === true
+        ? []
+        : [
+          ...(Array.isArray(result.classification.matchingProfileIds)
+            ? result.classification.matchingProfileIds
+            : []),
+          ...(result.profiles || [])
+            .filter((profile) => profile.recommended === true)
+            .map((profile) => profile.id),
+        ]),
+    ]);
     const resultProfiles = new Map(
       (result.profiles || []).map((profile) => [profile.id, profile]),
     );
@@ -391,9 +404,14 @@
     elements.cancel.disabled = false;
     elements.cancel.textContent = 'Cancel';
     elements.save.onclick = async () => {
-      const ids = readSelectedIds();
+      const availableIds = new Set(
+        candidates
+          .filter((profile) => profile.available !== false)
+          .map((profile) => profile.id),
+      );
+      const ids = readSelectedIds().filter((id) => availableIds.has(id));
       if (!ids.length) {
-        elements.message.textContent = 'Select at least one candidate before saving.';
+        elements.message.textContent = 'Select at least one new candidate account to add this job.';
         return;
       }
       elements.save.disabled = true;
@@ -447,7 +465,7 @@
     const responseByProfile = new Map(
       (response.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
     );
-    renderProfiles(managerProfiles.map((profile) => ({
+    renderProfiles((result.profiles || managerProfiles).map((profile) => ({
       ...profile,
       saveResult: responseByProfile.get(profile.id) || null,
     })));
@@ -463,7 +481,7 @@
     elements.cancel.setAttribute('aria-label', 'Return to candidate accounts');
     elements.cancel.onclick = () => {
       currentResult = null;
-      renderIdlePanel();
+      renderCurrentResult();
     };
   }
 
@@ -482,8 +500,15 @@
   }
 
   function renderCurrentResult() {
+    if (!signedIn || extensionStatus !== 'get_jd') {
+      setPanelVisible(false);
+      return;
+    }
+    if (!currentResult || currentResult.status === 'not_job_page') {
+      setPanelVisible(false);
+      return;
+    }
     setPanelVisible(true);
-    if (!signedIn || extensionStatus !== 'get_jd') return;
     if (currentResult?.status === 'complete' && currentResult.classification?.isJobPage === true) {
       renderReview(currentResult);
       return;
@@ -503,11 +528,9 @@
     renderIdlePanel();
   }
 
-  async function loadManagerProfiles() {
-    const requestId = ++profileLoadRequestId;
+  async function loadManagerSession() {
     const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
     if (!sessionIsValid(stored)) {
-      profileLoadRequestId += 1;
       signedIn = false;
       managerProfiles = [];
       profilesLoaded = false;
@@ -519,43 +542,10 @@
 
     ensureRoot();
     signedIn = true;
-    profilesLoaded = false;
-    profileLoadError = '';
-    renderCurrentResult();
-    if (extensionStatus === 'get_jd') {
-      renderIdlePanel('Loading your candidate accounts...');
-    }
-    let response;
-    try {
-      response = await chrome.runtime.sendMessage({
-        type: 'GET_MANAGER_CANDIDATE_PROFILES',
-      });
-    } catch (error) {
-      if (requestId !== profileLoadRequestId || !signedIn) return;
-      const message = error instanceof Error ? error.message : 'Could not load candidate accounts.';
-      profilesLoaded = true;
-      profileLoadError = message;
-      renderCurrentResult();
-      console.error('[QTS Get JD] Could not load manager candidate accounts:', error);
-      return;
-    }
-    if (requestId !== profileLoadRequestId || !signedIn) return;
-    if (!response?.ok || !Array.isArray(response.profiles)) {
-      profileLoadError = response?.error || 'Could not load candidate accounts.';
-      profilesLoaded = true;
-      renderCurrentResult();
-      console.error('[QTS Get JD] Could not load manager candidate accounts:', profileLoadError);
-      return;
-    }
-    managerProfiles = response.profiles
-      .filter((profile) => profile && typeof profile.id === 'string')
-      .map((profile) => ({
-        id: profile.id,
-        name: typeof profile.name === 'string' ? profile.name : 'Candidate',
-        category: typeof profile.category === 'string' ? profile.category : null,
-      }));
+    managerProfiles = [];
     profilesLoaded = true;
     profileLoadError = '';
+    renderCurrentResult();
     renderCurrentResult();
   }
 
@@ -573,6 +563,14 @@
       return;
     }
     currentResult = result;
+    if (result.status === 'processing') profilesLoaded = false;
+    else profilesLoaded = true;
+    if (result.status === 'not_job_page') {
+      currentResult = null;
+      setPanelVisible(false);
+      showToast('This is not a job page.', 'normal', `${result.runId || result.updatedAt}:not-job-page`);
+      return;
+    }
     if (!signedIn) return;
     const elements = host.__qtsElements;
     setPanelVisible(true);
@@ -635,8 +633,23 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (changes.qtsManagerPageExclusions) {
+      chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
+        .then((response) => {
+          if (!response?.ok) return;
+          if (response.excluded) {
+            globalThis.__qtsGetJdReview?.disable?.();
+          } else if (globalThis.__qtsGetJdReview?.excluded) {
+            globalThis.__qtsGetJdReview = null;
+            initializeGetJdReview().catch((error) => {
+              console.error('[QTS Get JD] Could not restore page review:', error);
+            });
+          }
+        })
+        .catch((error) => console.error('[QTS Get JD] Could not apply URL exclusions:', error));
+    }
     if (changes.authToken || changes.authExpiresAt) {
-      loadManagerProfiles().catch((error) => {
+      loadManagerSession().catch((error) => {
         console.error('[QTS Get JD] Could not sync the manager session:', error);
       });
     }
@@ -653,12 +666,43 @@
     })
     .catch((error) => console.error('[QTS Get JD] Could not load page review:', error));
 
-  loadManagerProfiles().catch((error) => {
+  loadManagerSession().catch((error) => {
     console.error('[QTS Get JD] Could not load manager candidate accounts:', error);
   });
   syncExtensionStatus().catch((error) => {
     console.error('[QTS Get JD] Could not load Get JD status:', error);
   });
 
-  globalThis.__qtsGetJdReview = { applyResult };
-})();
+  globalThis.__qtsGetJdReview = {
+    excluded: false,
+    applyResult,
+    disable() {
+      setPanelVisible(false);
+      host?.remove();
+      document.documentElement?.removeAttribute('data-qts-get-jd-docked');
+      globalThis.__qtsGetJdReview = { excluded: true };
+    },
+  };
+}
+
+globalThis.__qtsInitializeGetJdReview = initializeGetJdReview;
+if (!globalThis.__qtsGetJdNavigationListener) {
+  globalThis.__qtsGetJdNavigationListener = true;
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== 'QTS_PAGE_URL_CHANGED') return;
+    if (message.excluded) {
+      globalThis.__qtsGetJdReview?.disable?.();
+      return;
+    }
+    if (globalThis.__qtsGetJdReview?.excluded) {
+      globalThis.__qtsGetJdReview = null;
+      initializeGetJdReview().catch((error) => {
+        console.error('[QTS Get JD] Could not restore page review:', error);
+      });
+    }
+  });
+}
+
+initializeGetJdReview().catch((error) => {
+  console.error('[QTS Get JD] Could not verify page access:', error);
+});

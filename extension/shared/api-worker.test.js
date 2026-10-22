@@ -101,6 +101,57 @@ test('worker permits loading the signed-in manager candidate accounts', async ()
   assert.ok(requests[0].options.headers.Authorization);
 });
 
+test('worker permits manager extension feature and shared highlight requests', async () => {
+  const requests = [];
+  const worker = loadApiWorker(async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, features: { canManageTextHighlights: true }, rules: [] }),
+    };
+  });
+
+  const features = await worker.workerApiRequest('GET', '/api/extension/features/me');
+  const rules = await worker.workerApiRequest('GET', '/api/extension/highlights');
+  const updated = await worker.workerApiRequest(
+    'PUT',
+    '/api/extension/highlights/123e4567-e89b-42d3-a456-426614174000',
+    { text: 'remote', textColor: '#111111', backgroundColor: '#ffff00' },
+  );
+  const exclusions = await worker.workerApiRequest('GET', '/api/extension/page-exclusions');
+  const addedExclusion = await worker.workerApiRequest(
+    'POST',
+    '/api/extension/page-exclusions',
+    { url: 'example.test/careers' },
+  );
+  const deletedExclusion = await worker.workerApiRequest(
+    'DELETE',
+    '/api/extension/page-exclusions/123e4567-e89b-42d3-a456-426614174000',
+  );
+
+  assert.equal(features.features.canManageTextHighlights, true);
+  assert.deepEqual(rules.rules, []);
+  assert.equal(updated.success, true);
+  assert.equal(exclusions.success, true);
+  assert.equal(addedExclusion.success, true);
+  assert.equal(deletedExclusion.success, true);
+  assert.equal(requests.length, 6);
+  assert.equal(requests[0].url, 'https://qts.example.test/api/extension/features/me');
+  assert.equal(requests[1].url, 'https://qts.example.test/api/extension/highlights');
+  assert.equal(
+    requests[2].url,
+    'https://qts.example.test/api/extension/highlights/123e4567-e89b-42d3-a456-426614174000',
+  );
+  assert.equal(requests[3].url, 'https://qts.example.test/api/extension/page-exclusions');
+  assert.equal(requests[4].url, 'https://qts.example.test/api/extension/page-exclusions');
+  assert.equal(
+    requests[5].url,
+    'https://qts.example.test/api/extension/page-exclusions/123e4567-e89b-42d3-a456-426614174000',
+  );
+  assert.ok(requests.every(({ options }) => options.headers.Authorization === 'Bearer worker-token'));
+});
+
 test('worker permits authenticated Generation endpoints', async () => {
   const requests = [];
   const worker = loadApiWorker(async (url, options) => {

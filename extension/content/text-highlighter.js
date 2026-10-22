@@ -1,13 +1,15 @@
-(function startPageTextHighlighter() {
+async function startPageTextHighlighter() {
   if (globalThis.__qtsPageTextHighlighter) return;
 
   const highlighting = globalThis.__qtsTextHighlighting;
   if (!highlighting || !globalThis.chrome?.storage?.local) return;
+  if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
 
   let currentStorageKey = '';
   let currentRules = [];
   let observer = null;
   let refreshQueued = false;
+  let pageExcluded = false;
 
   function unwrapHighlights() {
     const marks = document.querySelectorAll('mark[data-qts-text-highlight]');
@@ -77,10 +79,41 @@
   }
 
   async function loadAndApply() {
+    const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
+    if (!pageAccess?.ok || pageAccess.excluded) {
+      pageExcluded = true;
+      currentRules = [];
+      if (observer) observer.disconnect();
+      applyRules(currentRules);
+      return;
+    }
+    pageExcluded = false;
     currentStorageKey = highlighting.getGlobalStorageKey();
-    const stored = await chrome.storage.local.get(currentStorageKey);
+    const stored = await chrome.storage.local.get([
+      currentStorageKey,
+      'authToken',
+      'authExpiresAt',
+    ]);
     currentRules = highlighting.normalizeRules(stored[currentStorageKey] || []);
+    let expiresAt = Number(stored.authExpiresAt) || 0;
+    try {
+      const payload = JSON.parse(atob(
+        String(stored.authToken || '').split('.')[1]
+          .replace(/-/g, '+')
+          .replace(/_/g, '/'),
+      ));
+      if (Number.isFinite(payload.exp)) expiresAt = payload.exp * 1000;
+    } catch {
+      // The stored expiry remains authoritative when the token is not a JWT.
+    }
+    if (!stored.authToken || expiresAt <= Date.now()) {
+      currentRules = [];
+      applyRules(currentRules);
+      observePage();
+      return;
+    }
     applyRules(currentRules);
+    observePage();
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_GLOBAL_TEXT_HIGHLIGHTS' });
       if (!response?.success) {
@@ -92,12 +125,13 @@
   }
 
   function observePage() {
-    if (observer && document.body) {
+    if (!pageExcluded && observer && document.body) {
       observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     }
   }
 
   function scheduleRefresh() {
+    if (pageExcluded) return;
     if (refreshQueued) return;
     refreshQueued = true;
     setTimeout(() => {
@@ -110,9 +144,24 @@
 
   globalThis.__qtsPageTextHighlighter = { refresh: loadAndApply };
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && currentStorageKey && changes[currentStorageKey]) {
+    if (
+      area === 'local' &&
+      currentStorageKey &&
+      (
+        changes[currentStorageKey]
+        || changes.authToken
+        || changes.authExpiresAt
+        || changes.qtsManagerPageExclusions
+      )
+    ) {
       loadAndApply().catch((error) => console.error('[QTS text highlights] Could not apply saved rules:', error));
     }
+  });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== 'QTS_PAGE_URL_CHANGED') return;
+    loadAndApply().catch((error) => {
+      console.error('[QTS text highlights] Could not follow page navigation:', error);
+    });
   });
   window.addEventListener('popstate', () => {
     loadAndApply().catch((error) => console.error('[QTS text highlights] Could not follow page navigation:', error));
@@ -126,4 +175,8 @@
     observer = new MutationObserver(scheduleRefresh);
     observePage();
   }).catch((error) => console.error('[QTS text highlights] Could not load saved rules:', error));
-})();
+}
+
+startPageTextHighlighter().catch((error) => {
+  console.error('[QTS text highlights] Could not verify page access:', error);
+});

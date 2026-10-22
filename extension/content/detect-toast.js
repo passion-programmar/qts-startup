@@ -1,4 +1,4 @@
-// In-page toast alerts — stacked vertically, numbered, slide in left-to-right.
+// In-page toast alerts — newest first with a numbered status badge.
 
 (function () {
   'use strict';
@@ -43,62 +43,71 @@
     style.id = STYLE_ID;
     style.textContent = `
       #${TOAST_HOST_ID} {
+        all: initial;
         position: fixed;
         top: 16px;
         left: 16px;
         z-index: 2147483646;
         display: flex;
         flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
+        align-items: stretch;
+        gap: 8px;
         pointer-events: none;
-        max-width: min(380px, calc(100vw - 32px));
+        width: min(390px, calc(100vw - 32px));
       }
       .qts-toast {
         display: flex;
         align-items: flex-start;
-        gap: 10px;
+        gap: 12px;
         width: 100%;
-        max-width: min(380px, calc(100vw - 32px));
-        padding: 12px 14px;
-        border-radius: 10px;
-        font: 600 13px/1.35 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        color: #fff;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.22);
+        padding: 13px 15px;
+        border: 1px solid #e2e8f0;
+        border-left: 4px solid var(--qts-toast-accent, #64748b);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.97);
+        color: #172033;
+        font: 500 13px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.06);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
         opacity: 0;
-        transform: translateX(-28px);
-        transition: opacity 0.35s ease, transform 0.35s ease;
+        transform: translateY(-8px) scale(0.985);
+        transition: opacity 0.22s ease, transform 0.22s ease;
       }
       .qts-toast.is-visible {
         opacity: 1;
-        transform: translateX(0);
+        transform: translateY(0) scale(1);
       }
       .qts-toast.is-leaving {
         opacity: 0;
-        transform: translateX(28px);
+        transform: translateY(-5px) scale(0.985);
       }
       .qts-toast-index {
         flex: 0 0 auto;
-        min-width: 1.4em;
-        font-weight: 800;
-        font-size: 14px;
-        line-height: 1.2;
-        opacity: 0.92;
+        display: inline-flex;
+        width: 25px;
+        height: 25px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 9px;
+        background: color-mix(in srgb, var(--qts-toast-accent, #64748b) 12%, white);
+        color: var(--qts-toast-accent, #475569);
+        font: 750 11px/1 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       }
       .qts-toast-text {
         flex: 1 1 auto;
         min-width: 0;
-        word-break: break-word;
+        padding-top: 3px;
+        overflow-wrap: anywhere;
       }
-      .qts-toast--success { background: #15803d; border: 1px solid #166534; }
-      .qts-toast--fail { background: #475569; border: 1px solid #334155; }
-      .qts-toast--error { background: #b91c1c; border: 1px solid #991b1b; }
-      .qts-toast--info { background: #1d4ed8; border: 1px solid #1e40af; }
-      .qts-toast--warn { background: #b45309; border: 1px solid #92400e; }
-      .qts-toast--applied {
-        background: #eab308;
-        border: 1px solid #ca8a04;
-        color: #1c1917;
+      .qts-toast--success { --qts-toast-accent: #15803d; }
+      .qts-toast--fail { --qts-toast-accent: #64748b; }
+      .qts-toast--error { --qts-toast-accent: #dc2626; }
+      .qts-toast--info { --qts-toast-accent: #2563eb; }
+      .qts-toast--warn { --qts-toast-accent: #d97706; }
+      .qts-toast--applied { --qts-toast-accent: #ca8a04; }
+      @media (prefers-reduced-motion: reduce) {
+        .qts-toast { transition: none; }
       }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -125,8 +134,10 @@
   }
 
   function trimStack(host) {
-    while (host.children.length > MAX_VISIBLE) {
-      dismissToast(host.children[0]);
+    const activeToasts = Array.from(host.children)
+      .filter((toast) => !toast.classList.contains('is-leaving'));
+    while (activeToasts.length > MAX_VISIBLE) {
+      dismissToast(activeToasts.pop());
     }
   }
 
@@ -161,7 +172,7 @@
 
     toast.appendChild(indexEl);
     toast.appendChild(textEl);
-    host.appendChild(toast);
+    host.insertBefore(toast, host.firstChild);
     trimStack(host);
 
     requestAnimationFrame(() => {

@@ -16,10 +16,16 @@ test('the page launcher is the only user entry point', () => {
   );
 
   assert.ok(scripts.includes('content/page-launcher.js'));
+  assert.ok(scripts.includes('content/text-highlighter.js'));
   assert.ok(scripts.includes('shared/page-exclusions.js'));
+  assert.ok(scripts.includes('shared/text-highlighting.js'));
   assert.ok(
     scripts.indexOf('shared/page-exclusions.js')
       < scripts.indexOf('content/page-launcher.js'),
+  );
+  assert.ok(
+    scripts.indexOf('shared/text-highlighting.js')
+      < scripts.indexOf('content/text-highlighter.js'),
   );
   assert.ok(serviceWorker.includes("'../shared/page-exclusions.js'"));
   assert.equal(manifest.action.default_popup, undefined);
@@ -32,7 +38,7 @@ test('the page launcher is the only user entry point', () => {
     path.join(extensionRoot, 'content', 'page-launcher.js'),
     'utf8',
   );
-  assert.ok(launcher.includes("initializeQtsPageLauncher();"));
+  assert.ok(launcher.includes('initializeQtsPageLauncher().catch'));
   assert.equal(launcher.includes("window.addEventListener('load', initializeQtsPageLauncher"), false);
   assert.ok(launcher.includes('conic-gradient(from 0deg'));
   assert.ok(launcher.includes('qts-border-rotate'));
@@ -59,6 +65,83 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'cancel'"));
   assert.ok(launcher.includes("'Sign In'"));
   assert.ok(launcher.includes("'Sign Out'"));
+});
+
+test('Get JD locally rejects non-job pages before duplicate checks and profile requests', () => {
+  const serviceWorker = fs.readFileSync(
+    path.join(extensionRoot, 'background', 'service-worker.js'),
+    'utf8',
+  );
+  const review = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'get-jd-review.js'),
+    'utf8',
+  );
+  const preflightIndex = serviceWorker.indexOf('classifyJobPageEvidence({');
+  const duplicateCheckIndex = serviceWorker.indexOf("workerApiRequest('POST', '/api/extension/get-jd/check'");
+
+  assert.ok(preflightIndex >= 0);
+  assert.ok(duplicateCheckIndex > preflightIndex);
+  assert.ok(serviceWorker.includes("status: 'not_job_page'"));
+  assert.ok(serviceWorker.includes("msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED'"));
+  assert.ok(review.includes("result.status === 'not_job_page'"));
+  assert.equal(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"), false);
+});
+
+test('manager URL exclusions are permission-gated and applied before page UI runs', () => {
+  const serviceWorker = fs.readFileSync(
+    path.join(extensionRoot, 'background', 'service-worker.js'),
+    'utf8',
+  );
+  const launcher = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'page-launcher.js'),
+    'utf8',
+  );
+  const featureRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'features', 'me', 'route.ts'),
+    'utf8',
+  );
+  const exclusionsRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'page-exclusions', 'route.ts'),
+    'utf8',
+  );
+
+  assert.ok(launcher.includes("type: 'CHECK_EXTENSION_PAGE_ALLOWED'"));
+  assert.ok(launcher.includes("url.searchParams.set('panel', panel)"));
+  assert.ok(launcher.includes("'page-exclusions'"));
+  assert.ok(serviceWorker.includes("'/api/extension/page-exclusions'"));
+  assert.ok(featureRoute.includes('canManagePageExclusions'));
+  assert.ok(exclusionsRoute.includes('managerCanManagePageExclusions(manager.id)'));
+});
+
+test('manager URL exclusions update UI and workflows across SPA navigation', () => {
+  const serviceWorker = fs.readFileSync(
+    path.join(extensionRoot, 'background', 'service-worker.js'),
+    'utf8',
+  );
+  const launcher = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'page-launcher.js'),
+    'utf8',
+  );
+  const review = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'get-jd-review.js'),
+    'utf8',
+  );
+  const highlighter = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'text-highlighter.js'),
+    'utf8',
+  );
+  const navigationHandler = serviceWorker.slice(
+    serviceWorker.indexOf('chrome.webNavigation.onHistoryStateUpdated.addListener'),
+  );
+
+  assert.ok(navigationHandler.indexOf('notifyPageUrlAccess') < navigationHandler.indexOf('if (!isExtractablePageUrl'));
+  assert.ok(serviceWorker.includes('changes[PAGE_EXCLUSIONS_STORAGE_KEY]'));
+  assert.ok(serviceWorker.includes("type: 'QTS_PAGE_URL_CHANGED'"));
+  assert.ok(launcher.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
+  assert.ok(review.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
+  assert.ok(highlighter.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
+  assert.ok(launcher.includes('initializeQtsPageLauncher().catch'));
+  assert.ok(review.includes('initializeGetJdReview().catch'));
 });
 
 test('Generation launcher shows a document icon and can cancel an active run', () => {
@@ -97,11 +180,20 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
     path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'get-jd', 'profiles', 'route.ts'),
     'utf8',
   );
+  const duplicateCheckRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'get-jd', 'check', 'route.ts'),
+    'utf8',
+  );
+  const duplicateHelper = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'server', 'jobs', 'get-jd-jobs.ts'),
+    'utf8',
+  );
 
   assert.ok(profilesRoute.includes('getExtensionManager(request)'));
   assert.ok(profilesRoute.includes('eq(users.parentUserId, manager.id)'));
   assert.ok(profilesRoute.includes('category: categories.name'));
-  assert.ok(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"));
+  assert.ok(review.includes('result.profiles || []'));
+  assert.equal(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"), false);
   assert.ok(review.includes('position: fixed; inset: 0 0 0 auto'));
   assert.ok(review.includes('width: min(400px, 48vw)'));
   assert.ok(review.includes('padding-right: min(400px, 48vw)'));
@@ -122,12 +214,23 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(serviceWorker.includes('profiles.filter((profile) => profile.available !== false)'));
   assert.ok(serviceWorker.includes("status: 'complete'"));
   assert.ok(review.includes("checkbox.disabled = !selectionEnabled || profile.available === false"));
+  assert.ok(review.includes('checkbox.checked = selectedIds.has(profile.id)'));
+  assert.ok(review.includes('readSelectedIds().filter((id) => availableIds.has(id))'));
+  assert.ok(review.includes("profile.jobStatus === 'todo'"));
+  assert.ok(review.includes("'In Jobs · To do'"));
   assert.ok(review.includes("elements.heading.textContent = 'Save result'"));
   assert.ok(review.includes('Successfully saved ${savedCount}'));
   assert.ok(review.includes("? 'Already applied.'"));
   assert.ok(review.includes("? 'Already added.'"));
   assert.ok(review.includes("result.toastMessage || 'New job.'"));
-  assert.ok(serviceWorker.includes('result.exists === true || result.allCandidatesAssigned === true'));
+  assert.ok(serviceWorker.includes('if (result.allCandidatesAssigned === true || availableProfiles.length === 0)'));
+  assert.equal(serviceWorker.includes('result.exists === true || result.allCandidatesAssigned === true'), false);
+  assert.ok(serviceWorker.includes('.filter((profile) => profile.duplicateKind)'));
+  assert.ok(duplicateCheckRoute.includes('findGetJdDuplicateDetails('));
+  assert.ok(duplicateHelper.includes('.from(jobs)'));
+  assert.ok(duplicateHelper.includes('.from(bids)'));
+  assert.ok(duplicateHelper.includes('jobStatus: row.status'));
+  assert.ok(duplicateHelper.includes('current.jobStatus === "todo"'));
   assert.ok(serviceWorker.includes('savedCount !== profileIds.length'));
   assert.ok(serviceWorker.includes('duplicateCount > 0'));
 });
@@ -246,6 +349,50 @@ test('the login panel submits completed credentials without a timer or button', 
   assert.equal(popupScript.includes('setTimeout(submitCompletedLogin'), false);
 });
 
+test('shared text highlights are manager-gated and available from the page launcher', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
+  const runtime = fs.readFileSync(path.join(extensionRoot, 'shared', 'runtime-config.js'), 'utf8');
+  const workerApi = fs.readFileSync(path.join(extensionRoot, 'shared', 'api-worker.js'), 'utf8');
+  const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  const launcher = fs.readFileSync(path.join(extensionRoot, 'content', 'page-launcher.js'), 'utf8');
+  const highlighter = fs.readFileSync(path.join(extensionRoot, 'content', 'text-highlighter.js'), 'utf8');
+  const featureRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'features', 'me', 'route.ts'),
+    'utf8',
+  );
+  const highlightsRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'highlights', 'route.ts'),
+    'utf8',
+  );
+  const settingsPage = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'page.tsx'),
+    'utf8',
+  );
+  const settingsActions = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'actions.ts'),
+    'utf8',
+  );
+
+  assert.ok(runtime.includes('textHighlights: true'));
+  assert.ok(workerApi.includes("path === '/api/extension/highlights'"));
+  assert.ok(worker.includes("'/api/extension/highlights'"));
+  assert.ok(worker.includes("'/api/extension/features/me'"));
+  assert.ok(launcher.includes("['text_highlights', 'Text Highlight', '✎', 'text-highlights']"));
+  assert.ok(launcher.includes("type: 'GET_MANAGER_EXTENSION_FEATURES'"));
+  assert.ok(launcher.includes("url.searchParams.set('panel', panel)"));
+  assert.ok(launcher.includes("highlightButton.hidden = response?.ok !== true || response.canManageTextHighlights !== true"));
+  assert.ok(highlighter.includes('changes.authToken'));
+  assert.ok(highlighter.includes('changes.authExpiresAt'));
+  assert.ok(featureRoute.includes('managerCanManageTextHighlights(manager.id)'));
+  assert.ok(highlightsRoute.includes('managerCanManageTextHighlights(manager.id)'));
+  assert.ok(settingsPage.includes('<ManagerTextHighlightAccessForm'));
+  assert.ok(settingsActions.includes('actor.role !== "super_admin"'));
+  assert.ok(settingsActions.includes('canManageTextHighlights: enabledValue === "true"'));
+  assert.ok(manifest.web_accessible_resources.some((entry) => (
+    entry.resources || []
+  ).includes('popup/*')));
+});
+
 test('page Sign In uses the two-field top-right form instead of the embedded panel', () => {
   const launcher = fs.readFileSync(
     path.join(extensionRoot, 'content', 'page-launcher.js'),
@@ -284,4 +431,18 @@ test('PDF downloads use the extension bridge without a directory picker', () => 
   assert.ok(workspace.includes('QTS_DOWNLOAD_APPLICATION_FILES'));
   assert.ok(worker.includes("filename: file.downloadPath"));
   assert.ok(worker.includes('saveAs: false'));
+});
+
+test('page toasts use a modern theme and keep the newest notice on top', () => {
+  const toast = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'detect-toast.js'),
+    'utf8',
+  );
+
+  assert.ok(toast.includes('host.insertBefore(toast, host.firstChild)'));
+  assert.ok(toast.includes("!toast.classList.contains('is-leaving')"));
+  assert.ok(toast.includes('activeToasts.pop()'));
+  assert.ok(toast.includes('backdrop-filter: blur(12px)'));
+  assert.ok(toast.includes('border-left: 4px solid var(--qts-toast-accent'));
+  assert.ok(toast.includes('@media (prefers-reduced-motion: reduce)'));
 });

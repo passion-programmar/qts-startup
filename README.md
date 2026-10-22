@@ -1,9 +1,9 @@
 # QTS Job Application Workspace
 
 QTS is a job-application workspace built with Next.js and a Chrome extension.
-The current extension workflow extracts job details locally from the active
-page and displays them in an in-page preview. Gemini evaluation and saving jobs
-from that preview are reserved for a later release.
+The extension identifies likely job pages locally before extracting details
+and checking the signed-in Manager's saved jobs. This preflight does not call
+Gemini.
 
 ## Current status
 
@@ -11,11 +11,13 @@ from that preview are reserved for a later release.
 - Responsive sign-in page and role-scoped dashboard connected to Neon.
 - Server-only Neon connection helper and Users/Profiles/Categories/Login History schema.
 - Gmail mailbox OAuth is deferred until the candidate-consent flow is defined.
-- The browser extension provides an in-page launcher before sign-in. Its Get JD
-  action extracts a local preview without Gemini or a server request.
-- Scanner, application-session, document-generation, text-highlight, Gmail,
-  and automatic-application code is disabled until its matching server API and
-  integration coverage are implemented.
+- The browser extension provides an in-page launcher before sign-in. Get JD
+  first checks the page locally, then contacts the server only for likely job
+  pages. Managers can manage excluded URLs when a Super Admin grants access.
+- Shared text highlights are applied automatically. Only Managers explicitly
+  granted access by a Super Admin can edit their shared rules in the extension.
+- Scanner, application-session, Gmail, and automatic-application workflows
+  remain disabled until their matching APIs and integration coverage exist.
 
 The canonical ownership model, supported APIs, disabled feature boundary, and
 database invariants are documented in [docs/architecture.md](docs/architecture.md).
@@ -23,8 +25,8 @@ database invariants are documented in [docs/architecture.md](docs/architecture.m
 Planned AI responsibilities:
 
 - OpenAI/ChatGPT: tailored resumes and cover letters only.
-- Gemini: job-page classification and candidate fit evaluation; application
-  answer generation is planned for a later workflow.
+- Gemini: candidate fit evaluation; application-answer generation is planned
+  for a later workflow. Current job-page detection is local and deterministic.
 - API keys must remain server-side and must never use a `NEXT_PUBLIC_` prefix.
 
 Manual application mode will leave Next/Submit to the Manager after review.
@@ -115,9 +117,17 @@ page, including before sign-in. Clicking it opens a radial menu with **Get
 JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
 toolbar icon has no click behavior. Sign In opens the existing Manager login
 panel inside the current page and the panel closes after a successful login.
-Get JD stores persistent `get_jd` status, extracts job identity whenever a page
-loads, and checks the authenticated Manager's Jobs and Bids for a duplicate.
-The result appears in a top-left page toast. This flow does not call Gemini.
+Get JD stores persistent `get_jd` status and uses local page content and
+structured metadata to reject non-job pages before extraction or any
+job-existence server request. Confirmed job pages are checked against the
+authenticated Manager's Jobs and Bids for existing matches. Non-job pages show
+only a toast. This flow does not call Gemini. Managers can maintain URL
+exclusions from the launcher when a Super Admin grants them the
+`canManagePageExclusions` permission; excluded pages do not render QTS controls
+or run extension workflows. Exclusion updates also apply to already-open pages.
+Text highlights from the shared rule set render automatically, while the
+launcher editor is available only to Managers granted `canManageTextHighlights`
+by a Super Admin.
 Managers start document generation with **Queue Generation** on a Jobs row;
 the signed-in extension processes queued jobs one at a time and downloads a
 résumé PDF, cover-letter PDF, and JD text file to the local Downloads folder.

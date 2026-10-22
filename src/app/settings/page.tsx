@@ -1,6 +1,12 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { GlobalPromptForm, PromptAssignmentForm, PromptModeForm } from "@/app/settings/prompt-forms";
+import {
+  GlobalPromptForm,
+  ManagerTextHighlightAccessForm,
+  ManagerPageExclusionAccessForm,
+  PromptAssignmentForm,
+  PromptModeForm,
+} from "@/app/settings/prompt-forms";
 import {
   managerPromptAssignments,
   prompts,
@@ -63,6 +69,8 @@ export default async function SettingsPage() {
         loginName: users.loginName,
         assignedPromptId: managerPromptAssignments.promptId,
         assignedPromptName: prompts.name,
+        canManageTextHighlights: users.canManageTextHighlights,
+        canManagePageExclusions: users.canManagePageExclusions,
       })
       .from(users)
       .leftJoin(
@@ -170,8 +178,10 @@ export default async function SettingsPage() {
           </div>
           <PaginatedTable
             columns={[
-              { label: "Manager", className: "w-[30%]" },
-              { label: "Prompt assignment", className: "w-[70%]" },
+              { label: "Manager", className: "w-[25%]" },
+              { label: "Prompt assignment", className: "w-[35%]" },
+              { label: "Text highlight access", className: "w-[20%]" },
+              { label: "Excluded URL access", className: "w-[20%]" },
             ]}
             emptyMessage="No active managers"
             rows={managerRows.map((manager) => ({
@@ -195,6 +205,16 @@ export default async function SettingsPage() {
                     name: prompt.name,
                     version: prompt.version,
                   }))}
+                />,
+                <ManagerTextHighlightAccessForm
+                  canManage={manager.canManageTextHighlights}
+                  key="text-highlight-access"
+                  managerId={manager.id}
+                />,
+                <ManagerPageExclusionAccessForm
+                  canManage={manager.canManagePageExclusions}
+                  key="page-exclusion-access"
+                  managerId={manager.id}
                 />,
               ],
             }))}

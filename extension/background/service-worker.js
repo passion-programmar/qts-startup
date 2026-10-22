@@ -5,12 +5,14 @@ importScripts(
   '../shared/runtime-config.js',
   '../shared/application-flow.js',
   '../shared/job-detect.js',
+  '../shared/job-page-classifier.js',
   '../shared/get-jd-save-payload.js',
   '../shared/api-prefetch.js',
   '../shared/custom-gpt.js',
   '../shared/scanner-chatgpt.js',
   '../shared/generation-chatgpt.js',
   '../shared/account-auth-storage.js',
+  '../shared/text-highlighting.js',
   '../shared/apply-session-store.js',
   '../shared/api-worker.js',
   '../shared/gpt-worker-handoff.js',
@@ -65,6 +67,185 @@ const CAPTURE_PANEL_FILE = 'content/capture-panel.js';
 const detectGenerationByTab = new Map();
 const GLOBAL_TEXT_HIGHLIGHT_REFRESH_TTL_MS = 60_000;
 let globalTextHighlightRefreshPromise = null;
+const PAGE_EXCLUSIONS_STORAGE_KEY = 'qtsManagerPageExclusions';
+const PAGE_EXCLUSIONS_UPDATED_AT_KEY = 'qtsManagerPageExclusionsUpdatedAt';
+const PAGE_EXCLUSIONS_MANAGER_ID_KEY = 'qtsManagerPageExclusionsManagerId';
+const PAGE_EXCLUSIONS_REFRESH_TTL_MS = 5 * 60_000;
+let pageExclusionsRefreshPromise = null;
+const MANAGER_FEATURES_STORAGE_KEY = 'qtsManagerExtensionFeatures';
+const MANAGER_FEATURES_UPDATED_AT_KEY = 'qtsManagerExtensionFeaturesUpdatedAt';
+const MANAGER_FEATURES_MANAGER_ID_KEY = 'qtsManagerExtensionFeaturesManagerId';
+const MANAGER_FEATURES_REFRESH_TTL_MS = 5 * 60_000;
+let managerFeaturesRefreshPromise = null;
+
+async function getManagerExtensionFeatures(forceRefresh = false) {
+  const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+  if (!manager?.id || manager.role !== 'manager') {
+    return { success: false, message: 'Sign in as a Manager to check extension permissions.' };
+  }
+  const stored = await chrome.storage.local.get([
+    MANAGER_FEATURES_STORAGE_KEY,
+    MANAGER_FEATURES_UPDATED_AT_KEY,
+    MANAGER_FEATURES_MANAGER_ID_KEY,
+  ]);
+  const cached = stored[MANAGER_FEATURES_MANAGER_ID_KEY] === manager.id
+    ? stored[MANAGER_FEATURES_STORAGE_KEY]
+    : null;
+  const updatedAt = Number(stored[MANAGER_FEATURES_UPDATED_AT_KEY] || 0);
+  const fresh = cached && updatedAt > 0 && Date.now() - updatedAt < MANAGER_FEATURES_REFRESH_TTL_MS;
+  if (!forceRefresh && fresh) return { success: true, features: cached, cached: true };
+  if (!forceRefresh && cached) {
+    fetchManagerExtensionFeatures().catch((error) => {
+      console.warn('[QTS extension] Could not refresh Manager permissions:', error);
+    });
+    return { success: true, features: cached, cached: true, stale: true };
+  }
+  return fetchManagerExtensionFeatures();
+}
+
+async function fetchManagerExtensionFeatures() {
+  if (managerFeaturesRefreshPromise) return managerFeaturesRefreshPromise;
+  managerFeaturesRefreshPromise = (async () => {
+    const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+    if (!manager?.id || manager.role !== 'manager') {
+      return { success: false, message: 'Sign in as a Manager to check extension permissions.' };
+    }
+    const result = await workerApiRequest('GET', '/api/extension/features/me');
+    if (result.success !== true || !result.features) return result;
+    await chrome.storage.local.set({
+      [MANAGER_FEATURES_STORAGE_KEY]: result.features,
+      [MANAGER_FEATURES_UPDATED_AT_KEY]: Date.now(),
+      [MANAGER_FEATURES_MANAGER_ID_KEY]: manager.id,
+    });
+    return result;
+  })();
+  try {
+    return await managerFeaturesRefreshPromise;
+  } finally {
+    managerFeaturesRefreshPromise = null;
+  }
+}
+
+async function fetchManagerPageExclusions() {
+  if (pageExclusionsRefreshPromise) return pageExclusionsRefreshPromise;
+  pageExclusionsRefreshPromise = (async () => {
+    const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+    if (!manager?.id || manager.role !== 'manager') {
+      return {
+        success: true,
+        managerId: null,
+        canManagePageExclusions: false,
+        exclusions: [],
+      };
+    }
+    const result = await workerApiRequest('GET', '/api/extension/page-exclusions');
+    if (result.success !== true || !Array.isArray(result.exclusions)) return result;
+    const exclusions = result.exclusions.filter((entry) =>
+      entry && typeof entry.id === 'string' && typeof entry.url === 'string',
+    );
+    await chrome.storage.local.set({
+      [PAGE_EXCLUSIONS_STORAGE_KEY]: exclusions,
+      [PAGE_EXCLUSIONS_UPDATED_AT_KEY]: Date.now(),
+      [PAGE_EXCLUSIONS_MANAGER_ID_KEY]: manager.id,
+      qtsCanManagePageExclusions: result.canManagePageExclusions === true,
+    });
+    return { ...result, exclusions };
+  })();
+  try {
+    return await pageExclusionsRefreshPromise;
+  } finally {
+    pageExclusionsRefreshPromise = null;
+  }
+}
+
+async function getManagerPageExclusions() {
+  const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+  if (!manager?.id || manager.role !== 'manager') {
+    const stored = await chrome.storage.local.get([
+      PAGE_EXCLUSIONS_STORAGE_KEY,
+      PAGE_EXCLUSIONS_MANAGER_ID_KEY,
+    ]);
+    return {
+      success: true,
+      managerId: stored[PAGE_EXCLUSIONS_MANAGER_ID_KEY] || null,
+      canManagePageExclusions: false,
+      exclusions: Array.isArray(stored[PAGE_EXCLUSIONS_STORAGE_KEY])
+        ? stored[PAGE_EXCLUSIONS_STORAGE_KEY]
+        : [],
+      cached: true,
+    };
+  }
+  const stored = await chrome.storage.local.get([
+    PAGE_EXCLUSIONS_STORAGE_KEY,
+    PAGE_EXCLUSIONS_UPDATED_AT_KEY,
+    PAGE_EXCLUSIONS_MANAGER_ID_KEY,
+    'qtsCanManagePageExclusions',
+  ]);
+  const cached = stored[PAGE_EXCLUSIONS_MANAGER_ID_KEY] === manager.id
+    && Array.isArray(stored[PAGE_EXCLUSIONS_STORAGE_KEY])
+    ? stored[PAGE_EXCLUSIONS_STORAGE_KEY]
+    : null;
+  const updatedAt = Number(stored[PAGE_EXCLUSIONS_UPDATED_AT_KEY] || 0);
+  const fresh = cached && updatedAt > 0 && Date.now() - updatedAt < PAGE_EXCLUSIONS_REFRESH_TTL_MS;
+  if (fresh) {
+    return {
+      success: true,
+      managerId: manager.id,
+      canManagePageExclusions: stored.qtsCanManagePageExclusions === true,
+      exclusions: cached,
+      cached: true,
+    };
+  }
+  if (cached) {
+    fetchManagerPageExclusions().catch((error) => {
+      console.warn('[QTS page exclusions] Could not refresh excluded URLs:', error);
+    });
+    return {
+      success: true,
+      managerId: manager.id,
+      canManagePageExclusions: stored.qtsCanManagePageExclusions === true,
+      exclusions: cached,
+      cached: true,
+      stale: true,
+    };
+  }
+  return fetchManagerPageExclusions();
+}
+
+async function savePageExclusionsResponse(result) {
+  if (result.success !== true || !Array.isArray(result.exclusions)) return result;
+  const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+  if (!manager?.id || result.managerId !== manager.id) {
+    return { success: false, message: 'The page exclusion response belongs to a different Manager.' };
+  }
+  const exclusions = result.exclusions.filter((entry) =>
+    entry && typeof entry.id === 'string' && typeof entry.url === 'string',
+  );
+  await chrome.storage.local.set({
+    [PAGE_EXCLUSIONS_STORAGE_KEY]: exclusions,
+    [PAGE_EXCLUSIONS_UPDATED_AT_KEY]: Date.now(),
+    [PAGE_EXCLUSIONS_MANAGER_ID_KEY]: manager.id,
+    qtsCanManagePageExclusions: result.canManagePageExclusions === true,
+  });
+  return { ...result, exclusions };
+}
+
+async function isPageExcludedForManager(url) {
+  const result = await getManagerPageExclusions();
+  if (!result.success) return false;
+  const rules = (result.exclusions || []).map((entry) => entry.url);
+  return self.__qtsPageExclusions.shouldSkipPage(url, rules);
+}
+
+async function notifyPageUrlAccess(tabId, url) {
+  const result = await getManagerPageExclusions();
+  if (!result.success) return;
+  const rules = (result.exclusions || []).map((entry) => entry.url);
+  await chrome.tabs.sendMessage(tabId, {
+    type: 'QTS_PAGE_URL_CHANGED',
+    excluded: self.__qtsPageExclusions.shouldSkipPage(url, rules),
+  }).catch(() => {});
+}
 
 async function refreshGlobalTextHighlights() {
   if (globalTextHighlightRefreshPromise) return globalTextHighlightRefreshPromise;
@@ -97,7 +278,7 @@ async function fetchGlobalTextHighlights() {
       : { success: false, message: 'Sign in as a Manager to load shared text highlights.' };
   }
 
-  const result = await workerApiRequest('GET', '/api/v2/extension-features/highlights');
+  const result = await workerApiRequest('GET', '/api/extension/highlights');
   if (!result.success || !Array.isArray(result.rules)) {
     if (cachedRules.length) {
       console.warn('[QTS text highlights] Could not refresh shared rules; using the last saved copy:', result.message);
@@ -114,7 +295,7 @@ async function fetchGlobalTextHighlights() {
 }
 
 async function verifyManagerScannerAccess() {
-  const result = await workerApiRequest('GET', '/api/v2/extension-features/me');
+  const result = await workerApiRequest('GET', '/api/extension/features/me');
   return result.success && result.features?.canUseScanner === true
     ? { allowed: true }
     : {
@@ -531,11 +712,7 @@ async function updateGetJdSelection(tabId, profileIds) {
   ) {
     return { ok: false, error: 'The current job review is no longer available.' };
   }
-  const allowedIds = new Set(
-    (result.profiles || [])
-      .filter((profile) => profile.available !== false)
-      .map((profile) => profile.id),
-  );
+  const allowedIds = new Set((result.profiles || []).map((profile) => profile.id));
   if (profileIds.some((id) => !allowedIds.has(id))) {
     return { ok: false, error: 'One or more selected candidates are unavailable.' };
   }
@@ -640,6 +817,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
   if (getJdInFlightTabs.has(tabId)) return;
 
   if (!(await isGetJdActive())) return;
+  if (await isPageExcludedForManager(url)) return;
 
   const pageKey = `${documentId}:${url}`;
   if (getJdLastPageByTab.get(tabId) === pageKey) return;
@@ -657,9 +835,31 @@ async function processGetJdPage(tabId, url, documentId = '') {
     classification: null,
   };
   try {
-    await saveGetJdResult(tabId, initialResult);
     const tab = await getTab(tabId);
     if (!tab?.id || tab.url !== url) return;
+
+    const pageEvidence = await collectGetJdPageEvidence(tabId);
+    if (!(await isGetJdActive())) return;
+    const pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
+      ...pageEvidence,
+      urlType: classifyJobPageUrl(url),
+    });
+    if (!pageClassification.isJobPage) {
+      await saveGetJdResult(tabId, {
+        ...initialResult,
+        pageTitle: pageEvidence.title || tab.title || '',
+        status: 'not_job_page',
+        message: 'This is not a job page.',
+        updatedAt: Date.now(),
+        classification: { isJobPage: false, reason: pageClassification.reason },
+      });
+      return;
+    }
+
+    await saveGetJdResult(tabId, {
+      ...initialResult,
+      classification: { isJobPage: true },
+    });
     const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
     if (!token) {
       await saveGetJdResult(tabId, {
@@ -702,6 +902,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
       });
       return;
     }
+    if (await isPageExcludedForManager(url)) return;
     const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
       job: {
         jobUrl: extractedJobDetails.url,
@@ -726,7 +927,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
       .filter((profile) => profile.recommended === true || matchingProfileIds.has(profile.id))
       .map((profile) => profile.id);
     const availableProfiles = profiles.filter((profile) => profile.available !== false);
-    if (result.exists === true || result.allCandidatesAssigned === true || availableProfiles.length === 0) {
+    if (result.allCandidatesAssigned === true || availableProfiles.length === 0) {
       await saveGetJdResult(tabId, {
         ...initialResult,
         pageTitle: extraction.title || tab.title || '',
@@ -774,7 +975,14 @@ async function processGetJdPage(tabId, url, documentId = '') {
         ...profile,
         recommended: profile.recommended === true || matchingProfileIds.has(profile.id),
       })),
-      selectedProfileIds: recommendedProfileIds,
+      selectedProfileIds: [
+        ...new Set([
+          ...profiles
+            .filter((profile) => profile.duplicateKind)
+            .map((profile) => profile.id),
+          ...recommendedProfileIds,
+        ]),
+      ],
       jobDescription: extractedJobDetails.description,
     });
   } catch (error) {
@@ -799,6 +1007,76 @@ async function processGetJdPage(tabId, url, documentId = '') {
       });
     }
   }
+}
+
+async function collectGetJdPageEvidence(tabId) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const readText = (element, maxLength) =>
+        String(element?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+      const headings = Array.from(
+        document.querySelectorAll('h1,h2,h3,h4,[role="heading"]'),
+      )
+        .slice(0, 80)
+        .map((heading) => readText(heading, 140))
+        .filter(Boolean);
+      let description = '';
+      const descriptionElements = Array.from(document.querySelectorAll(
+        '[itemprop="description"],[data-testid*="description" i],[class*="job-description" i],[id*="job-description" i],[class*="jobDescription"],main article,article,main,[role="main"]',
+      )).slice(0, 10);
+      for (const element of descriptionElements) {
+        const content = readText(element, 12000);
+        if (content.length > description.length) description = content;
+        if (description.length >= 12000) break;
+      }
+      if (!description) {
+        description = String(
+          document.querySelector('meta[name="description"]')?.getAttribute('content') || '',
+        ).trim().slice(0, 2000);
+      }
+      let hasJobPosting = document.querySelector('[itemtype*="JobPosting" i]') != null;
+      const structuredData = Array.from(
+        document.querySelectorAll('script[type="application/ld+json"]'),
+      ).slice(0, 10);
+      for (const script of structuredData) {
+        if (hasJobPosting) break;
+        const source = String(script.textContent || '').slice(0, 100000);
+        if (!/"@type"\s*:\s*(?:"JobPosting"|\[[^\]]*"JobPosting")/i.test(source)) continue;
+        try {
+          const root = JSON.parse(source);
+          const pending = Array.isArray(root) ? [...root] : [root];
+          let inspected = 0;
+          while (pending.length && inspected < 500) {
+            const value = pending.pop();
+            inspected += 1;
+            if (!value || typeof value !== 'object') continue;
+            const types = Array.isArray(value['@type']) ? value['@type'] : [value['@type']];
+            if (types.some((type) => String(type || '').toLowerCase() === 'jobposting')) {
+              hasJobPosting = true;
+              break;
+            }
+            if (Array.isArray(value['@graph'])) pending.push(...value['@graph']);
+            if (Array.isArray(value.itemListElement)) pending.push(...value.itemListElement);
+          }
+        } catch {
+          // Invalid JSON-LD is ignored; visible page evidence remains available.
+        }
+      }
+      return {
+        title: readText(document.querySelector('h1'), 300) || String(document.title || '').trim().slice(0, 300),
+        headings,
+        description,
+        hasJobPosting,
+      };
+    },
+  });
+  return results[0]?.result || {
+    title: '',
+    headings: [],
+    description: '',
+    hasJobPosting: false,
+  };
 }
 
 async function enableGetJdForTab(tabId) {
@@ -3266,6 +3544,7 @@ async function autoDetectJob(
   if (!forcePipeline && !captureOnly && !(await isAutoApplyArmed())) return;
 
   if (!isExtractablePageUrl(url) || isIgnoredSite(url) || isChatGptHostUrl(url)) return;
+  if (await isPageExcludedForManager(url)) return;
 
   const generation = (detectGenerationByTab.get(tabId) || 0) + 1;
   detectGenerationByTab.set(tabId, generation);
@@ -3900,6 +4179,113 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     return true;
   }
+  if (msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED') {
+    if (sender.tab?.id == null || !sender.tab?.url) {
+      sendResponse({ ok: false, error: 'The current page is unavailable.' });
+      return false;
+    }
+    getManagerPageExclusions()
+      .then((result) => {
+        if (!result.success) {
+          sendResponse({
+            ok: false,
+            error: result.message || 'Could not verify excluded page URLs.',
+          });
+          return;
+        }
+        const rules = (result.exclusions || []).map((entry) => entry.url);
+        sendResponse({
+          ok: true,
+          excluded: self.__qtsPageExclusions.shouldSkipPage(sender.tab.url, rules),
+          canManagePageExclusions: result.canManagePageExclusions === true,
+        });
+      })
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Could not verify excluded page URLs.',
+      }));
+    return true;
+  }
+  if (msg.type === 'GET_MANAGER_PAGE_EXCLUSIONS') {
+    getManagerPageExclusions()
+      .then((result) => sendResponse({
+        ok: result.success === true,
+        exclusions: result.exclusions || [],
+        canManagePageExclusions: result.canManagePageExclusions === true,
+        error: result.success === true
+          ? undefined
+          : result.message || 'Could not load excluded page URLs.',
+      }))
+      .catch((error) => sendResponse({
+        ok: false,
+        exclusions: [],
+        canManagePageExclusions: false,
+        error: error instanceof Error ? error.message : 'Could not load excluded page URLs.',
+      }));
+    return true;
+  }
+  if (msg.type === 'ADD_MANAGER_PAGE_EXCLUSION') {
+    (async () => {
+      const url = self.__qtsPageExclusions.normalizePageExclusion(msg.url);
+      if (!url) {
+        sendResponse({ ok: false, error: 'Enter a valid website domain or http(s) URL path.' });
+        return;
+      }
+      const result = await workerApiRequest('POST', '/api/extension/page-exclusions', { url });
+      const saved = await savePageExclusionsResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        exclusions: saved.exclusions || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not save this excluded URL.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not save this excluded URL.',
+    }));
+    return true;
+  }
+  if (msg.type === 'DELETE_MANAGER_PAGE_EXCLUSION') {
+    (async () => {
+      const exclusionId = String(msg.exclusionId || '');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(exclusionId)) {
+        sendResponse({ ok: false, error: 'Invalid excluded URL.' });
+        return;
+      }
+      const result = await workerApiRequest(
+        'DELETE',
+        `/api/extension/page-exclusions/${exclusionId}`,
+      );
+      const saved = await savePageExclusionsResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        exclusions: saved.exclusions || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not remove this excluded URL.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not remove this excluded URL.',
+    }));
+    return true;
+  }
+  if (msg.type === 'GET_MANAGER_EXTENSION_FEATURES') {
+    getManagerExtensionFeatures(msg.refresh === true)
+      .then((result) => sendResponse({
+        ok: result.success === true,
+        canManageTextHighlights: result.features?.canManageTextHighlights === true,
+        canManagePageExclusions: result.features?.canManagePageExclusions === true,
+        tabId: sender.tab?.id ?? null,
+        error: result.success === true
+          ? undefined
+          : result.message || 'Could not verify text highlight permissions.',
+      }))
+      .catch((error) => sendResponse({
+        ok: false,
+        canManageTextHighlights: false,
+        canManagePageExclusions: false,
+        error: error instanceof Error ? error.message : 'Could not verify text highlight permissions.',
+      }));
+    return true;
+  }
   if (msg.type === 'AUTH_SESSION_EXPIRED') {
     disarmJobPageActivity();
     sendResponse({ ok: true });
@@ -4433,6 +4819,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 const AUTO_APPLY_ENABLED_KEY = 'qtsAutoApplyEnabled';
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (
+    area === 'local'
+    && (changes[PAGE_EXCLUSIONS_STORAGE_KEY] || changes[PAGE_EXCLUSIONS_MANAGER_ID_KEY])
+  ) {
+    chrome.tabs.query({}).then((tabs) => {
+      for (const tab of tabs) {
+        if (!tab.id || !/^https?:/i.test(tab.url || '')) continue;
+        notifyPageUrlAccess(tab.id, tab.url).catch((error) => {
+          console.warn('[QTS page exclusions] Could not refresh an open page:', error);
+        });
+      }
+    }).catch((error) => {
+      console.warn('[QTS page exclusions] Could not find open pages to refresh:', error);
+    });
+  }
   if (area === 'local' && changes.authToken) {
     if (!changes.authToken.newValue) {
       disarmJobPageActivity();
@@ -4524,6 +4925,10 @@ chrome.webNavigation.onCommitted.addListener((details) => {
 
 chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   if (details.frameId !== 0) return;
+  if (!/^https?:/i.test(details.url || '')) return;
+  notifyPageUrlAccess(details.tabId, details.url).catch((error) => {
+    console.warn('[QTS extension] Could not apply URL exclusions after navigation:', error);
+  });
   if (!isExtractablePageUrl(details.url)) return;
   processGetJdPage(details.tabId, details.url, details.documentId).catch((error) => {
     console.error('[QTS Get JD] Could not process the updated page:', error);

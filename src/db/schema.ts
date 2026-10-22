@@ -105,6 +105,12 @@ export const users = pgTable(
     displayName: text("display_name"),
     loginName: text("login_name"),
     passwordHash: text("password_hash"),
+    canManageTextHighlights: boolean("can_manage_text_highlights")
+      .default(false)
+      .notNull(),
+    canManagePageExclusions: boolean("can_manage_page_exclusions")
+      .default(false)
+      .notNull(),
     authVersion: integer("auth_version").default(0).notNull(),
     blockedAt: timestamp("blocked_at", { withTimezone: true, mode: "date" }),
     blockedBy: uuid("blocked_by").references((): AnyPgColumn => users.id, {
@@ -199,6 +205,51 @@ export const settings = pgTable("settings", {
     .defaultNow()
     .notNull(),
 });
+
+export const textHighlightRules = pgTable(
+  "text_highlight_rules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    text: text("text").notNull(),
+    textColor: text("text_color").notNull(),
+    backgroundColor: text("background_color").notNull(),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("text_highlight_rules_text_normalized_unique").on(
+      sql`lower(btrim(${table.text}))`,
+    ),
+  ],
+);
+
+export const extensionPageExclusions = pgTable(
+  "extension_page_exclusions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    urlRule: text("url_rule").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("extension_page_exclusions_manager_url_unique").on(
+      table.managerId,
+      table.urlRule,
+    ),
+    index("extension_page_exclusions_manager_id_index").on(table.managerId),
+  ],
+);
 
 export const prompts = pgTable(
   "prompts",

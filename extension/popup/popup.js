@@ -23,8 +23,11 @@ let pageHighlightRules = [];
 let pageHighlightMigrationMessage = '';
 let selectedPageHighlightRuleId = null;
 let pageHighlightsReturnView = null;
+let pageExclusionsReturnView = null;
+let managerPageExclusions = [];
 let managerExtensionFeatures = {
   canManageTextHighlights: false,
+  canManagePageExclusions: false,
   canUseScanner: false,
   canUseApply: false,
 };
@@ -120,6 +123,78 @@ function setPageHighlightStatus(message, isError = false) {
   if (!status) return;
   status.textContent = message;
   status.classList.toggle('is-error', isError);
+}
+
+function setPageExclusionsStatus(message, isError = false) {
+  const status = document.getElementById('page-exclusions-status');
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle('is-error', isError);
+}
+
+async function refreshPageExclusions() {
+  const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_PAGE_EXCLUSIONS' });
+  if (!response?.ok || !Array.isArray(response.exclusions)) {
+    throw new Error(response?.error || 'Could not load excluded URLs.');
+  }
+  managerPageExclusions = response.exclusions.filter((entry) =>
+    entry && typeof entry.id === 'string' && typeof entry.url === 'string',
+  );
+  const list = document.getElementById('page-exclusion-list');
+  if (!list) return;
+  list.replaceChildren();
+  if (!managerPageExclusions.length) {
+    const empty = document.createElement('li');
+    empty.className = 'page-highlight-list-empty';
+    empty.textContent = 'No website URLs are excluded.';
+    list.appendChild(empty);
+  } else {
+    for (const exclusion of managerPageExclusions) {
+      const item = document.createElement('li');
+      item.className = 'page-exclusion-list-item';
+      const url = document.createElement('span');
+      url.textContent = exclusion.url;
+      const remove = document.createElement('button');
+      remove.className = 'btn btn-ghost btn-sm';
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove excluded URL ${exclusion.url}`);
+      remove.addEventListener('click', () => {
+        removePageExclusion(exclusion.id).catch((error) => {
+          setPageExclusionsStatus(error.message || 'Could not remove this URL.', true);
+        });
+      });
+      item.append(url, remove);
+      list.appendChild(item);
+    }
+  }
+  setPageExclusionsStatus(
+    managerPageExclusions.length
+      ? `${managerPageExclusions.length} excluded URL(s) are active for this Manager.`
+      : 'No excluded URLs are configured.',
+  );
+  scheduleFitPopup();
+}
+
+async function addPageExclusion(url) {
+  const response = await chrome.runtime.sendMessage({
+    type: 'ADD_MANAGER_PAGE_EXCLUSION',
+    url,
+  });
+  if (!response?.ok) throw new Error(response?.error || 'Could not exclude this URL.');
+  managerPageExclusions = response.exclusions || [];
+  document.getElementById('page-exclusion-url').value = '';
+  await refreshPageExclusions();
+}
+
+async function removePageExclusion(exclusionId) {
+  const response = await chrome.runtime.sendMessage({
+    type: 'DELETE_MANAGER_PAGE_EXCLUSION',
+    exclusionId,
+  });
+  if (!response?.ok) throw new Error(response?.error || 'Could not remove this URL.');
+  managerPageExclusions = response.exclusions || [];
+  await refreshPageExclusions();
 }
 
 function createHighlightColorInput(label, value, inputId = '') {
@@ -490,6 +565,7 @@ async function showPageHighlights() {
   document.getElementById('action-section')?.classList.add('hidden');
   document.getElementById('job-section')?.classList.add('hidden');
   document.getElementById('action-bar')?.classList.add('hidden');
+  document.getElementById('page-exclusions')?.classList.add('hidden');
   panel.classList.remove('hidden');
   document.querySelectorAll('.btn-text-highlights').forEach((button) => {
     button.setAttribute('aria-expanded', 'true');
@@ -523,9 +599,82 @@ function hidePageHighlights() {
 }
 
 function returnFromPageHighlights() {
+  if (new URLSearchParams(window.location.search).get('panel') === 'text-highlights') {
+    window.parent.postMessage({ type: 'QTS_CLOSE_TEXT_HIGHLIGHTS' }, '*');
+    return;
+  }
   const returnView = pageHighlightsReturnView;
   pageHighlightsReturnView = null;
   hidePageHighlights();
+  document.getElementById('login-section')?.classList.add('hidden');
+  if (returnView === 'job') {
+    document.getElementById('action-section')?.classList.add('hidden');
+    document.getElementById('job-section')?.classList.remove('hidden');
+    document.getElementById('action-bar')?.classList.remove('hidden');
+  } else {
+    document.getElementById('job-section')?.classList.add('hidden');
+    document.getElementById('action-section')?.classList.remove('hidden');
+    document.getElementById('action-bar')?.classList.add('hidden');
+  }
+  scheduleFitPopup();
+}
+
+async function showPageExclusions() {
+  const panel = document.getElementById('page-exclusions');
+  if (!panel) return;
+  await refreshManagerExtensionFeatures();
+  if (currentUser?.role !== 'manager' || !managerExtensionFeatures.canManagePageExclusions) {
+    hidePageExclusions();
+    const alertId = document.getElementById('job-section')?.classList.contains('hidden')
+      ? 'action-alert'
+      : 'main-alert';
+    showAlert(
+      alertId,
+      managerExtensionFeaturesError || 'Super must assign page exclusion management to this Manager account.',
+      'error',
+    );
+    return;
+  }
+  if (!pageExclusionsReturnView) {
+    pageExclusionsReturnView = document.getElementById('job-section')?.classList.contains('hidden')
+      ? 'action'
+      : 'job';
+  }
+  document.getElementById('login-section')?.classList.add('hidden');
+  document.getElementById('action-section')?.classList.add('hidden');
+  document.getElementById('job-section')?.classList.add('hidden');
+  document.getElementById('action-bar')?.classList.add('hidden');
+  document.getElementById('page-highlights')?.classList.add('hidden');
+  panel.classList.remove('hidden');
+  document.querySelectorAll('.btn-page-exclusions').forEach((button) => {
+    button.setAttribute('aria-expanded', 'true');
+  });
+  setPageExclusionsStatus('Loading excluded URLs…');
+  try {
+    await refreshPageExclusions();
+  } catch (error) {
+    setPageExclusionsStatus(error.message || 'Could not load excluded URLs.', true);
+  } finally {
+    panel.scrollIntoView({ block: 'start' });
+    scheduleFitPopup();
+  }
+}
+
+function hidePageExclusions() {
+  document.getElementById('page-exclusions')?.classList.add('hidden');
+  document.querySelectorAll('.btn-page-exclusions').forEach((button) => {
+    button.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function returnFromPageExclusions() {
+  if (new URLSearchParams(window.location.search).get('panel') === 'page-exclusions') {
+    window.parent.postMessage({ type: 'QTS_CLOSE_TEXT_HIGHLIGHTS' }, '*');
+    return;
+  }
+  const returnView = pageExclusionsReturnView;
+  pageExclusionsReturnView = null;
+  hidePageExclusions();
   document.getElementById('login-section')?.classList.add('hidden');
   if (returnView === 'job') {
     document.getElementById('action-section')?.classList.add('hidden');
@@ -2910,6 +3059,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     await window.api.ensureServerUrl();
     await bootstrapPopupFast();
+    if (
+      new URLSearchParams(window.location.search).get('panel') === 'text-highlights'
+      && currentUser?.role === 'manager'
+    ) {
+      await openPageHighlights();
+      if (!managerExtensionFeatures.canManageTextHighlights) {
+        window.parent.postMessage({ type: 'QTS_CLOSE_TEXT_HIGHLIGHTS' }, '*');
+      }
+    }
+    if (
+      new URLSearchParams(window.location.search).get('panel') === 'page-exclusions'
+      && currentUser?.role === 'manager'
+    ) {
+      await showPageExclusions();
+      if (!managerExtensionFeatures.canManagePageExclusions) {
+        window.parent.postMessage({ type: 'QTS_CLOSE_TEXT_HIGHLIGHTS' }, '*');
+      }
+    }
     checkConnection().catch(() => {});
   } catch {
     hideLoading(true);
@@ -2954,7 +3121,27 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     });
   });
+  document.querySelectorAll('.btn-page-exclusions').forEach((button) => {
+    button.addEventListener('click', () => {
+      showPageExclusions().catch((error) => {
+        setPageExclusionsStatus(error.message || 'Could not open excluded URL settings.', true);
+      });
+    });
+  });
   document.getElementById('btn-close-page-highlights')?.addEventListener('click', returnFromPageHighlights);
+  document.getElementById('btn-close-page-exclusions')?.addEventListener('click', returnFromPageExclusions);
+  document.getElementById('page-exclusion-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = document.getElementById('page-exclusion-url');
+    const submit = document.getElementById('page-exclusion-submit');
+    submit.disabled = true;
+    setPageExclusionsStatus('Saving excluded URL…');
+    addPageExclusion(input.value.trim())
+      .catch((error) => setPageExclusionsStatus(error.message || 'Could not save this URL.', true))
+      .finally(() => {
+        submit.disabled = false;
+      });
+  });
   document.getElementById('page-highlight-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = document.getElementById('page-highlight-text');
@@ -3998,7 +4185,12 @@ function setSession(user) {
 
 function clearSession() {
   currentUser = null;
-  managerExtensionFeatures = { canManageTextHighlights: false, canUseScanner: false, canUseApply: false };
+  managerExtensionFeatures = {
+    canManageTextHighlights: false,
+    canManagePageExclusions: false,
+    canUseScanner: false,
+    canUseApply: false,
+  };
   managerExtensionFeaturesError = '';
   scannerSelectedAccountId = null;
   scannerApplyMode = false;
@@ -6635,6 +6827,8 @@ function updateFeatureGatedControls(user) {
   const canManageHighlights = highlightsEnabled
     && managerMode
     && managerExtensionFeatures.canManageTextHighlights;
+  const canManagePageExclusions = managerMode
+    && managerExtensionFeatures.canManagePageExclusions;
   const scannerSection = document.getElementById('site-discovery');
   scannerSection?.classList.toggle('hidden', !managerMode || (!scannerEnabled && !applicationEnabled));
   const scannerTitle = document.getElementById('site-discovery-title');
@@ -6651,6 +6845,9 @@ function updateFeatureGatedControls(user) {
   );
   document.querySelectorAll('.btn-text-highlights').forEach((button) => {
     button.classList.toggle('hidden', !canManageHighlights);
+  });
+  document.querySelectorAll('.btn-page-exclusions').forEach((button) => {
+    button.classList.toggle('hidden', !canManagePageExclusions);
   });
   if (!canManageHighlights) {
     if (!document.getElementById('page-highlights')?.classList.contains('hidden')) {
@@ -6681,7 +6878,12 @@ function updateFeatureGatedControls(user) {
 }
 
 async function refreshManagerExtensionFeatures() {
-  managerExtensionFeatures = { canManageTextHighlights: false, canUseScanner: false, canUseApply: false };
+  managerExtensionFeatures = {
+    canManageTextHighlights: false,
+    canManagePageExclusions: false,
+    canUseScanner: false,
+    canUseApply: false,
+  };
   managerExtensionFeaturesError = '';
   if (currentUser?.role !== 'manager') return managerExtensionFeatures;
   const runtimeFeatures = window.__qtsRuntimeConfig?.features || {};
@@ -6689,6 +6891,7 @@ async function refreshManagerExtensionFeatures() {
     runtimeFeatures.scanner !== true
     && runtimeFeatures.applicationAutomation !== true
     && runtimeFeatures.textHighlights !== true
+    && runtimeFeatures.pageExclusions !== true
   ) {
     updateFeatureGatedControls(currentUser);
     return managerExtensionFeatures;
@@ -6701,6 +6904,7 @@ async function refreshManagerExtensionFeatures() {
   }
   managerExtensionFeatures = {
     canManageTextHighlights: result.features.canManageTextHighlights === true,
+    canManagePageExclusions: result.features.canManagePageExclusions === true,
     canUseScanner: result.features.canUseScanner === true,
     canUseApply: result.features.canUseApply === true,
   };
@@ -6720,7 +6924,12 @@ async function requireScannerFeatureAccess() {
 async function initializeManagerExtensionFeatures(user) {
   setSession(user);
   if (user?.role === 'manager') await refreshManagerExtensionFeatures();
-  else managerExtensionFeatures = { canManageTextHighlights: false, canUseScanner: false, canUseApply: false };
+  else managerExtensionFeatures = {
+    canManageTextHighlights: false,
+    canManagePageExclusions: false,
+    canUseScanner: false,
+    canUseApply: false,
+  };
   if (window.__qtsRuntimeConfig?.isFeatureEnabled('textHighlights')) {
     try {
       const highlights = await chrome.runtime.sendMessage({ type: 'GET_GLOBAL_TEXT_HIGHLIGHTS' });

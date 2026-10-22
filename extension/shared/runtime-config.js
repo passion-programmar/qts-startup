@@ -8,7 +8,8 @@
     geminiEvaluation: false,
     scanner: false,
     applicationAutomation: false,
-    textHighlights: false,
+    textHighlights: true,
+    pageExclusions: true,
   });
 
   function normalizeServerUrl(value) {

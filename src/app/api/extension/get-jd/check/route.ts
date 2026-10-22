@@ -4,7 +4,7 @@ import { categories, profiles, subCategories, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import {
-  findGetJdDuplicates,
+  findGetJdDuplicateDetails,
   findManagerJobPresence,
 } from "@/server/jobs/get-jd-jobs";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
@@ -74,32 +74,35 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const [duplicates, presence] = await Promise.all([
-      findGetJdDuplicates(
+    const [duplicateDetails, presence] = await Promise.all([
+      findGetJdDuplicateDetails(
         manager.id,
         job,
         candidateRows.map((candidate) => candidate.id),
       ),
       findManagerJobPresence(manager.id, job),
     ]);
-    const allCandidatesAssigned = duplicates.size === candidateRows.length;
-    const toastKind = presence.inBids
-      ? "applied"
-      : presence.inJobs
-        ? "added"
-        : "new";
     const candidateProfiles = candidateRows.map((candidate) => {
-      const duplicateKind = duplicates.get(candidate.id) ?? null;
+      const duplicate = duplicateDetails.get(candidate.id) ?? null;
+      const available = duplicate === null
+        || (duplicate.kind === "job_list" && duplicate.jobStatus === "todo");
       return {
         id: candidate.id,
         name: [candidate.firstName, candidate.lastName]
           .filter(Boolean)
           .join(" ") || "Candidate",
         category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
-        available: duplicateKind === null,
-        duplicateKind,
+        available,
+        duplicateKind: duplicate?.kind ?? null,
+        jobStatus: duplicate?.jobStatus ?? null,
       };
     });
+    const allCandidatesAssigned = candidateProfiles.every((candidate) => !candidate.available);
+    const toastKind = presence.inBids
+      ? "applied"
+      : presence.inJobs
+        ? "added"
+        : "new";
 
     return jsonResponse({
       success: true,
@@ -115,7 +118,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       profiles: candidateProfiles,
       message: allCandidatesAssigned
         ? "This job already exists for every active candidate."
-        : duplicates.size > 0
+        : duplicateDetails.size > 0
           ? "This job already exists for some candidates. Select from the available candidates."
           : "This is a new job! Select candidates to save it.",
     });
