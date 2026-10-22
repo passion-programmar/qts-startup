@@ -62,9 +62,9 @@ export default async function CategoriesPage() {
           </div>
           <PaginatedTable
             columns={[
-              { label: "Category", className: "min-w-52" },
-              { label: "Candidate profiles", className: "min-w-40" },
-              { label: "Actions", className: "min-w-32" },
+              { label: "Category", className: "w-[40%]" },
+              { label: "Candidate profiles", className: "w-[35%]" },
+              { label: "Actions", className: "w-[25%]" },
             ]}
             emptyMessage="No categories"
             rows={categoryRows.map((category) => ({

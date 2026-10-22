@@ -19,6 +19,7 @@ export default async function JobsPage() {
       id: jobs.id,
       title: jobs.jobTitle,
       company: jobs.company,
+      description: jobs.description,
       location: jobs.location,
       employmentType: jobs.employmentType,
       workplaceType: jobs.workplaceType,
@@ -56,22 +57,22 @@ export default async function JobsPage() {
         </header>
         <PaginatedTable
           columns={[
-            { label: "No", className: "w-16" },
-            { label: "Candidate", className: "min-w-44" },
-            { label: "Category", className: "min-w-36" },
-            { label: "Job", className: "min-w-56" },
-            { label: "Location", className: "min-w-40" },
-            { label: "Work type", className: "min-w-36" },
-            { label: "Salary", className: "min-w-36" },
-            { label: "Date", className: "min-w-28" },
-            { label: "Status", className: "min-w-24" },
-            { label: "Resume path (Downloads)", className: "min-w-52" },
-            { label: "Generation", className: "min-w-32" },
-            { label: "Failure reason", className: "min-w-44" },
-            { label: "Link", className: "w-20" },
-            { label: "Created", className: "min-w-40" },
-            { label: "Updated", className: "min-w-40" },
-            { label: "Actions", className: "min-w-48" },
+            { label: "No", className: "w-[3%]" },
+            { label: "Candidate", className: "w-[7%]" },
+            { label: "Category", className: "w-[6%]" },
+            { label: "Job", className: "w-[9%]" },
+            { label: "Location", className: "w-[7%]" },
+            { label: "Work type", className: "w-[6%]" },
+            { label: "Salary", className: "w-[6%]" },
+            { label: "Date", className: "w-[5%]" },
+            { label: "Status", className: "w-[5%]" },
+            { label: "Resume path (Downloads)", className: "w-[7%]" },
+            { label: "Generation", className: "w-[7%]" },
+            { label: "Failure reason", className: "w-[7%]" },
+            { label: "Link", className: "w-[4%]" },
+            { label: "Created", className: "w-[6%]" },
+            { label: "Updated", className: "w-[6%]" },
+            { label: "Actions", className: "w-[9%]" },
           ]}
           emptyMessage="No jobs saved yet"
           rows={rows.map((row, index) => ({
@@ -87,14 +88,14 @@ export default async function JobsPage() {
               row.date,
               <span className="capitalize" key="status">{row.status.replaceAll("_", " ")}</span>,
               row.resumeLocalPath
-                ? <code className="block max-w-64 truncate text-xs" key="resume-path" title={row.resumeLocalPath}>{row.resumeLocalPath}</code>
+                ? <code className="block max-w-full whitespace-normal break-all text-xs" key="resume-path" title={row.resumeLocalPath}>{row.resumeLocalPath}</code>
                 : "—",
               <span className="capitalize" key="generation-status">{row.generationStatus.replaceAll("_", " ")}{row.generationError ? <span className="mt-1 block max-w-52 text-xs text-rose-700">{row.generationError}</span> : null}</span>,
               row.failureReason ?? "—",
               <a aria-label={`Open ${row.title}`} className="inline-flex size-8 items-center justify-center rounded border border-blue-200 text-blue-600 hover:bg-blue-50" href={row.url} key="link" rel="noreferrer" target="_blank"><ExternalLink className="size-4" /></a>,
               row.createdAt.toLocaleString(),
               row.updatedAt.toLocaleString(),
-              <JobActions candidates={candidateOptions} key="actions" record={{ id: row.id, candidateId: row.candidateId, title: row.title, company: row.company, location: row.location, employmentType: row.employmentType, workplaceType: row.workplaceType, salary: row.salary, url: row.url, date: row.date, status: row.status, failureReason: row.failureReason, generationStatus: row.generationStatus, generationError: row.generationError }} />,
+              <JobActions candidates={candidateOptions} key="actions" record={{ id: row.id, candidateId: row.candidateId, title: row.title, company: row.company, description: row.description, location: row.location, employmentType: row.employmentType, workplaceType: row.workplaceType, salary: row.salary, url: row.url, date: row.date, status: row.status, failureReason: row.failureReason, generationStatus: row.generationStatus, generationError: row.generationError }} />,
             ],
           }))}
         />

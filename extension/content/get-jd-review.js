@@ -7,6 +7,11 @@
   let root = null;
   let toastTimer = null;
   let lastToastKey = '';
+  let managerProfiles = [];
+  let currentResult = null;
+  let extensionStatus = null;
+  let signedIn = false;
+  let profileLoadRequestId = 0;
 
   function ensureRoot() {
     if (root) return root;
@@ -27,35 +32,42 @@
       .toast.error { background: #991b1b; }
       .toast.success { background: #166534; }
       .panel {
-        position: fixed; top: 14px; right: 14px; z-index: 1; width: min(390px, calc(100vw - 28px));
-        max-height: calc(100vh - 28px); overflow: auto; box-sizing: border-box; padding: 16px;
-        border: 1px solid #cbd5e1; border-radius: 12px; background: #fff; color: #0f172a;
-        box-shadow: 0 12px 40px #0f172a38; font: 13px/1.45 system-ui, sans-serif;
+        position: fixed; inset: 0 0 0 auto; z-index: 1; display: flex; flex-direction: column;
+        width: min(380px, 94vw); height: 100vh; height: 100dvh; box-sizing: border-box;
+        padding: 18px; border-left: 1px solid #cbd5e1; background: #fff; color: #0f172a;
+        box-shadow: -12px 0 36px #0f172a30; font: 13px/1.45 system-ui, sans-serif;
         pointer-events: auto;
       }
       .panel[hidden], .toast[hidden] { display: none; }
-      h2 { margin: 0 0 10px; font-size: 16px; }
-      .status { margin: 0 0 12px; color: #334155; }
-      .details { margin: 0 0 12px; }
+      .panel-header { flex: 0 0 auto; padding-bottom: 13px; border-bottom: 1px solid #e2e8f0; }
+      h2 { margin: 0; font-size: 17px; }
+      .status { margin: 8px 0 0; color: #475569; }
+      .details { flex: 0 1 auto; max-height: 34vh; overflow: auto; margin: 0; padding: 0 0 12px; }
+      .details[hidden] { display: none; }
       .details div { margin-top: 7px; overflow-wrap: anywhere; }
       .details dt { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
       .details dd { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
       .description { max-height: 130px; overflow: auto; padding: 8px; border-radius: 7px; background: #f8fafc; }
-      .profiles { max-height: 220px; overflow: auto; margin: 9px 0 12px; border-top: 1px solid #e2e8f0; }
-      .profile { display: flex; gap: 9px; align-items: flex-start; padding: 8px 2px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
-      .profile.unavailable { cursor: default; opacity: .72; }
-      .profile input { margin: 2px 0 0; accent-color: #4f46e5; }
-      .profile small { display: block; margin-top: 2px; color: #64748b; }
+      .account-heading { display: flex; flex: 0 0 auto; justify-content: space-between; gap: 8px; padding: 13px 0 7px; color: #334155; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+      .profiles { flex: 1 1 auto; min-height: 100px; overflow: auto; margin: 0 0 8px; border-top: 1px solid #e2e8f0; }
+      .profile { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-height: 54px; padding: 9px 3px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+      .profile.unavailable, .profile.inactive { cursor: default; opacity: .68; }
+      .profile input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0 2px 0 0; accent-color: #4f46e5; }
+      .profile-name { min-width: 0; overflow-wrap: anywhere; font-weight: 650; }
+      .profile small { display: block; margin-top: 2px; color: #64748b; font-weight: 400; }
       .profile .saved { color: #166534; }
       .profile .failed { color: #b91c1c; }
-      .message { min-height: 18px; margin: 0 0 8px; color: #b91c1c; }
-      .actions { display: flex; gap: 8px; }
+      .message { flex: 0 0 auto; min-height: 18px; margin: 0 0 8px; color: #b91c1c; }
+      .actions { display: flex; flex: 0 0 auto; gap: 8px; }
       button { min-height: 36px; padding: 0 13px; border: 0; border-radius: 7px; font: 600 12px system-ui, sans-serif; cursor: pointer; }
       button:disabled { opacity: .6; cursor: wait; }
       button[hidden] { display: none; }
       .save { flex: 1; color: #fff; background: #4f46e5; }
       .cancel { color: #334155; background: #e2e8f0; }
-      @media (max-width: 480px) { .panel { top: 8px; right: 8px; width: calc(100vw - 16px); max-height: calc(100vh - 16px); } }
+      @media (max-width: 520px) {
+        .panel { width: min(360px, 100vw); padding: 14px; }
+        .details { max-height: 28vh; }
+      }
     `;
     root.appendChild(style);
 
@@ -70,11 +82,18 @@
     panel.hidden = true;
     panel.setAttribute('aria-label', 'Review job and candidate matches');
     const heading = document.createElement('h2');
-    heading.textContent = 'Review new job';
+    heading.textContent = 'QTS Candidate Accounts';
     const status = document.createElement('p');
     status.className = 'status';
     const details = document.createElement('dl');
     details.className = 'details';
+    details.hidden = true;
+    const accountHeading = document.createElement('div');
+    accountHeading.className = 'account-heading';
+    const accountLabel = document.createElement('span');
+    accountLabel.textContent = 'Accounts';
+    const accountCount = document.createElement('span');
+    accountHeading.append(accountLabel, accountCount);
     const profiles = document.createElement('div');
     profiles.className = 'profiles';
     const message = document.createElement('p');
@@ -91,9 +110,14 @@
     cancel.type = 'button';
     cancel.textContent = 'Cancel';
     actions.append(save, cancel);
-    panel.append(heading, status, details, profiles, message, actions);
+    const panelHeader = document.createElement('div');
+    panelHeader.className = 'panel-header';
+    panelHeader.append(heading, status);
+    panel.append(panelHeader, details, accountHeading, profiles, message, actions);
     root.appendChild(panel);
-    host.__qtsElements = { toast, panel, status, details, profiles, message, save, cancel };
+    host.__qtsElements = {
+      toast, panel, heading, status, details, accountCount, profiles, message, save, cancel,
+    };
     (document.documentElement || document.body).appendChild(host);
     return root;
   }
@@ -136,18 +160,101 @@
   }
 
   async function sendSelection() {
+    if (currentResult?.status !== 'complete') return;
+    currentResult = {
+      ...currentResult,
+      selectedProfileIds: readSelectedIds(),
+      selectionModified: true,
+    };
     const response = await chrome.runtime.sendMessage({
       type: 'UPDATE_GET_JD_SELECTION',
-      profileIds: readSelectedIds(),
+      profileIds: currentResult.selectedProfileIds,
     });
     if (!response?.ok) throw new Error(response?.error || 'Could not save candidate selection.');
+  }
+
+  function renderProfiles(profiles, options = {}) {
+    const elements = host.__qtsElements;
+    const selectable = options.selectable === true;
+    const selectionEnabled = options.enabled === true;
+    const selectedIds = options.selectedIds || new Set();
+    const saveResults = options.saveResults || new Map();
+    elements.profiles.replaceChildren();
+    elements.accountCount.textContent = `${profiles.length}`;
+    if (!profiles.length) {
+      const empty = document.createElement('p');
+      empty.textContent = signedIn
+        ? 'No active candidate accounts were found for this Manager.'
+        : 'Sign in to load candidate accounts.';
+      elements.profiles.appendChild(empty);
+      return;
+    }
+
+    for (const profile of profiles) {
+      const label = document.createElement('label');
+      label.className = 'profile';
+      const details = document.createElement('span');
+      details.className = 'profile-name';
+      details.textContent = profile.name || 'Candidate';
+      const category = document.createElement('small');
+      const saveResult = saveResults.get(profile.id) || profile.saveResult;
+      const availability = profile.duplicateKind === 'applied'
+        ? 'Already applied'
+        : profile.duplicateKind === 'job_list'
+          ? 'Already in Jobs'
+          : '';
+      category.textContent = [
+        profile.category || 'Uncategorized',
+        saveResult?.message || availability,
+      ].filter(Boolean).join(' · ');
+      if (saveResult?.status === 'saved') category.classList.add('saved');
+      if (saveResult?.status === 'failed') category.classList.add('failed');
+      details.appendChild(category);
+
+      if (selectable) {
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.dataset.profileId = profile.id;
+        checkbox.disabled = !selectionEnabled || profile.available === false;
+        checkbox.checked = !checkbox.disabled && selectedIds.has(profile.id);
+        if (profile.available === false) label.classList.add('unavailable');
+        else if (checkbox.disabled) label.classList.add('inactive');
+        checkbox.addEventListener('change', () => {
+          sendSelection().catch((error) => {
+            elements.message.textContent = error.message || 'Could not save candidate selection.';
+          });
+        });
+        label.append(details, checkbox);
+      } else {
+        label.classList.add('inactive');
+        label.appendChild(details);
+      }
+      elements.profiles.appendChild(label);
+    }
+  }
+
+  function renderIdlePanel(message) {
+    const elements = host.__qtsElements;
+    elements.heading.textContent = 'QTS Candidate Accounts';
+    elements.status.textContent = message || (
+      extensionStatus === 'get_jd'
+        ? 'Get JD is checking this page. Candidate accounts will be ready to select when the check finishes.'
+        : 'Start Get JD on a job page to match and save candidates.'
+    );
+    elements.details.hidden = true;
+    elements.details.replaceChildren();
+    elements.message.textContent = '';
+    elements.save.hidden = true;
+    elements.cancel.hidden = true;
+    renderProfiles(managerProfiles, { selectable: true });
   }
 
   function renderReview(result) {
     const elements = host.__qtsElements;
     elements.panel.hidden = false;
-    elements.panel.querySelector('h2').textContent = 'Review new job';
+    elements.heading.textContent = 'QTS Candidate Accounts';
     elements.status.textContent = result.message || 'Select candidates to save this job.';
+    elements.details.hidden = false;
     elements.details.replaceChildren();
     appendDetail(elements.details, 'Title', result.classification.job.title);
     appendDetail(elements.details, 'Company', result.classification.job.company);
@@ -158,58 +265,36 @@
     appendDetail(elements.details, 'Salary', result.classification.job.salary);
     appendDetail(elements.details, 'URL', result.classification.job.jobUrl);
     appendDetail(elements.details, 'Job description', result.jobDescription, 'description');
-    elements.profiles.replaceChildren();
     elements.message.textContent = result.saveError || '';
 
-    const candidates = result.profiles || [];
-    if (!candidates.length) {
-      const empty = document.createElement('p');
-      empty.textContent = 'No active candidate Accounts were found for this Manager.';
-      elements.profiles.appendChild(empty);
-    }
-    const selectedIds = Array.isArray(result.selectedProfileIds)
-      ? new Set(result.selectedProfileIds)
-      : null;
+    const selectedIds = result.selectionModified === true
+      ? new Set(Array.isArray(result.selectedProfileIds) ? result.selectedProfileIds : [])
+      : new Set([
+        ...(Array.isArray(result.selectedProfileIds) ? result.selectedProfileIds : []),
+        ...(Array.isArray(result.classification.matchingProfileIds)
+          ? result.classification.matchingProfileIds
+          : []),
+        (result.profiles || [])
+          .filter((profile) => profile.recommended === true)
+          .map((profile) => profile.id),
+      ].flat());
+    const resultProfiles = new Map(
+      (result.profiles || []).map((profile) => [profile.id, profile]),
+    );
+    const candidates = managerProfiles.length
+      ? managerProfiles.map((profile) => ({
+        ...profile,
+        ...(resultProfiles.get(profile.id) || {}),
+      }))
+      : result.profiles || [];
     const saveResults = new Map(
       (result.saveResponse?.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
     );
-    for (const profile of candidates) {
-      const label = document.createElement('label');
-      label.className = 'profile';
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.dataset.profileId = profile.id;
-      checkbox.disabled = profile.available === false;
-      checkbox.checked = !checkbox.disabled && (selectedIds
-        ? selectedIds.has(profile.id)
-        : profile.recommended === true);
-      if (checkbox.disabled) label.classList.add('unavailable');
-      checkbox.addEventListener('change', () => {
-        sendSelection().catch((error) => {
-          elements.message.textContent = error.message || 'Could not save candidate selection.';
-        });
-      });
-      const details = document.createElement('span');
-      details.textContent = profile.name || 'Candidate';
-      const category = document.createElement('small');
-      const saveResult = saveResults.get(profile.id) || profile.saveResult;
-      const availability = profile.duplicateKind === 'applied'
-        ? 'Already applied'
-        : profile.duplicateKind === 'job_list'
-          ? 'Already in Jobs'
-          : '';
-      category.textContent = [profile.category || 'Uncategorized', saveResult?.message || availability]
-        .filter(Boolean)
-        .join(' · ');
-      if (saveResult?.status === 'saved') category.classList.add('saved');
-      if (saveResult?.status === 'failed') category.classList.add('failed');
-      details.appendChild(category);
-      label.append(checkbox, details);
-      elements.profiles.appendChild(label);
-    }
+    renderProfiles(candidates, { selectable: true, enabled: true, selectedIds, saveResults });
 
     elements.save.hidden = false;
     elements.save.disabled = !candidates.some((profile) => profile.available !== false);
+    elements.cancel.hidden = false;
     elements.save.textContent = 'Save';
     elements.cancel.disabled = false;
     elements.cancel.textContent = 'Cancel';
@@ -255,68 +340,156 @@
     const duplicateCount = Number(response.duplicateCount || 0);
     const failedCount = Number(response.failedCount || 0);
     elements.panel.hidden = false;
-    elements.panel.querySelector('h2').textContent = 'Save result';
+    elements.heading.textContent = 'Save result';
     elements.status.textContent = savedCount > 0
       ? `Successfully saved ${savedCount} job${savedCount === 1 ? '' : 's'}.`
       : 'No new jobs were saved.';
+    elements.details.hidden = false;
     elements.details.replaceChildren();
     appendDetail(elements.details, 'Job', result.classification?.job?.title || 'Job');
-    elements.profiles.replaceChildren();
-    for (const profileResult of response.results || []) {
-      const row = document.createElement('div');
-      row.className = 'profile unavailable';
-      const details = document.createElement('span');
-      details.textContent = profileResult.name || 'Candidate';
-      const status = document.createElement('small');
-      status.className = profileResult.status === 'failed' ? 'failed' : 'saved';
-      status.textContent = [profileResult.category || 'Uncategorized', profileResult.message]
-        .filter(Boolean)
-        .join(' · ');
-      details.appendChild(status);
-      row.appendChild(details);
-      elements.profiles.appendChild(row);
-    }
+    const responseByProfile = new Map(
+      (response.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
+    );
+    renderProfiles(managerProfiles.map((profile) => ({
+      ...profile,
+      saveResult: responseByProfile.get(profile.id) || null,
+    })));
     elements.message.textContent = failedCount > 0
       ? `${failedCount} candidate${failedCount === 1 ? '' : 's'} could not be saved.`
       : duplicateCount > 0
         ? `${duplicateCount} candidate${duplicateCount === 1 ? '' : 's'} already had this job.`
         : '';
     elements.save.hidden = true;
+    elements.cancel.hidden = false;
     elements.cancel.disabled = false;
     elements.cancel.textContent = 'Done';
-    elements.cancel.onclick = () => { elements.panel.hidden = true; };
+    elements.cancel.setAttribute('aria-label', 'Return to candidate accounts');
+    elements.cancel.onclick = () => {
+      currentResult = null;
+      renderIdlePanel();
+    };
+  }
+
+  function sessionIsValid(stored) {
+    if (!stored.authToken) return false;
+    let expiresAt = Number(stored.authExpiresAt) || 0;
+    try {
+      const payloadSegment = String(stored.authToken).split('.')[1];
+      const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(atob(normalized));
+      if (Number.isFinite(payload.exp)) expiresAt = payload.exp * 1000;
+    } catch {
+      // The stored expiry remains authoritative for non-JWT tokens.
+    }
+    return expiresAt > Date.now();
+  }
+
+  function renderCurrentResult() {
+    if (!signedIn) return;
+    if (currentResult?.status === 'complete' && currentResult.classification?.isJobPage === true) {
+      renderReview(currentResult);
+      return;
+    }
+    if (currentResult?.status === 'saved') {
+      renderSaveResult(currentResult);
+      return;
+    }
+    if (currentResult?.status === 'processing') {
+      renderIdlePanel(currentResult.message);
+      return;
+    }
+    if (currentResult?.status === 'error' || currentResult?.status === 'duplicate') {
+      renderIdlePanel(currentResult.message || 'Get JD could not review this page.');
+      return;
+    }
+    renderIdlePanel();
+  }
+
+  async function loadManagerProfiles() {
+    const requestId = ++profileLoadRequestId;
+    const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
+    if (!sessionIsValid(stored)) {
+      profileLoadRequestId += 1;
+      signedIn = false;
+      managerProfiles = [];
+      currentResult = null;
+      if (host?.__qtsElements) host.__qtsElements.panel.hidden = true;
+      return;
+    }
+
+    ensureRoot();
+    signedIn = true;
+    host.__qtsElements.panel.hidden = false;
+    renderIdlePanel('Loading your candidate accounts...');
+    let response;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: 'GET_MANAGER_CANDIDATE_PROFILES',
+      });
+    } catch (error) {
+      if (requestId !== profileLoadRequestId || !signedIn) return;
+      const message = error instanceof Error ? error.message : 'Could not load candidate accounts.';
+      host.__qtsElements.status.textContent = message;
+      console.error('[QTS Get JD] Could not load manager candidate accounts:', error);
+      return;
+    }
+    if (requestId !== profileLoadRequestId || !signedIn) return;
+    if (!response?.ok || !Array.isArray(response.profiles)) {
+      host.__qtsElements.status.textContent = response?.error || 'Could not load candidate accounts.';
+      console.error('[QTS Get JD] Could not load manager candidate accounts:', response?.error);
+      return;
+    }
+    managerProfiles = response.profiles
+      .filter((profile) => profile && typeof profile.id === 'string')
+      .map((profile) => ({
+        id: profile.id,
+        name: typeof profile.name === 'string' ? profile.name : 'Candidate',
+        category: typeof profile.category === 'string' ? profile.category : null,
+      }));
+    renderCurrentResult();
+  }
+
+  async function syncExtensionStatus() {
+    const stored = await chrome.storage.local.get(['qtsExtensionStatus']);
+    extensionStatus = stored.qtsExtensionStatus || null;
+    renderCurrentResult();
   }
 
   function applyResult(result) {
     ensureRoot();
-    const elements = host.__qtsElements;
-    if (!result || result.pageUrl !== location.href || result.status === 'processing') {
-      elements.panel.hidden = true;
+    if (!result || result.pageUrl !== location.href) {
+      currentResult = null;
+      renderCurrentResult();
       return;
     }
+    currentResult = result;
+    if (!signedIn) return;
+    const elements = host.__qtsElements;
+    elements.panel.hidden = false;
     const toastKey = `${result.runId || result.updatedAt || ''}:${result.status}`;
     if (result.status === 'duplicate') {
-      elements.panel.hidden = true;
       const message = result.toastMessage || (result.inBids
         ? 'Already applied.'
         : result.inJobs
           ? 'Already added.'
           : 'New job.');
+      renderIdlePanel(result.message || message);
       showToast(message, 'normal', toastKey);
       return;
     }
     if (result.status === 'new') {
-      elements.panel.hidden = true;
+      renderIdlePanel(result.message || 'This is a new job.');
       showToast(result.message || 'This is a new job!', 'success', toastKey);
       return;
     }
     if (result.status === 'error') {
-      elements.panel.hidden = true;
+      renderIdlePanel(result.message || 'Could not check this job.');
       showToast(result.message || 'Could not check this job.', 'error', toastKey);
       return;
     }
     if (result.status === 'cancelled') {
-      elements.panel.hidden = true;
+      currentResult = null;
+      renderCurrentResult();
       return;
     }
     if (result.status === 'saved') {
@@ -330,11 +503,11 @@
       return;
     }
     if (result.status !== 'complete' || !result.classification) {
-      elements.panel.hidden = true;
+      renderIdlePanel(result.message || 'Get JD is checking this page...');
       return;
     }
     if (!result.classification.isJobPage) {
-      elements.panel.hidden = true;
+      renderIdlePanel('This is not a job posting page.');
       showToast('This is not Job Page', 'normal', toastKey);
       return;
     }
@@ -350,11 +523,32 @@
     if (message?.type === RESULT_MESSAGE) applyResult(message.result);
   });
 
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes.authToken || changes.authExpiresAt) {
+      loadManagerProfiles().catch((error) => {
+        console.error('[QTS Get JD] Could not sync the manager session:', error);
+      });
+    }
+    if (changes.qtsExtensionStatus) {
+      syncExtensionStatus().catch((error) => {
+        console.error('[QTS Get JD] Could not sync Get JD status:', error);
+      });
+    }
+  });
+
   chrome.runtime.sendMessage({ type: 'GET_JD_PAGE_RESULT' })
     .then((response) => {
-      if (response?.ok) applyResult(response.result);
+      if (response?.ok && response.result) applyResult(response.result);
     })
     .catch((error) => console.error('[QTS Get JD] Could not load page review:', error));
+
+  loadManagerProfiles().catch((error) => {
+    console.error('[QTS Get JD] Could not load manager candidate accounts:', error);
+  });
+  syncExtensionStatus().catch((error) => {
+    console.error('[QTS Get JD] Could not load Get JD status:', error);
+  });
 
   globalThis.__qtsGetJdReview = { applyResult };
 })();

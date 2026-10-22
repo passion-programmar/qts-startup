@@ -190,7 +190,7 @@ export default async function UsersPage() {
   return (
     <WorkspaceShell activeHref="/users" user={actor}>
     <main className="py-1">
-      <div className="mx-auto max-w-7xl">
+      <div>
         <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
@@ -239,15 +239,15 @@ export default async function UsersPage() {
             {actor.role === "manager" ? (
               <PaginatedTable
                 columns={[
-                  { label: "No", className: "w-16 text-center" },
-                  { label: "Full name", className: "min-w-40" },
-                  { label: "Category", className: "min-w-28" },
-                  { label: "Contact", className: "min-w-40" },
-                  { label: "Street address", className: "min-w-44" },
-                  { label: "Postal code", className: "min-w-28" },
-                  { label: "LinkedIn", className: "w-24" },
-                  { label: "Edit", className: "w-24 text-center" },
-                  { label: "Delete", className: "w-24 text-center" },
+                  { label: "No", className: "w-[4%] text-center" },
+                  { label: "Full name", className: "w-[14%]" },
+                  { label: "Category", className: "w-[12%]" },
+                  { label: "Contact", className: "w-[18%]" },
+                  { label: "Street address", className: "w-[16%]" },
+                  { label: "Postal code", className: "w-[10%]" },
+                  { label: "LinkedIn", className: "w-[8%]" },
+                  { label: "Edit", className: "w-[9%] text-center" },
+                  { label: "Delete", className: "w-[9%] text-center" },
                 ]}
                 emptyMessage="No candidate accounts"
                 rows={result.rows
@@ -370,12 +370,12 @@ export default async function UsersPage() {
             ) : (
               <PaginatedTable
                 columns={[
-                  { label: "Name", className: "min-w-44" },
-                  { label: "Reports to", className: "min-w-36" },
-                  { label: "Role", className: "min-w-28" },
-                  { label: "Direct reports", className: "min-w-28" },
-                  { label: "Status", className: "min-w-24" },
-                  { label: "Actions", className: "min-w-64" },
+                  { label: "Name", className: "w-[22%]" },
+                  { label: "Reports to", className: "w-[18%]" },
+                  { label: "Role", className: "w-[15%]" },
+                  { label: "Direct reports", className: "w-[15%]" },
+                  { label: "Status", className: "w-[12%]" },
+                  { label: "Actions", className: "w-[18%]" },
                 ]}
                 emptyMessage="No people found"
                 rows={result.rows.map((person) => {

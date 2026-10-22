@@ -436,7 +436,8 @@
 .popup-app .application-preview-table-wrap {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   margin-bottom: 10px;
@@ -444,6 +445,7 @@
 
 .popup-app .application-preview-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 11px;
 }
@@ -454,6 +456,7 @@
   border-bottom: 1px solid #e2e8f0;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 .popup-app .application-preview-table th {

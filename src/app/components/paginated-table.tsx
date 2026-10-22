@@ -30,49 +30,47 @@ export function PaginatedTable({
   );
 
   return (
-    <div className="overflow-hidden rounded border border-[#dfe3e7] bg-white">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse text-left text-[13px]">
-          <thead className="border-b border-[#e9ecef] bg-[#f8f9fa] text-[11px] font-semibold uppercase tracking-wide text-[#6c757d]">
-            <tr>
-              {columns.map((column) => (
-                <th
-                  className={`px-4 py-3 ${column.className ?? ""}`}
-                  key={column.label}
-                  scope="col"
+    <div className="paginated-table min-w-0 overflow-hidden rounded border border-[#dfe3e7] bg-white">
+      <table className="w-full table-fixed border-collapse text-left text-[13px]">
+        <thead className="border-b border-[#e9ecef] bg-[#f8f9fa] text-[11px] font-semibold uppercase tracking-wide text-[#6c757d]">
+          <tr>
+            {columns.map((column) => (
+              <th
+                className={`min-w-0 whitespace-normal px-2 py-3 sm:px-3 ${column.className ?? ""}`}
+                key={column.label}
+                scope="col"
+              >
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#e9ecef]">
+          {visibleRows.map((row) => (
+            <tr className="align-top hover:bg-[#f8f9fa]" key={row.id}>
+              {row.cells.map((cell, index) => (
+                <td
+                  className={`min-w-0 whitespace-normal px-2 py-3 text-[#343a40] sm:px-3 ${columns[index]?.className ?? ""}`}
+                  data-label={columns[index]?.label}
+                  key={`${row.id}-${columns[index]?.label ?? index}`}
                 >
-                  {column.label}
-                </th>
+                  {cell}
+                </td>
               ))}
             </tr>
-          </thead>
-          <tbody className="divide-y divide-[#e9ecef]">
-            {visibleRows.map((row) => (
-              <tr className="align-top hover:bg-[#f8f9fa]" key={row.id}>
-                {row.cells.map((cell, index) => (
-                  <td
-                    className={`px-4 py-3 text-[#343a40] ${columns[index]?.className ?? ""}`}
-                    key={`${row.id}-${columns[index]?.label ?? index}`}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td
-                  className="px-4 py-10 text-center text-sm text-[#6c757d]"
-                  colSpan={columns.length}
-                >
-                  {emptyMessage}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
+          ))}
+          {rows.length === 0 && (
+            <tr>
+              <td
+                className="px-4 py-10 text-center text-sm text-[#6c757d]"
+                colSpan={columns.length}
+              >
+                {emptyMessage}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
       <div className="flex flex-col gap-3 border-t border-[#e9ecef] px-4 py-3 text-xs text-[#6c757d] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <span>

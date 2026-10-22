@@ -224,9 +224,9 @@ export default async function Home() {
               </div>
               <PaginatedTable
                 columns={[
-                  { label: "Name", className: "min-w-52" },
-                  { label: "Role", className: "min-w-28" },
-                  { label: "Category / added", className: "min-w-36" },
+                  { label: "Name", className: "w-[45%]" },
+                  { label: "Role", className: "w-[25%]" },
+                  { label: "Category / added", className: "w-[30%]" },
                 ]}
                 emptyMessage="No team members"
                 rows={workspaceUsers.map((user) => {
@@ -277,9 +277,9 @@ export default async function Home() {
                   </div>
                   <PaginatedTable
                     columns={[
-                      { label: "Name", className: "min-w-48" },
-                      { label: "Login", className: "min-w-40" },
-                      { label: "Signed in", className: "min-w-44" },
+                      { label: "Name", className: "w-[35%]" },
+                      { label: "Login", className: "w-[25%]" },
+                      { label: "Signed in", className: "w-[40%]" },
                     ]}
                     emptyMessage="No sign-ins"
                     rows={recentLogins.map((login, index) => ({

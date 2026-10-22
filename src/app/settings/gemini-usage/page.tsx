@@ -94,12 +94,12 @@ export default async function GeminiUsagePage() {
         ) : (
           <PaginatedTable
             columns={[
-              { label: "API key", className: "min-w-40" },
-              { label: "Requests / 60 sec", className: "min-w-44" },
-              { label: "Requests today", className: "min-w-40" },
-              { label: "Input tokens / 60 sec", className: "min-w-48" },
-              { label: "Status", className: "min-w-28" },
-              { label: "Last call", className: "min-w-40" },
+              { label: "API key", className: "w-[17%]" },
+              { label: "Requests / 60 sec", className: "w-[17%]" },
+              { label: "Requests today", className: "w-[16%]" },
+              { label: "Input tokens / 60 sec", className: "w-[20%]" },
+              { label: "Status", className: "w-[14%]" },
+              { label: "Last call", className: "w-[16%]" },
             ]}
             emptyMessage="No API keys configured"
             rows={keys.map((_key, index) => {
@@ -177,7 +177,7 @@ function UsageMetric({
   const remaining = Math.max(0, limit - used);
   const progress = Math.min(100, (used / limit) * 100);
   return (
-    <div className="min-w-28">
+    <div className="min-w-0">
       <div className="font-semibold tabular-nums text-slate-800">
         {used.toLocaleString()}{" "}
         <span className="text-xs font-normal text-slate-500">

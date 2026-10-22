@@ -12,7 +12,7 @@ import {
 
 export type CandidateOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };
-export type EditableJob = CommonRecord & { employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationError: string | null };
+export type EditableJob = CommonRecord & { description: string | null; employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationError: string | null };
 export type EditableBid = CommonRecord & { employmentType: string | null; workplaceType: string | null; salary: string | null; resumeLocalPath: string; googleDrivePath: string | null; appliedAt: string };
 
 export function JobActions({ record, candidates }: { record: EditableJob; candidates: CandidateOption[] }) {
@@ -42,7 +42,7 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
       <input name="id" type="hidden" value={record.id} />
       <input name="intent" type="hidden" value={cancellable ? "cancel" : "queue"} />
       <button
-        className="inline-flex h-8 items-center rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60"
+        className="inline-flex h-auto min-h-8 max-w-full items-center whitespace-normal rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-left text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60 sm:px-3"
         disabled={pending}
         type="submit"
       >
@@ -65,11 +65,11 @@ function RecordActions({ kind, record, candidates }: { kind: "job"; record: Edit
   const [deleteState, deleteFormAction, deleting] = useActionState(deleteAction, initialRecordState);
 
   return (
-    <div className="flex items-start gap-2">
-      <button aria-label={`Edit ${record.title}`} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100" onClick={() => setOpen(true)} type="button"><Pencil className="size-3.5" />Edit</button>
+    <div className="flex flex-wrap items-start gap-2">
+      <button aria-label={`Edit ${record.title}`} className="inline-flex h-8 max-w-full items-center gap-1.5 whitespace-normal rounded-md border border-blue-200 bg-blue-50 px-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 sm:px-3" onClick={() => setOpen(true)} type="button"><Pencil className="size-3.5 shrink-0" />Edit</button>
       <form action={deleteFormAction} onSubmit={(event) => { if (!window.confirm(`Permanently delete this ${kind}?`)) event.preventDefault(); }}>
         <input name="id" type="hidden" value={record.id} />
-        <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60" disabled={deleting} type="submit"><Trash2 className="size-3.5" />{deleting ? "Deleting..." : "Delete"}</button>
+        <button className="inline-flex h-8 max-w-full items-center gap-1.5 whitespace-normal rounded-md border border-rose-200 bg-rose-50 px-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 sm:px-3" disabled={deleting} type="submit"><Trash2 className="size-3.5 shrink-0" />{deleting ? "Deleting..." : "Delete"}</button>
         {deleteState.error && <p className="mt-1 max-w-40 text-[10px] text-rose-700">{deleteState.error}</p>}
       </form>
       {open && (
@@ -102,7 +102,7 @@ function RecordActions({ kind, record, candidates }: { kind: "job"; record: Edit
 }
 
 function JobFields({ record }: { record: EditableJob }) {
-  return <><Field label="Employment type"><input className={inputClass} defaultValue={record.employmentType ?? ""} maxLength={200} name="employmentType" /></Field><Field label="Work arrangement"><input className={inputClass} defaultValue={record.workplaceType ?? ""} maxLength={200} name="workplaceType" /></Field><Field label="Salary"><input className={inputClass} defaultValue={record.salary ?? ""} maxLength={500} name="salary" /></Field><Field label="Date"><input className={inputClass} defaultValue={record.date} name="date" required type="date" /></Field><Field label="Status"><select className={inputClass} defaultValue={record.status} name="status">{["todo", "pending", "applied", "failed"].map((status) => <option key={status} value={status}>{status}</option>)}</select></Field><Field className="sm:col-span-2" label="Failure reason"><textarea className={`${inputClass} min-h-24`} defaultValue={record.failureReason ?? ""} maxLength={5000} name="failureReason" /></Field></>;
+  return <><Field className="sm:col-span-2" label="Job description"><textarea className={`${inputClass} min-h-40`} defaultValue={record.description ?? ""} maxLength={100000} name="description" /></Field><Field label="Employment type"><input className={inputClass} defaultValue={record.employmentType ?? ""} maxLength={200} name="employmentType" /></Field><Field label="Work arrangement"><input className={inputClass} defaultValue={record.workplaceType ?? ""} maxLength={200} name="workplaceType" /></Field><Field label="Salary"><input className={inputClass} defaultValue={record.salary ?? ""} maxLength={500} name="salary" /></Field><Field label="Date"><input className={inputClass} defaultValue={record.date} name="date" required type="date" /></Field><Field label="Status"><select className={inputClass} defaultValue={record.status} name="status">{["todo", "pending", "applied", "failed"].map((status) => <option key={status} value={status}>{status}</option>)}</select></Field><Field className="sm:col-span-2" label="Failure reason"><textarea className={`${inputClass} min-h-24`} defaultValue={record.failureReason ?? ""} maxLength={5000} name="failureReason" /></Field></>;
 }
 function BidFields({ record }: { record: EditableBid }) {
   return <><Field label="Employment type"><input className={inputClass} defaultValue={record.employmentType ?? ""} maxLength={200} name="employmentType" /></Field><Field label="Work arrangement"><input className={inputClass} defaultValue={record.workplaceType ?? ""} maxLength={200} name="workplaceType" /></Field><Field label="Salary"><input className={inputClass} defaultValue={record.salary ?? ""} maxLength={500} name="salary" /></Field><Field label="Applied at"><input className={inputClass} defaultValue={record.appliedAt} name="appliedAt" required type="datetime-local" /></Field><Field className="sm:col-span-2" label="Resume local path"><input className={inputClass} defaultValue={record.resumeLocalPath} maxLength={2048} name="resumeLocalPath" required /></Field><Field className="sm:col-span-2" label="Google Drive path"><input className={inputClass} defaultValue={record.googleDrivePath ?? ""} maxLength={2048} name="googleDrivePath" /></Field></>;

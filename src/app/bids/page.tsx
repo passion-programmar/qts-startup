@@ -58,21 +58,21 @@ export default async function BidsPage() {
         </header>
         <PaginatedTable
           columns={[
-            { label: "No", className: "w-16" },
-            { label: "Candidate", className: "min-w-44" },
-            { label: "Category", className: "min-w-36" },
-            { label: "Job", className: "min-w-56" },
-            { label: "Location", className: "min-w-40" },
-            { label: "Type", className: "min-w-28" },
-            { label: "Salary", className: "min-w-36" },
-            { label: "Applied", className: "min-w-28" },
-            { label: "Resume path", className: "min-w-52" },
-            { label: "Drive path", className: "min-w-52" },
-            { label: "Source job", className: "min-w-64" },
-            { label: "Link", className: "w-20" },
-            { label: "Created", className: "min-w-40" },
-            { label: "Updated", className: "min-w-40" },
-            { label: "Actions", className: "min-w-48" },
+            { label: "No", className: "w-[3%]" },
+            { label: "Candidate", className: "w-[7%]" },
+            { label: "Category", className: "w-[6%]" },
+            { label: "Job", className: "w-[9%]" },
+            { label: "Location", className: "w-[7%]" },
+            { label: "Type", className: "w-[5%]" },
+            { label: "Salary", className: "w-[6%]" },
+            { label: "Applied", className: "w-[5%]" },
+            { label: "Resume path", className: "w-[7%]" },
+            { label: "Drive path", className: "w-[7%]" },
+            { label: "Source job", className: "w-[8%]" },
+            { label: "Link", className: "w-[4%]" },
+            { label: "Created", className: "w-[6%]" },
+            { label: "Updated", className: "w-[6%]" },
+            { label: "Actions", className: "w-[14%]" },
           ]}
           emptyMessage="No bids submitted yet"
           rows={rows.map((row, index) => ({

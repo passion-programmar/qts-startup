@@ -542,6 +542,7 @@ async function updateGetJdSelection(tabId, profileIds) {
   const updated = {
     ...result,
     selectedProfileIds: profileIds,
+    selectionModified: true,
     updatedAt: Date.now(),
   };
   await saveGetJdResult(tabId, updated, false);
@@ -716,6 +717,14 @@ async function processGetJdPage(tabId, url, documentId = '') {
     const profiles = Array.isArray(result.profiles)
       ? result.profiles.filter((profile) => profile && typeof profile.id === 'string')
       : [];
+    const matchingProfileIds = new Set(
+      Array.isArray(result.matchingProfileIds)
+        ? result.matchingProfileIds.filter((id) => typeof id === 'string')
+        : [],
+    );
+    const recommendedProfileIds = profiles
+      .filter((profile) => profile.recommended === true || matchingProfileIds.has(profile.id))
+      .map((profile) => profile.id);
     const availableProfiles = profiles.filter((profile) => profile.available !== false);
     if (result.exists === true || result.allCandidatesAssigned === true || availableProfiles.length === 0) {
       await saveGetJdResult(tabId, {
@@ -748,7 +757,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
         isRemote: /\bremote\b/i.test(
           `${extractedJobDetails.workplaceType} ${extractedJobDetails.location}`,
         ),
-        matchingProfileIds: [],
+        matchingProfileIds: recommendedProfileIds,
         job: {
           title: extractedJobDetails.title,
           company: extractedJobDetails.company,
@@ -761,8 +770,11 @@ async function processGetJdPage(tabId, url, documentId = '') {
           jobUrl: extractedJobDetails.url,
         },
       },
-      profiles,
-      selectedProfileIds: [],
+      profiles: profiles.map((profile) => ({
+        ...profile,
+        recommended: profile.recommended === true || matchingProfileIds.has(profile.id),
+      })),
+      selectedProfileIds: recommendedProfileIds,
       jobDescription: extractedJobDetails.description,
     });
   } catch (error) {
@@ -3756,6 +3768,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((error) => sendResponse({
         ok: false,
         error: error instanceof Error ? error.message : 'Could not load the current job review.',
+      }));
+    return true;
+  }
+  if (msg.type === 'GET_MANAGER_CANDIDATE_PROFILES') {
+    if (sender.tab?.id == null) {
+      sendResponse({ ok: false, error: 'Candidate accounts must be loaded from a web page.' });
+      return false;
+    }
+    workerApiRequest('GET', '/api/extension/get-jd/profiles')
+      .then((response) => {
+        if (response.success !== true || !Array.isArray(response.profiles)) {
+          sendResponse({
+            ok: false,
+            error: response.message || 'Could not load candidate accounts.',
+          });
+          return;
+        }
+        sendResponse({
+          ok: true,
+          profiles: response.profiles.filter((profile) =>
+            profile && typeof profile.id === 'string',
+          ),
+        });
+      })
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Could not load candidate accounts.',
       }));
     return true;
   }

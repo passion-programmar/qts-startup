@@ -169,8 +169,8 @@ export default async function SettingsPage() {
           </div>
           <PaginatedTable
             columns={[
-              { label: "Manager", className: "min-w-48" },
-              { label: "Prompt assignment", className: "min-w-[28rem]" },
+              { label: "Manager", className: "w-[30%]" },
+              { label: "Prompt assignment", className: "w-[70%]" },
             ]}
             emptyMessage="No active managers"
             rows={managerRows.map((manager) => ({

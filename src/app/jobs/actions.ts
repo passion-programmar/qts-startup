@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -22,6 +22,7 @@ export async function updateJobAction(
   const jobUrl = text(formData, "jobUrl", 2048);
   const jobTitle = text(formData, "jobTitle", 500);
   const company = text(formData, "company", 500);
+  const description = text(formData, "description", 100_000);
   const location = text(formData, "location", 500);
   const employmentType = text(formData, "employmentType", 200);
   const workplaceType = text(formData, "workplaceType", 200);
@@ -40,16 +41,53 @@ export async function updateJobAction(
     .where(and(eq(profiles.userId, candidateId), eq(users.parentUserId, manager.id), eq(users.role, "account"))).limit(1);
   if (!candidate) return { error: "Select one of your candidate accounts.", success: null };
 
-  const updated = await db.update(jobs).set({
-    candidateId, jobUrl: normalizeJobUrl(jobUrl), jobTitle, company,
-    location: location || null,
-    employmentType: employmentType || null,
-    workplaceType: workplaceType || null,
-    salary: salary || null,
-    date, status: status as "todo" | "pending" | "applied" | "failed",
-    failureReason: failureReason || null, updatedAt: new Date(),
-  }).where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).returning({ id: jobs.id });
-  if (!updated.length) return { error: "Job was not found.", success: null };
+  const [existingJob] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
+    .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
+  if (!existingJob) return { error: "Job was not found.", success: null };
+  if (existingJob.generationStatus === "processing") {
+    return { error: "Cancel Generation before editing a job that is currently processing.", success: null };
+  }
+
+  const normalizedUrl = normalizeJobUrl(jobUrl);
+  const duplicate = await db.select({ id: jobs.id }).from(jobs).where(and(
+    eq(jobs.managerId, manager.id),
+    eq(jobs.candidateId, candidateId),
+    ne(jobs.id, id),
+    or(
+      sql`regexp_replace(split_part(btrim(${jobs.jobUrl}), '#', 1), '/+$', '') = ${normalizedUrl}`,
+      and(
+        sql`lower(btrim(${jobs.jobTitle})) = ${jobTitle.trim().toLowerCase()}`,
+        sql`lower(btrim(${jobs.company})) = ${company.trim().toLowerCase()}`,
+      ),
+    ),
+  )).limit(1);
+  if (duplicate.length) {
+    return { error: "This candidate already has a job row with the same URL or title and company.", success: null };
+  }
+
+  let updated: { id: string }[];
+  try {
+    updated = await db.update(jobs).set({
+      candidateId, jobUrl: normalizedUrl, jobTitle, company,
+      description: description || null,
+      location: location || null,
+      employmentType: employmentType || null,
+      workplaceType: workplaceType || null,
+      salary: salary || null,
+      date, status: status as "todo" | "pending" | "applied" | "failed",
+      failureReason: failureReason || null, updatedAt: new Date(),
+    }).where(and(
+      eq(jobs.id, id),
+      eq(jobs.managerId, manager.id),
+      ne(jobs.generationStatus, "processing"),
+    )).returning({ id: jobs.id });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return { error: "This candidate already has a job row with the same URL or title and company.", success: null };
+    }
+    throw error;
+  }
+  if (!updated.length) return { error: "Job is unavailable or Generation started processing; refresh and try again.", success: null };
   revalidatePath("/jobs");
   return { error: null, success: "Job updated." };
 }
@@ -128,8 +166,18 @@ export async function deleteJobAction(
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
   const id = text(formData, "id", 36);
   if (!uuid(id)) return { error: "Invalid job.", success: null };
-  const deleted = await db.delete(jobs).where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).returning({ id: jobs.id });
-  if (!deleted.length) return { error: "Job was not found.", success: null };
+  const [job] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
+    .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
+  if (!job) return { error: "Job was not found.", success: null };
+  if (job.generationStatus === "processing") {
+    return { error: "Cancel Generation before deleting a job that is currently processing.", success: null };
+  }
+  const deleted = await db.delete(jobs).where(and(
+    eq(jobs.id, id),
+    eq(jobs.managerId, manager.id),
+    ne(jobs.generationStatus, "processing"),
+  )).returning({ id: jobs.id });
+  if (!deleted.length) return { error: "Job is unavailable or Generation started processing; refresh and try again.", success: null };
   revalidatePath("/jobs");
   return { error: null, success: "Job deleted." };
 }
@@ -137,5 +185,9 @@ export async function deleteJobAction(
 function text(data: FormData, name: string, max: number): string {
   const value = data.get(name);
   return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null &&
+    "code" in error && error.code === "23505";
 }
 function uuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }

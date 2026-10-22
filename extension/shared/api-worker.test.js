@@ -82,6 +82,25 @@ test('worker permits the authenticated Get JD duplicate check', async () => {
   assert.equal(requests[0].options.headers.Authorization, 'Bearer worker-token');
 });
 
+test('worker permits loading the signed-in manager candidate accounts', async () => {
+  const requests = [];
+  const worker = loadApiWorker(async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, profiles: [] }),
+    };
+  });
+
+  const result = await worker.workerApiRequest('GET', '/api/extension/get-jd/profiles');
+
+  assert.equal(result.success, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://qts.example.test/api/extension/get-jd/profiles');
+  assert.ok(requests[0].options.headers.Authorization);
+});
+
 test('worker permits authenticated Generation endpoints', async () => {
   const requests = [];
   const worker = loadApiWorker(async (url, options) => {

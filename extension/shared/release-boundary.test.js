@@ -87,11 +87,23 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
     path.join(extensionRoot, 'content', 'get-jd-review.js'),
     'utf8',
   );
+  const profilesRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'get-jd', 'profiles', 'route.ts'),
+    'utf8',
+  );
 
+  assert.ok(profilesRoute.includes('getExtensionManager(request)'));
+  assert.ok(profilesRoute.includes('eq(users.parentUserId, manager.id)'));
+  assert.ok(profilesRoute.includes('category: categories.name'));
+  assert.ok(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"));
+  assert.ok(review.includes('position: fixed; inset: 0 0 0 auto'));
+  assert.ok(review.includes('if (!sessionIsValid(stored))'));
+  assert.ok(review.includes('result.classification.matchingProfileIds'));
+  assert.ok(serviceWorker.includes('selectionModified: true'));
   assert.ok(serviceWorker.includes('profiles.filter((profile) => profile.available !== false)'));
   assert.ok(serviceWorker.includes("status: 'complete'"));
-  assert.ok(review.includes("checkbox.disabled = profile.available === false"));
-  assert.ok(review.includes("elements.panel.querySelector('h2').textContent = 'Save result'"));
+  assert.ok(review.includes("checkbox.disabled = !selectionEnabled || profile.available === false"));
+  assert.ok(review.includes("elements.heading.textContent = 'Save result'"));
   assert.ok(review.includes('Successfully saved ${savedCount}'));
   assert.ok(review.includes("? 'Already applied.'"));
   assert.ok(review.includes("? 'Already added.'"));
@@ -99,6 +111,32 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(serviceWorker.includes('result.exists === true || result.allCandidatesAssigned === true'));
   assert.ok(serviceWorker.includes('savedCount !== profileIds.length'));
   assert.ok(serviceWorker.includes('duplicateCount > 0'));
+});
+
+test('manager job rows support safe manual edits and deletion', () => {
+  const jobsPage = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'jobs', 'page.tsx'),
+    'utf8',
+  );
+  const actions = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'jobs', 'actions.ts'),
+    'utf8',
+  );
+  const forms = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'components', 'record-forms.tsx'),
+    'utf8',
+  );
+
+  assert.ok(jobsPage.includes('<JobActions'));
+  assert.ok(actions.includes('export async function updateJobAction'));
+  assert.ok(actions.includes('export async function deleteJobAction'));
+  assert.ok(actions.includes('eq(jobs.managerId, manager.id)'));
+  assert.ok(actions.includes('eq(users.parentUserId, manager.id)'));
+  assert.ok(actions.includes('description: description || null'));
+  assert.ok(forms.includes('label="Job description"'));
+  assert.ok(forms.includes('updateJobAction'));
+  assert.ok(forms.includes('deleteJobAction'));
+  assert.ok(actions.includes('generationStatus, "processing"'));
 });
 
 test('the login panel submits completed credentials without a timer or button', () => {

@@ -164,7 +164,7 @@ export function PromptAssignmentForm({
   );
 
   return (
-    <div className="min-w-64 space-y-2">
+    <div className="min-w-0 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-slate-600">
           {assignedPromptName ?? "No prompt assigned"}
