@@ -74,7 +74,6 @@ export default async function GeminiUsagePage() {
         <header className="mb-7 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              Gemini API usage
             </h1>
           </div>
           <div className="flex gap-2">
