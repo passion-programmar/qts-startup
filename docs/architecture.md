@@ -84,6 +84,10 @@ The popup and service worker resolve the server through
 may set `qtsServerUrl` in extension local storage; popup and background requests
 then use the same normalized value.
 
+After a Manager signs in, shared text highlights are applied on all supported
+web pages independently of built-in and Manager-configured URL exclusions. Those
+exclusions continue to suppress the launcher and other extension workflows.
+
 ## Database invariants
 
 - A Manager and candidate can have only one Job for a normalized URL.

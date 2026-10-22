@@ -3,13 +3,11 @@ async function startPageTextHighlighter() {
 
   const highlighting = globalThis.__qtsTextHighlighting;
   if (!highlighting || !globalThis.chrome?.storage?.local) return;
-  if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
 
   let currentStorageKey = '';
   let currentRules = [];
   let observer = null;
   let refreshQueued = false;
-  let pageExcluded = false;
 
   function waitForDocumentBody() {
     if (document.body) return Promise.resolve();
@@ -91,15 +89,6 @@ async function startPageTextHighlighter() {
   }
 
   async function loadAndApply() {
-    const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
-    if (!pageAccess?.ok || pageAccess.excluded) {
-      pageExcluded = true;
-      currentRules = [];
-      if (observer) observer.disconnect();
-      applyRules(currentRules);
-      return;
-    }
-    pageExcluded = false;
     await waitForDocumentBody();
     currentStorageKey = highlighting.getGlobalStorageKey();
     const stored = await chrome.storage.local.get([
@@ -138,13 +127,12 @@ async function startPageTextHighlighter() {
   }
 
   function observePage() {
-    if (!pageExcluded && observer && document.body) {
+    if (observer && document.body) {
       observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     }
   }
 
   function scheduleRefresh() {
-    if (pageExcluded) return;
     if (refreshQueued) return;
     refreshQueued = true;
     setTimeout(() => {
@@ -164,7 +152,6 @@ async function startPageTextHighlighter() {
         changes[currentStorageKey]
         || changes.authToken
         || changes.authExpiresAt
-        || changes.qtsManagerPageExclusions
       )
     ) {
       loadAndApply().catch((error) => console.error('[QTS text highlights] Could not apply saved rules:', error));

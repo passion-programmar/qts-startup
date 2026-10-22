@@ -172,6 +172,25 @@ test('manager URL exclusions update UI and workflows across SPA navigation', () 
   assert.ok(review.includes('initializeGetJdReview().catch'));
 });
 
+test('shared text highlights run independently of site and manager URL exclusions', () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'),
+  );
+  const highlighter = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'text-highlighter.js'),
+    'utf8',
+  );
+
+  assert.ok(manifest.content_scripts.some((entry) => (
+    entry.matches?.includes('<all_urls>')
+    && entry.js?.includes('content/text-highlighter.js')
+  )));
+  assert.equal(highlighter.includes('CHECK_EXTENSION_PAGE_ALLOWED'), false);
+  assert.equal(highlighter.includes('__qtsPageExclusions'), false);
+  assert.ok(highlighter.includes("'authToken'"));
+  assert.ok(highlighter.includes("changes.authToken"));
+});
+
 test('Generation launcher shows a document icon and can cancel an active run', () => {
   const launcher = fs.readFileSync(
     path.join(extensionRoot, 'content', 'page-launcher.js'),

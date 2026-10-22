@@ -138,9 +138,10 @@ grants the matching permissions. Detection rules match a domain and optional
 path prefix and act as a URL hint; page content must still look like a job
 posting. Excluded pages do not render QTS controls or run extension workflows.
 Exclusion updates also apply to already-open pages.
-Text highlights from the shared rule set render automatically, while the
-launcher editor is available only to Managers granted `canManageTextHighlights`
-by a Super Admin.
+After a Manager signs in, text highlights from the shared rule set render
+automatically on all supported web pages, including pages excluded from the
+launcher and other extension workflows. The launcher editor is available only
+to Managers granted `canManageTextHighlights` by a Super Admin.
 Managers start document generation with **Queue Generation** on a Jobs row;
 the signed-in extension processes queued jobs one at a time and downloads a
 résumé PDF, cover-letter PDF, and JD text file to the local Downloads folder.
