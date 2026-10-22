@@ -10,7 +10,13 @@ import {
   passwordLengthError,
 } from "@/lib/password-policy";
 import { requireUser } from "@/lib/session";
-import { isValidBirthday } from "@/server/users/profile-values";
+import {
+  isValidBirthday,
+  isValidProfileEmail,
+  isValidProfileMonth,
+  isValidProfilePhone,
+  normalizeLinkedInProfile,
+} from "@/server/users/profile-values";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
 export type UserActionState = {
@@ -65,6 +71,21 @@ export async function createUserAction(
     isCurrent: 5,
     description: 5000,
   });
+  if (
+    expectedRole === "account" &&
+    [
+      ["birthday", 10],
+      ["candidateEmail", 320],
+      ["phone", 64],
+      ["linkedinUrl", 2048],
+    ].some(([name, maxLength]) => {
+      const value = formData.get(String(name));
+      return value !== null &&
+        (typeof value !== "string" || value.length > Number(maxLength));
+    })
+  ) {
+    return { ...emptyState, error: "One or more profile fields are too long." };
+  }
   if (!educationRows || !experienceRows) {
     return {
       ...emptyState,
@@ -79,6 +100,8 @@ export async function createUserAction(
     };
   }
 
+  const normalizedLinkedInUrl =
+    expectedRole === "account" ? normalizeLinkedInProfile(linkedinUrl) : "";
   if (expectedRole === "account") {
     if (!firstName || !lastName) {
       return {
@@ -86,8 +109,11 @@ export async function createUserAction(
         error: "Enter the candidate's first and last name.",
       };
     }
-    if (candidateEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidateEmail)) {
+    if (candidateEmail && !isValidProfileEmail(candidateEmail)) {
       return { ...emptyState, error: "Enter a valid candidate email address." };
+    }
+    if (phone && !isValidProfilePhone(phone)) {
+      return { ...emptyState, error: "Enter a valid phone number with 7 to 15 digits." };
     }
     if (birthday && !isValidBirthday(birthday)) {
       return { ...emptyState, error: "Enter a valid birthday that is not in the future." };
@@ -95,8 +121,8 @@ export async function createUserAction(
     if (!isPdfTemplate(pdfTemplate)) {
       return { ...emptyState, error: "Select a valid PDF template." };
     }
-    if (linkedinUrl && !isHttpUrl(linkedinUrl)) {
-      return { ...emptyState, error: "Enter a valid LinkedIn profile URL." };
+    if (normalizedLinkedInUrl === null) {
+      return { ...emptyState, error: "Enter a LinkedIn profile as linkedin.com/in/username." };
     }
     if (subCategoryId && !isUuid(subCategoryId)) {
       return { ...emptyState, error: "Select a valid candidate subcategory." };
@@ -163,7 +189,7 @@ export async function createUserAction(
           select id, ${subCategoryId || null}::uuid, ${firstName}, ${lastName},
             ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
-            ${phone || null}, ${headline || null}, ${linkedinUrl || null},
+            ${phone || null}, ${headline || null}, ${normalizedLinkedInUrl || null},
             ${country || null}, ${city || null}, ${province || null},
             ${addressLine1 || null}, ${postalCode || null}
           from new_user
@@ -331,11 +357,11 @@ export async function updateCandidateProfileAction(
       error: "Enter the candidate's first and last name.",
     };
   }
-  if (
-    values.candidateEmail &&
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.candidateEmail)
-  ) {
+  if (values.candidateEmail && !isValidProfileEmail(values.candidateEmail)) {
     return { ...emptyState, error: "Enter a valid candidate email address." };
+  }
+  if (values.phone && !isValidProfilePhone(values.phone)) {
+    return { ...emptyState, error: "Enter a valid phone number with 7 to 15 digits." };
   }
   if (values.birthday && !isValidBirthday(values.birthday)) {
     return { ...emptyState, error: "Enter a valid birthday that is not in the future." };
@@ -343,8 +369,9 @@ export async function updateCandidateProfileAction(
   if (!isPdfTemplate(values.pdfTemplate)) {
     return { ...emptyState, error: "Select a valid PDF template." };
   }
-  if (values.linkedinUrl && !isHttpUrl(values.linkedinUrl)) {
-    return { ...emptyState, error: "Enter a valid LinkedIn profile URL." };
+  const normalizedLinkedInUrl = normalizeLinkedInProfile(values.linkedinUrl);
+  if (normalizedLinkedInUrl === null) {
+    return { ...emptyState, error: "Enter a LinkedIn profile as linkedin.com/in/username." };
   }
   if (values.subCategoryId && !isUuid(values.subCategoryId)) {
     return { ...emptyState, error: "Select a valid candidate subcategory." };
@@ -402,7 +429,7 @@ export async function updateCandidateProfileAction(
           pdf_template = ${values.pdfTemplate},
           candidate_email = ${values.candidateEmail ? values.candidateEmail.toLowerCase() : null},
           phone = ${values.phone || null}, headline = ${values.headline || null},
-          linkedin_url = ${values.linkedinUrl || null}, country = ${values.country || null},
+          linkedin_url = ${normalizedLinkedInUrl || null}, country = ${values.country || null},
           city = ${values.city || null}, province = ${values.province || null},
           address_line_1 = ${values.addressLine1 || null}, postal_code = ${values.postalCode || null},
           jd_matching = ${values.jdMatching || null},
@@ -827,12 +854,10 @@ function validateHistoryDates(
   const startDate = row.startDate ?? "";
   const endDate = row.endDate ?? "";
   const isCurrent = row.isCurrent === "true";
-  const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-  if (startDate && !validMonth.test(startDate)) {
+  if (startDate && !isValidProfileMonth(startDate)) {
     return `Enter a valid start month for ${label} entry ${index + 1}.`;
   }
-  if (endDate && !validMonth.test(endDate)) {
+  if (endDate && !isValidProfileMonth(endDate)) {
     return `Enter a valid end month for ${label} entry ${index + 1}.`;
   }
   if (isCurrent && endDate) {
@@ -855,15 +880,6 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
   );
-}
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
-  }
 }
 
 function isUniqueViolation(error: unknown): boolean {

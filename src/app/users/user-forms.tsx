@@ -119,6 +119,8 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               label="Phone"
               maxLength={64}
               name="phone"
+              placeholder="+1 (555) 123-4567"
+              type="tel"
             />
             <TextField
               autoComplete="organization-title"
@@ -130,10 +132,11 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
             <TextField
               autoComplete="url"
               id="linkedinUrl"
-              label="LinkedIn profile URL"
+              label="LinkedIn profile (linkedin.com/in/username)"
               maxLength={2048}
               name="linkedinUrl"
-              type="url"
+              placeholder="linkedin.com/in/username"
+              type="text"
             />
             <TextField
               autoComplete="country"
@@ -537,6 +540,8 @@ export function EditCandidateProfileForm({
             label="Phone"
             maxLength={64}
             name="phone"
+            placeholder="+1 (555) 123-4567"
+            type="tel"
           />
           <TextField
             autoComplete="organization-title"
@@ -558,10 +563,11 @@ export function EditCandidateProfileForm({
             autoComplete="url"
             defaultValue={candidate.linkedinUrl ?? ""}
             id={fieldId("linkedinUrl")}
-            label="LinkedIn profile URL"
+            label="LinkedIn profile (linkedin.com/in/username)"
             maxLength={2048}
             name="linkedinUrl"
-            type="url"
+            placeholder="linkedin.com/in/username"
+            type="text"
           />
           <TextField
             autoComplete="country"
