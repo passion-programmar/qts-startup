@@ -11,7 +11,10 @@
   let currentResult = null;
   let extensionStatus = null;
   let signedIn = false;
+  let profilesLoaded = false;
+  let profileLoadError = '';
   let profileLoadRequestId = 0;
+  let panelHideTimer = null;
 
   function ensureRoot() {
     if (root) return root;
@@ -24,8 +27,9 @@
     dockStyle.textContent = `
       html[data-qts-get-jd-docked="true"] body {
         box-sizing: border-box !important;
-        padding-right: min(380px, 48vw) !important;
+        padding-right: min(400px, 48vw) !important;
       }
+      html body { transition: padding-right .28s cubic-bezier(.2,.8,.2,1); }
     `;
     (document.head || document.documentElement).appendChild(dockStyle);
 
@@ -42,40 +46,58 @@
       .toast.success { background: #166534; }
       .panel {
         position: fixed; inset: 0 0 0 auto; z-index: 1; display: flex; flex-direction: column;
-        width: min(380px, 48vw); height: 100vh; height: 100dvh; box-sizing: border-box;
-        padding: 18px; border-left: 1px solid #cbd5e1; background: #fff; color: #0f172a;
-        box-shadow: -12px 0 36px #0f172a30; font: 13px/1.45 system-ui, sans-serif;
-        pointer-events: auto;
+        width: min(400px, 48vw); height: 100vh; height: 100dvh; box-sizing: border-box;
+        padding: 20px 18px 16px; border: 1px solid #dbe4f0; border-right: 0;
+        border-radius: 18px 0 0 18px; background: linear-gradient(160deg, #fff 0%, #f8faff 100%);
+        color: #172033; box-shadow: -16px 0 42px #0f172a24;
+        font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+        opacity: 0; transform: translateX(20px); visibility: hidden; pointer-events: none;
+        transition: opacity .24s ease, transform .28s cubic-bezier(.2,.8,.2,1), visibility .28s;
       }
+      .panel.is-visible { opacity: 1; transform: translateX(0); visibility: visible; pointer-events: auto; }
       .panel[hidden], .toast[hidden] { display: none; }
-      .panel-header { flex: 0 0 auto; padding-bottom: 13px; border-bottom: 1px solid #e2e8f0; }
-      h2 { margin: 0; font-size: 17px; }
-      .status { margin: 8px 0 0; color: #475569; }
+      .panel-header { flex: 0 0 auto; padding-bottom: 15px; border-bottom: 1px solid #e2e8f0; }
+      h2 { margin: 0; color: #111827; font-size: 17px; font-weight: 750; letter-spacing: -.02em; }
+      .status { position: relative; margin: 7px 0 0; color: #64748b; }
+      .status.is-loading { display: flex; align-items: flex-start; gap: 8px; }
+      .status.is-loading::before { content: ''; flex: 0 0 8px; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #4f7cff; box-shadow: 0 0 0 4px #4f7cff18; animation: qts-status-pulse 1.4s ease-in-out infinite; }
+      @keyframes qts-status-pulse { 50% { opacity: .45; box-shadow: 0 0 0 7px #4f7cff0a; } }
       .details { flex: 0 1 auto; max-height: 34vh; overflow: auto; margin: 0; padding: 0 0 12px; }
       .details[hidden] { display: none; }
-      .details div { margin-top: 7px; overflow-wrap: anywhere; }
-      .details dt { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-      .details dd { margin: 1px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-      .description { max-height: 130px; overflow: auto; padding: 8px; border-radius: 7px; background: #f8fafc; }
-      .account-heading { display: flex; flex: 0 0 auto; justify-content: space-between; gap: 8px; padding: 13px 0 7px; color: #334155; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-      .profiles { flex: 1 1 auto; min-height: 100px; overflow: auto; margin: 0 0 8px; border-top: 1px solid #e2e8f0; }
-      .profile { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-height: 54px; padding: 9px 3px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+      .details div { margin-top: 9px; overflow-wrap: anywhere; }
+      .details dt { color: #718096; font-size: 10px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+      .details dd { margin: 2px 0 0; color: #273449; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .description { max-height: 130px; overflow: auto; padding: 10px; border: 1px solid #e5eaf2; border-radius: 10px; background: #f7f9fc; }
+      .account-heading { display: flex; flex: 0 0 auto; justify-content: space-between; gap: 8px; padding: 13px 0 8px; color: #48566d; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+      .account-count { display: inline-flex; min-width: 22px; height: 22px; align-items: center; justify-content: center; margin-top: -4px; border: 1px solid #dbe4f0; border-radius: 999px; background: #fff; color: #334155; font-size: 11px; letter-spacing: 0; }
+      .profiles { flex: 1 1 auto; min-height: 100px; overflow: auto; margin: 0 0 8px; border-top: 1px solid #e2e8f0; scrollbar-color: #b8c4d6 transparent; scrollbar-width: thin; }
+      .profile { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-height: 58px; padding: 10px 3px; border-bottom: 1px solid #edf1f6; cursor: pointer; transition: background .16s ease, padding .16s ease; }
+      .profile:hover { padding-right: 7px; padding-left: 7px; background: #f1f5ff; }
       .profile.unavailable, .profile.inactive { cursor: default; opacity: .68; }
-      .profile input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0 2px 0 0; accent-color: #4f46e5; }
-      .profile-name { min-width: 0; overflow-wrap: anywhere; font-weight: 650; }
-      .profile small { display: block; margin-top: 2px; color: #64748b; font-weight: 400; }
-      .profile .saved { color: #166534; }
+      .profile input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0 2px 0 0; accent-color: #4f6ef7; }
+      .profile-name { min-width: 0; overflow-wrap: anywhere; color: #253149; font-weight: 700; }
+      .profile small { display: block; margin-top: 3px; color: #8290a5; font-size: 11px; font-weight: 450; }
+      .profile .saved { color: #15803d; }
       .profile .failed { color: #b91c1c; }
+      .profiles-empty { padding: 14px 4px; color: #718096; font-size: 12px; }
+      .profile-skeleton { height: 48px; margin: 8px 2px; border-radius: 9px; background: linear-gradient(90deg, #edf1f7 25%, #f7f9fc 40%, #edf1f7 65%); background-size: 300% 100%; animation: qts-skeleton 1.4s ease infinite; }
+      @keyframes qts-skeleton { to { background-position: -150% 0; } }
       .message { flex: 0 0 auto; min-height: 18px; margin: 0 0 8px; color: #b91c1c; }
       .actions { display: flex; flex: 0 0 auto; gap: 8px; }
-      button { min-height: 36px; padding: 0 13px; border: 0; border-radius: 7px; font: 600 12px system-ui, sans-serif; cursor: pointer; }
+      button { min-height: 40px; padding: 0 15px; border: 0; border-radius: 10px; font: 700 12px system-ui, sans-serif; cursor: pointer; transition: transform .16s ease, background .16s ease, box-shadow .16s ease; }
+      button:hover:not(:disabled) { transform: translateY(-1px); }
       button:disabled { opacity: .6; cursor: wait; }
       button[hidden] { display: none; }
-      .save { flex: 1; color: #fff; background: #4f46e5; }
-      .cancel { color: #334155; background: #e2e8f0; }
+      .save { flex: 1; color: #fff; background: linear-gradient(135deg, #4f6ef7, #6554d9); box-shadow: 0 5px 14px #4f6ef72e; }
+      .save:hover:not(:disabled) { background: linear-gradient(135deg, #405fe8, #5745c7); box-shadow: 0 7px 18px #4f6ef744; }
+      .cancel { border: 1px solid #dbe3ef; color: #475569; background: #fff; }
+      .cancel:hover:not(:disabled) { background: #f1f5f9; }
       @media (max-width: 520px) {
-        .panel { padding: 14px; }
+        .panel { padding: 16px 14px 14px; border-radius: 14px 0 0 14px; }
         .details { max-height: 28vh; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .panel, .profile, button, .status.is-loading::before, .profile-skeleton { transition: none; animation: none; }
       }
     `;
     root.appendChild(style);
@@ -89,11 +111,15 @@
     const panel = document.createElement('section');
     panel.className = 'panel';
     panel.hidden = true;
+    panel.inert = true;
+    panel.setAttribute('aria-hidden', 'true');
     panel.setAttribute('aria-label', 'Review job and candidate matches');
     const heading = document.createElement('h2');
     heading.textContent = 'QTS Candidate Accounts';
     const status = document.createElement('p');
     status.className = 'status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
     const details = document.createElement('dl');
     details.className = 'details';
     details.hidden = true;
@@ -102,9 +128,11 @@
     const accountLabel = document.createElement('span');
     accountLabel.textContent = 'Accounts';
     const accountCount = document.createElement('span');
+    accountCount.className = 'account-count';
     accountHeading.append(accountLabel, accountCount);
     const profiles = document.createElement('div');
     profiles.className = 'profiles';
+    profiles.setAttribute('aria-busy', 'true');
     const message = document.createElement('p');
     message.className = 'message';
     message.setAttribute('role', 'status');
@@ -132,8 +160,27 @@
   }
 
   function setPanelVisible(visible) {
-    const shouldShow = visible && signedIn && extensionStatus === 'get_jd';
-    if (host?.__qtsElements) host.__qtsElements.panel.hidden = !shouldShow;
+    const shouldShow =
+      visible && signedIn && profilesLoaded && extensionStatus === 'get_jd';
+    const panel = host?.__qtsElements?.panel;
+    if (panel) {
+      clearTimeout(panelHideTimer);
+      if (shouldShow) {
+        const wasHidden = panel.hidden;
+        panel.hidden = false;
+        panel.inert = false;
+        panel.setAttribute('aria-hidden', 'false');
+        if (wasHidden) requestAnimationFrame(() => panel.classList.add('is-visible'));
+        else panel.classList.add('is-visible');
+      } else {
+        panel.classList.remove('is-visible');
+        panel.inert = true;
+        panel.setAttribute('aria-hidden', 'true');
+        panelHideTimer = setTimeout(() => {
+          if (!panel.classList.contains('is-visible')) panel.hidden = true;
+        }, 300);
+      }
+    }
     if (shouldShow) {
       document.documentElement?.setAttribute('data-qts-get-jd-docked', 'true');
     } else {
@@ -199,12 +246,27 @@
     const selectedIds = options.selectedIds || new Set();
     const saveResults = options.saveResults || new Map();
     elements.profiles.replaceChildren();
+    elements.profiles.setAttribute('aria-busy', String(!profilesLoaded));
     elements.accountCount.textContent = `${profiles.length}`;
     if (!profiles.length) {
+      if (!profilesLoaded) {
+        const loading = document.createElement('div');
+        loading.className = 'profiles-loading';
+        loading.setAttribute('aria-label', 'Loading candidate accounts');
+        for (let index = 0; index < 5; index += 1) {
+          const skeleton = document.createElement('div');
+          skeleton.className = 'profile-skeleton';
+          skeleton.setAttribute('aria-hidden', 'true');
+          loading.appendChild(skeleton);
+        }
+        elements.profiles.appendChild(loading);
+        return;
+      }
       const empty = document.createElement('p');
-      empty.textContent = signedIn
+      empty.className = 'profiles-empty';
+      empty.textContent = profileLoadError || (signedIn
         ? 'No active candidate accounts were found for this Manager.'
-        : 'Sign in to load candidate accounts.';
+        : 'Sign in to load candidate accounts.');
       elements.profiles.appendChild(empty);
       return;
     }
@@ -255,10 +317,20 @@
   function renderIdlePanel(message) {
     const elements = host.__qtsElements;
     elements.heading.textContent = 'QTS Candidate Accounts';
-    elements.status.textContent = message || (
-      extensionStatus === 'get_jd'
-        ? 'Get JD is checking this page. Candidate accounts will be ready to select when the check finishes.'
-        : 'Start Get JD on a job page to match and save candidates.'
+    elements.status.textContent = message || profileLoadError || (
+      !profilesLoaded
+        ? 'Loading your candidate accounts...'
+        : extensionStatus === 'get_jd'
+          ? 'Get JD is checking this page. Candidate accounts will be ready to select when the check finishes.'
+          : 'Start Get JD on a job page to match and save candidates.'
+    );
+    elements.status.classList.toggle(
+      'is-loading',
+      extensionStatus === 'get_jd' && (
+        currentResult?.status === 'processing' ||
+        !profilesLoaded ||
+        /checking|loading/i.test(elements.status.textContent)
+      ),
     );
     elements.details.hidden = true;
     elements.details.replaceChildren();
@@ -273,6 +345,7 @@
     setPanelVisible(true);
     elements.heading.textContent = 'QTS Candidate Accounts';
     elements.status.textContent = result.message || 'Select candidates to save this job.';
+    elements.status.classList.remove('is-loading');
     elements.details.hidden = false;
     elements.details.replaceChildren();
     appendDetail(elements.details, 'Title', result.classification.job.title);
@@ -327,6 +400,8 @@
       elements.cancel.disabled = true;
       elements.save.textContent = 'Saving...';
       elements.message.textContent = 'Saving selected candidates...';
+      elements.status.textContent = 'Saving the selected candidates...';
+      elements.status.classList.add('is-loading');
       try {
         const response = await chrome.runtime.sendMessage({
           type: 'SAVE_GET_JD_SELECTION',
@@ -338,6 +413,8 @@
         elements.save.disabled = false;
         elements.cancel.disabled = false;
         elements.save.textContent = 'Save';
+        elements.status.textContent = 'Select candidates to save this job.';
+        elements.status.classList.remove('is-loading');
       }
     };
     elements.cancel.onclick = async () => {
@@ -363,6 +440,7 @@
     elements.status.textContent = savedCount > 0
       ? `Successfully saved ${savedCount} job${savedCount === 1 ? '' : 's'}.`
       : 'No new jobs were saved.';
+    elements.status.classList.remove('is-loading');
     elements.details.hidden = false;
     elements.details.replaceChildren();
     appendDetail(elements.details, 'Job', result.classification?.job?.title || 'Job');
@@ -432,6 +510,8 @@
       profileLoadRequestId += 1;
       signedIn = false;
       managerProfiles = [];
+      profilesLoaded = false;
+      profileLoadError = '';
       currentResult = null;
       setPanelVisible(false);
       return;
@@ -439,6 +519,8 @@
 
     ensureRoot();
     signedIn = true;
+    profilesLoaded = false;
+    profileLoadError = '';
     renderCurrentResult();
     if (extensionStatus === 'get_jd') {
       renderIdlePanel('Loading your candidate accounts...');
@@ -451,14 +533,18 @@
     } catch (error) {
       if (requestId !== profileLoadRequestId || !signedIn) return;
       const message = error instanceof Error ? error.message : 'Could not load candidate accounts.';
-      host.__qtsElements.status.textContent = message;
+      profilesLoaded = true;
+      profileLoadError = message;
+      renderCurrentResult();
       console.error('[QTS Get JD] Could not load manager candidate accounts:', error);
       return;
     }
     if (requestId !== profileLoadRequestId || !signedIn) return;
     if (!response?.ok || !Array.isArray(response.profiles)) {
-      host.__qtsElements.status.textContent = response?.error || 'Could not load candidate accounts.';
-      console.error('[QTS Get JD] Could not load manager candidate accounts:', response?.error);
+      profileLoadError = response?.error || 'Could not load candidate accounts.';
+      profilesLoaded = true;
+      renderCurrentResult();
+      console.error('[QTS Get JD] Could not load manager candidate accounts:', profileLoadError);
       return;
     }
     managerProfiles = response.profiles
@@ -468,6 +554,8 @@
         name: typeof profile.name === 'string' ? profile.name : 'Candidate',
         category: typeof profile.category === 'string' ? profile.category : null,
       }));
+    profilesLoaded = true;
+    profileLoadError = '';
     renderCurrentResult();
   }
 

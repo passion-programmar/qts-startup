@@ -167,23 +167,25 @@ export async function deleteJobAction(
   const id = text(formData, "id", 36);
   if (!uuid(id)) return { error: "Invalid job.", success: null };
   try {
-    const [job] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
-      .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
-    if (!job) return { error: "Job was not found.", success: null };
-    if (job.generationStatus === "processing") {
-      return { error: "Cancel Generation before deleting a job that is currently processing.", success: null };
-    }
     const deleted = await db.delete(jobs).where(and(
       eq(jobs.id, id),
       eq(jobs.managerId, manager.id),
       ne(jobs.generationStatus, "processing"),
     )).returning({ id: jobs.id });
-    if (!deleted.length) return { error: "Job is unavailable or Generation started processing; refresh and try again.", success: null };
+    if (!deleted.length) {
+      const [job] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
+        .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
+      if (!job) return { error: "Job was not found. Refresh the page and try again.", success: null };
+      if (job.generationStatus === "processing") {
+        return { error: "Cancel Generation before deleting a job that is currently processing.", success: null };
+      }
+      return { error: "The job could not be deleted. Refresh the page and try again.", success: null };
+    }
   } catch (error) {
     console.error("Could not delete manager job.", error);
     if (isForeignKeyViolation(error)) {
       return {
-        error: "This job is still referenced by another record and cannot be deleted.",
+        error: "This job is linked to another record and cannot be deleted. Remove the linked record first.",
         success: null,
       };
     }
@@ -192,7 +194,15 @@ export async function deleteJobAction(
       success: null,
     };
   }
-  revalidatePath("/jobs");
+  try {
+    revalidatePath("/jobs");
+  } catch (error) {
+    console.error("Job was deleted, but the Jobs page could not be refreshed.", error);
+    return {
+      error: null,
+      success: "Job deleted. Refresh the page if it is still visible.",
+    };
+  }
   return { error: null, success: "Job deleted." };
 }
 

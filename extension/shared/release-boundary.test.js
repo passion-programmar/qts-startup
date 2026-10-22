@@ -32,8 +32,12 @@ test('the page launcher is the only user entry point', () => {
     path.join(extensionRoot, 'content', 'page-launcher.js'),
     'utf8',
   );
-  assert.ok(launcher.includes("document.readyState === 'complete'"));
-  assert.ok(launcher.includes("window.addEventListener('load', initializeQtsPageLauncher, { once: true })"));
+  assert.ok(launcher.includes("initializeQtsPageLauncher();"));
+  assert.equal(launcher.includes("window.addEventListener('load', initializeQtsPageLauncher"), false);
+  assert.ok(launcher.includes('conic-gradient(from 0deg'));
+  assert.ok(launcher.includes('qts-border-rotate'));
+  assert.ok(launcher.includes('animation: qts-border-rotate 1.5s linear infinite'));
+  assert.equal(launcher.includes("launcher.classList.toggle('loading'"), false);
 });
 
 test('Get JD monitoring uses the non-Gemini duplicate check', () => {
@@ -51,7 +55,7 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(launcher.includes("Let's start finding Your Remote Job!"));
   assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
   assert.ok(launcher.includes("launcher.classList.toggle('get-jd-active', activeStatus === 'get_jd')"));
-  assert.ok(launcher.includes('.launcher.get-jd-active { right: calc(min(380px, 48vw) + 112px); }'));
+  assert.ok(launcher.includes('.launcher.get-jd-active { right: calc(min(400px, 48vw) + 112px); }'));
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'cancel'"));
   assert.ok(launcher.includes("'Sign In'"));
   assert.ok(launcher.includes("'Sign Out'"));
@@ -99,10 +103,19 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(profilesRoute.includes('category: categories.name'));
   assert.ok(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"));
   assert.ok(review.includes('position: fixed; inset: 0 0 0 auto'));
-  assert.ok(review.includes('width: min(380px, 48vw)'));
-  assert.ok(review.includes('padding-right: min(380px, 48vw)'));
+  assert.ok(review.includes('width: min(400px, 48vw)'));
+  assert.ok(review.includes('padding-right: min(400px, 48vw)'));
   assert.ok(review.includes("extensionStatus !== 'get_jd'"));
   assert.ok(review.includes('data-qts-get-jd-docked'));
+  assert.ok(review.includes("panel.classList.add('is-visible')"));
+  assert.ok(review.includes("panel.classList.remove('is-visible')"));
+  assert.ok(review.includes('transition: padding-right .28s'));
+  assert.ok(review.includes('profile-skeleton'));
+  assert.ok(review.includes('profilesLoaded = true'));
+  assert.ok(review.includes('visible && signedIn && profilesLoaded && extensionStatus === \'get_jd\''));
+  assert.ok(review.includes('!profilesLoaded'));
+  assert.ok(review.includes('Loading your candidate accounts...'));
+  assert.ok(review.includes('prefers-reduced-motion: reduce'));
   assert.ok(review.includes('if (!sessionIsValid(stored))'));
   assert.ok(review.includes('result.classification.matchingProfileIds'));
   assert.ok(serviceWorker.includes('selectionModified: true'));
@@ -149,6 +162,11 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(forms.includes('updateJobAction'));
   assert.ok(forms.includes('deleteJobAction'));
   assert.ok(actions.includes('generationStatus, "processing"'));
+  assert.ok(actions.includes('revalidatePath("/jobs")'));
+  assert.ok(actions.includes('Job deleted. Refresh the page if it is still visible.'));
+  assert.ok(forms.includes('aria-label={`Edit ${record.title}`}'));
+  assert.ok(forms.includes('aria-label={`Delete ${record.title}`}'));
+  assert.ok(forms.includes('whitespace-nowrap'));
 });
 
 test('document generation uses saved manager prompt assignments and gates prompt access', () => {

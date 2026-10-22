@@ -58,13 +58,13 @@ export default async function JobsPage() {
           columns={[
             { label: "No", className: "w-[5%]" },
             { label: "Candidate Name", className: "w-[13%]" },
-            { label: "Job Title", className: "w-[22%]" },
+            { label: "Job Title", className: "w-[28%]" },
             { label: "Status", className: "w-[9%]" },
             { label: "Resume Path", className: "w-[16%]" },
             { label: "Date", className: "w-[9%]" },
-            { label: "Edit", className: "w-[7%]" },
-            { label: "Delete", className: "w-[7%]" },
-            { label: "Queue", className: "w-[12%]" },
+            { label: "Edit", className: "w-[5%]" },
+            { label: "Delete", className: "w-[5%]" },
+            { label: "Queue", className: "w-[10%]" },
           ]}
           emptyMessage="No jobs saved yet"
           rows={rows.map((row, index) => {

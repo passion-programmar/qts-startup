@@ -11,11 +11,13 @@ function initializeQtsPageLauncher() {
   style.textContent = `
     :host { all: initial; }
     * { box-sizing: border-box; }
-    .launcher { position: fixed; right: 112px; bottom: 28px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; }
-    .main { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; width: 58px; height: 58px; padding: 5px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease; }
+    .launcher { position: fixed; right: 112px; bottom: 28px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
+    .launcher::before { content: ""; position: absolute; inset: -5px; z-index: 1; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0deg 245deg, #3b82f6 285deg, #22d3ee 325deg, #818cf8 350deg, transparent 360deg); opacity: 1; transform: rotate(0deg); animation: qts-border-rotate 1.5s linear infinite; pointer-events: none; }
+    @keyframes qts-border-rotate { to { transform: rotate(360deg); } }
+    .main { position: absolute; inset: 4px; z-index: 3; display: grid; place-items: center; width: 50px; height: 50px; padding: 4px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease; }
     .main:hover { transform: scale(1.06); background: #f8fafc; }
     .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
-    .brand-icon { display: block; width: 46px; height: 46px; object-fit: contain; object-position: center; }
+    .brand-icon { display: block; width: 40px; height: 40px; object-fit: contain; object-position: center; }
     .action { --x: 0px; --y: 0px; position: absolute; top: -7px; left: -7px; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 72px; padding: 7px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; color: #1e293b; box-shadow: 0 9px 24px #0f172a30; font: 700 10px/1.05 system-ui, sans-serif; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.45); transition: transform .2s ease, opacity .16s ease, visibility .2s; }
     .action:hover { color: #3730a3; background: #eef2ff; border-color: #818cf8; }
     .action-icon { color: #4f46e5; font-size: 20px; line-height: 1; }
@@ -44,15 +46,15 @@ function initializeQtsPageLauncher() {
     .details dt { color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .details dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .description { max-height: 180px; overflow: auto; padding: 9px; border-radius: 8px; background: #f8fafc; }
-    .launcher.get-jd-active { right: calc(min(380px, 48vw) + 112px); }
+    .launcher.get-jd-active { right: calc(min(400px, 48vw) + 112px); }
     @media (max-width: 520px) {
       .launcher { right: 96px; bottom: 24px; }
       .action { width: 66px; height: 66px; }
       .logout { --x: 68px; --y: -78px; }
       .get-jd { --x: -96px; }
-      .launcher.get-jd-active { right: calc(min(380px, 48vw) + 96px); }
+      .launcher.get-jd-active { right: calc(min(400px, 48vw) + 96px); }
     }
-    @media (prefers-reduced-motion: reduce) { .main, .action, .toast { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { .main, .action, .toast, .launcher { transition: none; } .launcher::before { animation: none; } }
   `;
 
   const launcher = document.createElement('div');
@@ -339,8 +341,4 @@ function initializeQtsPageLauncher() {
   globalThis.__qtsPageLauncher = { setOpen, showPreview, syncSessionAction, syncModeActions };
 }
 
-if (document.readyState === 'complete') {
-  initializeQtsPageLauncher();
-} else {
-  window.addEventListener('load', initializeQtsPageLauncher, { once: true });
-}
+initializeQtsPageLauncher();

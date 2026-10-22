@@ -37,18 +37,25 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
   const processing = record.generationStatus === "processing";
   const cancellable = queued || processing;
   const label = cancellable
-    ? processing ? "Cancel Generation" : "Cancel queue"
+    ? "Cancel"
+    : record.generationStatus === "failed"
+      ? "Retry"
+      : "Queue";
+  const accessibleLabel = cancellable
+    ? processing ? "Cancel running Generation" : "Cancel queued Generation"
     : record.generationStatus === "failed"
         ? "Retry Generation"
         : record.generationStatus === "completed"
-          ? "Queue again"
+          ? "Queue Generation again"
           : "Queue Generation";
   return (
     <form action={action}>
       <input name="id" type="hidden" value={record.id} />
       <input name="intent" type="hidden" value={cancellable ? "cancel" : "queue"} />
       <button
-        className="inline-flex h-auto min-h-8 max-w-full items-center whitespace-normal rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-left text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60 sm:px-3"
+        aria-label={accessibleLabel}
+        className="inline-flex min-h-9 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60"
+        title={accessibleLabel}
         disabled={pending}
         type="submit"
       >
@@ -80,12 +87,12 @@ function RecordActions({
   const [deleteState, deleteFormAction, deleting] = useActionState(deleteAction, initialRecordState);
 
   return (
-    <div className="flex flex-wrap items-start gap-2">
-      {showEdit && <button aria-label={`Edit ${record.title}`} className="inline-flex h-8 max-w-full items-center gap-1.5 whitespace-normal rounded-md border border-blue-200 bg-blue-50 px-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 sm:px-3" onClick={() => setOpen(true)} type="button"><Pencil className="size-3.5 shrink-0" />Edit</button>}
+    <div className="flex min-w-0 items-start gap-2">
+      {showEdit && <button aria-label={`Edit ${record.title}`} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setOpen(true)} title={`Edit ${record.title}`} type="button"><Pencil aria-hidden="true" className="size-4" /></button>}
       {showDelete && <form action={deleteFormAction} onSubmit={(event) => { if (!window.confirm(`Permanently delete this ${kind}?`)) event.preventDefault(); }}>
         <input name="id" type="hidden" value={record.id} />
-        <button className="inline-flex h-8 max-w-full items-center gap-1.5 whitespace-normal rounded-md border border-rose-200 bg-rose-50 px-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 sm:px-3" disabled={deleting} type="submit"><Trash2 className="size-3.5 shrink-0" />{deleting ? "Deleting..." : "Delete"}</button>
-        {deleteState.error && <p className="mt-1 max-w-40 text-[10px] text-rose-700" role="alert">{deleteState.error}</p>}
+        <button aria-label={`Delete ${record.title}`} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60" disabled={deleting} title={deleting ? "Deleting job" : `Delete ${record.title}`} type="submit"><Trash2 aria-hidden="true" className="size-4" /></button>
+        {(deleteState.error || deleteState.success) && <p className={`mt-2 max-w-48 rounded-md border px-2 py-1 text-[11px] ${deleteState.error ? "border-rose-200 bg-rose-50 text-rose-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`} role={deleteState.error ? "alert" : "status"}>{deleteState.error ?? deleteState.success}</p>}
       </form>}
       {open && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true">
