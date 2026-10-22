@@ -19,7 +19,9 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
-import type { PdfTemplate } from "@/server/pdf/pdf-templates";
+import {
+  isPdfTemplate,
+} from "@/server/pdf/pdf-templates";
 
 export const instant = false;
 
@@ -45,7 +47,7 @@ type UserRow = {
   first_name: string | null;
   last_name: string | null;
   birthday: string | null;
-  pdf_template: PdfTemplate;
+  pdf_template: string | null;
   candidate_email: string | null;
   phone: string | null;
   headline: string | null;
@@ -314,7 +316,10 @@ export default async function UsersPage() {
                           firstName: candidate.first_name,
                           lastName: candidate.last_name,
                           birthday: candidate.birthday,
-                          pdfTemplate: candidate.pdf_template,
+                          pdfTemplate: candidate.pdf_template
+                            && isPdfTemplate(candidate.pdf_template)
+                            ? candidate.pdf_template
+                            : "heritage",
                           candidateEmail: candidate.candidate_email,
                           phone: candidate.phone,
                           headline: candidate.headline,

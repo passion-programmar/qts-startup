@@ -156,7 +156,7 @@ export const profiles = pgTable(
       .where(sql`${table.candidateEmail} is not null`),
     check(
       "profiles_pdf_template_check",
-      sql`${table.pdfTemplate} in ('heritage', 'laurel', 'vellum', 'pewter', 'regent', 'orchid', 'onyx', 'palette', 'ivory', 'azure', 'pillar', 'barrister', 'indigo', 'amber-crest', 'garnet', 'reef', 'verdant', 'parchment', 'vanguard', 'axis', 'admiral', 'seafoam', 'ember', 'terminal', 'aurelia', 'portrait', 'basalt', 'ripple', 'meridian', 'sentinel')`,
+      sql`${table.pdfTemplate} in ('heritage', 'laurel', 'vellum', 'pewter', 'regent', 'onyx', 'palette', 'indigo', 'amber-crest', 'garnet', 'reef', 'verdant', 'ember', 'terminal', 'meridian')`,
     ),
   ],
 );

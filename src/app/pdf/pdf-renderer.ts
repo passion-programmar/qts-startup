@@ -271,19 +271,13 @@ async function createWriter(
     const headerTop = y + 16;
     const blockHeight = detail ? 68 : 48;
     const darkHeader = design.header === "band" || design.header === "card";
-    const headerFill = template === "orchid"
-      ? rgb(.38, .08, .28)
-      : template === "amber-crest"
+    const headerFill = template === "amber-crest"
         ? rgb(.07, .12, .22)
         : template === "terminal"
           ? rgb(.08, .11, .14)
           : template === "onyx"
             ? rgb(.12, .13, .15)
-            : template === "basalt"
-              ? rgb(.15, .18, .23)
-              : template === "sentinel"
-                ? rgb(.03, .13, .28)
-                : accent;
+            : accent;
     if (design.header === "band" || design.header === "soft" || design.header === "card") {
       const x = design.header === "card" ? margin - 10 : 0;
       const blockWidth = design.header === "card" ? width - (margin - 10) * 2 : width;

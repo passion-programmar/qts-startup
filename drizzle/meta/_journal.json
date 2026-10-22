@@ -155,6 +155,13 @@
       "when": 1792575442573,
       "tag": "0021_puzzling_zodiak",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792627820417,
+      "tag": "0022_sparkling_vermin",
+      "breakpoints": true
     }
   ]
 }

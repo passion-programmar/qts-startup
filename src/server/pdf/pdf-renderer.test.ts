@@ -4,6 +4,7 @@ import { PDFDocument } from "pdf-lib";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import {
+  isPdfTemplate,
   pdfTemplateDesigns,
   pdfTemplateLabels,
   pdfTemplateValues,
@@ -43,7 +44,7 @@ const data: PdfPackage = {
 };
 
 test("every one-column template renders a valid resume and cover letter PDF", async () => {
-  assert.equal(pdfTemplateValues.length, 30);
+  assert.equal(pdfTemplateValues.length, 15);
   for (const template of pdfTemplateValues) {
     const rendered = await renderPdfPackage(data, template);
     assert.equal(Buffer.from(rendered.resume).subarray(0, 4).toString(), "%PDF", template);
@@ -55,10 +56,17 @@ test("every one-column template renders a valid resume and cover letter PDF", as
   }
 });
 
-test("template selector labels are numbered in display order", () => {
-  pdfTemplateValues.forEach((template, index) => {
-    assert.equal(pdfTemplateLabels[template], `Template_${index + 1}`);
-  });
+test("template selector preserves the retained original numbers", () => {
+  assert.deepEqual(
+    pdfTemplateValues.map((template) => pdfTemplateLabels[template]),
+    [
+      "Template_1", "Template_2", "Template_3", "Template_4", "Template_5",
+      "Template_7", "Template_8", "Template_13", "Template_14", "Template_15",
+      "Template_16", "Template_17", "Template_23", "Template_24", "Template_29",
+    ],
+  );
+  assert.equal(isPdfTemplate("meridian"), true);
+  assert.equal(isPdfTemplate("orchid"), false);
 });
 
 test("full resume sections and bullets fit without exceeding two pages", async () => {
@@ -154,7 +162,7 @@ test("flat skills render through the safe inline fallback", async () => {
       }],
     },
   };
-  const rendered = await renderPdfPackage(flatSkills, "portrait");
+  const rendered = await renderPdfPackage(flatSkills, "meridian");
   const resume = await PDFDocument.load(rendered.resume);
   assert.equal(resume.getPageCount(), 1);
 });
