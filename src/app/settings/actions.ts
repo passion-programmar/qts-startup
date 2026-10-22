@@ -1,11 +1,10 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
   managerPromptAssignments,
-  managerPromptOverrides,
   prompts,
   settings,
   users,
@@ -119,8 +118,20 @@ export async function saveGlobalPromptAction(
         where prompt_group_id = ${promptGroupId}::uuid
         returning id, version
       `,
+      tx`
+        update manager_prompt_assignments
+        set prompt_id = (
+          select id
+          from prompts
+          where prompt_group_id = ${promptGroupId}::uuid
+            and is_active = true
+        )
+        where prompt_id in (
+          select id from prompts where prompt_group_id = ${promptGroupId}::uuid
+        )
+      `,
     ]);
-    const inserted = transactionResults[transactionResults.length - 1];
+    const inserted = transactionResults[transactionResults.length - 2];
     if (!inserted || inserted.length !== 1) {
       return { ...emptyState, error: "The prompt revision could not be saved." };
     }
@@ -211,21 +222,7 @@ export async function assignPromptAction(
     if (!manager) return { ...emptyState, error: "That active Manager was not found." };
 
     let promptId: string | undefined;
-    if (promptChoice === "random") {
-      const [randomPrompt] = await db
-        .select({ id: prompts.id })
-        .from(prompts)
-        .where(
-          and(
-            eq(prompts.provider, "openai"),
-            eq(prompts.purpose, "document_generation"),
-            eq(prompts.isActive, true),
-          ),
-        )
-        .orderBy(sql`random()`)
-        .limit(1);
-      promptId = randomPrompt?.id;
-    } else if (isUuid(promptChoice)) {
+    if (isUuid(promptChoice)) {
       const [selectedPrompt] = await db
         .select({ id: prompts.id })
         .from(prompts)
@@ -308,76 +305,6 @@ export async function unassignPromptAction(
     error: null,
     success: "The assignment was removed. The Manager's normal prompt will be used.",
   };
-}
-
-export async function saveManagerPromptAction(
-  _previousState: PromptActionState,
-  formData: FormData,
-): Promise<PromptActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "manager") {
-    return { ...emptyState, error: "Only Managers can update a private prompt." };
-  }
-
-  const promptTemplate = readText(formData, "promptTemplate", 50000);
-  if (!promptTemplate) {
-    return { ...emptyState, error: "Enter a prompt before saving." };
-  }
-
-  try {
-    const [modeSetting] = await db
-      .select({ value: settings.value })
-      .from(settings)
-      .where(eq(settings.key, "prompt_mode"))
-      .limit(1);
-    if (modeSetting?.value !== "private") {
-      return {
-        ...emptyState,
-        error: "Private prompt editing is currently disabled by Super Admin.",
-      };
-    }
-
-    const [globalPrompt] = await db
-      .select({ id: prompts.id })
-      .from(prompts)
-      .where(
-        and(
-          eq(prompts.provider, "openai"),
-          eq(prompts.purpose, "document_generation"),
-          eq(prompts.isActive, true),
-          eq(prompts.isDefault, true),
-        ),
-      )
-      .limit(1);
-    if (!globalPrompt) {
-      throw new Error("No active global ChatGPT prompt exists.");
-    }
-
-    await db
-      .insert(managerPromptOverrides)
-      .values({
-        managerId: actor.id,
-        promptTemplate,
-        basedOnPromptId: globalPrompt.id,
-      })
-      .onConflictDoUpdate({
-        target: managerPromptOverrides.managerId,
-        set: {
-          promptTemplate,
-          basedOnPromptId: globalPrompt.id,
-          updatedAt: new Date(),
-        },
-      });
-  } catch (error) {
-    logPromptActionFailure("saving a Manager prompt", error);
-    return {
-      ...emptyState,
-      error: "Your private prompt could not be saved. Please try again.",
-    };
-  }
-
-  revalidatePath("/prompts");
-  return { error: null, success: "Your private ChatGPT prompt was saved." };
 }
 
 function readText(formData: FormData, name: string, maxLength: number): string {

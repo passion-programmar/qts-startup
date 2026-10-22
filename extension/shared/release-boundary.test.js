@@ -50,6 +50,8 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'get_jd'"));
   assert.ok(launcher.includes("Let's start finding Your Remote Job!"));
   assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
+  assert.ok(launcher.includes("launcher.classList.toggle('get-jd-active', activeStatus === 'get_jd')"));
+  assert.ok(launcher.includes('.launcher.get-jd-active { right: calc(min(380px, 48vw) + 112px); }'));
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'cancel'"));
   assert.ok(launcher.includes("'Sign In'"));
   assert.ok(launcher.includes("'Sign Out'"));
@@ -97,6 +99,10 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(profilesRoute.includes('category: categories.name'));
   assert.ok(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"));
   assert.ok(review.includes('position: fixed; inset: 0 0 0 auto'));
+  assert.ok(review.includes('width: min(380px, 48vw)'));
+  assert.ok(review.includes('padding-right: min(380px, 48vw)'));
+  assert.ok(review.includes("extensionStatus !== 'get_jd'"));
+  assert.ok(review.includes('data-qts-get-jd-docked'));
   assert.ok(review.includes('if (!sessionIsValid(stored))'));
   assert.ok(review.includes('result.classification.matchingProfileIds'));
   assert.ok(serviceWorker.includes('selectionModified: true'));
@@ -127,7 +133,13 @@ test('manager job rows support safe manual edits and deletion', () => {
     'utf8',
   );
 
-  assert.ok(jobsPage.includes('<JobActions'));
+  assert.ok(jobsPage.includes('<JobEditAction'));
+  assert.ok(jobsPage.includes('<JobDeleteAction'));
+  assert.ok(jobsPage.includes('<JobGenerationQueueAction'));
+  assert.ok(jobsPage.includes('label: "Candidate Name"'));
+  assert.ok(jobsPage.includes('label: "Job Title"'));
+  assert.ok(jobsPage.includes('label: "Resume Path"'));
+  assert.ok(jobsPage.includes('target="_blank"'));
   assert.ok(actions.includes('export async function updateJobAction'));
   assert.ok(actions.includes('export async function deleteJobAction'));
   assert.ok(actions.includes('eq(jobs.managerId, manager.id)'));
@@ -137,6 +149,73 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(forms.includes('updateJobAction'));
   assert.ok(forms.includes('deleteJobAction'));
   assert.ok(actions.includes('generationStatus, "processing"'));
+});
+
+test('document generation uses saved manager prompt assignments and gates prompt access', () => {
+  const repositoryRoot = path.join(extensionRoot, '..');
+  const promptActions = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'settings', 'actions.ts'),
+    'utf8',
+  );
+  const promptResolver = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'server', 'generation', 'manager-prompt.ts'),
+    'utf8',
+  );
+  const promptPage = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'prompts', 'page.tsx'),
+    'utf8',
+  );
+  const workspaceShell = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'components', 'workspace-shell.tsx'),
+    'utf8',
+  );
+  const workspaceClient = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'components', 'workspace-shell-client.tsx'),
+    'utf8',
+  );
+  const promptForms = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'settings', 'prompt-forms.tsx'),
+    'utf8',
+  );
+
+  assert.ok(promptResolver.includes('managerPromptAssignments'));
+  assert.ok(promptResolver.includes('assignedRows[0]?.promptTemplate'));
+  assert.ok(promptResolver.includes('MissingDocumentPromptError'));
+  assert.ok(promptActions.includes('update manager_prompt_assignments'));
+  assert.ok(!promptActions.includes('promptChoice === "random"'));
+  assert.ok(!promptForms.includes('Random active prompt'));
+  assert.ok(promptPage.includes('modeRows[0]?.value !== "private"'));
+  assert.ok(workspaceShell.includes('modeRows[0]?.value === "private"'));
+  assert.ok(workspaceClient.includes('user.role === "manager" && managerPromptEnabled'));
+  assert.ok(workspaceClient.includes('useState(true)'));
+});
+
+test('candidate profiles use grouped subcategories and legacy assignments are preserved', () => {
+  const schema = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'db', 'schema.ts'),
+    'utf8',
+  );
+  const migration = fs.readFileSync(
+    path.join(extensionRoot, '..', 'drizzle', '0025_outgoing_zzzax.sql'),
+    'utf8',
+  );
+  const userActions = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'users', 'actions.ts'),
+    'utf8',
+  );
+  const userForms = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'users', 'user-forms.tsx'),
+    'utf8',
+  );
+
+  assert.ok(schema.includes('export const subCategories = pgTable('));
+  assert.ok(schema.includes('subCategoryId: uuid("category_id").references(() => subCategories.id'));
+  assert.ok(migration.includes("VALUES ('General')"));
+  assert.ok(migration.includes('SELECT "id", general_category_id, "name"'));
+  assert.ok(migration.includes('profiles_category_id_sub_categories_id_fk'));
+  assert.ok(userActions.includes('from(subCategories)'));
+  assert.ok(userForms.includes('label="Subcategory"'));
+  assert.ok(userForms.includes('<optgroup key={categoryName} label={categoryName}>'));
 });
 
 test('the login panel submits completed credentials without a timer or button', () => {

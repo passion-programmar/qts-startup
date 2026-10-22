@@ -61,6 +61,7 @@ export default async function SettingsPage() {
         id: users.id,
         displayName: users.displayName,
         loginName: users.loginName,
+        assignedPromptId: managerPromptAssignments.promptId,
         assignedPromptName: prompts.name,
       })
       .from(users)
@@ -185,6 +186,7 @@ export default async function SettingsPage() {
                   </div>
                 </div>,
                 <PromptAssignmentForm
+                  assignedPromptId={manager.assignedPromptId}
                   assignedPromptName={manager.assignedPromptName}
                   key="assignment"
                   managerId={manager.id}

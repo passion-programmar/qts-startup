@@ -2,7 +2,7 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { categories, users } from "@/db/schema";
+import { subCategories, users } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
 import { hashPassword } from "@/lib/password";
 import {
@@ -46,7 +46,7 @@ export async function createUserAction(
   const province = readText(formData, "province", 120);
   const addressLine1 = readText(formData, "addressLine1", 256);
   const postalCode = readText(formData, "postalCode", 32);
-  const categoryId = readText(formData, "categoryId", 36);
+  const subCategoryId = readText(formData, "subCategoryId", 36);
   const educationRows = readHistoryRows(formData, "education", {
     institution: 120,
     degree: 120,
@@ -98,8 +98,17 @@ export async function createUserAction(
     if (linkedinUrl && !isHttpUrl(linkedinUrl)) {
       return { ...emptyState, error: "Enter a valid LinkedIn profile URL." };
     }
-    if (categoryId && !isUuid(categoryId)) {
-      return { ...emptyState, error: "Select a valid candidate category." };
+    if (subCategoryId && !isUuid(subCategoryId)) {
+      return { ...emptyState, error: "Select a valid candidate subcategory." };
+    }
+    if (subCategoryId) {
+      const [subCategory] = await db.select({ id: subCategories.id })
+        .from(subCategories)
+        .where(eq(subCategories.id, subCategoryId))
+        .limit(1);
+      if (!subCategory) {
+        return { ...emptyState, error: "That candidate subcategory no longer exists. Refresh and try again." };
+      }
     }
     const educationError = validateEducationRows(educationRows);
     if (educationError) return { ...emptyState, error: educationError };
@@ -151,7 +160,7 @@ export async function createUserAction(
             headline, linkedin_url, country, city, province, address_line_1,
             postal_code
           )
-          select id, ${categoryId || null}::uuid, ${firstName}, ${lastName},
+          select id, ${subCategoryId || null}::uuid, ${firstName}, ${lastName},
             ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
             ${phone || null}, ${headline || null}, ${linkedinUrl || null},
@@ -264,7 +273,7 @@ export async function updateCandidateProfileAction(
     addressLine1: 256,
     postalCode: 32,
     jdMatching: 5000,
-    categoryId: 36,
+    subCategoryId: 36,
   } as const;
   const values = {
     firstName: readText(formData, "firstName", limits.firstName),
@@ -281,7 +290,7 @@ export async function updateCandidateProfileAction(
     addressLine1: readText(formData, "addressLine1", limits.addressLine1),
     postalCode: readText(formData, "postalCode", limits.postalCode),
     jdMatching: readText(formData, "jdMatching", limits.jdMatching),
-    categoryId: readText(formData, "categoryId", limits.categoryId),
+    subCategoryId: readText(formData, "subCategoryId", limits.subCategoryId),
   };
   const educationRows = readHistoryRows(formData, "education", {
     institution: 120,
@@ -337,8 +346,8 @@ export async function updateCandidateProfileAction(
   if (values.linkedinUrl && !isHttpUrl(values.linkedinUrl)) {
     return { ...emptyState, error: "Enter a valid LinkedIn profile URL." };
   }
-  if (values.categoryId && !isUuid(values.categoryId)) {
-    return { ...emptyState, error: "Select a valid candidate category." };
+  if (values.subCategoryId && !isUuid(values.subCategoryId)) {
+    return { ...emptyState, error: "Select a valid candidate subcategory." };
   }
   const educationError = validateEducationRows(educationRows);
   if (educationError) return { ...emptyState, error: educationError };
@@ -346,16 +355,16 @@ export async function updateCandidateProfileAction(
   if (experienceError) return { ...emptyState, error: experienceError };
 
   try {
-    if (values.categoryId) {
+    if (values.subCategoryId) {
       const [category] = await db
-        .select({ id: categories.id })
-        .from(categories)
-        .where(eq(categories.id, values.categoryId))
+        .select({ id: subCategories.id })
+        .from(subCategories)
+        .where(eq(subCategories.id, values.subCategoryId))
         .limit(1);
       if (!category) {
         return {
           ...emptyState,
-          error: "That candidate category no longer exists. Refresh and try again.",
+          error: "That candidate subcategory no longer exists. Refresh and try again.",
         };
       }
     }
@@ -387,7 +396,7 @@ export async function updateCandidateProfileAction(
     const results = await neonSql.transaction((tx) => [
       tx`
         update profiles
-        set category_id = ${values.categoryId || null}::uuid,
+        set category_id = ${values.subCategoryId || null}::uuid,
           first_name = ${values.firstName}, last_name = ${values.lastName},
           birthday = ${values.birthday || null}::date,
           pdf_template = ${values.pdfTemplate},

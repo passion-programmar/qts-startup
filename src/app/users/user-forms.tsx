@@ -33,8 +33,10 @@ const initialState: UserActionState = { error: null, success: null };
 
 type CreateUserFormProps = {
   role: "admin" | "manager" | "account";
-  categories: { id: string; name: string }[];
+  categories: CandidateCategoryOption[];
 };
+
+export type CandidateCategoryOption = { id: string; name: string; categoryName: string };
 
 export function CreateUserForm({ role, categories }: CreateUserFormProps) {
   const [educationRows, setEducationRows] = useState([0]);
@@ -170,9 +172,9 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               name="postalCode"
             />
             <SelectField
-              id="categoryId"
-              label="Category"
-              name="categoryId"
+              id="subCategoryId"
+              label="Subcategory"
+              name="subCategoryId"
               options={categories}
             />
           </div>
@@ -427,7 +429,7 @@ export type CandidateProfileValues = {
   addressLine1: string | null;
   postalCode: string | null;
   jdMatching: string | null;
-  categoryId: string | null;
+  subCategoryId: string | null;
   education: {
     institution: string;
     degree: string | null;
@@ -453,7 +455,7 @@ export function EditCandidateProfileForm({
   categories,
 }: {
   candidate: CandidateProfileValues;
-  categories: { id: string; name: string }[];
+  categories: CandidateCategoryOption[];
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [educationRows, setEducationRows] = useState(() =>
@@ -602,10 +604,10 @@ export function EditCandidateProfileForm({
             name="postalCode"
           />
           <SelectField
-            defaultValue={candidate.categoryId ?? ""}
-            id={fieldId("categoryId")}
-            label="Category"
-            name="categoryId"
+            defaultValue={candidate.subCategoryId ?? ""}
+            id={fieldId("subCategoryId")}
+            label="Subcategory"
+            name="subCategoryId"
             options={categories}
           />
           </div>
@@ -1060,7 +1062,7 @@ function SelectField({
   id: string;
   label: string;
   name: string;
-  options: { id: string; name: string }[];
+  options: CandidateCategoryOption[];
   defaultValue?: string;
 }) {
   return (
@@ -1078,11 +1080,21 @@ function SelectField({
         defaultValue={defaultValue}
       >
         <option value="">No category</option>
-        {options.map((option) => (
-          <option key={option.id} value={option.id}>
-            {option.name}
-          </option>
-        ))}
+        {Array.from(
+          options.reduce((groups, option) => {
+            const group = groups.get(option.categoryName) ?? [];
+            group.push(option);
+            groups.set(option.categoryName, group);
+            return groups;
+          }, new Map<string, CandidateCategoryOption[]>()),
+          ([categoryName, categoryOptions]) => (
+            <optgroup key={categoryName} label={categoryName}>
+              {categoryOptions.map((option) => (
+                <option key={option.id} value={option.id}>{option.name}</option>
+              ))}
+            </optgroup>
+          ),
+        )}
       </select>
     </div>
   );

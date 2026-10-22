@@ -44,11 +44,13 @@ function initializeQtsPageLauncher() {
     .details dt { color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .details dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .description { max-height: 180px; overflow: auto; padding: 9px; border-radius: 8px; background: #f8fafc; }
+    .launcher.get-jd-active { right: calc(min(380px, 48vw) + 112px); }
     @media (max-width: 520px) {
       .launcher { right: 96px; bottom: 24px; }
       .action { width: 66px; height: 66px; }
       .logout { --x: 68px; --y: -78px; }
       .get-jd { --x: -96px; }
+      .launcher.get-jd-active { right: calc(min(380px, 48vw) + 96px); }
     }
     @media (prefers-reduced-motion: reduce) { .main, .action, .toast { transition: none; } }
   `;
@@ -244,6 +246,7 @@ function initializeQtsPageLauncher() {
   async function syncModeActions() {
     const stored = await chrome.storage.local.get(['qtsExtensionStatus']);
     const activeStatus = stored.qtsExtensionStatus;
+    launcher.classList.toggle('get-jd-active', activeStatus === 'get_jd');
     const labels = {
       get_jd: 'Get JD',
       generation: 'Generation',

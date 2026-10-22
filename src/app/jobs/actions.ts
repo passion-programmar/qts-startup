@@ -166,18 +166,32 @@ export async function deleteJobAction(
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
   const id = text(formData, "id", 36);
   if (!uuid(id)) return { error: "Invalid job.", success: null };
-  const [job] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
-    .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
-  if (!job) return { error: "Job was not found.", success: null };
-  if (job.generationStatus === "processing") {
-    return { error: "Cancel Generation before deleting a job that is currently processing.", success: null };
+  try {
+    const [job] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
+      .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
+    if (!job) return { error: "Job was not found.", success: null };
+    if (job.generationStatus === "processing") {
+      return { error: "Cancel Generation before deleting a job that is currently processing.", success: null };
+    }
+    const deleted = await db.delete(jobs).where(and(
+      eq(jobs.id, id),
+      eq(jobs.managerId, manager.id),
+      ne(jobs.generationStatus, "processing"),
+    )).returning({ id: jobs.id });
+    if (!deleted.length) return { error: "Job is unavailable or Generation started processing; refresh and try again.", success: null };
+  } catch (error) {
+    console.error("Could not delete manager job.", error);
+    if (isForeignKeyViolation(error)) {
+      return {
+        error: "This job is still referenced by another record and cannot be deleted.",
+        success: null,
+      };
+    }
+    return {
+      error: "The job could not be deleted because of a server or database error. Please try again.",
+      success: null,
+    };
   }
-  const deleted = await db.delete(jobs).where(and(
-    eq(jobs.id, id),
-    eq(jobs.managerId, manager.id),
-    ne(jobs.generationStatus, "processing"),
-  )).returning({ id: jobs.id });
-  if (!deleted.length) return { error: "Job is unavailable or Generation started processing; refresh and try again.", success: null };
   revalidatePath("/jobs");
   return { error: null, success: "Job deleted." };
 }
@@ -189,5 +203,9 @@ function text(data: FormData, name: string, max: number): string {
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null &&
     "code" in error && error.code === "23505";
+}
+function isForeignKeyViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null &&
+    "code" in error && error.code === "23503";
 }
 function uuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }

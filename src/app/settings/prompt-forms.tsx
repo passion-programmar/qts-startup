@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { Check, Shuffle, Trash2 } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import {
   assignPromptAction,
   saveGlobalPromptAction,
@@ -9,7 +9,6 @@ import {
   updatePromptModeAction,
   type PromptActionState,
 } from "@/app/settings/actions";
-import { saveManagerPromptAction } from "@/app/settings/actions";
 
 const initialState: PromptActionState = { error: null, success: null };
 
@@ -32,7 +31,7 @@ export function PromptModeForm({ mode }: { mode: "global" | "private" }) {
           className="mb-2 block text-xs font-semibold text-slate-700"
           htmlFor="promptMode"
         >
-          ChatGPT prompt mode
+          Manager prompt visibility
         </label>
         <select
           className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 sm:max-w-sm"
@@ -40,8 +39,8 @@ export function PromptModeForm({ mode }: { mode: "global" | "private" }) {
           id="promptMode"
           name="promptMode"
         >
-          <option value="global">Global default</option>
-          <option value="private">Manager private prompts</option>
+          <option value="global">Hide manager prompt tab</option>
+          <option value="private">Show assigned prompt to Managers</option>
         </select>
       </div>
       <ActionFeedback state={state} />
@@ -147,10 +146,12 @@ export function GlobalPromptForm({
 
 export function PromptAssignmentForm({
   managerId,
+  assignedPromptId,
   assignedPromptName,
   prompts,
 }: {
   managerId: string;
+  assignedPromptId: string | null;
   assignedPromptName: string | null;
   prompts: { id: string; name: string; version: number }[];
 }) {
@@ -187,14 +188,13 @@ export function PromptAssignmentForm({
         <input name="managerId" type="hidden" value={managerId} />
         <select
           className="h-9 min-w-0 flex-1 rounded border border-slate-300 bg-white px-2 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-          defaultValue=""
+          defaultValue={assignedPromptId ?? ""}
           name="promptChoice"
           required
         >
           <option disabled value="">
             Choose a prompt
           </option>
-          <option value="random">Random active prompt</option>
           {prompts.map((prompt) => (
             <option key={prompt.id} value={prompt.id}>
               {prompt.name} · v{prompt.version}
@@ -206,62 +206,13 @@ export function PromptAssignmentForm({
           disabled={assignPending || prompts.length === 0}
           type="submit"
         >
-          <Shuffle className="size-3.5" />
-          {assignPending ? "Assigning..." : "Assign"}
+          <Check className="size-3.5" />
+          {assignPending ? "Saving..." : assignedPromptId ? "Update assignment" : "Assign"}
         </button>
       </form>
       <ActionFeedback state={assignState} />
       <ActionFeedback state={unassignState} />
     </div>
-  );
-}
-
-export function ManagerPromptForm({
-  promptTemplate,
-  assignedPromptName,
-}: {
-  promptTemplate: string;
-  assignedPromptName: string | null;
-}) {
-  const [state, formAction, isPending] = useActionState(
-    saveManagerPromptAction,
-    initialState,
-  );
-
-  return (
-    <form action={formAction} className="space-y-4">
-      {assignedPromptName && (
-        <span className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-[11px] font-medium text-amber-800">
-          Assigned prompt: {assignedPromptName}
-        </span>
-      )}
-      <div>
-        <label
-          className="mb-2 block text-xs font-semibold text-slate-700"
-          htmlFor="managerPromptTemplate"
-        >
-          Your ChatGPT prompt
-        </label>
-        <textarea
-          className="min-h-80 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
-          defaultValue={promptTemplate}
-          id="managerPromptTemplate"
-          maxLength={50000}
-          name="promptTemplate"
-          required
-          rows={14}
-        />
-      </div>
-      <ActionFeedback state={state} />
-      <button
-        className="inline-flex h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-        disabled={isPending}
-        type="submit"
-      >
-        <Check className="size-3.5" />
-        {isPending ? "Saving..." : "Save private prompt"}
-      </button>
-    </form>
   );
 }
 

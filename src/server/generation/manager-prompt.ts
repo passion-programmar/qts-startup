@@ -1,21 +1,28 @@
 import "server-only";
 
 import { and, eq } from "drizzle-orm";
-import {
-  managerPromptOverrides,
-  prompts,
-  settings,
-} from "@/db/schema";
+import { managerPromptAssignments, prompts } from "@/db/schema";
 import { db } from "@/lib/db";
 
-const fallbackPrompt = [
-  "Create a truthful, ATS-friendly resume and matching one-page cover letter tailored to the supplied job.",
-  "Use only candidate facts supplied in this prompt. Never invent employers, education, dates, certifications, or achievements.",
-].join(" ");
+export class MissingDocumentPromptError extends Error {
+  constructor() {
+    super("No active saved document-generation prompt is configured.");
+    this.name = "MissingDocumentPromptError";
+  }
+}
 
 export async function getManagerDocumentPrompt(managerId: string): Promise<string> {
-  const [modeRows, defaultRows, overrideRows] = await Promise.all([
-    db.select({ value: settings.value }).from(settings).where(eq(settings.key, "prompt_mode")).limit(1),
+  const [assignedRows, defaultRows] = await Promise.all([
+    db
+      .select({ promptTemplate: prompts.promptTemplate })
+      .from(managerPromptAssignments)
+      .innerJoin(prompts, eq(prompts.id, managerPromptAssignments.promptId))
+      .where(and(
+        eq(managerPromptAssignments.managerId, managerId),
+        eq(prompts.provider, "openai"),
+        eq(prompts.purpose, "document_generation"),
+      ))
+      .limit(1),
     db
       .select({ promptTemplate: prompts.promptTemplate })
       .from(prompts)
@@ -26,18 +33,13 @@ export async function getManagerDocumentPrompt(managerId: string): Promise<strin
         eq(prompts.isDefault, true),
       ))
       .limit(1),
-    db
-      .select({ promptTemplate: managerPromptOverrides.promptTemplate })
-      .from(managerPromptOverrides)
-      .where(eq(managerPromptOverrides.managerId, managerId))
-      .limit(1),
   ]);
 
-  const privateMode = modeRows[0]?.value === "private";
-  const selected = privateMode
-    ? overrideRows[0]?.promptTemplate ?? defaultRows[0]?.promptTemplate
-    : defaultRows[0]?.promptTemplate;
-  return selected?.trim() || fallbackPrompt;
+  const selected =
+    assignedRows[0]?.promptTemplate ?? defaultRows[0]?.promptTemplate;
+  const promptTemplate = selected?.trim();
+  if (!promptTemplate) throw new MissingDocumentPromptError();
+  return promptTemplate;
 }
 
 export type GenerationJob = {

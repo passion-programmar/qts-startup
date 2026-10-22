@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { categories, profiles, users } from "@/db/schema";
+import { categories, profiles, subCategories, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import {
@@ -45,10 +45,12 @@ export async function POST(request: Request): Promise<NextResponse> {
         firstName: profiles.firstName,
         lastName: profiles.lastName,
         category: categories.name,
+        subCategory: subCategories.name,
       })
       .from(users)
       .innerJoin(profiles, eq(profiles.userId, users.id))
-      .leftJoin(categories, eq(categories.id, profiles.categoryId))
+      .leftJoin(subCategories, eq(subCategories.id, profiles.subCategoryId))
+      .leftJoin(categories, eq(categories.id, subCategories.categoryId))
       .where(
         and(
           eq(users.parentUserId, manager.id),
@@ -93,7 +95,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         name: [candidate.firstName, candidate.lastName]
           .filter(Boolean)
           .join(" ") || "Candidate",
-        category: candidate.category,
+        category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
         available: duplicateKind === null,
         duplicateKind,
       };

@@ -70,6 +70,30 @@ export const categories = pgTable(
   ],
 );
 
+export const subCategories = pgTable(
+  "sub_categories",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("sub_categories_category_name_normalized_unique").on(
+      table.categoryId,
+      sql`lower(btrim(${table.name}))`,
+    ),
+    index("sub_categories_category_id_index").on(table.categoryId),
+  ],
+);
+
 export const users = pgTable(
   "users",
   {
@@ -125,7 +149,7 @@ export const profiles = pgTable(
     userId: uuid("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "restrict" }),
-    categoryId: uuid("category_id").references(() => categories.id, {
+    subCategoryId: uuid("category_id").references(() => subCategories.id, {
       onDelete: "set null",
     }),
     resumePdfId: uuid("resume_pdf_id"),
@@ -151,7 +175,7 @@ export const profiles = pgTable(
       .notNull(),
   },
   (table) => [
-    index("profiles_category_id_index").on(table.categoryId),
+    index("profiles_category_id_index").on(table.subCategoryId),
     uniqueIndex("profiles_candidate_email_normalized_unique")
       .on(sql`lower(btrim(${table.candidateEmail}))`)
       .where(sql`${table.candidateEmail} is not null`),

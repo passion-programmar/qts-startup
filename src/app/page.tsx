@@ -23,6 +23,7 @@ type WorkspaceUserRow = {
   last_name: string | null;
   candidate_email: string | null;
   category_name: string | null;
+  sub_category_name: string | null;
 };
 
 type LoginHistoryRow = {
@@ -112,10 +113,12 @@ export default async function Home() {
       profiles.first_name,
       profiles.last_name,
       profiles.candidate_email,
-      categories.name as category_name
+      categories.name as category_name,
+      sub_categories.name as sub_category_name
     from visible_users
     left join profiles on profiles.user_id = visible_users.id
-    left join categories on categories.id = profiles.category_id
+    left join sub_categories on sub_categories.id = profiles.category_id
+    left join categories on categories.id = sub_categories.category_id
     order by visible_users.created_at desc
   `);
   const workspaceUsers = visibleResult.rows;
@@ -255,7 +258,9 @@ export default async function Home() {
                         </span>
                       </div>,
                       roleLabels[user.role] ?? user.role,
-                      user.category_name || formatDate(user.created_at),
+                      user.sub_category_name
+                        ? `${user.category_name} / ${user.sub_category_name}`
+                        : formatDate(user.created_at),
                     ],
                   };
                 })}

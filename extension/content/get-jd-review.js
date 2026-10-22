@@ -20,6 +20,15 @@
     host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
     root = host.attachShadow({ mode: 'closed' });
 
+    const dockStyle = document.createElement('style');
+    dockStyle.textContent = `
+      html[data-qts-get-jd-docked="true"] body {
+        box-sizing: border-box !important;
+        padding-right: min(380px, 48vw) !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(dockStyle);
+
     const style = document.createElement('style');
     style.textContent = `
       .toast {
@@ -33,7 +42,7 @@
       .toast.success { background: #166534; }
       .panel {
         position: fixed; inset: 0 0 0 auto; z-index: 1; display: flex; flex-direction: column;
-        width: min(380px, 94vw); height: 100vh; height: 100dvh; box-sizing: border-box;
+        width: min(380px, 48vw); height: 100vh; height: 100dvh; box-sizing: border-box;
         padding: 18px; border-left: 1px solid #cbd5e1; background: #fff; color: #0f172a;
         box-shadow: -12px 0 36px #0f172a30; font: 13px/1.45 system-ui, sans-serif;
         pointer-events: auto;
@@ -65,7 +74,7 @@
       .save { flex: 1; color: #fff; background: #4f46e5; }
       .cancel { color: #334155; background: #e2e8f0; }
       @media (max-width: 520px) {
-        .panel { width: min(360px, 100vw); padding: 14px; }
+        .panel { padding: 14px; }
         .details { max-height: 28vh; }
       }
     `;
@@ -120,6 +129,16 @@
     };
     (document.documentElement || document.body).appendChild(host);
     return root;
+  }
+
+  function setPanelVisible(visible) {
+    const shouldShow = visible && signedIn && extensionStatus === 'get_jd';
+    if (host?.__qtsElements) host.__qtsElements.panel.hidden = !shouldShow;
+    if (shouldShow) {
+      document.documentElement?.setAttribute('data-qts-get-jd-docked', 'true');
+    } else {
+      document.documentElement?.removeAttribute('data-qts-get-jd-docked');
+    }
   }
 
   function showToast(message, type, key) {
@@ -251,7 +270,7 @@
 
   function renderReview(result) {
     const elements = host.__qtsElements;
-    elements.panel.hidden = false;
+    setPanelVisible(true);
     elements.heading.textContent = 'QTS Candidate Accounts';
     elements.status.textContent = result.message || 'Select candidates to save this job.';
     elements.details.hidden = false;
@@ -339,7 +358,7 @@
     const savedCount = Number(response.savedCount || 0);
     const duplicateCount = Number(response.duplicateCount || 0);
     const failedCount = Number(response.failedCount || 0);
-    elements.panel.hidden = false;
+    setPanelVisible(true);
     elements.heading.textContent = 'Save result';
     elements.status.textContent = savedCount > 0
       ? `Successfully saved ${savedCount} job${savedCount === 1 ? '' : 's'}.`
@@ -385,7 +404,8 @@
   }
 
   function renderCurrentResult() {
-    if (!signedIn) return;
+    setPanelVisible(true);
+    if (!signedIn || extensionStatus !== 'get_jd') return;
     if (currentResult?.status === 'complete' && currentResult.classification?.isJobPage === true) {
       renderReview(currentResult);
       return;
@@ -413,14 +433,16 @@
       signedIn = false;
       managerProfiles = [];
       currentResult = null;
-      if (host?.__qtsElements) host.__qtsElements.panel.hidden = true;
+      setPanelVisible(false);
       return;
     }
 
     ensureRoot();
     signedIn = true;
-    host.__qtsElements.panel.hidden = false;
-    renderIdlePanel('Loading your candidate accounts...');
+    renderCurrentResult();
+    if (extensionStatus === 'get_jd') {
+      renderIdlePanel('Loading your candidate accounts...');
+    }
     let response;
     try {
       response = await chrome.runtime.sendMessage({
@@ -465,7 +487,7 @@
     currentResult = result;
     if (!signedIn) return;
     const elements = host.__qtsElements;
-    elements.panel.hidden = false;
+    setPanelVisible(true);
     const toastKey = `${result.runId || result.updatedAt || ''}:${result.status}`;
     if (result.status === 'duplicate') {
       const message = result.toastMessage || (result.inBids

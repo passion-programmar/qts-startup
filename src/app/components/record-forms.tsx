@@ -15,8 +15,14 @@ type CommonRecord = { id: string; candidateId: string; title: string; company: s
 export type EditableJob = CommonRecord & { description: string | null; employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationError: string | null };
 export type EditableBid = CommonRecord & { employmentType: string | null; workplaceType: string | null; salary: string | null; resumeLocalPath: string; googleDrivePath: string | null; appliedAt: string };
 
-export function JobActions({ record, candidates }: { record: EditableJob; candidates: CandidateOption[] }) {
-  return <div className="flex flex-wrap items-start gap-2"><GenerationQueueAction record={record} /><RecordActions kind="job" record={record} candidates={candidates} /></div>;
+export function JobEditAction({ record, candidates }: { record: EditableJob; candidates: CandidateOption[] }) {
+  return <RecordActions kind="job" record={record} candidates={candidates} showDelete={false} />;
+}
+export function JobDeleteAction({ record }: { record: EditableJob }) {
+  return <RecordActions kind="job" record={record} candidates={[]} showEdit={false} />;
+}
+export function JobGenerationQueueAction({ record }: { record: EditableJob }) {
+  return <GenerationQueueAction record={record} />;
 }
 export function BidActions({ record, candidates }: { record: EditableBid; candidates: CandidateOption[] }) {
   return <RecordActions kind="bid" record={record} candidates={candidates} />;
@@ -57,7 +63,16 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
   );
 }
 
-function RecordActions({ kind, record, candidates }: { kind: "job"; record: EditableJob; candidates: CandidateOption[] } | { kind: "bid"; record: EditableBid; candidates: CandidateOption[] }) {
+function RecordActions({
+  kind,
+  record,
+  candidates,
+  showEdit = true,
+  showDelete = true,
+}: (
+  | { kind: "job"; record: EditableJob; candidates: CandidateOption[] }
+  | { kind: "bid"; record: EditableBid; candidates: CandidateOption[] }
+) & { showEdit?: boolean; showDelete?: boolean }) {
   const [open, setOpen] = useState(false);
   const updateAction = kind === "job" ? updateJobAction : updateBidAction;
   const deleteAction = kind === "job" ? deleteJobAction : deleteBidAction;
@@ -66,12 +81,12 @@ function RecordActions({ kind, record, candidates }: { kind: "job"; record: Edit
 
   return (
     <div className="flex flex-wrap items-start gap-2">
-      <button aria-label={`Edit ${record.title}`} className="inline-flex h-8 max-w-full items-center gap-1.5 whitespace-normal rounded-md border border-blue-200 bg-blue-50 px-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 sm:px-3" onClick={() => setOpen(true)} type="button"><Pencil className="size-3.5 shrink-0" />Edit</button>
-      <form action={deleteFormAction} onSubmit={(event) => { if (!window.confirm(`Permanently delete this ${kind}?`)) event.preventDefault(); }}>
+      {showEdit && <button aria-label={`Edit ${record.title}`} className="inline-flex h-8 max-w-full items-center gap-1.5 whitespace-normal rounded-md border border-blue-200 bg-blue-50 px-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 sm:px-3" onClick={() => setOpen(true)} type="button"><Pencil className="size-3.5 shrink-0" />Edit</button>}
+      {showDelete && <form action={deleteFormAction} onSubmit={(event) => { if (!window.confirm(`Permanently delete this ${kind}?`)) event.preventDefault(); }}>
         <input name="id" type="hidden" value={record.id} />
         <button className="inline-flex h-8 max-w-full items-center gap-1.5 whitespace-normal rounded-md border border-rose-200 bg-rose-50 px-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 sm:px-3" disabled={deleting} type="submit"><Trash2 className="size-3.5 shrink-0" />{deleting ? "Deleting..." : "Delete"}</button>
-        {deleteState.error && <p className="mt-1 max-w-40 text-[10px] text-rose-700">{deleteState.error}</p>}
-      </form>
+        {deleteState.error && <p className="mt-1 max-w-40 text-[10px] text-rose-700" role="alert">{deleteState.error}</p>}
+      </form>}
       {open && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true">
           <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">

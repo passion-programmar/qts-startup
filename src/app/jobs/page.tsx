@@ -1,10 +1,13 @@
 import { asc, desc, eq } from "drizzle-orm";
-import { ExternalLink } from "lucide-react";
 import { redirect } from "next/navigation";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
-import { JobActions } from "@/app/components/record-forms";
-import { categories, jobs, profiles, users } from "@/db/schema";
+import {
+  JobDeleteAction,
+  JobEditAction,
+  JobGenerationQueueAction,
+} from "@/app/components/record-forms";
+import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -31,16 +34,12 @@ export default async function JobsPage() {
       resumeLocalPath: jobs.resumeLocalPath,
       generationStatus: jobs.generationStatus,
       generationError: jobs.generationError,
-      createdAt: jobs.createdAt,
-      updatedAt: jobs.updatedAt,
       candidateId: jobs.candidateId,
       firstName: profiles.firstName,
       lastName: profiles.lastName,
-      category: categories.name,
     })
     .from(jobs)
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
-    .leftJoin(categories, eq(categories.id, profiles.categoryId))
     .where(eq(jobs.managerId, currentUser.id))
     .orderBy(desc(jobs.date), desc(jobs.createdAt));
   const candidateRows = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
@@ -57,47 +56,72 @@ export default async function JobsPage() {
         </header>
         <PaginatedTable
           columns={[
-            { label: "No", className: "w-[3%]" },
-            { label: "Candidate", className: "w-[7%]" },
-            { label: "Category", className: "w-[6%]" },
-            { label: "Job", className: "w-[9%]" },
-            { label: "Location", className: "w-[7%]" },
-            { label: "Work type", className: "w-[6%]" },
-            { label: "Salary", className: "w-[6%]" },
-            { label: "Date", className: "w-[5%]" },
-            { label: "Status", className: "w-[5%]" },
-            { label: "Resume path (Downloads)", className: "w-[7%]" },
-            { label: "Generation", className: "w-[7%]" },
-            { label: "Failure reason", className: "w-[7%]" },
-            { label: "Link", className: "w-[4%]" },
-            { label: "Created", className: "w-[6%]" },
-            { label: "Updated", className: "w-[6%]" },
-            { label: "Actions", className: "w-[9%]" },
+            { label: "No", className: "w-[5%]" },
+            { label: "Candidate Name", className: "w-[13%]" },
+            { label: "Job Title", className: "w-[22%]" },
+            { label: "Status", className: "w-[9%]" },
+            { label: "Resume Path", className: "w-[16%]" },
+            { label: "Date", className: "w-[9%]" },
+            { label: "Edit", className: "w-[7%]" },
+            { label: "Delete", className: "w-[7%]" },
+            { label: "Queue", className: "w-[12%]" },
           ]}
           emptyMessage="No jobs saved yet"
-          rows={rows.map((row, index) => ({
-            id: row.id,
-            cells: [
-              index + 1,
-              [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
-              row.category ?? "Uncategorized",
-              <div key="job"><span className="block font-medium">{row.title}</span><span className="mt-1 block text-xs text-slate-500">{row.company}</span></div>,
-              row.location ?? "—",
-              [row.employmentType, row.workplaceType].filter(Boolean).join(" · ") || "—",
-              row.salary ?? "—",
-              row.date,
-              <span className="capitalize" key="status">{row.status.replaceAll("_", " ")}</span>,
-              row.resumeLocalPath
-                ? <code className="block max-w-full whitespace-normal break-all text-xs" key="resume-path" title={row.resumeLocalPath}>{row.resumeLocalPath}</code>
-                : "—",
-              <span className="capitalize" key="generation-status">{row.generationStatus.replaceAll("_", " ")}{row.generationError ? <span className="mt-1 block max-w-52 text-xs text-rose-700">{row.generationError}</span> : null}</span>,
-              row.failureReason ?? "—",
-              <a aria-label={`Open ${row.title}`} className="inline-flex size-8 items-center justify-center rounded border border-blue-200 text-blue-600 hover:bg-blue-50" href={row.url} key="link" rel="noreferrer" target="_blank"><ExternalLink className="size-4" /></a>,
-              row.createdAt.toLocaleString(),
-              row.updatedAt.toLocaleString(),
-              <JobActions candidates={candidateOptions} key="actions" record={{ id: row.id, candidateId: row.candidateId, title: row.title, company: row.company, description: row.description, location: row.location, employmentType: row.employmentType, workplaceType: row.workplaceType, salary: row.salary, url: row.url, date: row.date, status: row.status, failureReason: row.failureReason, generationStatus: row.generationStatus, generationError: row.generationError }} />,
-            ],
-          }))}
+          rows={rows.map((row, index) => {
+            const editableJob = {
+              id: row.id,
+              candidateId: row.candidateId,
+              title: row.title,
+              company: row.company,
+              description: row.description,
+              location: row.location,
+              employmentType: row.employmentType,
+              workplaceType: row.workplaceType,
+              salary: row.salary,
+              url: row.url,
+              date: row.date,
+              status: row.status,
+              failureReason: row.failureReason,
+              generationStatus: row.generationStatus,
+              generationError: row.generationError,
+            };
+            return {
+              id: row.id,
+              cells: [
+                index + 1,
+                [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
+                <div key="job">
+                  <a
+                    className="font-medium text-blue-700 underline-offset-2 hover:underline"
+                    href={row.url}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    {row.title}
+                  </a>
+                  <span className="mt-1 block text-xs text-slate-500">{row.company}</span>
+                </div>,
+                <div key="status">
+                  <span className="capitalize">{row.status.replaceAll("_", " ")}</span>
+                  <span className="mt-1 block text-[10px] capitalize text-slate-500">
+                    Generation: {row.generationStatus.replaceAll("_", " ")}
+                  </span>
+                  {row.generationError && (
+                    <span className="mt-1 block text-xs text-rose-700">
+                      {row.generationError}
+                    </span>
+                  )}
+                </div>,
+                row.resumeLocalPath
+                  ? <code className="block max-w-full whitespace-normal break-all text-xs" key="resume-path" title={row.resumeLocalPath}>{row.resumeLocalPath}</code>
+                  : "—",
+                row.date,
+                <JobEditAction candidates={candidateOptions} key="edit" record={editableJob} />,
+                <JobDeleteAction key="delete" record={editableJob} />,
+                <JobGenerationQueueAction key="queue" record={editableJob} />,
+              ],
+            };
+          })}
         />
       </main>
     </WorkspaceShell>

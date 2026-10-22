@@ -7,6 +7,7 @@ import { isRecord, readGenerationJob } from "@/server/generation/generation-valu
 import {
   composeGenerationPrompt,
   getManagerDocumentPrompt,
+  MissingDocumentPromptError,
 } from "@/server/generation/manager-prompt";
 import { normalizeJobUrl } from "@/server/jobs/job-values";
 
@@ -177,6 +178,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     });
   } catch (error) {
     console.error("Could not start extension generation.", error);
+    if (error instanceof MissingDocumentPromptError) {
+      return NextResponse.json(
+        { success: false, message: "No saved resume and cover-letter prompt is available. Ask your Super Admin to configure one." },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { success: false, message: "QTS could not start Generation. Try again." },
       { status: 500 },
