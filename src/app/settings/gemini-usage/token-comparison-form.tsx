@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 
 type ComparisonResult = {
   localEstimate: number;
@@ -8,9 +9,12 @@ type ComparisonResult = {
   difference: number;
   differencePercent: number;
   safe: boolean;
+  keyNumber: number;
+  keyHashPrefix: string;
 };
 
 export function TokenComparisonForm() {
+  const router = useRouter();
   const [prompt, setPrompt] = useState("");
   const [result, setResult] = useState<ComparisonResult | null>(null);
   const [error, setError] = useState("");
@@ -32,6 +36,7 @@ export function TokenComparisonForm() {
         throw new Error(readError(data) || "Token comparison failed.");
       }
       setResult(data);
+      router.refresh();
     } catch (comparisonError) {
       setError(
         comparisonError instanceof Error
@@ -93,7 +98,8 @@ export function TokenComparisonForm() {
 
 function ComparisonResultView({ result }: { result: ComparisonResult }) {
   return (
-    <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <Metric label="API key" value={`Key ${result.keyNumber} · ${result.keyHashPrefix}`} />
       <Metric label="Local estimate" value={result.localEstimate.toLocaleString()} />
       <Metric label="Google count" value={result.googleCount.toLocaleString()} />
       <Metric label="Difference" value={formatSigned(result.difference)} />
@@ -133,7 +139,9 @@ function isComparisonResult(value: unknown): value is ComparisonResult {
     typeof value.googleCount === "number" &&
     typeof value.difference === "number" &&
     typeof value.differencePercent === "number" &&
-    typeof value.safe === "boolean"
+    typeof value.safe === "boolean" &&
+    typeof value.keyNumber === "number" &&
+    typeof value.keyHashPrefix === "string"
   );
 }
 

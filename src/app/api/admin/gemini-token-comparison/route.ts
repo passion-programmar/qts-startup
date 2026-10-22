@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { getGeminiApiKeys } from "@/lib/gemini-usage";
+import {
+  acquireGeminiKey,
+  getGeminiApiKeyHash,
+  getGeminiApiKeys,
+  releaseGeminiKey,
+  reserveGeminiGeneration,
+} from "@/lib/gemini-usage";
 import { getCurrentUser } from "@/lib/session";
 import {
   estimateGeminiInputTokens,
@@ -40,8 +46,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const apiKey = getGeminiApiKeys()[0];
-  if (!apiKey) {
+  const apiKeys = getGeminiApiKeys();
+  if (apiKeys.length === 0) {
     return NextResponse.json(
       { error: "No Gemini API key is configured on Vercel." },
       { status: 503 },
@@ -53,9 +59,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     prompt,
     geminiJobEvaluationGenerationConfig,
   );
+  const selectedKey = await selectTrackedGeminiKey(apiKeys, localEstimate);
+  if (!selectedKey) {
+    return NextResponse.json(
+      { error: "All Gemini keys are busy or at their QTS usage limits." },
+      { status: 503 },
+    );
+  }
+
   let googleCount: number;
   try {
-    googleCount = await requestGoogleTokenCount(apiKey, prompt);
+    googleCount = await requestGoogleTokenCount(selectedKey.apiKey, prompt);
   } catch (error) {
     console.error(
       "Temporary Gemini token comparison failed.",
@@ -65,6 +79,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       { error: "Google token counting failed. Check the Vercel function log." },
       { status: 502 },
     );
+  } finally {
+    await releaseGeminiKey(selectedKey.apiKey, selectedKey.leaseId);
   }
   const difference = localEstimate - googleCount;
   const differencePercent =
@@ -76,7 +92,34 @@ export async function POST(request: Request): Promise<NextResponse> {
     difference,
     differencePercent,
     safe: localEstimate >= googleCount,
+    keyNumber: selectedKey.keyIndex + 1,
+    keyHashPrefix: getGeminiApiKeyHash(selectedKey.apiKey).slice(0, 10),
   });
+}
+
+async function selectTrackedGeminiKey(
+  apiKeys: string[],
+  inputTokens: number,
+): Promise<{
+  apiKey: string;
+  keyIndex: number;
+  leaseId: string;
+} | null> {
+  for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex += 1) {
+    const apiKey = apiKeys[keyIndex];
+    const leaseId = await acquireGeminiKey(apiKey);
+    if (!leaseId) continue;
+    try {
+      if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens)) {
+        return { apiKey, keyIndex, leaseId };
+      }
+    } catch (error) {
+      await releaseGeminiKey(apiKey, leaseId);
+      throw error;
+    }
+    await releaseGeminiKey(apiKey, leaseId);
+  }
+  return null;
 }
 
 function isComparisonEnabled(): boolean {
