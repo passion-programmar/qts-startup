@@ -62,7 +62,11 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'get_jd'"));
   assert.ok(launcher.includes("Let's start finding Your Remote Job!"));
   assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
-  assert.ok(launcher.includes("launcher.classList.toggle('get-jd-active', activeStatus === 'get_jd')"));
+  assert.ok(launcher.includes("document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true'"));
+  assert.ok(launcher.includes("attributeFilter: ['data-qts-get-jd-docked']"));
+  assert.ok(launcher.includes('.launcher { position: fixed; top: 28px; right: 112px;'));
+  assert.ok(launcher.includes('.generation { --x: -80px; --y: 82px; }'));
+  assert.ok(launcher.includes('.apply { --x: 0px; --y: 116px; }'));
   assert.ok(launcher.includes('.launcher.get-jd-active { right: calc(min(400px, 48vw) + 112px); }'));
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'cancel'"));
   assert.ok(launcher.includes("'Sign In'"));

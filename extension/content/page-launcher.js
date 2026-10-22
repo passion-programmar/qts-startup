@@ -16,7 +16,7 @@ async function initializeQtsPageLauncher() {
   style.textContent = `
     :host { all: initial; }
     * { box-sizing: border-box; }
-    .launcher { position: fixed; right: 112px; bottom: 28px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
+    .launcher { position: fixed; top: 28px; right: 112px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
     .launcher::before { content: ""; position: absolute; inset: -5px; z-index: 1; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0deg 245deg, #3b82f6 285deg, #22d3ee 325deg, #818cf8 350deg, transparent 360deg); opacity: 1; transform: rotate(0deg); animation: qts-border-rotate 1.5s linear infinite; pointer-events: none; }
     @keyframes qts-border-rotate { to { transform: rotate(360deg); } }
     .main { position: absolute; inset: 4px; z-index: 3; display: grid; place-items: center; width: 50px; height: 50px; padding: 4px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease; }
@@ -29,9 +29,9 @@ async function initializeQtsPageLauncher() {
     .action-icon { color: #4f46e5; font-size: 20px; line-height: 1; }
     .launcher.open .action { opacity: 1; visibility: visible; transform: translate(var(--x), var(--y)) scale(1); }
     .get-jd { --x: -112px; --y: 0px; }
-    .generation { --x: -80px; --y: -82px; }
-    .apply { --x: 0px; --y: -116px; }
-    .logout { --x: 82px; --y: -82px; }
+    .generation { --x: -80px; --y: 82px; }
+    .apply { --x: 0px; --y: 116px; }
+    .logout { --x: 82px; --y: 82px; }
     .text-highlights { --x: 112px; --y: 0px; }
     .page-exclusions { --x: 78px; --y: 84px; }
     .toast { position: fixed; top: 16px; left: 16px; max-width: min(360px, calc(100vw - 32px)); padding: 11px 14px; border-radius: 9px; background: #172554; color: #fff; box-shadow: 0 9px 28px #0f172a38; font: 600 13px/1.4 system-ui, sans-serif; pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .16s ease, transform .16s ease; }
@@ -61,9 +61,9 @@ async function initializeQtsPageLauncher() {
     .highlight-panel-close:hover { background: #f1f5f9; }
     .launcher.get-jd-active { right: calc(min(400px, 48vw) + 112px); }
     @media (max-width: 520px) {
-      .launcher { right: 96px; bottom: 24px; }
+      .launcher { top: 24px; right: 96px; }
       .action { width: 66px; height: 66px; }
-      .logout { --x: 68px; --y: -78px; }
+      .logout { --x: 68px; --y: 78px; }
       .text-highlights { --x: 96px; }
       .page-exclusions { --x: 70px; --y: 78px; }
       .get-jd { --x: -96px; }
@@ -187,6 +187,20 @@ async function initializeQtsPageLauncher() {
     main.setAttribute('aria-expanded', String(open));
     main.setAttribute('aria-label', open ? 'Close QTS actions' : 'Open QTS actions');
   }
+
+  function syncGetJdDocking() {
+    launcher.classList.toggle(
+      'get-jd-active',
+      document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true',
+    );
+  }
+
+  const getJdDockObserver = new MutationObserver(syncGetJdDocking);
+  getJdDockObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-qts-get-jd-docked'],
+  });
+  syncGetJdDocking();
 
   function showToast(message, isError = false) {
     toast.textContent = message;
@@ -355,7 +369,6 @@ async function initializeQtsPageLauncher() {
   async function syncModeActions() {
     const stored = await chrome.storage.local.get(['qtsExtensionStatus']);
     const activeStatus = stored.qtsExtensionStatus;
-    launcher.classList.toggle('get-jd-active', activeStatus === 'get_jd');
     const labels = {
       get_jd: 'Get JD',
       generation: 'Generation',
@@ -492,6 +505,7 @@ async function initializeQtsPageLauncher() {
       highlightPanel.hidden = true;
       preview.hidden = true;
       signInForm.hidden = true;
+      getJdDockObserver.disconnect();
       host.remove();
       globalThis.__qtsPageLauncher = { excluded: true };
     },
