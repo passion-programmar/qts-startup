@@ -64,10 +64,12 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
   assert.ok(launcher.includes("document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true'"));
   assert.ok(launcher.includes("attributeFilter: ['data-qts-get-jd-docked']"));
-  assert.ok(launcher.includes('.launcher { position: fixed; top: 28px; right: 112px;'));
-  assert.ok(launcher.includes('.generation { --x: -80px; --y: 82px; }'));
-  assert.ok(launcher.includes('.apply { --x: 0px; --y: 116px; }'));
-  assert.ok(launcher.includes('.launcher.get-jd-active { right: calc(min(400px, 48vw) + 112px); }'));
+  assert.ok(launcher.includes('.launcher { position: fixed; right: 180px; bottom: 24px;'));
+  assert.ok(launcher.includes('.generation { --x: -122px; --y: -88px; }'));
+  assert.ok(launcher.includes('.apply { --x: -46px; --y: -143px; }'));
+  assert.ok(launcher.includes('.logout { --x: 46px; --y: -143px; }'));
+  assert.ok(launcher.includes('.page-exclusions { --x: 150px; --y: 0px; }'));
+  assert.ok(launcher.includes('.launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }'));
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'cancel'"));
   assert.ok(launcher.includes("'Sign In'"));
   assert.ok(launcher.includes("'Sign Out'"));

@@ -16,24 +16,24 @@ async function initializeQtsPageLauncher() {
   style.textContent = `
     :host { all: initial; }
     * { box-sizing: border-box; }
-    .launcher { position: fixed; top: 28px; right: 112px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
+    .launcher { position: fixed; right: 180px; bottom: 24px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
     .launcher::before { content: ""; position: absolute; inset: -5px; z-index: 1; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0deg 245deg, #3b82f6 285deg, #22d3ee 325deg, #818cf8 350deg, transparent 360deg); opacity: 1; transform: rotate(0deg); animation: qts-border-rotate 1.5s linear infinite; pointer-events: none; }
     @keyframes qts-border-rotate { to { transform: rotate(360deg); } }
     .main { position: absolute; inset: 4px; z-index: 3; display: grid; place-items: center; width: 50px; height: 50px; padding: 4px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease; }
     .main:hover { transform: scale(1.06); background: #f8fafc; }
     .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
     .brand-icon { display: block; width: 40px; height: 40px; object-fit: contain; object-position: center; }
-    .action { --x: 0px; --y: 0px; position: absolute; top: -7px; left: -7px; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 72px; padding: 7px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; color: #1e293b; box-shadow: 0 9px 24px #0f172a30; font: 700 10px/1.05 system-ui, sans-serif; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.45); transition: transform .2s ease, opacity .16s ease, visibility .2s; }
+    .action { --x: 0px; --y: 0px; position: absolute; top: 50%; left: 50%; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 72px; margin: -36px 0 0 -36px; padding: 7px; aspect-ratio: 1; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; color: #1e293b; box-shadow: 0 9px 24px #0f172a30; font: 700 10px/1.05 system-ui, sans-serif; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.45); transition: transform .2s ease, opacity .16s ease, visibility .2s; }
     .action[hidden] { display: none; }
     .action:hover { color: #3730a3; background: #eef2ff; border-color: #818cf8; }
     .action-icon { color: #4f46e5; font-size: 20px; line-height: 1; }
     .launcher.open .action { opacity: 1; visibility: visible; transform: translate(var(--x), var(--y)) scale(1); }
-    .get-jd { --x: -112px; --y: 0px; }
-    .generation { --x: -80px; --y: 82px; }
-    .apply { --x: 0px; --y: 116px; }
-    .logout { --x: 82px; --y: 82px; }
-    .text-highlights { --x: 112px; --y: 0px; }
-    .page-exclusions { --x: 78px; --y: 84px; }
+    .get-jd { --x: -150px; --y: 0px; }
+    .generation { --x: -122px; --y: -88px; }
+    .apply { --x: -46px; --y: -143px; }
+    .logout { --x: 46px; --y: -143px; }
+    .text-highlights { --x: 122px; --y: -88px; }
+    .page-exclusions { --x: 150px; --y: 0px; }
     .toast { position: fixed; top: 16px; left: 16px; max-width: min(360px, calc(100vw - 32px)); padding: 11px 14px; border-radius: 9px; background: #172554; color: #fff; box-shadow: 0 9px 28px #0f172a38; font: 600 13px/1.4 system-ui, sans-serif; pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .16s ease, transform .16s ease; }
     .toast.visible { opacity: 1; transform: translateY(0); }
     .toast.error { background: #991b1b; }
@@ -59,15 +59,17 @@ async function initializeQtsPageLauncher() {
     .highlight-panel iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
     .highlight-panel-close { position: absolute; top: 8px; right: 8px; z-index: 2; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #cbd5e1; border-radius: 50%; background: #fff; color: #334155; box-shadow: 0 2px 8px #0f172a24; font: 20px/1 system-ui, sans-serif; cursor: pointer; }
     .highlight-panel-close:hover { background: #f1f5f9; }
-    .launcher.get-jd-active { right: calc(min(400px, 48vw) + 112px); }
+    .launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }
     @media (max-width: 520px) {
-      .launcher { top: 24px; right: 96px; }
-      .action { width: 66px; height: 66px; }
-      .logout { --x: 68px; --y: 78px; }
-      .text-highlights { --x: 96px; }
-      .page-exclusions { --x: 70px; --y: 78px; }
-      .get-jd { --x: -96px; }
-      .launcher.get-jd-active { right: calc(min(400px, 48vw) + 96px); }
+      .launcher { right: calc(50vw - 29px); bottom: 18px; }
+      .action { width: 66px; height: 66px; margin: -33px 0 0 -33px; }
+      .get-jd { --x: -112px; --y: 0px; }
+      .generation { --x: -91px; --y: -66px; }
+      .apply { --x: -35px; --y: -106px; }
+      .logout { --x: 35px; --y: -106px; }
+      .text-highlights { --x: 91px; --y: -66px; }
+      .page-exclusions { --x: 112px; --y: 0px; }
+      .launcher.get-jd-active { right: calc(50vw - 29px); }
     }
     @media (prefers-reduced-motion: reduce) { .main, .action, .toast, .launcher { transition: none; } .launcher::before { animation: none; } }
   `;
