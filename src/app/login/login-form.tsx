@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { ArrowRight, UserRound } from "lucide-react";
 import { loginAction, type LoginState } from "@/app/login/actions";
+import { LoadingIcon } from "@/app/components/loading-icon";
 import { PasswordField } from "@/app/components/password-field";
 
 const initialState: LoginState = { error: null };
@@ -59,6 +60,7 @@ export function LoginForm() {
         disabled={isPending}
         type="submit"
       >
+        {isPending ? <LoadingIcon /> : null}
         {isPending ? "Signing in..." : "Sign in"}
         {!isPending && <ArrowRight className="size-4" />}
       </button>

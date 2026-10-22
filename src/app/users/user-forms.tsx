@@ -17,6 +17,7 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
+import { LoadingIcon } from "@/app/components/loading-icon";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
@@ -66,6 +67,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
       </button>
       <Modal
         confirmOnDismiss={isAccount}
+        dismissQuestion="Do you want to continue creating this Account?"
         onClose={closeModal}
         open={isOpen}
         subtitle={
@@ -354,7 +356,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               disabled={isPending}
               type="submit"
             >
-              <Plus className="size-4" />
+              {isPending ? <LoadingIcon className="size-4" /> : <Plus className="size-4" />}
               {isPending ? "Creating..." : `Create ${roleLabel}`}
             </button>
           </div>
@@ -408,10 +410,11 @@ export function CredentialResetForm({
           <FormMessage variant="success">{state.success}</FormMessage>
         )}
         <button
-          className="h-8 rounded-md bg-slate-900 px-3 text-[10px] font-semibold text-white disabled:opacity-60"
+          className="inline-flex h-8 items-center gap-2 rounded-md bg-slate-900 px-3 text-[10px] font-semibold text-white disabled:opacity-60"
           disabled={isPending}
           type="submit"
         >
+          {isPending && <LoadingIcon className="size-4" />}
           {isPending ? "Saving..." : "Save credentials"}
         </button>
       </form>
@@ -492,6 +495,7 @@ export function EditCandidateProfileForm({
       </button>
       <Modal
         confirmOnDismiss
+        dismissQuestion="Do you want to continue editing this Profile?"
         onClose={closeModal}
         open={isOpen}
         subtitle="Update the candidate's contact information and profile details."
@@ -686,10 +690,11 @@ export function EditCandidateProfileForm({
               Cancel
             </button>
             <button
-              className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
               disabled={isPending}
               type="submit"
             >
+              {isPending && <LoadingIcon className="size-4" />}
               {isPending ? "Saving..." : "Save profile"}
             </button>
           </div>
@@ -731,7 +736,7 @@ export function DeleteCandidateAccountForm({
         disabled={isPending}
         type="submit"
       >
-        <Trash2 aria-hidden="true" className="size-3.5" />
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />}
         {isPending ? "Deleting..." : "Delete"}
       </button>
       {state.error && (
@@ -785,6 +790,7 @@ function Modal({
   title,
   subtitle,
   confirmOnDismiss = false,
+  dismissQuestion,
   children,
 }: {
   open: boolean;
@@ -792,6 +798,7 @@ function Modal({
   title: string;
   subtitle: string;
   confirmOnDismiss?: boolean;
+  dismissQuestion: string;
   children: React.ReactNode;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -946,7 +953,7 @@ function Modal({
                 className="text-base font-semibold text-slate-900"
                 id={`${titleId}-leave-title`}
               >
-                Do you want to continue editing this profile?
+                {dismissQuestion}
               </h3>
               <p
                 className="mt-2 text-sm leading-6 text-slate-600"
@@ -1094,10 +1101,11 @@ export function DeleteStaffUserForm({
         <FormMessage variant="success">{state.success}</FormMessage>
       )}
       <button
-        className="h-8 rounded-md border border-rose-200 px-3 text-[10px] font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
+        className="inline-flex h-8 items-center gap-2 rounded-md border border-rose-200 px-3 text-[10px] font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
         disabled={isPending || noReplacementAvailable}
         type="submit"
       >
+        {isPending && <LoadingIcon className="size-3.5" />}
         {isPending ? "Deleting..." : "Delete account"}
       </button>
     </form>

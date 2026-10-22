@@ -9,6 +9,7 @@ import {
   updateJobAction,
 } from "@/app/jobs/actions";
 import { initialRecordState } from "@/app/record-action-state";
+import { LoadingIcon } from "@/app/components/loading-icon";
 
 export type CandidateOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };
@@ -59,6 +60,7 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
         disabled={pending}
         type="submit"
       >
+        {pending && <LoadingIcon className="size-3.5" />}
         {pending ? "Updating…" : label}
       </button>
       {(state.error || state.success) && (
@@ -168,6 +170,7 @@ function RecordActions({
                         disabled={deleting}
                         type="submit"
                       >
+                        {deleting && <LoadingIcon className="size-4" />}
                         {deleting ? "Deleting…" : `Delete ${kind}`}
                       </button>
                     </div>
@@ -197,7 +200,7 @@ function RecordActions({
               {updateState.success && <p className="text-sm text-emerald-700 sm:col-span-2" role="status">{updateState.success}</p>}
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 sm:col-span-2">
                 <button className="rounded-lg border border-slate-200 px-4 py-2 text-sm" onClick={() => setOpen(false)} type="button">Cancel</button>
-                <button className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={updating} type="submit">{updating ? "Saving..." : "Save changes"}</button>
+                <button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={updating} type="submit">{updating && <LoadingIcon className="size-4" />}{updating ? "Saving..." : "Save changes"}</button>
               </div>
             </form>
           </div>

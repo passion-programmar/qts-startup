@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { Check, Trash2 } from "lucide-react";
+import { LoadingIcon } from "@/app/components/loading-icon";
 import {
   assignPromptAction,
   saveGlobalPromptAction,
@@ -52,7 +53,7 @@ export function PromptModeForm({ mode }: { mode: "global" | "private" }) {
         disabled={isPending}
         type="submit"
       >
-        <Check className="size-3.5" />
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
         {isPending ? "Saving..." : "Save prompt mode"}
       </button>
     </form>
@@ -140,7 +141,7 @@ export function GlobalPromptForm({
         disabled={isPending}
         type="submit"
       >
-        <Check className="size-3.5" />
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
         {isPending ? "Saving..." : promptGroupId ? "Save new version" : "Create prompt"}
       </button>
     </form>
@@ -181,7 +182,7 @@ export function PromptAssignmentForm({
               disabled={unassignPending}
               type="submit"
             >
-              <Trash2 className="size-3" />
+              {unassignPending ? <LoadingIcon className="size-3" /> : <Trash2 className="size-3" />}
               {unassignPending ? "Removing..." : "Unassign"}
             </button>
           </form>
@@ -209,7 +210,7 @@ export function PromptAssignmentForm({
           disabled={assignPending || prompts.length === 0}
           type="submit"
         >
-          <Check className="size-3.5" />
+          {assignPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
           {assignPending ? "Saving..." : assignedPromptId ? "Update assignment" : "Assign"}
         </button>
       </form>
@@ -248,6 +249,7 @@ export function ManagerTextHighlightAccessForm({
           disabled={isPending}
           type="submit"
         >
+          {isPending && <LoadingIcon className="mr-1 size-3.5" />}
           {isPending ? "Saving..." : canManage ? "Remove access" : "Assign access"}
         </button>
       </form>
@@ -285,6 +287,7 @@ export function ManagerPageExclusionAccessForm({
           disabled={isPending}
           type="submit"
         >
+          {isPending && <LoadingIcon className="mr-1 size-3.5" />}
           {isPending ? "Saving..." : canManage ? "Remove access" : "Assign access"}
         </button>
       </form>
@@ -322,6 +325,7 @@ export function ManagerJobDetectionUrlAccessForm({
           disabled={isPending}
           type="submit"
         >
+          {isPending && <LoadingIcon className="mr-1 size-3.5" />}
           {isPending ? "Saving..." : canManage ? "Remove access" : "Assign access"}
         </button>
       </form>

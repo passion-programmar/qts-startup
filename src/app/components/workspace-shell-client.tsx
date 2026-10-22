@@ -20,7 +20,9 @@ import {
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { useFormStatus } from "react-dom";
 import { logoutAction } from "@/app/login/actions";
+import { LoadingIcon } from "@/app/components/loading-icon";
 import type { StaffSession } from "@/lib/session";
 
 const roleLabels: Record<StaffSession["role"], string> = {
@@ -127,10 +129,7 @@ export function WorkspaceShellClient({
                 My profile
               </Link>
               <form action={logoutAction} className="mt-2 border-t border-white/10 pt-2">
-                <button className="flex min-h-10 w-full items-center gap-3 rounded px-3 text-sm text-white/75 hover:bg-white/10 hover:text-white" type="submit">
-                  <LogOut className="size-4" />
-                  Sign out
-                </button>
+                <LogoutButton />
               </form>
             </div>
           </details>
@@ -208,5 +207,19 @@ export function WorkspaceShellClient({
         </div>
       </div>
     </div>
+  );
+}
+
+function LogoutButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      className="flex min-h-10 w-full items-center gap-3 rounded px-3 text-sm text-white/75 hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+      disabled={pending}
+      type="submit"
+    >
+      {pending ? <LoadingIcon className="size-4" /> : <LogOut className="size-4" />}
+      {pending ? "Signing out..." : "Sign out"}
+    </button>
   );
 }

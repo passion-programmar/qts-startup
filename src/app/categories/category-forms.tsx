@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
+import { LoadingIcon } from "@/app/components/loading-icon";
 import {
   createCategoryAction,
   createSubCategoryAction,
@@ -146,7 +147,7 @@ function SubmitButton({
   const { pending } = useFormStatus();
   return (
     <button
-      className={`h-9 whitespace-nowrap rounded-lg px-3 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
+      className={`inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg px-3 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60 ${
         destructive
           ? "border border-rose-200 text-rose-700 hover:bg-rose-50"
           : "bg-indigo-600 text-white hover:bg-indigo-700"
@@ -154,6 +155,7 @@ function SubmitButton({
       disabled={pending}
       type="submit"
     >
+      {pending && <LoadingIcon className="size-3.5" />}
       {pending ? pendingText : idleText}
     </button>
   );

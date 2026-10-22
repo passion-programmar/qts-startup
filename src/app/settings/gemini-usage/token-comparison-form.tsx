@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { LoadingIcon } from "@/app/components/loading-icon";
 
 type ComparisonResult = {
   localEstimate: number;
@@ -82,6 +83,7 @@ export function TokenComparisonForm() {
           disabled={submitting || prompt.trim().length === 0}
           type="submit"
         >
+          {submitting && <LoadingIcon className="mr-2 inline-block size-4 align-[-3px]" />}
           {submitting ? "Comparing..." : "Compare token counts"}
         </button>
       </form>

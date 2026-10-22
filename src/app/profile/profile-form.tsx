@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { Check } from "lucide-react";
 import { updateProfileAction, type ProfileState } from "@/app/profile/actions";
+import { LoadingIcon } from "@/app/components/loading-icon";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 
@@ -107,7 +108,7 @@ export function ProfileForm({ displayName, loginName }: ProfileFormProps) {
         disabled={isPending}
         type="submit"
       >
-        <Check className="size-3.5" />
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
         {isPending ? "Saving..." : "Save changes"}
       </button>
     </form>
