@@ -162,7 +162,7 @@ export default async function GeminiUsagePage() {
           />
         )}
         {process.env.VERCEL === "1" &&
-        process.env.VERCEL_ENV === "preview" &&
+        process.env.VERCEL_ENV === "production" &&
         process.env.ENABLE_GEMINI_TOKEN_COMPARISON === "true" ? (
           <TokenComparisonForm />
         ) : null}

@@ -47,14 +47,14 @@ export function TokenComparisonForm() {
     <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
       <div className="mb-4">
         <div className="text-xs font-bold uppercase tracking-wider text-amber-700">
-          Temporary Vercel Preview test
+          Temporary Vercel Production test
         </div>
         <h2 className="mt-1 text-lg font-bold text-slate-900">
           Compare local estimate with Google
         </h2>
         <p className="mt-1 text-sm text-slate-600">
           Paste the exact prompt to test. This sends one CountTokens request from
-          Vercel and does not generate content or save the prompt.
+          Vercel Production and does not generate content or save the prompt.
         </p>
       </div>
 

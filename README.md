@@ -95,11 +95,11 @@ evaluation endpoint requires an active default `job_description_evaluation`
 prompt, although the current extension keeps that endpoint disabled.
 
 For temporary token-estimator calibration, set
-`ENABLE_GEMINI_TOKEN_COMPARISON=true` only in the Vercel Preview environment.
+`ENABLE_GEMINI_TOKEN_COMPARISON=true` only in the Vercel Production environment.
 The Super Admin Gemini usage page then shows a comparison form that runs the
 local estimate and Google's `countTokens` request on Vercel for the same prompt.
-The route is unavailable on localhost and Vercel Production. Remove the Preview
-environment variable after calibration to disable the form and endpoint.
+The route is unavailable on localhost and Vercel Preview. Remove the Production
+environment variable after calibration and redeploy to disable the form and endpoint.
 
 ## Browser extension sign-in
 
