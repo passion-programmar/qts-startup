@@ -37,11 +37,6 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
   const queued = record.generationStatus === "queued";
   const processing = record.generationStatus === "processing";
   const cancellable = queued || processing;
-  const label = cancellable
-    ? "Cancel"
-    : record.generationStatus === "failed"
-      ? "Retry"
-      : "Queue";
   const accessibleLabel = cancellable
     ? processing ? "Cancel running Generation" : "Cancel queued Generation"
     : record.generationStatus === "failed"
@@ -55,7 +50,7 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
       <input name="intent" type="hidden" value={cancellable ? "cancel" : "queue"} />
       <button
         aria-label={accessibleLabel}
-        className="inline-flex min-h-9 w-full min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60"
+        className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-60"
         title={accessibleLabel}
         disabled={pending}
         type="submit"
@@ -67,7 +62,6 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
             : record.generationStatus === "failed"
               ? <RotateCcw aria-hidden="true" className="size-3.5" />
               : <ListPlus aria-hidden="true" className="size-3.5" />}
-        {pending ? "Updating…" : label}
       </button>
       {(state.error || state.success) && (
         <p className={`mt-1 max-w-40 text-[10px] ${state.error ? "text-rose-700" : "text-emerald-700"}`} role={state.error ? "alert" : "status"}>
