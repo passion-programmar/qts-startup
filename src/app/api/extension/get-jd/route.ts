@@ -19,6 +19,7 @@ import {
   acquireGeminiKey,
   geminiModel,
   getGeminiApiKeys,
+  getGeminiApiLimits,
   releaseGeminiKey,
   recordGeminiApiCall,
   reserveGeminiGeneration,
@@ -171,6 +172,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       promptText,
       generationConfig,
       await getGeminiTokenCountMode(),
+      await getGeminiApiLimits(),
     );
     if (!selectedKey) {
       return jsonResponse(
@@ -258,6 +260,7 @@ async function selectAvailableGeminiApiKey(
   prompt: string,
   config: typeof generationConfig,
   tokenCountMode: GeminiTokenCountMode,
+  limits: Awaited<ReturnType<typeof getGeminiApiLimits>>,
 ): Promise<{ apiKey: string; leaseId: string } | null> {
   const shuffledKeys = [...apiKeys];
   for (let index = shuffledKeys.length - 1; index > 0; index -= 1) {
@@ -269,13 +272,13 @@ async function selectAvailableGeminiApiKey(
   }
 
   for (const apiKey of shuffledKeys) {
-    const leaseId = await acquireGeminiKey(apiKey);
+    const leaseId = await acquireGeminiKey(apiKey, limits);
     if (!leaseId) continue;
     try {
       const inputTokens = tokenCountMode === "gemini"
         ? await requestGeminiTokenCount(apiKey, prompt)
         : estimateGeminiInputTokens(prompt, config);
-      if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens)) {
+      if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens, limits)) {
         return { apiKey, leaseId };
       }
     } catch (error) {

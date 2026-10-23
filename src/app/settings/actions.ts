@@ -3,8 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { parseGeminiApiLimits } from "@/server/gemini/gemini-api-limits";
 import {
   managerPromptAssignments,
+  geminiKeyUsageEvents,
   prompts,
   settings,
   users,
@@ -238,6 +240,111 @@ export async function updateGeminiTokenCountModeAction(
   }
   revalidatePath("/settings");
   return { error: null, success: `Gemini token counting changed to ${mode}.` };
+}
+
+export async function saveGeminiApiLimitsAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can change Gemini API limits." };
+  }
+
+  const limits = parseGeminiApiLimits({
+    requestsPerMinute: formData.get("requestsPerMinute"),
+    requestsPerDay: formData.get("requestsPerDay"),
+    inputTokensPerMinute: formData.get("inputTokensPerMinute"),
+  });
+  if (!limits) {
+    return {
+      ...emptyState,
+      error: "Enter positive whole-number limits within the allowed ranges.",
+    };
+  }
+
+  try {
+    await db
+      .insert(settings)
+      .values({
+        key: "gemini_api_limits",
+        value: limits,
+        updatedByUserId: actor.id,
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: {
+          value: limits,
+          updatedByUserId: actor.id,
+          updatedAt: new Date(),
+        },
+      });
+  } catch (error) {
+    logPromptActionFailure("updating Gemini API limits", error);
+    return { ...emptyState, error: "Gemini API limits could not be saved." };
+  }
+
+  revalidatePath("/settings/gemini-usage");
+  return { error: null, success: "Gemini API limits were updated." };
+}
+
+export async function deleteGeminiUsageEventAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can remove Gemini usage records." };
+  }
+
+  const eventId = readText(formData, "eventId", 36);
+  if (!isUuid(eventId)) {
+    return { ...emptyState, error: "Select a valid Gemini usage record." };
+  }
+
+  try {
+    await db
+      .update(geminiKeyUsageEvents)
+      .set({ deletedAt: new Date() })
+      .where(
+        and(
+          eq(geminiKeyUsageEvents.id, eventId),
+          isNull(geminiKeyUsageEvents.deletedAt),
+        ),
+      );
+  } catch (error) {
+    logPromptActionFailure("removing a Gemini usage record", error);
+    return { ...emptyState, error: "The Gemini usage record could not be removed." };
+  }
+
+  revalidatePath("/settings/gemini-usage");
+  return { error: null, success: "Gemini usage record removed from history." };
+}
+
+export async function clearGeminiUsageHistoryAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can clear Gemini usage history." };
+  }
+  if (formData.get("confirmClearAll") !== "true") {
+    return { ...emptyState, error: "Confirm clearing Gemini usage history." };
+  }
+
+  try {
+    await db
+      .update(geminiKeyUsageEvents)
+      .set({ deletedAt: new Date() })
+      .where(isNull(geminiKeyUsageEvents.deletedAt));
+  } catch (error) {
+    logPromptActionFailure("clearing Gemini usage history", error);
+    return { ...emptyState, error: "Gemini usage history could not be cleared." };
+  }
+
+  revalidatePath("/settings/gemini-usage");
+  return { error: null, success: "Gemini usage history was cleared." };
 }
 
 export async function assignPromptAction(

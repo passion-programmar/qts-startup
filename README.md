@@ -63,18 +63,25 @@ integrations. For local Get JD, set `GEMINI_API_KEYS` in `.env.local` to a
 comma-separated list of Gemini API keys. QTS selects one key per request. For
 one key, `GEMINI_API_KEY` is still supported; the older
 `JD_READ_PROMPT_GEMINI_API_KEY_1` variable is also accepted for compatibility.
-QTS enforces these per-key caps: 9 Gemini API requests in any rolling
+QTS defaults to these per-key caps: 9 Gemini API requests in any rolling
 60-second window, 200 requests per day (resetting at midnight Pacific), and
-25,000 estimated input tokens per rolling 60 seconds. Before a Get JD
+25,000 estimated input tokens per rolling 60 seconds. Super Admin can change
+these caps on the Gemini Usage page. Request limits count GenerateContent and
+CountTokens calls; the input-token limit applies to GenerateContent requests.
+Before a Get JD
 evaluation, the server estimates input tokens locally using a production-
 calibrated character and word formula. It uses the larger result, counts
 non-ASCII code points conservatively, includes the generation configuration and
 response schema, and adds headroom targeting roughly twenty percent above
 observed Google counts. This estimate protects local capacity but is not an
 exact tokenizer result. Normal Get JD sends one `generateContent` request and
-does not call `countTokens`. The local estimate and that one request are recorded
-when generation is reserved. If no key has capacity, QTS does not generate the
-evaluation. QTS also does not retry another key after a Gemini API error.
+does not call `countTokens`. The Gemini Usage page shows per-key totals and the
+100 most recent recorded attempts for the current Pacific day. It does not store
+prompts, page HTML, job details, or Gemini responses. If no key has capacity,
+QTS does not generate the evaluation. QTS also does not retry another key after
+a Gemini API error.
+Super Admin can remove individual usage records or clear the visible history.
+Removed events remain in quota accounting so history cleanup cannot reset limits.
 
 Gemini keys are reserved atomically in Neon while a Get JD evaluation is
 running. A concurrent request skips a busy key and tries another free key.

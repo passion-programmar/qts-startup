@@ -218,6 +218,13 @@
       "when": 1792662600000,
       "tag": "0030_gemini_api_operations",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792663200000,
+      "tag": "0031_gemini_usage_history_removal",
+      "breakpoints": true
     }
   ]
 }

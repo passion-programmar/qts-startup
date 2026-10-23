@@ -1,17 +1,32 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { settings } from "@/db/schema";
 import { db } from "@/lib/db";
+import {
+  defaultGeminiApiLimits,
+  type GeminiApiLimits,
+  parseGeminiApiLimits,
+} from "@/server/gemini/gemini-api-limits";
 import { geminiModel } from "@/server/gemini/gemini-request";
 
 export { geminiModel };
+export { defaultGeminiApiLimits, type GeminiApiLimits };
 
-export const geminiApiLimits = {
-  requestsPerMinute: 9,
-  requestsPerDay: 200,
-  inputTokensPerMinute: 25_000,
-} as const;
+export async function getGeminiApiLimits(): Promise<GeminiApiLimits> {
+  const [row] = await db
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, "gemini_api_limits"))
+    .limit(1);
+  if (!row) return { ...defaultGeminiApiLimits };
+  const limits = parseGeminiApiLimits(row.value);
+  if (!limits) {
+    throw new Error("Saved Gemini API limits are invalid. Update them in Gemini Usage settings.");
+  }
+  return limits;
+}
 
 export function getGeminiApiKeys(): string[] {
   const configuredKeys = process.env.GEMINI_API_KEYS
@@ -30,13 +45,16 @@ export function getGeminiApiKeyHash(apiKey: string): string {
   return createHash("sha256").update(apiKey).digest("hex");
 }
 
-export async function acquireGeminiKey(apiKey: string): Promise<string | null> {
+export async function acquireGeminiKey(
+  apiKey: string,
+  limits: GeminiApiLimits,
+): Promise<string | null> {
   const keyHash = getGeminiApiKeyHash(apiKey);
   const result = await db.execute<{ leaseId: string | null }>(sql`
     select try_acquire_gemini_key(
       ${keyHash},
-      ${geminiApiLimits.requestsPerMinute},
-      ${geminiApiLimits.requestsPerDay}
+      ${limits.requestsPerMinute},
+      ${limits.requestsPerDay}
     )::text as "leaseId"
   `);
   return result.rows[0]?.leaseId ?? null;
@@ -46,6 +64,7 @@ export async function reserveGeminiGeneration(
   apiKey: string,
   leaseId: string,
   inputTokens: number,
+  limits: GeminiApiLimits,
 ): Promise<boolean> {
   const keyHash = getGeminiApiKeyHash(apiKey);
   const result = await db.execute<{ allowed: boolean }>(sql`
@@ -53,9 +72,9 @@ export async function reserveGeminiGeneration(
       ${keyHash},
       ${leaseId}::uuid,
       ${inputTokens},
-      ${geminiApiLimits.requestsPerMinute},
-      ${geminiApiLimits.requestsPerDay},
-      ${geminiApiLimits.inputTokensPerMinute}
+      ${limits.requestsPerMinute},
+      ${limits.requestsPerDay},
+      ${limits.inputTokensPerMinute}
     ) as allowed
   `);
   return result.rows[0]?.allowed === true;

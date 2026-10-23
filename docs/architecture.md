@@ -24,8 +24,13 @@ The supported browser-extension workflow is deliberately narrow:
    prompt and candidate ID/JD-note pairs, then prechecks returned candidate IDs.
    A Manager with the corresponding Super-assigned permission can add, edit,
    and delete only their own blocked URL fragments and job-page detection keywords.
-   Super Admin also selects local token estimation or Gemini CountTokens. Every
-   generateContent and CountTokens request is recorded for Gemini Usage.
+   Super Admin also selects local token estimation or Gemini CountTokens and
+   configures per-key request and generation-input-token limits from Gemini
+   Usage. The usage page shows per-key totals and the latest 100 recorded
+   GenerateContent and CountTokens attempts for the Pacific day. It stores
+   operation, key hash, token count, and timestamp, not prompt or page content.
+   Super Admin can hide individual events or clear the visible history; hidden
+   events remain in quota accounting and are pruned by the normal usage window.
 6. Managers can queue Generation from a Jobs row. The signed-in extension
    processes queued jobs sequentially through the job page and ChatGPT, then
    downloads résumé PDF, cover-letter PDF, and JD text files locally, and

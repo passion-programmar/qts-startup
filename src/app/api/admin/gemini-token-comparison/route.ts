@@ -3,6 +3,7 @@ import {
   acquireGeminiKey,
   getGeminiApiKeyHash,
   getGeminiApiKeys,
+  getGeminiApiLimits,
   recordGeminiApiCall,
   releaseGeminiKey,
 } from "@/lib/gemini-usage";
@@ -59,7 +60,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     prompt,
     geminiJobEvaluationGenerationConfig,
   );
-  const selectedKey = await selectTrackedGeminiKey(apiKeys);
+  const selectedKey = await selectTrackedGeminiKey(apiKeys, await getGeminiApiLimits());
   if (!selectedKey) {
     return NextResponse.json(
       { error: "All Gemini keys are busy or at their QTS usage limits." },
@@ -99,6 +100,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
 async function selectTrackedGeminiKey(
   apiKeys: string[],
+  limits: Awaited<ReturnType<typeof getGeminiApiLimits>>,
 ): Promise<{
   apiKey: string;
   keyIndex: number;
@@ -106,7 +108,7 @@ async function selectTrackedGeminiKey(
 } | null> {
   for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex += 1) {
     const apiKey = apiKeys[keyIndex];
-    const leaseId = await acquireGeminiKey(apiKey);
+    const leaseId = await acquireGeminiKey(apiKey, limits);
     if (!leaseId) continue;
     return { apiKey, keyIndex, leaseId };
   }

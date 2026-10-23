@@ -623,6 +623,7 @@ export const geminiKeyUsageEvents = pgTable(
     keyHash: text("key_hash").notNull(),
     operation: text("operation").default("generate_content").notNull(),
     inputTokens: integer("input_tokens").default(0).notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "date" }),
     occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
