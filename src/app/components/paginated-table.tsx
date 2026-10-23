@@ -31,46 +31,53 @@ export function PaginatedTable({
 
   return (
     <div className="paginated-table min-w-0 overflow-hidden rounded border border-[#dfe3e7] bg-white">
-      <table className="w-full table-fixed border-collapse text-left text-[13px]">
-        <thead className="border-b border-[#e9ecef] bg-[#f8f9fa] text-[11px] font-semibold uppercase tracking-wide text-[#6c757d]">
-          <tr>
-            {columns.map((column) => (
-              <th
-                className={`min-w-0 whitespace-normal px-2 py-3 sm:px-3 ${column.className ?? ""}`}
-                key={column.label}
-                scope="col"
-              >
-                {column.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-[#e9ecef]">
-          {visibleRows.map((row) => (
-            <tr className="align-top hover:bg-[#f8f9fa]" key={row.id}>
-              {row.cells.map((cell, index) => (
-                <td
-                  className={`min-w-0 whitespace-normal px-2 py-3 text-[#343a40] sm:px-3 ${columns[index]?.className ?? ""}`}
-                  data-label={columns[index]?.label}
-                  key={`${row.id}-${columns[index]?.label ?? index}`}
+      <div
+        aria-label="Table data; scroll horizontally to see all columns"
+        className="paginated-table__scroll"
+        role="region"
+        tabIndex={0}
+      >
+        <table className="paginated-table__grid w-full border-collapse text-left text-[13px]">
+          <thead className="border-b border-[#e9ecef] bg-[#f8f9fa] text-[11px] font-semibold uppercase tracking-wide text-[#6c757d]">
+            <tr>
+              {columns.map((column) => (
+                <th
+                  className={`whitespace-normal px-2 py-3 sm:px-3 ${column.className ?? ""}`}
+                  key={column.label}
+                  scope="col"
                 >
-                  {cell}
-                </td>
+                  {column.label}
+                </th>
               ))}
             </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td
-                className="px-4 py-10 text-center text-sm text-[#6c757d]"
-                colSpan={columns.length}
-              >
-                {emptyMessage}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-[#e9ecef]">
+            {visibleRows.map((row) => (
+              <tr className="align-top hover:bg-[#f8f9fa]" key={row.id}>
+                {row.cells.map((cell, index) => (
+                  <td
+                    className={`whitespace-normal px-2 py-3 text-[#343a40] sm:px-3 ${columns[index]?.className ?? ""}`}
+                    data-label={columns[index]?.label}
+                    key={`${row.id}-${columns[index]?.label ?? index}`}
+                  >
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr className="paginated-table__empty-row">
+                <td
+                  className="px-4 py-10 text-center text-sm text-[#6c757d]"
+                  colSpan={columns.length}
+                >
+                  {emptyMessage}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
       <div className="flex flex-col gap-3 border-t border-[#e9ecef] px-4 py-3 text-xs text-[#6c757d] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <span>
@@ -98,7 +105,7 @@ export function PaginatedTable({
           </label>
         </div>
 
-        <nav aria-label="Table pagination" className="flex items-center gap-1">
+        <nav aria-label="Table pagination" className="flex flex-wrap items-center gap-1 sm:flex-nowrap">
           <button
             aria-label="Previous page"
             className="flex size-8 items-center justify-center rounded border border-[#dee2e6] text-[#0d6efd] hover:bg-[#e9ecef] disabled:cursor-not-allowed disabled:text-[#adb5bd]"

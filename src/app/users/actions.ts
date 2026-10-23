@@ -55,7 +55,7 @@ export async function createUserAction(
   const addressLine1 = readText(formData, "addressLine1", 256);
   const postalCode = readText(formData, "postalCode", 32);
   const subCategoryId = readText(formData, "subCategoryId", 36);
-  const educationRows = readHistoryRows(formData, "education", {
+  const educationRows = normalizeEducationRows(readHistoryRows(formData, "education", {
     institution: 120,
     degree: 120,
     fieldOfStudy: 120,
@@ -63,7 +63,7 @@ export async function createUserAction(
     endDate: 7,
     isCurrent: 5,
     description: 5000,
-  });
+  }));
   const experienceRows = readHistoryRows(formData, "experience", {
     companyName: 160,
     jobTitle: 160,
@@ -320,7 +320,7 @@ export async function updateCandidateProfileAction(
     jdMatching: readText(formData, "jdMatching", limits.jdMatching),
     subCategoryId: readText(formData, "subCategoryId", limits.subCategoryId),
   };
-  const educationRows = readHistoryRows(formData, "education", {
+  const educationRows = normalizeEducationRows(readHistoryRows(formData, "education", {
     institution: 120,
     degree: 120,
     fieldOfStudy: 120,
@@ -328,7 +328,7 @@ export async function updateCandidateProfileAction(
     endDate: 7,
     isCurrent: 5,
     description: 5000,
-  });
+  }));
   const experienceRows = readHistoryRows(formData, "experience", {
     companyName: 160,
     jobTitle: 160,
@@ -816,6 +816,15 @@ function readHistoryRows(
   return Array.from({ length: rowCount }, (_, index) =>
     Object.fromEntries(fields.map(([name, values]) => [name, values[index]])),
   );
+}
+
+function normalizeEducationRows(
+  rows: Record<string, string>[] | null,
+): Record<string, string>[] | null {
+  return rows?.map((row) => {
+    row.isCurrent = "false";
+    return row;
+  }) ?? null;
 }
 
 function validateEducationRows(rows: Record<string, string>[]): string | null {

@@ -46,61 +46,130 @@ body {
 
 .paginated-table th,
 .paginated-table td {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .paginated-table td > * {
   min-width: 0;
   max-width: 100%;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
-@media (max-width: 767px) {
-  .paginated-table table,
-  .paginated-table tbody {
+/* Phone: show each row as a labeled card to avoid squeezing table columns. */
+@media (max-width: 639px) {
+  .paginated-table__scroll {
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .paginated-table__grid,
+  .paginated-table__grid tbody {
     display: block;
     width: 100%;
+  }
+
+  .paginated-table__grid tbody {
+    padding: 0.25rem 0.75rem;
+  }
+
+  .paginated-table__grid tbody tr:not(.paginated-table__empty-row) {
+    display: block;
+    margin: 0.5rem 0;
+    overflow: hidden;
+    border: 1px solid #e9ecef;
+    border-radius: 0.5rem;
+    background: #fff;
   }
 
   .paginated-table thead {
     display: none;
   }
 
-  .paginated-table tbody tr {
-    display: block;
-    border-bottom: 1px solid #e9ecef;
-    padding: 0.25rem 0.75rem;
+  .paginated-table__grid tbody tr:not(.paginated-table__empty-row) td {
+    display: grid;
+    grid-template-columns: minmax(5.5rem, 32%) minmax(0, 1fr);
+    gap: 0.5rem;
+    border: 0;
+    border-bottom: 1px solid #f1f3f5;
+    padding: 0.65rem 0.75rem;
+    text-align: left;
+    width: 100%;
   }
 
-  .paginated-table tbody tr:last-child {
+  .paginated-table__grid tbody tr:not(.paginated-table__empty-row) td:last-child {
     border-bottom: 0;
   }
 
-  .paginated-table tbody td {
-    display: grid;
-    grid-template-columns: minmax(5.5rem, 35%) minmax(0, 1fr);
-    gap: 0.75rem;
-    border: 0;
-    padding: 0.5rem 0.25rem;
-    text-align: left;
-    width: auto;
-  }
-
-  .paginated-table tbody td::before {
+  .paginated-table__grid tbody td::before {
     content: attr(data-label);
     color: #6c757d;
     font-size: 0.625rem;
     font-weight: 600;
     text-transform: uppercase;
+    overflow-wrap: normal;
   }
 
-  .paginated-table tbody td[colspan] {
+  .paginated-table__grid tbody td[colspan] {
     display: block;
     text-align: center;
+    padding: 1.5rem 0.75rem;
   }
 
-  .paginated-table tbody td[colspan]::before {
+  .paginated-table__grid tbody td[colspan]::before {
     content: none;
+  }
+
+  .paginated-table > div:last-child {
+    padding-right: 0.75rem;
+    padding-left: 0.75rem;
+  }
+}
+
+/* Small tablets: retain full table semantics and scroll within the table frame. */
+@media (min-width: 640px) and (max-width: 767px) {
+  .paginated-table__scroll {
+    overflow-x: auto;
+  }
+
+  .paginated-table__grid {
+    min-width: 900px;
+    table-layout: auto;
+  }
+}
+
+/* Tablets: allow more column space while keeping the page itself in the viewport. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .paginated-table__scroll {
+    overflow-x: auto;
+  }
+
+  .paginated-table__grid {
+    min-width: 1040px;
+    table-layout: auto;
+  }
+}
+
+/* Laptop: prevent action and contact columns from collapsing into narrow stacks. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .paginated-table__scroll {
+    overflow-x: auto;
+  }
+
+  .paginated-table__grid {
+    min-width: 1120px;
+    table-layout: auto;
+  }
+}
+
+/* Desktop: use all available width, expanding only when cell content needs it. */
+@media (min-width: 1280px) {
+  .paginated-table__scroll {
+    overflow-x: auto;
+  }
+
+  .paginated-table__grid {
+    min-width: 100%;
+    table-layout: auto;
   }
 }
 

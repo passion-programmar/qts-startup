@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
+import { DatePicker } from "@/app/components/date-picker";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
@@ -98,13 +99,10 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               name="lastName"
               required
             />
-            <TextField
-              autoComplete="bday"
+            <DatePicker
               id="birthday"
               label="Birthday (optional)"
-              maxLength={10}
               name="birthday"
-              type="date"
             />
             <PdfTemplateField id="pdfTemplate" />
             <div className="sm:col-span-2">
@@ -240,11 +238,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                   placeholder="MM/YYYY"
                   inputMode="numeric"
                 />
-                <CurrentStatusSelect
-                  id={`educationIsCurrent-${rowId}`}
-                  label="Currently studying here?"
-                  name="educationIsCurrent"
-                />
+                <input name="educationIsCurrent" type="hidden" value="false" />
                 <TextAreaField
                   className="sm:col-span-2 xl:col-span-3"
                   id={`educationDescription-${rowId}`}
@@ -308,7 +302,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                   placeholder="MM/YYYY"
                   inputMode="numeric"
                 />
-                <CurrentStatusSelect
+                <CurrentStatusCheckbox
                   id={`experienceIsCurrent-${rowId}`}
                   label="Currently working here?"
                   name="experienceIsCurrent"
@@ -531,14 +525,11 @@ export function EditCandidateProfileForm({
             name="lastName"
             required
           />
-          <TextField
-            autoComplete="bday"
+          <DatePicker
             defaultValue={candidate.birthday ?? ""}
             id={fieldId("birthday")}
             label="Birthday (optional)"
-            maxLength={10}
             name="birthday"
-            type="date"
           />
           <PdfTemplateField defaultValue={candidate.pdfTemplate} id={fieldId("pdfTemplate")} />
           <TextField
@@ -655,7 +646,7 @@ export function EditCandidateProfileForm({
                   <TextField autoComplete="off" defaultValue={entry?.fieldOfStudy ?? ""} id={fieldId(`educationFieldOfStudy-${rowId}`)} label="Field of study" maxLength={120} name="educationFieldOfStudy" />
                   <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`educationStartDate-${rowId}`)} label="Start month (MM/YYYY)" maxLength={7} name="educationStartDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
                   <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`educationEndDate-${rowId}`)} label="End month (MM/YYYY)" maxLength={7} name="educationEndDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
-                  <CurrentStatusSelect defaultValue={entry?.isCurrent ? "true" : "false"} id={fieldId(`educationIsCurrent-${rowId}`)} label="Currently studying here?" name="educationIsCurrent" />
+                  <input name="educationIsCurrent" type="hidden" value="false" />
                   <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`educationDescription-${rowId}`)} label="Description (optional)" maxLength={5000} name="educationDescription" />
                 </>
               );
@@ -680,7 +671,7 @@ export function EditCandidateProfileForm({
                   <TextField autoComplete="off" defaultValue={entry?.location ?? ""} id={fieldId(`experienceLocation-${rowId}`)} label="Location (optional)" maxLength={160} name="experienceLocation" />
                   <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`experienceStartDate-${rowId}`)} label="Start month (MM/YYYY)" maxLength={7} name="experienceStartDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
                   <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`experienceEndDate-${rowId}`)} label="End month (MM/YYYY)" maxLength={7} name="experienceEndDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
-                  <CurrentStatusSelect defaultValue={entry?.isCurrent ? "true" : "false"} id={fieldId(`experienceIsCurrent-${rowId}`)} label="Currently working here?" name="experienceIsCurrent" />
+                  <CurrentStatusCheckbox defaultChecked={entry?.isCurrent ?? false} id={fieldId(`experienceIsCurrent-${rowId}`)} label="Currently working here?" name="experienceIsCurrent" />
                   <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`experienceDescription-${rowId}`)} label="Responsibilities / achievements (optional)" maxLength={5000} name="experienceDescription" />
                 </>
               );
@@ -968,7 +959,7 @@ function Modal({
                 className="mt-2 text-sm leading-6 text-slate-600"
                 id={`${titleId}-leave-description`}
               >
-                Choose Continue to keep this form open. Choose Cancel to close it
+                Choose Yes to keep this form open. Choose No to close it
                 and discard unsaved changes.
               </p>
               <div className="mt-5 flex justify-end gap-2">
@@ -977,14 +968,14 @@ function Modal({
                   onClick={cancelAndClose}
                   type="button"
                 >
-                  Cancel
+                  No
                 </button>
                 <button
                   className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700"
                   onClick={continueEditing}
                   type="button"
                 >
-                  Continue
+                  Yes
                 </button>
               </div>
             </div>
@@ -1228,34 +1219,35 @@ function SelectField({
   );
 }
 
-function CurrentStatusSelect({
+function CurrentStatusCheckbox({
   id,
   label,
   name,
-  defaultValue = "false",
+  defaultChecked = false,
 }: {
   id: string;
   label: string;
   name: string;
-  defaultValue?: "true" | "false";
+  defaultChecked?: boolean;
 }) {
+  const [checked, setChecked] = useState(defaultChecked);
+
   return (
-    <div>
+    <div className="flex min-h-10 items-center gap-2 self-end">
+      <input name={name} type="hidden" value={checked ? "true" : "false"} />
+      <input
+        checked={checked}
+        className="size-4 accent-indigo-600"
+        id={id}
+        onChange={(event) => setChecked(event.target.checked)}
+        type="checkbox"
+      />
       <label
-        className="mb-2 block text-xs font-semibold text-slate-700"
+        className="text-xs font-semibold text-slate-700"
         htmlFor={id}
       >
         {label}
       </label>
-      <select
-        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
-        defaultValue={defaultValue}
-        id={id}
-        name={name}
-      >
-        <option value="false">No</option>
-        <option value="true">Yes</option>
-      </select>
     </div>
   );
 }
