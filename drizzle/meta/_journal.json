@@ -232,6 +232,20 @@
       "when": 1792729200000,
       "tag": "0032_gemini_api_response_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792731600000,
+      "tag": "0033_update_get_jd_evaluation_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792734300000,
+      "tag": "0034_refine_get_jd_evaluation_prompt",
+      "breakpoints": true
     }
   ]
 }
