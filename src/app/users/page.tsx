@@ -3,7 +3,7 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { eq, inArray, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { categories, educations, experiences, subCategories } from "@/db/schema";
 import {
@@ -171,12 +171,24 @@ export default async function UsersPage() {
           .select()
           .from(educations)
           .where(inArray(educations.profileUserId, candidateIds))
-          .orderBy(educations.profileUserId, educations.sortOrder),
+          .orderBy(
+            educations.profileUserId,
+            desc(educations.isCurrent),
+            sql`coalesce(${educations.endDate}, ${educations.startDate}) desc nulls last`,
+            sql`${educations.startDate} desc nulls last`,
+            asc(educations.sortOrder),
+          ),
         db
           .select()
           .from(experiences)
           .where(inArray(experiences.profileUserId, candidateIds))
-          .orderBy(experiences.profileUserId, experiences.sortOrder),
+          .orderBy(
+            experiences.profileUserId,
+            desc(experiences.isCurrent),
+            sql`coalesce(${experiences.endDate}, ${experiences.startDate}) desc nulls last`,
+            sql`${experiences.startDate} desc nulls last`,
+            asc(experiences.sortOrder),
+          ),
       ])
     : [[], []];
   const educationByCandidate = new Map<string, typeof educationHistory>();

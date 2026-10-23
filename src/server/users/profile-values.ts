@@ -9,7 +9,40 @@ export function isValidBirthday(value: string, today = new Date()): boolean {
 }
 
 export function isValidProfileMonth(value: string): boolean {
-  return /^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(value);
+  return /^(0[1-9]|1[0-2])\/(?!0000)\d{4}$/.test(value);
+}
+
+export function profileMonthOrdinal(value: string): number | null {
+  const match = /^(0[1-9]|1[0-2])\/(?!0000)(\d{4})$/.exec(value);
+  if (!match) return null;
+  return Number(match[2]) * 12 + Number(match[1]);
+}
+
+export function formatProfileMonth(value: string | null): string {
+  const match = /^(?!0000)(\d{4})-(0[1-9]|1[0-2])(?:-01)?$/.exec(value ?? "");
+  return match ? `${match[2]}/${match[1]}` : "";
+}
+
+export function sortProfileHistoryNewestFirst<T extends Record<string, string>>(
+  rows: T[],
+): T[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const leftCurrent = left.row.isCurrent === "true";
+      const rightCurrent = right.row.isCurrent === "true";
+      if (leftCurrent !== rightCurrent) return leftCurrent ? -1 : 1;
+
+      const leftDate = profileMonthOrdinal(left.row.endDate || left.row.startDate) ?? -1;
+      const rightDate = profileMonthOrdinal(right.row.endDate || right.row.startDate) ?? -1;
+      if (leftDate !== rightDate) return rightDate - leftDate;
+
+      const leftStart = profileMonthOrdinal(left.row.startDate) ?? -1;
+      const rightStart = profileMonthOrdinal(right.row.startDate) ?? -1;
+      if (leftStart !== rightStart) return rightStart - leftStart;
+      return left.index - right.index;
+    })
+    .map(({ row }) => row);
 }
 
 export function isValidProfileEmail(value: string): boolean {

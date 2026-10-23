@@ -16,6 +16,8 @@ import {
   isValidProfileMonth,
   isValidProfilePhone,
   normalizeLinkedInProfile,
+  profileMonthOrdinal,
+  sortProfileHistoryNewestFirst,
 } from "@/server/users/profile-values";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
@@ -149,7 +151,7 @@ export async function createUserAction(
 
   try {
     if (expectedRole === "account") {
-      const educationEntries = educationRows
+      const educationEntries = sortProfileHistoryNewestFirst(educationRows)
         .filter((row) => row.institution)
         .map((row, sortOrder) => ({
           institution: row.institution,
@@ -161,7 +163,7 @@ export async function createUserAction(
           description: row.description || null,
           sort_order: sortOrder,
         }));
-      const experienceEntries = experienceRows
+      const experienceEntries = sortProfileHistoryNewestFirst(experienceRows)
         .filter((row) => row.companyName && row.jobTitle)
         .map((row, sortOrder) => ({
           company_name: row.companyName,
@@ -396,7 +398,7 @@ export async function updateCandidateProfileAction(
       }
     }
 
-    const educationEntries = educationRows
+    const educationEntries = sortProfileHistoryNewestFirst(educationRows)
       .filter((row) => row.institution)
       .map((row, sortOrder) => ({
         institution: row.institution,
@@ -408,7 +410,7 @@ export async function updateCandidateProfileAction(
         description: row.description || null,
         sort_order: sortOrder,
       }));
-    const experienceEntries = experienceRows
+    const experienceEntries = sortProfileHistoryNewestFirst(experienceRows)
       .filter((row) => row.companyName && row.jobTitle)
       .map((row, sortOrder) => ({
         company_name: row.companyName,
@@ -863,7 +865,11 @@ function validateHistoryDates(
   if (isCurrent && endDate) {
     return `Clear the end month for current ${label} entry ${index + 1}.`;
   }
-  if (startDate && endDate && endDate < startDate) {
+  if (
+    startDate &&
+    endDate &&
+    (profileMonthOrdinal(endDate) ?? 0) < (profileMonthOrdinal(startDate) ?? 0)
+  ) {
     return `The end month cannot be before the start month for ${label} entry ${index + 1}.`;
   }
   if (row.isCurrent !== "true" && row.isCurrent !== "false") {
@@ -873,7 +879,9 @@ function validateHistoryDates(
 }
 
 function toDatabaseMonth(value: string): string | null {
-  return value ? `${value}-01` : null;
+  if (!value) return null;
+  const [month, year] = value.split("/");
+  return `${year}-${month}-01`;
 }
 
 function isUuid(value: string): boolean {

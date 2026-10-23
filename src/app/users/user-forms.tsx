@@ -21,6 +21,7 @@ import { LoadingIcon } from "@/app/components/loading-icon";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
+import { formatProfileMonth } from "@/server/users/profile-values";
 import {
   createUserAction,
   deleteCandidateAccountAction,
@@ -188,7 +189,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
           </div>
           <HistorySection
             addRow={() =>
-              setEducationRows((rows) => [...rows, Math.max(-1, ...rows) + 1])
+              setEducationRows((rows) => [Math.max(-1, ...rows) + 1, ...rows])
             }
             onRemove={(rowId) =>
               setEducationRows((rows) => rows.filter((id) => id !== rowId))
@@ -222,18 +223,22 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                 <TextField
                   autoComplete="off"
                   id={`educationStartDate-${rowId}`}
-                  label="Start month"
+                  label="Start month (MM/YYYY)"
                   maxLength={7}
                   name="educationStartDate"
-                  type="month"
+                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
+                  placeholder="MM/YYYY"
+                  inputMode="numeric"
                 />
                 <TextField
                   autoComplete="off"
                   id={`educationEndDate-${rowId}`}
-                  label="End month"
+                  label="End month (MM/YYYY)"
                   maxLength={7}
                   name="educationEndDate"
-                  type="month"
+                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
+                  placeholder="MM/YYYY"
+                  inputMode="numeric"
                 />
                 <CurrentStatusSelect
                   id={`educationIsCurrent-${rowId}`}
@@ -252,7 +257,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
           </HistorySection>
           <HistorySection
             addRow={() =>
-              setExperienceRows((rows) => [...rows, Math.max(-1, ...rows) + 1])
+              setExperienceRows((rows) => [Math.max(-1, ...rows) + 1, ...rows])
             }
             onRemove={(rowId) =>
               setExperienceRows((rows) => rows.filter((id) => id !== rowId))
@@ -286,18 +291,22 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                 <TextField
                   autoComplete="off"
                   id={`experienceStartDate-${rowId}`}
-                  label="Start month"
+                  label="Start month (MM/YYYY)"
                   maxLength={7}
                   name="experienceStartDate"
-                  type="month"
+                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
+                  placeholder="MM/YYYY"
+                  inputMode="numeric"
                 />
                 <TextField
                   autoComplete="off"
                   id={`experienceEndDate-${rowId}`}
-                  label="End month"
+                  label="End month (MM/YYYY)"
                   maxLength={7}
                   name="experienceEndDate"
-                  type="month"
+                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
+                  placeholder="MM/YYYY"
+                  inputMode="numeric"
                 />
                 <CurrentStatusSelect
                   id={`experienceIsCurrent-${rowId}`}
@@ -629,7 +638,7 @@ export function EditCandidateProfileForm({
           </div>
           <HistorySection
             addRow={() =>
-              setEducationRows((rows) => [...rows, nextEducationRowId.current++])
+              setEducationRows((rows) => [nextEducationRowId.current++, ...rows])
             }
             onRemove={(rowId) =>
               setEducationRows((rows) => rows.filter((id) => id !== rowId))
@@ -644,8 +653,8 @@ export function EditCandidateProfileForm({
                   <TextField autoComplete="off" defaultValue={entry?.institution ?? ""} id={fieldId(`educationInstitution-${rowId}`)} label="Institution" maxLength={120} name="educationInstitution" />
                   <TextField autoComplete="off" defaultValue={entry?.degree ?? ""} id={fieldId(`educationDegree-${rowId}`)} label="Degree / credential" maxLength={120} name="educationDegree" />
                   <TextField autoComplete="off" defaultValue={entry?.fieldOfStudy ?? ""} id={fieldId(`educationFieldOfStudy-${rowId}`)} label="Field of study" maxLength={120} name="educationFieldOfStudy" />
-                  <TextField autoComplete="off" defaultValue={entry?.startDate ?? ""} id={fieldId(`educationStartDate-${rowId}`)} label="Start month" maxLength={7} name="educationStartDate" type="month" />
-                  <TextField autoComplete="off" defaultValue={entry?.endDate ?? ""} id={fieldId(`educationEndDate-${rowId}`)} label="End month" maxLength={7} name="educationEndDate" type="month" />
+                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`educationStartDate-${rowId}`)} label="Start month (MM/YYYY)" maxLength={7} name="educationStartDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
+                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`educationEndDate-${rowId}`)} label="End month (MM/YYYY)" maxLength={7} name="educationEndDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
                   <CurrentStatusSelect defaultValue={entry?.isCurrent ? "true" : "false"} id={fieldId(`educationIsCurrent-${rowId}`)} label="Currently studying here?" name="educationIsCurrent" />
                   <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`educationDescription-${rowId}`)} label="Description (optional)" maxLength={5000} name="educationDescription" />
                 </>
@@ -654,7 +663,7 @@ export function EditCandidateProfileForm({
           </HistorySection>
           <HistorySection
             addRow={() =>
-              setExperienceRows((rows) => [...rows, nextExperienceRowId.current++])
+              setExperienceRows((rows) => [nextExperienceRowId.current++, ...rows])
             }
             onRemove={(rowId) =>
               setExperienceRows((rows) => rows.filter((id) => id !== rowId))
@@ -669,8 +678,8 @@ export function EditCandidateProfileForm({
                   <TextField autoComplete="organization" defaultValue={entry?.companyName ?? ""} id={fieldId(`experienceCompanyName-${rowId}`)} label="Employer" maxLength={160} name="experienceCompanyName" />
                   <TextField autoComplete="organization-title" defaultValue={entry?.jobTitle ?? ""} id={fieldId(`experienceJobTitle-${rowId}`)} label="Job title" maxLength={160} name="experienceJobTitle" />
                   <TextField autoComplete="off" defaultValue={entry?.location ?? ""} id={fieldId(`experienceLocation-${rowId}`)} label="Location (optional)" maxLength={160} name="experienceLocation" />
-                  <TextField autoComplete="off" defaultValue={entry?.startDate ?? ""} id={fieldId(`experienceStartDate-${rowId}`)} label="Start month" maxLength={7} name="experienceStartDate" type="month" />
-                  <TextField autoComplete="off" defaultValue={entry?.endDate ?? ""} id={fieldId(`experienceEndDate-${rowId}`)} label="End month" maxLength={7} name="experienceEndDate" type="month" />
+                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`experienceStartDate-${rowId}`)} label="Start month (MM/YYYY)" maxLength={7} name="experienceStartDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
+                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`experienceEndDate-${rowId}`)} label="End month (MM/YYYY)" maxLength={7} name="experienceEndDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
                   <CurrentStatusSelect defaultValue={entry?.isCurrent ? "true" : "false"} id={fieldId(`experienceIsCurrent-${rowId}`)} label="Currently working here?" name="experienceIsCurrent" />
                   <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`experienceDescription-${rowId}`)} label="Responsibilities / achievements (optional)" maxLength={5000} name="experienceDescription" />
                 </>
@@ -996,6 +1005,8 @@ function TextField({
   defaultValue,
   placeholder,
   type = "text",
+  pattern,
+  inputMode,
 }: {
   id: string;
   label: string;
@@ -1006,6 +1017,8 @@ function TextField({
   defaultValue?: string;
   placeholder?: string;
   type?: string;
+  pattern?: string;
+  inputMode?: "numeric";
 }) {
   return (
     <div>
@@ -1022,6 +1035,8 @@ function TextField({
         id={id}
         maxLength={maxLength}
         name={name}
+        pattern={pattern}
+        inputMode={inputMode}
         placeholder={placeholder}
         required={required}
         type={type}

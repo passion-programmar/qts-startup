@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { educations, experiences, generationRuns, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -100,7 +100,12 @@ export async function POST(request: Request): Promise<NextResponse> {
           description: educations.description,
         }).from(educations)
           .where(eq(educations.profileUserId, savedJob.candidateId))
-          .orderBy(asc(educations.sortOrder)),
+          .orderBy(
+            desc(educations.isCurrent),
+            sql`coalesce(${educations.endDate}, ${educations.startDate}) desc nulls last`,
+            sql`${educations.startDate} desc nulls last`,
+            asc(educations.sortOrder),
+          ),
         db.select({
           companyName: experiences.companyName,
           jobTitle: experiences.jobTitle,
@@ -111,7 +116,12 @@ export async function POST(request: Request): Promise<NextResponse> {
           description: experiences.description,
         }).from(experiences)
           .where(eq(experiences.profileUserId, savedJob.candidateId))
-          .orderBy(asc(experiences.sortOrder)),
+          .orderBy(
+            desc(experiences.isCurrent),
+            sql`coalesce(${experiences.endDate}, ${experiences.startDate}) desc nulls last`,
+            sql`${experiences.startDate} desc nulls last`,
+            asc(experiences.sortOrder),
+          ),
       ]);
       const fullName = [savedJob.firstName, savedJob.lastName].filter(Boolean).join(" ");
       if (!fullName || !savedJob.email) {

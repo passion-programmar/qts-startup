@@ -6,6 +6,9 @@ import {
   isValidProfileMonth,
   isValidProfilePhone,
   normalizeLinkedInProfile,
+  formatProfileMonth,
+  profileMonthOrdinal,
+  sortProfileHistoryNewestFirst,
 } from "@/server/users/profile-values";
 
 const today = new Date("2026-10-20T12:00:00.000Z");
@@ -23,10 +26,34 @@ test("birthday validation rejects impossible and future dates", () => {
 });
 
 test("profile month validation rejects malformed and impossible months", () => {
-  assert.equal(isValidProfileMonth("2024-02"), true);
-  assert.equal(isValidProfileMonth("2024-13"), false);
-  assert.equal(isValidProfileMonth("0000-01"), false);
-  assert.equal(isValidProfileMonth("2024-2"), false);
+  assert.equal(isValidProfileMonth("02/2024"), true);
+  assert.equal(isValidProfileMonth("13/2024"), false);
+  assert.equal(isValidProfileMonth("01/0000"), false);
+  assert.equal(isValidProfileMonth("2/2024"), false);
+  assert.equal(isValidProfileMonth("02/20245"), false);
+  assert.equal(isValidProfileMonth("2024-02"), false);
+});
+
+test("profile months format from database values and compare chronologically", () => {
+  assert.equal(formatProfileMonth("2024-02-01"), "02/2024");
+  assert.equal(formatProfileMonth("2024-02"), "02/2024");
+  assert.equal(formatProfileMonth(null), "");
+  const january2025 = profileMonthOrdinal("01/2025");
+  const december2024 = profileMonthOrdinal("12/2024");
+  assert.ok(january2025 !== null && december2024 !== null);
+  assert.ok(january2025 > december2024);
+});
+
+test("profile history sorts current and newest records before older ones", () => {
+  const rows = [
+    { startDate: "01/2018", endDate: "12/2020", isCurrent: "false", id: "old" },
+    { startDate: "01/2023", endDate: "", isCurrent: "true", id: "current" },
+    { startDate: "06/2021", endDate: "12/2022", isCurrent: "false", id: "recent" },
+  ];
+  assert.deepEqual(
+    sortProfileHistoryNewestFirst(rows).map(({ id }) => id),
+    ["current", "recent", "old"],
+  );
 });
 
 test("profile email validation accepts standard addresses and rejects malformed addresses", () => {
