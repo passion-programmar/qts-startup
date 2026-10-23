@@ -70,3 +70,14 @@ export async function releaseGeminiKey(
     select release_gemini_key(${keyHash}, ${leaseId}::uuid)
   `);
 }
+
+export async function recordGeminiApiCall(
+  apiKey: string,
+  operation: "generate_content" | "count_tokens",
+  inputTokens = 0,
+): Promise<void> {
+  await db.execute(sql`
+    insert into gemini_key_usage_events (key_hash, operation, input_tokens)
+    values (${getGeminiApiKeyHash(apiKey)}, ${operation}, ${inputTokens})
+  `);
+}

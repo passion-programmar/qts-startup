@@ -13,7 +13,6 @@ async function initializeQtsPageLauncher() {
     return;
   }
   if (globalThis.__qtsPageLauncher) return;
-  if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
   const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
   if (!pageAccess?.ok || pageAccess.excluded) {
     globalThis.__qtsPageLauncher = { excluded: true };

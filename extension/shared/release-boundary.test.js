@@ -87,7 +87,17 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(launcher.includes("'Sign Out'"));
 });
 
-test('Get JD applies Manager block and job-page match rules after load before duplicate checks', () => {
+test('Get JD supports Super-selected manual and Gemini matching flows', () => {
+  const serviceWorker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  const apiWorker = fs.readFileSync(path.join(extensionRoot, 'shared', 'api-worker.js'), 'utf8');
+  assert.ok(apiWorker.includes("path === '/api/extension/get-jd/mode'"));
+  assert.ok(apiWorker.includes("path === '/api/extension/get-jd'"));
+  assert.ok(serviceWorker.includes("modeResult.mode === 'gemini'"));
+  assert.ok(serviceWorker.includes('bodyHtml,'));
+  assert.ok(serviceWorker.includes('matchingProfileIds'));
+});
+
+test('Get JD applies Manager URL blocks and page-keyword detection after load before duplicate checks', () => {
   const serviceWorker = fs.readFileSync(
     path.join(extensionRoot, 'background', 'service-worker.js'),
     'utf8',
@@ -96,8 +106,8 @@ test('Get JD applies Manager block and job-page match rules after load before du
   const blockedRuleIndex = serviceWorker.indexOf(
     'if (await isPageBlockedForManager(url)) return;',
   );
-  const allowedRuleIndex = serviceWorker.indexOf(
-    'if (!(await isPageAllowedJobForManager(url))) return;',
+  const detectionIndex = serviceWorker.indexOf(
+    'if (!(await isPageDetectedAsJobForManager(tabId))) return;',
     blockedRuleIndex,
   );
   const extractionIndex = serviceWorker.indexOf(
@@ -107,21 +117,24 @@ test('Get JD applies Manager block and job-page match rules after load before du
 
   assert.ok(completedPageIndex >= 0);
   assert.ok(blockedRuleIndex > completedPageIndex);
-  assert.ok(allowedRuleIndex > blockedRuleIndex);
-  assert.ok(extractionIndex > allowedRuleIndex);
+  assert.ok(detectionIndex > blockedRuleIndex);
+  assert.ok(extractionIndex > detectionIndex);
   assert.ok(duplicateCheckIndex > extractionIndex);
   assert.equal(serviceWorker.includes('classifyJobPageEvidence({'), false);
   assert.equal(serviceWorker.includes("status: 'not_job_page'"), false);
   assert.ok(serviceWorker.includes("msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED'"));
   assert.ok(serviceWorker.includes("workerApiRequest('GET', '/api/extension/job-detection-url-rules')"));
-  assert.ok(serviceWorker.includes('excluded: self.__qtsPageExclusions.shouldSkipPage(sender.tab.url)'));
-  assert.ok(serviceWorker.includes('|| isManagerBlockedUrl(sender.tab.url, rules)'));
+  assert.ok(serviceWorker.includes('excluded: isManagerBlockedUrl(sender.tab.url, rules)'));
+  assert.equal(serviceWorker.includes('__qtsPageExclusions.shouldSkipPage'), false);
+  assert.equal(serviceWorker.includes('function isIgnoredSite('), false);
+  assert.equal(serviceWorker.includes("const ignored = new Set(["), false);
   assert.ok(serviceWorker.includes("await processGetJdPage(tabId, url, 'complete');"));
   const committedListener = serviceWorker.slice(
     serviceWorker.indexOf('chrome.webNavigation.onCommitted.addListener'),
     serviceWorker.indexOf('chrome.webNavigation.onHistoryStateUpdated.addListener'),
   );
   assert.equal(committedListener.includes('processGetJdPage('), false);
+  assert.equal(committedListener.includes('maybePrewarmCustomGptOnJobPage('), false);
 });
 
 test('Manager URL rule CRUD is permission-gated and scoped to its owner', () => {
@@ -198,7 +211,8 @@ test('Manager URL rule CRUD is permission-gated and scoped to its owner', () => 
   assert.ok(serviceWorker.includes("msg.type === 'DELETE_MANAGER_JOB_DETECTION_URL_RULE'"));
   assert.ok(managerSettings.includes('ManagerJobDetectionUrlAccessForm'));
   assert.ok(serviceWorker.includes('isManagerBlockedUrl'));
-  assert.ok(serviceWorker.includes('isManagerAllowedJobUrl'));
+  assert.ok(serviceWorker.includes('isPageDetectedAsJobForManager'));
+  assert.ok(serviceWorker.includes('pageHasJobDetectionSignals'));
   assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_PAGE_EXCLUSION'"));
   const popup = fs.readFileSync(
     path.join(extensionRoot, 'popup', 'popup.js'),

@@ -38,6 +38,12 @@ export default async function GeminiUsagePage() {
           dayRequests: sql<number>`
             count(*)::integer
           `.mapWith(Number),
+          dayGenerateCalls: sql<number>`
+            (count(*) filter (where ${geminiKeyUsageEvents.operation} = 'generate_content'))::integer
+          `.mapWith(Number),
+          dayCountTokenCalls: sql<number>`
+            (count(*) filter (where ${geminiKeyUsageEvents.operation} = 'count_tokens'))::integer
+          `.mapWith(Number),
           updatedAt: sql<Date>`max(${geminiKeyUsageEvents.occurredAt})`
             .mapWith(Date),
         })
@@ -98,8 +104,9 @@ export default async function GeminiUsagePage() {
               { label: "Requests / 60 sec", className: "w-[17%]" },
               { label: "Requests today", className: "w-[16%]" },
               { label: "Estimated input / 60 sec", className: "w-[20%]" },
-              { label: "Status", className: "w-[14%]" },
-              { label: "Last call", className: "w-[16%]" },
+              { label: "API calls today", className: "w-[18%]" },
+              { label: "Status", className: "w-[12%]" },
+              { label: "Last call", className: "w-[14%]" },
             ]}
             emptyMessage="No API keys configured"
             rows={keys.map((_key, index) => {
@@ -128,6 +135,10 @@ export default async function GeminiUsagePage() {
                     used={minuteRequests}
                     limit={geminiApiLimits.requestsPerMinute}
                   />,
+                  <div className="text-xs" key="api-operations">
+                    <div>Generate: {usage?.dayGenerateCalls ?? 0}</div>
+                    <div className="mt-1 text-slate-500">CountTokens: {usage?.dayCountTokenCalls ?? 0}</div>
+                  </div>,
                   <UsageMetric
                     key="day-requests"
                     used={dayRequests}

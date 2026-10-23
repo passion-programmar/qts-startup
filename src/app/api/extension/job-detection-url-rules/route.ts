@@ -17,8 +17,8 @@ export async function GET(request: Request): Promise<NextResponse> {
   try {
     return await listResponse(manager.id);
   } catch (error) {
-    console.error(`Could not load Manager job-detection URL rules (code: ${errorCode(error)}).`);
-    return jsonResponse({ success: false, message: "Could not load job-detection URL rules." }, 500);
+    console.error(`Could not load Manager blocked URL rules (code: ${errorCode(error)}).`);
+    return jsonResponse({ success: false, message: "Could not load blocked URL rules." }, 500);
   }
 }
 
@@ -32,7 +32,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const body: unknown = await request.json().catch(() => null);
     const urlRule = normalizeJobDetectionUrlRule(isRecord(body) ? body.url : null);
     if (!urlRule) {
-      return jsonResponse({ success: false, message: "Enter a valid website domain or http(s) URL path without query parameters." }, 400);
+      return jsonResponse({ success: false, message: "Enter a URL fragment to block." }, 400);
     }
     const existing = await db
       .select({ id: extensionJobDetectionUrlRules.id })
@@ -40,18 +40,18 @@ export async function POST(request: Request): Promise<NextResponse> {
       .where(eq(extensionJobDetectionUrlRules.managerId, manager.id))
       .limit(maxRules);
     if (existing.length >= maxRules) {
-      return jsonResponse({ success: false, message: `A maximum of ${maxRules} job-detection URL rules is allowed.` }, 400);
+      return jsonResponse({ success: false, message: `A maximum of ${maxRules} blocked URL rules is allowed.` }, 400);
     }
     const [created] = await db
       .insert(extensionJobDetectionUrlRules)
       .values({ managerId: manager.id, urlRule })
       .onConflictDoNothing()
       .returning({ id: extensionJobDetectionUrlRules.id });
-    if (!created) return jsonResponse({ success: false, message: "That job-detection URL rule already exists." }, 409);
+    if (!created) return jsonResponse({ success: false, message: "That blocked URL fragment already exists." }, 409);
     return listResponse(manager.id);
   } catch (error) {
-    console.error(`Could not create Manager job-detection URL rule (code: ${errorCode(error)}).`);
-    return jsonResponse({ success: false, message: "Could not save the job-detection URL rule." }, 500);
+    console.error(`Could not create Manager blocked URL rule (code: ${errorCode(error)}).`);
+    return jsonResponse({ success: false, message: "Could not save the blocked URL rule." }, 500);
   }
 }
 

@@ -20,7 +20,6 @@ async function initializeGetJdReviewOnce() {
     return;
   }
   if (globalThis.__qtsGetJdReview) return;
-  if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
   const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
   if (!pageAccess?.ok || pageAccess.excluded) {
     globalThis.__qtsGetJdReview = { excluded: true };
@@ -350,24 +349,24 @@ async function initializeGetJdReviewOnce() {
         </div>
         <div class="manager-settings-view" data-settings-view="page-exclusions" hidden>
           <section class="manager-settings-group" data-page-exclusions-group hidden>
-            <h3>Excluded URL rules</h3>
-            <p>These are job-page match rules. Get JD continues only when the loaded URL matches one of these saved domain or path values.</p>
+            <h3>Job-page detection keywords</h3>
+            <p>A loaded page is treated as a job page when at least two distinct saved keywords appear in its visible text.</p>
             <form data-exclusion-form>
-              <label class="manager-settings-label" for="qts-manager-exclusion-url">Website domain or URL path</label>
-              <input class="manager-settings-input" id="qts-manager-exclusion-url" name="url" type="text" placeholder="example.com" required>
+              <label class="manager-settings-label" for="qts-manager-exclusion-url">Keyword or phrase</label>
+              <input class="manager-settings-input" id="qts-manager-exclusion-url" name="url" type="text" maxlength="200" placeholder="preferred qualifications" autocomplete="off" required>
               <div class="manager-settings-actions">
-                <button type="submit" class="manager-settings-save" data-exclusion-save>Add job-page match</button>
+                <button type="submit" class="manager-settings-save" data-exclusion-save>Add keyword</button>
                 <button type="button" data-exclusion-cancel hidden>Cancel edit</button>
               </div>
             </form>
             <ul class="manager-settings-list" data-exclusion-list></ul>
           </section>
           <section class="manager-settings-group" data-job-detection-group hidden>
-            <h3>Job-detection URL rules</h3>
-            <p>These are blocking rules. QTS controls and workflows do not run on matching URLs.</p>
+            <h3>Blocked URL rules</h3>
+            <p>QTS controls and workflows do not run when the current URL contains any saved fragment.</p>
             <form data-job-detection-form>
-              <label class="manager-settings-label" for="qts-manager-job-url">Website domain or URL path</label>
-              <input class="manager-settings-input" id="qts-manager-job-url" name="url" type="text" placeholder="example.com/jobs" required>
+              <label class="manager-settings-label" for="qts-manager-job-url">URL fragment</label>
+              <input class="manager-settings-input" id="qts-manager-job-url" name="url" type="text" placeholder="example.com/private" required>
               <div class="manager-settings-actions">
                 <button type="submit" class="manager-settings-save" data-job-detection-save>Add blocked URL</button>
                 <button type="button" data-job-detection-cancel hidden>Cancel edit</button>
@@ -762,7 +761,7 @@ async function initializeGetJdReviewOnce() {
       if (!pageExclusionRules.length) {
         const empty = document.createElement('li');
         empty.className = 'manager-settings-empty';
-        empty.textContent = 'No job-page URL matches.';
+        empty.textContent = 'No job-page detection keywords.';
         settings.exclusionList.appendChild(empty);
       }
       pageExclusionRules.forEach((rule) => appendUrlRule(
@@ -771,7 +770,7 @@ async function initializeGetJdReviewOnce() {
         (entry) => {
           selectedPageExclusionId = entry.id;
           settings.exclusionForm.elements.namedItem('url').value = entry.url;
-          settings.exclusionSave.textContent = 'Update job-page match';
+          settings.exclusionSave.textContent = 'Update keyword';
           settings.exclusionCancel.hidden = false;
           settings.exclusionForm.elements.namedItem('url').focus();
         },
@@ -791,7 +790,7 @@ async function initializeGetJdReviewOnce() {
       if (!jobDetectionRules.length) {
         const empty = document.createElement('li');
         empty.className = 'manager-settings-empty';
-        empty.textContent = 'No blocked job-detection URLs.';
+        empty.textContent = 'No blocked URLs.';
         settings.jobDetectionList.appendChild(empty);
       }
       jobDetectionRules.forEach((rule) => appendUrlRule(
@@ -831,7 +830,7 @@ async function initializeGetJdReviewOnce() {
       pageExclusionRules = response.exclusions || [];
       resetSettingsForm('page-exclusions');
       renderUrlSettings();
-      setSettingsStatus('Job-page URL match saved.', false);
+      setSettingsStatus('Job-page detection keyword saved.', false);
     } catch (error) {
       setSettingsStatus(error.message, true);
     } finally {
@@ -878,7 +877,7 @@ async function initializeGetJdReviewOnce() {
     } else if (type === 'page-exclusions') {
       selectedPageExclusionId = null;
       settings.exclusionForm.reset();
-      settings.exclusionSave.textContent = 'Add job-page match';
+      settings.exclusionSave.textContent = 'Add keyword';
       settings.exclusionCancel.hidden = true;
     } else {
       selectedJobDetectionRuleId = null;

@@ -3,7 +3,7 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import { users } from "@/db/schema";
 import { db } from "@/lib/db";
-import { normalizePageExclusionUrl } from "@/server/page-exclusion-values";
+import { normalizePageDetectionKeyword } from "@/server/page-exclusion-values";
 
 export async function managerCanManagePageExclusions(managerId: string): Promise<boolean> {
   const [manager] = await db
@@ -14,4 +14,4 @@ export async function managerCanManagePageExclusions(managerId: string): Promise
   return manager?.allowed === true;
 }
 
-export { normalizePageExclusionUrl as readPageExclusionUrl };
+export { normalizePageDetectionKeyword as readPageDetectionKeyword };

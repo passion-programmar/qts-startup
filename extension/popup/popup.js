@@ -146,7 +146,7 @@ function setJobDetectionUrlStatus(message, isError = false) {
 async function refreshPageExclusions() {
   const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_PAGE_EXCLUSIONS' });
   if (!response?.ok || !Array.isArray(response.exclusions)) {
-    throw new Error(response?.error || 'Could not load excluded URLs.');
+    throw new Error(response?.error || 'Could not load job-page detection keywords.');
   }
   managerPageExclusions = response.exclusions.filter((entry) =>
     entry && typeof entry.id === 'string' && typeof entry.url === 'string',
@@ -157,7 +157,7 @@ async function refreshPageExclusions() {
   if (!managerPageExclusions.length) {
     const empty = document.createElement('li');
     empty.className = 'page-highlight-list-empty';
-    empty.textContent = 'No job-page URL matches are configured.';
+    empty.textContent = 'No job-page detection keywords are configured.';
     list.appendChild(empty);
   } else {
     for (const exclusion of managerPageExclusions) {
@@ -171,13 +171,13 @@ async function refreshPageExclusions() {
       edit.className = 'btn btn-ghost btn-sm';
       edit.type = 'button';
       edit.textContent = 'Edit';
-      edit.setAttribute('aria-label', `Edit job-page URL match ${exclusion.url}`);
+      edit.setAttribute('aria-label', `Edit job-page keyword ${exclusion.url}`);
       edit.addEventListener('click', () => selectPageExclusion(exclusion));
       const remove = document.createElement('button');
       remove.className = 'btn btn-ghost btn-sm';
       remove.type = 'button';
       remove.textContent = 'Delete';
-      remove.setAttribute('aria-label', `Delete job-page URL match ${exclusion.url}`);
+      remove.setAttribute('aria-label', `Delete job-page keyword ${exclusion.url}`);
       remove.addEventListener('click', () => {
         removePageExclusion(exclusion.id).catch((error) => {
           setPageExclusionsStatus(error.message || 'Could not remove this URL.', true);
@@ -190,8 +190,8 @@ async function refreshPageExclusions() {
   }
   setPageExclusionsStatus(
     managerPageExclusions.length
-      ? `${managerPageExclusions.length} job-page URL match(es) are active for this Manager.`
-      : 'No job-page URL matches are configured.',
+      ? `${managerPageExclusions.length} job-page detection keyword(s) are active for this Manager.`
+      : 'No job-page detection keywords are configured.',
   );
   scheduleFitPopup();
 }
@@ -202,7 +202,7 @@ function selectPageExclusion(exclusion) {
   document.getElementById('page-exclusion-submit').textContent = 'Save changes';
   document.getElementById('page-exclusion-cancel')?.classList.remove('hidden');
   document.getElementById('page-exclusion-delete')?.classList.remove('hidden');
-  document.getElementById('page-exclusions-status').textContent = 'Editing job-page URL match.';
+  document.getElementById('page-exclusions-status').textContent = 'Editing job-page detection keyword.';
 }
 
 function clearSelectedPageExclusion() {
@@ -210,7 +210,7 @@ function clearSelectedPageExclusion() {
   const input = document.getElementById('page-exclusion-url');
   if (input) input.value = '';
   const submit = document.getElementById('page-exclusion-submit');
-  if (submit) submit.textContent = 'Add job-page match';
+  if (submit) submit.textContent = 'Add keyword';
   document.getElementById('page-exclusion-cancel')?.classList.add('hidden');
   document.getElementById('page-exclusion-delete')?.classList.add('hidden');
 }
@@ -220,7 +220,7 @@ async function addPageExclusion(url) {
     type: 'ADD_MANAGER_PAGE_EXCLUSION',
     url,
   });
-  if (!response?.ok) throw new Error(response?.error || 'Could not exclude this URL.');
+  if (!response?.ok) throw new Error(response?.error || 'Could not save this keyword.');
   managerPageExclusions = response.exclusions || [];
   clearSelectedPageExclusion();
   await refreshPageExclusions();
@@ -232,7 +232,7 @@ async function updatePageExclusion(exclusionId, url) {
     exclusionId,
     url,
   });
-  if (!response?.ok) throw new Error(response?.error || 'Could not update this excluded URL.');
+  if (!response?.ok) throw new Error(response?.error || 'Could not update this keyword.');
   managerPageExclusions = response.exclusions || [];
   clearSelectedPageExclusion();
   await refreshPageExclusions();
@@ -243,7 +243,7 @@ async function removePageExclusion(exclusionId) {
     type: 'DELETE_MANAGER_PAGE_EXCLUSION',
     exclusionId,
   });
-  if (!response?.ok) throw new Error(response?.error || 'Could not remove this URL.');
+  if (!response?.ok) throw new Error(response?.error || 'Could not remove this keyword.');
   managerPageExclusions = response.exclusions || [];
   clearSelectedPageExclusion();
   await refreshPageExclusions();
@@ -267,7 +267,7 @@ function renderJobDetectionUrlRules() {
   if (!managerJobDetectionUrlRules.length) {
     const empty = document.createElement('li');
     empty.className = 'page-highlight-list-empty';
-    empty.textContent = 'No blocked job-detection URLs are configured.';
+    empty.textContent = 'No blocked URL fragments are configured.';
     list.appendChild(empty);
   } else {
     for (const rule of managerJobDetectionUrlRules) {

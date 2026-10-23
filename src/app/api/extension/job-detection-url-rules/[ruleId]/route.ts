@@ -24,7 +24,7 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
     const body: unknown = await request.json().catch(() => null);
     const urlRule = normalizeJobDetectionUrlRule(isRecord(body) ? body.url : null);
     if (!urlRule) {
-      return jsonResponse({ success: false, message: "Enter a valid website domain or http(s) URL path without query parameters." }, 400);
+      return jsonResponse({ success: false, message: "Enter a URL fragment to block." }, 400);
     }
     try {
       const [updated] = await db

@@ -11,6 +11,8 @@ import {
   updateManagerJobDetectionUrlAccessAction,
   unassignPromptAction,
   updatePromptModeAction,
+  updateGetJdMatchingModeAction,
+  updateGeminiTokenCountModeAction,
   type PromptActionState,
 } from "@/app/settings/actions";
 
@@ -55,6 +57,48 @@ export function PromptModeForm({ mode }: { mode: "global" | "private" }) {
       >
         {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
         {isPending ? "Saving..." : "Save prompt mode"}
+      </button>
+    </form>
+  );
+}
+
+export function GetJdMatchingModeForm({ mode }: { mode: "manual" | "gemini" }) {
+  const [state, formAction, isPending] = useActionState(updateGetJdMatchingModeAction, initialState);
+  return (
+    <form action={formAction} className="space-y-4">
+      <div>
+        <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor="getJdMatchingMode">
+          Candidate matching flow
+        </label>
+        <select className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 sm:max-w-sm" defaultValue={mode} id="getJdMatchingMode" name="getJdMatchingMode">
+          <option value="manual">Manual candidate selection</option>
+          <option value="gemini">Gemini candidate matching</option>
+        </select>
+      </div>
+      <ActionFeedback state={state} />
+      <button className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60" disabled={isPending} type="submit">
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
+        {isPending ? "Saving..." : "Save Get JD mode"}
+      </button>
+    </form>
+  );
+}
+
+export function GeminiTokenCountModeForm({ mode }: { mode: "local" | "gemini" }) {
+  const [state, formAction, isPending] = useActionState(updateGeminiTokenCountModeAction, initialState);
+  return (
+    <form action={formAction} className="space-y-4">
+      <div>
+        <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor="geminiTokenCountMode">Gemini input-token calculation</label>
+        <select className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 sm:max-w-sm" defaultValue={mode} id="geminiTokenCountMode" name="geminiTokenCountMode">
+          <option value="local">Local estimate (no extra API call)</option>
+          <option value="gemini">Gemini CountTokens API</option>
+        </select>
+      </div>
+      <ActionFeedback state={state} />
+      <button className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60" disabled={isPending} type="submit">
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
+        {isPending ? "Saving..." : "Save token mode"}
       </button>
     </form>
   );
@@ -276,7 +320,7 @@ export function ManagerPageExclusionAccessForm({
         <input name="managerId" type="hidden" value={managerId} />
         <input name="enabled" type="hidden" value={String(!canManage)} />
         <span className={`text-xs font-medium ${canManage ? "text-emerald-700" : "text-slate-500"}`}>
-          {canManage ? "Can manage job-page URL matches" : "No job-page URL match access"}
+          {canManage ? "Can manage job-page detection keywords" : "No job-page keyword access"}
         </span>
         <button
           className={`inline-flex h-8 items-center rounded-lg px-3 text-[11px] font-semibold disabled:opacity-60 ${

@@ -192,6 +192,54 @@ export async function updatePromptModeAction(
   return { error: null, success: `Prompt mode changed to ${mode}.` };
 }
 
+export async function updateGetJdMatchingModeAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can change Get JD matching mode." };
+  }
+  const mode = readText(formData, "getJdMatchingMode", 16);
+  if (mode !== "manual" && mode !== "gemini") {
+    return { ...emptyState, error: "Choose a valid Get JD matching mode." };
+  }
+  try {
+    await db.insert(settings).values({
+      key: "get_jd_matching_mode",
+      value: mode,
+      updatedByUserId: actor.id,
+    }).onConflictDoUpdate({
+      target: settings.key,
+      set: { value: mode, updatedByUserId: actor.id, updatedAt: new Date() },
+    });
+  } catch (error) {
+    logPromptActionFailure("updating Get JD matching mode", error);
+    return { ...emptyState, error: "Get JD matching mode could not be updated." };
+  }
+  revalidatePath("/settings");
+  return { error: null, success: `Get JD matching mode changed to ${mode}.` };
+}
+
+export async function updateGeminiTokenCountModeAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") return { ...emptyState, error: "Only Super Admin can change token counting mode." };
+  const mode = readText(formData, "geminiTokenCountMode", 16);
+  if (mode !== "local" && mode !== "gemini") return { ...emptyState, error: "Choose a valid token counting mode." };
+  try {
+    await db.insert(settings).values({ key: "gemini_token_count_mode", value: mode, updatedByUserId: actor.id })
+      .onConflictDoUpdate({ target: settings.key, set: { value: mode, updatedByUserId: actor.id, updatedAt: new Date() } });
+  } catch (error) {
+    logPromptActionFailure("updating Gemini token count mode", error);
+    return { ...emptyState, error: "Token counting mode could not be updated." };
+  }
+  revalidatePath("/settings");
+  return { error: null, success: `Gemini token counting changed to ${mode}.` };
+}
+
 export async function assignPromptAction(
   _previousState: PromptActionState,
   formData: FormData,

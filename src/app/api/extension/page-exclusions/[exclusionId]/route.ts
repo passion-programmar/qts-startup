@@ -4,7 +4,7 @@ import { extensionPageExclusions } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import { managerCanManagePageExclusions } from "@/server/page-exclusions";
-import { normalizePageExclusionUrl } from "@/server/page-exclusion-values";
+import { normalizePageDetectionKeyword } from "@/server/page-exclusion-values";
 import { errorCode, isRecord } from "@/server/text-highlights";
 
 type RouteContext = { params: Promise<{ exclusionId: string }> };
@@ -16,37 +16,37 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
   }
   try {
     if (!(await managerCanManagePageExclusions(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign page exclusion management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Super must assign job-page keyword management to this Manager." }, 403);
     }
     const { exclusionId } = await context.params;
     if (!isUuid(exclusionId)) {
-      return jsonResponse({ success: false, message: "Invalid page exclusion ID." }, 400);
+      return jsonResponse({ success: false, message: "Invalid job-page keyword ID." }, 400);
     }
     const body: unknown = await request.json().catch(() => null);
-    const urlRule = normalizePageExclusionUrl(isRecord(body) ? body.url : null);
-    if (!urlRule) {
-      return jsonResponse({ success: false, message: "Enter a valid website domain or http(s) URL path without query parameters." }, 400);
+    const keyword = normalizePageDetectionKeyword(isRecord(body) ? (body.keyword ?? body.url) : null);
+    if (!keyword) {
+      return jsonResponse({ success: false, message: "Enter a job-page keyword between 2 and 200 characters." }, 400);
     }
     try {
       const [updated] = await db
         .update(extensionPageExclusions)
-        .set({ urlRule })
+        .set({ urlRule: keyword })
         .where(and(
           eq(extensionPageExclusions.id, exclusionId),
           eq(extensionPageExclusions.managerId, manager.id),
         ))
         .returning({ id: extensionPageExclusions.id });
-      if (!updated) return jsonResponse({ success: false, message: "That excluded URL no longer exists." }, 404);
+      if (!updated) return jsonResponse({ success: false, message: "That job-page keyword no longer exists." }, 404);
     } catch (error) {
       if (isUniqueViolation(error)) {
-        return jsonResponse({ success: false, message: "That website or path is already excluded." }, 409);
+        return jsonResponse({ success: false, message: "That job-page keyword already exists." }, 409);
       }
       throw error;
     }
     return listResponse(manager.id);
   } catch (error) {
-    console.error(`Could not update Manager page exclusion (code: ${errorCode(error)}).`);
-    return jsonResponse({ success: false, message: "Could not update the excluded URL." }, 500);
+    console.error(`Could not update Manager job-page keyword (code: ${errorCode(error)}).`);
+    return jsonResponse({ success: false, message: "Could not update the job-page keyword." }, 500);
   }
 }
 
@@ -57,11 +57,11 @@ export async function DELETE(request: Request, context: RouteContext): Promise<N
   }
   try {
     if (!(await managerCanManagePageExclusions(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign page exclusion management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Super must assign job-page keyword management to this Manager." }, 403);
     }
     const { exclusionId } = await context.params;
     if (!isUuid(exclusionId)) {
-      return jsonResponse({ success: false, message: "Invalid page exclusion ID." }, 400);
+      return jsonResponse({ success: false, message: "Invalid job-page keyword ID." }, 400);
     }
     const [deleted] = await db
       .delete(extensionPageExclusions)
@@ -71,7 +71,7 @@ export async function DELETE(request: Request, context: RouteContext): Promise<N
       ))
       .returning({ id: extensionPageExclusions.id });
     if (!deleted) {
-      return jsonResponse({ success: false, message: "That excluded URL no longer exists." }, 404);
+      return jsonResponse({ success: false, message: "That job-page keyword no longer exists." }, 404);
     }
     const exclusions = await db
       .select({
@@ -89,8 +89,8 @@ export async function DELETE(request: Request, context: RouteContext): Promise<N
       exclusions,
     });
   } catch (error) {
-    console.error(`Could not delete Manager page exclusion (code: ${errorCode(error)}).`);
-    return jsonResponse({ success: false, message: "Could not remove the excluded URL." }, 500);
+    console.error(`Could not delete Manager job-page keyword (code: ${errorCode(error)}).`);
+    return jsonResponse({ success: false, message: "Could not remove the job-page keyword." }, 500);
   }
 }
 

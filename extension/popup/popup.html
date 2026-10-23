@@ -690,12 +690,12 @@
         <button class="btn btn-ghost btn-sm" id="btn-close-page-exclusions" type="button">Back</button>
       </div>
       <section id="job-detection-url-settings" class="url-settings-group hidden" aria-labelledby="job-detection-url-title">
-        <h3 id="job-detection-url-title">Job-detection URL rules</h3>
-        <p class="page-highlights-hint">Matching URLs are blocked from QTS controls and workflows. Enter a domain or path prefix, for example example.com/private. Subdomains and pages under the path are included.</p>
+        <h3 id="job-detection-url-title">Blocked URL rules</h3>
+        <p class="page-highlights-hint">QTS is blocked when the current URL contains any saved fragment.</p>
         <form id="job-detection-url-form" class="page-exclusions-form">
           <label class="page-exclusion-field">
-            <span>Job-detail domain or URL path</span>
-            <input id="job-detection-url" type="text" maxlength="2048" placeholder="jobs.example.com/openings" required>
+            <span>URL fragment</span>
+            <input id="job-detection-url" type="text" maxlength="2048" placeholder="example.com/private" required>
           </label>
           <div class="page-exclusion-actions">
             <button class="btn btn-primary btn-sm" id="job-detection-url-submit" type="submit">Add blocked URL</button>
@@ -707,15 +707,15 @@
         <ul id="job-detection-url-list" class="page-highlight-list"></ul>
       </section>
       <section id="page-exclusion-settings" class="url-settings-group hidden" aria-labelledby="page-exclusion-settings-title">
-        <h3 id="page-exclusion-settings-title">Excluded URL rules</h3>
-        <p class="page-highlights-hint">These are job-page match rules. Get JD checks a loaded page only when its URL matches one of these domain or path values.</p>
+        <h3 id="page-exclusion-settings-title">Job-page detection keywords</h3>
+        <p class="page-highlights-hint">A loaded page is treated as a job page when at least two distinct saved keywords appear in its visible text.</p>
         <form id="page-exclusion-form" class="page-exclusions-form">
           <label class="page-exclusion-field">
-            <span>Website or URL path</span>
-            <input id="page-exclusion-url" type="text" maxlength="2048" placeholder="example.com or example.com/careers" required>
+            <span>Keyword or phrase</span>
+            <input id="page-exclusion-url" type="text" maxlength="200" placeholder="preferred qualifications" autocomplete="off" required>
           </label>
           <div class="page-exclusion-actions">
-            <button class="btn btn-primary btn-sm" id="page-exclusion-submit" type="submit">Add job-page match</button>
+            <button class="btn btn-primary btn-sm" id="page-exclusion-submit" type="submit">Add keyword</button>
             <button class="btn btn-ghost btn-sm hidden" id="page-exclusion-cancel" type="button">Cancel edit</button>
             <button class="btn btn-ghost btn-sm hidden" id="page-exclusion-delete" type="button">Delete match</button>
           </div>

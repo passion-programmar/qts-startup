@@ -621,12 +621,17 @@ export const geminiKeyUsageEvents = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     keyHash: text("key_hash").notNull(),
+    operation: text("operation").default("generate_content").notNull(),
     inputTokens: integer("input_tokens").default(0).notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
   },
   (table) => [
+    check(
+      "gemini_key_usage_events_operation_check",
+      sql`${table.operation} in ('generate_content', 'count_tokens')`,
+    ),
     index("gemini_key_usage_events_key_occurred_at_index").on(
       table.keyHash,
       table.occurredAt,

@@ -20,15 +20,19 @@ import {
   geminiModel,
   getGeminiApiKeys,
   releaseGeminiKey,
+  recordGeminiApiCall,
   reserveGeminiGeneration,
 } from "@/lib/gemini-usage";
 import { estimateGeminiInputTokens } from "@/server/gemini/gemini-request";
 import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
-import { findGetJdDuplicates } from "@/server/jobs/get-jd-jobs";
+import { getGeminiTokenCountMode, type GeminiTokenCountMode } from "@/server/gemini/token-count-mode";
+import { findGetJdDuplicateDetails, findManagerJobPresence } from "@/server/jobs/get-jd-jobs";
+import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 
 const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
 const maxJobTextLength = 30000;
+const maxBodyHtmlLength = 2_000_000;
 const maxManagerAccounts = 100;
 const maxGeminiResponseBytes = 1_000_000;
 
@@ -47,6 +51,7 @@ type GetJdClassification = {
   job: {
     title: string;
     company: string;
+      description: string;
     location: string;
     country: string;
     employmentType: string;
@@ -78,15 +83,18 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const pageUrl = readString(body, "pageUrl", maxPageUrlLength);
   const pageTitle = readString(body, "pageTitle", maxPageTitleLength);
-  const extracted = readExtractedJob(body);
-  if (!pageUrl || !isHttpUrl(pageUrl) || !pageTitle || !extracted) {
+  const bodyHtml = readString(body, "bodyHtml", maxBodyHtmlLength);
+  if (!pageUrl || !isHttpUrl(pageUrl) || !pageTitle || !bodyHtml) {
     return jsonResponse(
-      { success: false, message: "A valid page URL, title, and extracted job data are required." },
+      { success: false, message: "A valid page URL, title, and body HTML are required." },
       400,
     );
   }
 
   try {
+    if (await getGetJdMatchingMode() !== "gemini") {
+      return jsonResponse({ success: false, message: "Gemini Get JD matching is not enabled." }, 409);
+    }
     const profileResult = await loadManagerCandidateProfiles(manager.id);
     if (profileResult.tooMany) {
       return jsonResponse(
@@ -103,34 +111,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         409,
       );
     }
-    const duplicateProfiles = await findGetJdDuplicates(
-      manager.id,
-      {
-        jobUrl: extracted.url,
-        jobTitle: extracted.title,
-        company: extracted.company,
-      },
-      profileResult.profiles.map((profile) => profile.id),
-    );
-    const candidateProfiles = profileResult.profiles.filter(
-      (profile) => !duplicateProfiles.has(profile.id),
-    );
-    if (
-      profileResult.profiles.length > 0 &&
-      candidateProfiles.length === 0
-    ) {
-      const allApplied = [...duplicateProfiles.values()].every(
-        (kind) => kind === "applied",
-      );
-      return jsonResponse({
-        success: true,
-        duplicate: true,
-        duplicateKind: allApplied ? "applied" : "job_list",
-        message: allApplied
-          ? "All active candidates have already applied to this job"
-          : "This job is already assigned to every active candidate",
-      });
-    }
+    const candidateProfiles = profileResult.profiles;
 
     const [prompt] = await db
       .select({ promptTemplate: prompts.promptTemplate })
@@ -163,15 +144,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const jobContext = {
-      pageUrl,
-      pageTitle,
-      extractedJobDetails: extracted,
-    };
     const candidateContext = candidateProfiles.map((candidate) => ({
       candidateId: candidate.id,
-      candidateName: candidate.name,
-      category: candidate.category,
       jdMatching: candidate.jdMatching,
     }));
     const promptText = [
@@ -182,18 +156,21 @@ export async function POST(request: Request): Promise<NextResponse> {
       "Return only JSON matching the required response schema.",
       "Set isRemote to true only when the posting explicitly indicates remote work; otherwise set it to false.",
       "If this is not one specific job posting, set isJobPage and isRemote to false and return no matchingProfileIds.",
-      "For a real job posting, select suitable candidates using the job details, each candidate's category, and their manager-provided jdMatching notes. Treat category as the candidate's primary role and jdMatching as additional matching guidance, not verified qualifications. Ignore candidate names when deciding suitability.",
+      "For a real job posting, select suitable candidates by comparing the job details in the supplied body HTML with each candidate's manager-authored jdMatching notes.",
       "Return only candidate IDs from the supplied list, at most once each. Never infer qualifications or include IDs not supplied.",
-      "Return exactly these fields: isJobPage, isRemote, job (title, company, location, country, employmentType, workplaceType, salary, jobUrl), and matchingProfileIds. Do not add confidence, reason, description, or other fields.",
+      "Return exactly these fields: isJobPage, isRemote, job (title, company, description, location, country, employmentType, workplaceType, salary, jobUrl), and matchingProfileIds. Do not add confidence, reason, or other fields.",
       "Use an empty string for unknown job fields.",
-      `Job page data:\n${JSON.stringify(jobContext)}`,
-      `Candidate accounts (ID, name, category, and JD matching guidance):\n${JSON.stringify(candidateContext)}`,
+      `Job page URL: ${pageUrl}`,
+      `Job page title: ${pageTitle}`,
+      `Job page body HTML:\n${bodyHtml}`,
+      `Candidate ID and JD matching-note pairs:\n${JSON.stringify(candidateContext)}`,
     ].join("\n\n");
 
     const selectedKey = await selectAvailableGeminiApiKey(
       apiKeys,
       promptText,
       generationConfig,
+      await getGeminiTokenCountMode(),
     );
     if (!selectedKey) {
       return jsonResponse(
@@ -215,19 +192,46 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
     const classification = validateClassification(
       modelResult,
-      extracted.url,
+      pageUrl,
       candidateProfiles,
     );
-    return jsonResponse({
-      success: true,
-      classification,
-      jobDescription: extracted.description,
-      profiles: candidateProfiles.map((candidate) => ({
+    if (!classification.isJobPage) {
+      return jsonResponse({ success: true, classification, profiles: [], message: "Gemini determined this is not a job page." });
+    }
+    const jobIdentity = {
+      jobUrl: pageUrl,
+      jobTitle: classification.job.title,
+      company: classification.job.company,
+    };
+    const [duplicateDetails, presence] = await Promise.all([
+      findGetJdDuplicateDetails(manager.id, jobIdentity, candidateProfiles.map((profile) => profile.id)),
+      findManagerJobPresence(manager.id, jobIdentity),
+    ]);
+    const profilesWithStatus = candidateProfiles.map((candidate) => {
+      const duplicate = duplicateDetails.get(candidate.id) ?? null;
+      return {
         id: candidate.id,
         name: candidate.name,
         category: candidate.category,
         recommended: classification.matchingProfileIds.includes(candidate.id),
-      })),
+        available: duplicate === null || (duplicate.kind === "job_list" && duplicate.jobStatus === "todo"),
+        duplicateKind: duplicate?.kind ?? null,
+        jobStatus: duplicate?.jobStatus ?? null,
+      };
+    });
+    const allCandidatesAssigned = profilesWithStatus.every((profile) => !profile.available);
+    const toastKind = presence.inBids ? "applied" : presence.inJobs ? "added" : "new";
+    return jsonResponse({
+      success: true,
+      classification,
+      jobDescription: classification.job.description,
+      profiles: profilesWithStatus,
+      allCandidatesAssigned,
+      exists: presence.inJobs || presence.inBids,
+      ...presence,
+      toastKind,
+      toastMessage: toastKind === "applied" ? "Already applied." : toastKind === "added" ? "Already added." : "New job.",
+      message: allCandidatesAssigned ? "This job already exists for every active candidate." : "Review Gemini's checked and unchecked candidate matches, then save.",
     });
   } catch (error) {
     const diagnosticCode = getGetJdFailureCode(error);
@@ -253,8 +257,8 @@ async function selectAvailableGeminiApiKey(
   apiKeys: string[],
   prompt: string,
   config: typeof generationConfig,
+  tokenCountMode: GeminiTokenCountMode,
 ): Promise<{ apiKey: string; leaseId: string } | null> {
-  const inputTokens = estimateGeminiInputTokens(prompt, config);
   const shuffledKeys = [...apiKeys];
   for (let index = shuffledKeys.length - 1; index > 0; index -= 1) {
     const swapIndex = randomInt(index + 1);
@@ -268,6 +272,9 @@ async function selectAvailableGeminiApiKey(
     const leaseId = await acquireGeminiKey(apiKey);
     if (!leaseId) continue;
     try {
+      const inputTokens = tokenCountMode === "gemini"
+        ? await requestGeminiTokenCount(apiKey, prompt)
+        : estimateGeminiInputTokens(prompt, config);
       if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens)) {
         return { apiKey, leaseId };
       }
@@ -278,6 +285,32 @@ async function selectAvailableGeminiApiKey(
     await releaseGeminiKey(apiKey, leaseId);
   }
   return null;
+}
+
+async function requestGeminiTokenCount(apiKey: string, prompt: string): Promise<number> {
+  await recordGeminiApiCall(apiKey, "count_tokens");
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:countTokens`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        generateContentRequest: {
+          model: `models/${geminiModel}`,
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig,
+        },
+      }),
+      signal: AbortSignal.timeout(20_000),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) throw getJdError(`gemini_count_tokens_http_${response.status}`, "Gemini CountTokens failed.");
+  const data: unknown = await response.json();
+  if (!isRecord(data) || typeof data.totalTokens !== "number" || !Number.isSafeInteger(data.totalTokens) || data.totalTokens < 0) {
+    throw getJdError("gemini_count_tokens_invalid_response", "Gemini CountTokens returned invalid data.");
+  }
+  return data.totalTokens;
 }
 
 async function loadManagerCandidateProfiles(
@@ -409,6 +442,7 @@ function validateClassification(
   const stringFields = [
     "title",
     "company",
+    "description",
     "location",
     "country",
     "employmentType",
@@ -455,6 +489,7 @@ function validateClassification(
     job: {
       title: String(job.title).slice(0, 500),
       company: String(job.company).slice(0, 500),
+      description: String(job.description).slice(0, maxJobTextLength),
       location: String(job.location).slice(0, 500),
       country: String(job.country).slice(0, 200),
       employmentType: String(job.employmentType).slice(0, 300),
@@ -464,40 +499,6 @@ function validateClassification(
     },
     matchingProfileIds: isJobPage ? matchingProfileIds : [],
   };
-}
-
-function readExtractedJob(value: unknown): Record<string, string> | null {
-  if (!isRecord(value) || !isRecord(value.extractedJobDetails)) return null;
-  const fields = ["title", "company", "description", "url", "source"] as const;
-  const result: Record<string, string> = {};
-  for (const field of fields) {
-    const fieldValue = value.extractedJobDetails[field];
-    if (typeof fieldValue !== "string" || fieldValue.length > maxJobTextLength) {
-      return null;
-    }
-    result[field] = fieldValue.trim();
-  }
-  for (const field of [
-    "country",
-    "employmentType",
-    "workplaceType",
-    "salary",
-  ] as const) {
-    const fieldValue = value.extractedJobDetails[field];
-    if (fieldValue === undefined) {
-      result[field] = "";
-      continue;
-    }
-    if (
-      typeof fieldValue !== "string" ||
-      fieldValue.length > maxJobTextLength
-    ) {
-      return null;
-    }
-    result[field] = fieldValue.trim();
-  }
-  if (!result.url || !isHttpUrl(result.url)) return null;
-  return result;
 }
 
 function readString(

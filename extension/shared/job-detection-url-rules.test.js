@@ -12,17 +12,16 @@ function loadRules() {
   return context.__qtsJobDetectionUrlRules;
 }
 
-test('job-detection URL rules normalize domains and paths safely', () => {
+test('blocked URL rules normalize literal fragments safely', () => {
   const rules = loadRules();
-  assert.equal(rules.normalizeJobDetectionUrlRule('WWW.Example.com/Jobs/'), 'example.com/Jobs');
-  assert.equal(rules.normalizeJobDetectionUrlRule('https://example.com'), 'example.com');
-  assert.equal(rules.normalizeJobDetectionUrlRule('example.com/jobs?query=1'), null);
-  assert.equal(rules.normalizeJobDetectionUrlRule('javascript:alert(1)'), null);
+  assert.equal(rules.normalizeJobDetectionUrlRule(' Example.COM/Jobs?remote=true '), 'example.com/jobs?remote=true');
+  assert.equal(rules.normalizeJobDetectionUrlRule(''), null);
+  assert.equal(rules.normalizeJobDetectionUrlRule('bad\nfragment'), null);
 });
 
-test('job-detection blocking rules match only the configured host and path descendants', () => {
+test('blocked URL rules use case-insensitive substring matching', () => {
   const rules = loadRules();
   assert.equal(rules.jobDetectionUrlRuleMatches('https://jobs.example.com/openings/123', 'example.com/openings'), true);
-  assert.equal(rules.jobDetectionUrlRuleMatches('https://example.com/jobs-old', 'example.com/jobs'), false);
-  assert.equal(rules.jobDetectionUrlRuleMatches('https://notexample.com/jobs', 'example.com'), false);
+  assert.equal(rules.jobDetectionUrlRuleMatches('https://example.com/jobs-old', '/JOBS-'), true);
+  assert.equal(rules.jobDetectionUrlRuleMatches('https://notexample.com/jobs', 'jobs.example.com'), false);
 });

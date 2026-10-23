@@ -18,6 +18,8 @@ function workerUnavailableResponse() {
 
 function workerSupportedApiPath(path) {
   return path === '/api/extension/get-jd/check'
+    || path === '/api/extension/get-jd'
+    || path === '/api/extension/get-jd/mode'
     || path === '/api/extension/get-jd/profiles'
     || path === '/api/extension/get-jd/save'
     || path === '/api/extension/features/me'

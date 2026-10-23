@@ -14,14 +14,18 @@ The supported browser-extension workflow is deliberately narrow:
    panel as the candidate profile list. The panel reserves right-side page
    space, does not open a popup/iframe, and returns to profiles with Back.
 5. Get JD enables persistent monitoring. After a page finishes loading, a
-   matching job-detection URL rule blocks QTS on that page. Every other page
-   must match an excluded URL rule saved for the signed-in Manager before Get JD
-   continues. Unmatched URLs are ignored without extraction or a server
-   duplicate check. Matching pages are extracted locally, checked against the
-   Manager's Jobs and Bids, and reported in a page toast. This flow does not
-   invoke Gemini.
+   matching Manager-owned blocked URL fragment blocks QTS on that page. There
+   is no built-in URL blocklist. Every other page
+   must contain at least two distinct job-page detection keywords saved for the
+   signed-in Manager before Get JD continues. Pages below that threshold are
+   ignored without extraction or a server request. Super Admin selects manual
+   matching or Gemini matching. Manual mode extracts locally and checks Jobs and
+   Bids. Gemini mode sends body HTML to the server with the default evaluation
+   prompt and candidate ID/JD-note pairs, then prechecks returned candidate IDs.
    A Manager with the corresponding Super-assigned permission can add, edit,
-   and delete only their own detection and exclusion URL rules.
+   and delete only their own blocked URL fragments and job-page detection keywords.
+   Super Admin also selects local token estimation or Gemini CountTokens. Every
+   generateContent and CountTokens request is recorded for Gemini Usage.
 6. Managers can queue Generation from a Jobs row. The signed-in extension
    processes queued jobs sequentially through the job page and ChatGPT, then
    downloads résumé PDF, cover-letter PDF, and JD text files locally, and
@@ -94,8 +98,8 @@ may set `qtsServerUrl` in extension local storage; popup and background requests
 then use the same normalized value.
 
 After a Manager signs in, shared text highlights are applied on all supported
-web pages independently of built-in and Manager-configured URL exclusions. Those
-exclusions continue to suppress the launcher and other extension workflows.
+web pages independently of Manager-configured URL rules. Manager-owned blocked
+URL rules suppress the launcher and other extension workflows.
 
 ## Database invariants
 

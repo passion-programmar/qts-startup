@@ -211,6 +211,13 @@
       "when": 1792659000000,
       "tag": "0029_small_tomorrow_man",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792662600000,
+      "tag": "0030_gemini_api_operations",
+      "breakpoints": true
     }
   ]
 }

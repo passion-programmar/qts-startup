@@ -13,8 +13,8 @@ Gemini.
 - Gmail mailbox OAuth is deferred until the candidate-consent flow is defined.
 - The browser extension provides an in-page launcher before sign-in. Get JD
   first checks the page locally, then contacts the server only for likely job
-  pages. Super Admins can separately assign Managers access to job-detection
-  URL rules and excluded URLs in the extension's URL Settings panel.
+  pages. Super Admins can separately assign Managers access to blocked URL
+  fragments and job-page detection keywords in the extension's URL Settings panel.
 - Shared text highlights are applied automatically. Only Managers explicitly
   granted access by a Super Admin can edit their shared rules in the extension.
 - Scanner, application-session, Gmail, and automatic-application workflows
@@ -129,17 +129,21 @@ JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
 toolbar icon has no click behavior. Sign In opens the existing Manager login
 panel inside the current page and the panel closes after a successful login.
 Get JD stores persistent `get_jd` status and waits until a page has finished
-loading. A matching job-detection URL rule blocks QTS on that page. Otherwise,
-the page URL must match one of the signed-in Manager's excluded URL rules before
-extraction or any job-existence server request. Matching pages are checked
-against the authenticated Manager's Jobs and Bids for existing records.
-Unmatched URLs are ignored. This flow does not call Gemini. Managers can maintain URL
-exclusions and job-detection URL rules from URL Settings when a Super Admin
+loading. A matching Manager-owned blocked URL fragment blocks QTS on that page. There is no built-in URL blocklist. Otherwise,
+at least two distinct Manager-owned detection keywords must appear in the visible page text before
+extraction or any job-processing server request. Pages without two keyword
+matches are ignored. Managers can maintain job-page
+detection keywords and blocked URL fragments from URL Settings when a Super Admin
 grants the matching permissions. An assigned Manager can add, edit, and delete
 their own rules; every server mutation is scoped to that Manager. Both rule
-types match a domain and optional path prefix. Job-detection URL rules are the
-Manager blocklist. Excluded URL rules are the Manager job-page match list. There
-is no separate local job-page classification step.
+blocked URL rule matches when the current URL contains its saved fragment. Job-page
+detection uses case-insensitive visible-text matching. There
+is no separate local job-page classification step. Super Admin chooses Manual
+candidate selection or Gemini candidate matching. Gemini mode sends the loaded
+body HTML together with the default evaluation prompt and candidate ID/JD-note
+pairs, then prechecks returned matching IDs for Manager review. Super Admin can
+independently choose local token estimation or Gemini CountTokens; Gemini Usage
+records CountTokens and generateContent operations separately.
 Exclusion updates also apply to already-open pages. Text Highlight and URL
 Settings render as native controls inside the same docked in-page panel as the
 candidate profile list, rather than opening a popup, iframe, or page-covering

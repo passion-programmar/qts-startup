@@ -8,6 +8,7 @@ export const geminiJobEvaluationResponseSchema = {
       properties: {
         title: { type: "STRING" },
         company: { type: "STRING" },
+        description: { type: "STRING" },
         location: { type: "STRING" },
         country: { type: "STRING" },
         employmentType: { type: "STRING" },
@@ -18,6 +19,7 @@ export const geminiJobEvaluationResponseSchema = {
       required: [
         "title",
         "company",
+        "description",
         "location",
         "country",
         "employmentType",

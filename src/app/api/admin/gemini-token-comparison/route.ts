@@ -3,8 +3,8 @@ import {
   acquireGeminiKey,
   getGeminiApiKeyHash,
   getGeminiApiKeys,
+  recordGeminiApiCall,
   releaseGeminiKey,
-  reserveGeminiGeneration,
 } from "@/lib/gemini-usage";
 import { getCurrentUser } from "@/lib/session";
 import {
@@ -59,7 +59,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     prompt,
     geminiJobEvaluationGenerationConfig,
   );
-  const selectedKey = await selectTrackedGeminiKey(apiKeys, localEstimate);
+  const selectedKey = await selectTrackedGeminiKey(apiKeys);
   if (!selectedKey) {
     return NextResponse.json(
       { error: "All Gemini keys are busy or at their QTS usage limits." },
@@ -99,7 +99,6 @@ export async function POST(request: Request): Promise<NextResponse> {
 
 async function selectTrackedGeminiKey(
   apiKeys: string[],
-  inputTokens: number,
 ): Promise<{
   apiKey: string;
   keyIndex: number;
@@ -109,15 +108,7 @@ async function selectTrackedGeminiKey(
     const apiKey = apiKeys[keyIndex];
     const leaseId = await acquireGeminiKey(apiKey);
     if (!leaseId) continue;
-    try {
-      if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens)) {
-        return { apiKey, keyIndex, leaseId };
-      }
-    } catch (error) {
-      await releaseGeminiKey(apiKey, leaseId);
-      throw error;
-    }
-    await releaseGeminiKey(apiKey, leaseId);
+    return { apiKey, keyIndex, leaseId };
   }
   return null;
 }
@@ -139,6 +130,7 @@ async function requestGoogleTokenCount(
   apiKey: string,
   prompt: string,
 ): Promise<number> {
+  await recordGeminiApiCall(apiKey, "count_tokens");
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:countTokens`,
     {
