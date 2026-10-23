@@ -11,11 +11,15 @@ test('Get JD save payload restores the description returned beside the classific
       employmentType: 'Full-time',
       workplaceType: 'Hybrid',
       salary: '$120,000 per year',
+      country: 'Romania',
+      reason: 'The posting allows remote work.',
       jobUrl: 'https://example.com/jobs/123',
     },
   }, 'Build reliable services.');
 
   assert.equal(savedJob.description, 'Build reliable services.');
+  assert.equal(savedJob.country, 'Romania');
+  assert.equal(savedJob.reason, 'The posting allows remote work.');
 });
 
 test('Get JD save payload rejects a missing description', () => {

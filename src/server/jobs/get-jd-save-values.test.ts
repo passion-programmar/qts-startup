@@ -10,9 +10,11 @@ test("extension job saves preserve the extracted description", () => {
       company: "Example",
       description: "Build reliable services.",
       location: "Remote",
+      country: "Romania",
       employmentType: "Full-time",
       workplaceType: "Hybrid",
       salary: "$120,000-$150,000 per year",
+      reason: "The posting requires hybrid work.",
     },
   });
 
@@ -22,9 +24,11 @@ test("extension job saves preserve the extracted description", () => {
     company: "Example",
     description: "Build reliable services.",
     location: "Remote",
+    country: "Romania",
     employmentType: "Full-time",
     workplaceType: "Hybrid",
     salary: "$120,000-$150,000 per year",
+    jobReason: "The posting requires hybrid work.",
   });
 });
 
@@ -42,6 +46,21 @@ test("extension job saves default optional job details to null", () => {
   assert.equal(job?.employmentType, null);
   assert.equal(job?.workplaceType, null);
   assert.equal(job?.salary, null);
+  assert.equal(job?.country, null);
+  assert.equal(job?.jobReason, null);
+});
+
+test("extension job saves reject an oversized Gemini eligibility reason", () => {
+  assert.equal(readExtensionSavedJob({
+    job: {
+      jobUrl: "https://example.com/jobs/123",
+      title: "Senior Engineer",
+      company: "Example",
+      description: "Build reliable services.",
+      location: "",
+      reason: "x".repeat(1201),
+    },
+  }), null);
 });
 
 test("extension job saves reject a missing or oversized description", () => {

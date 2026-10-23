@@ -398,9 +398,11 @@ export const jobs = pgTable(
     company: text("company").notNull(),
     description: text("description"),
     location: text("location"),
+    country: text("country"),
     employmentType: text("employment_type"),
     workplaceType: text("workplace_type"),
     salary: text("salary"),
+    jobReason: text("job_reason"),
     autoSavedByGetJd: boolean("auto_saved_by_get_jd").default(false).notNull(),
     candidateId: uuid("candidate_id")
       .notNull()

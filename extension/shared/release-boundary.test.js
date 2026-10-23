@@ -427,7 +427,14 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes("? 'Already applied.'"));
   assert.ok(review.includes("? 'Already added.'"));
   assert.ok(review.includes("result.toastMessage || 'New job.'"));
-  assert.ok(evaluationRoute.includes('insertGetJdJob({'));
+  assert.ok(evaluationRoute.includes('insertGetJdJob(jobToSave)'));
+  assert.ok(evaluationRoute.includes('updateExistingGetJdJobDetails(jobToSave)'));
+  const detailUpdater = duplicateHelper.slice(
+    duplicateHelper.indexOf('export async function updateExistingGetJdJobDetails'),
+  );
+  assert.ok(detailUpdater.includes('eq(jobs.managerId, job.managerId)'));
+  assert.ok(detailUpdater.includes('duplicateConditions(jobs, job)'));
+  assert.equal(detailUpdater.includes('eq(jobs.candidateId, job.candidateId)'), false);
   assert.ok(evaluationRoute.includes('autoSavedProfileIds: [...autoSavedProfileIds]'));
   assert.ok(serviceWorker.includes('autoSavedProfileIds.length === 0'));
   assert.ok(serviceWorker.includes('autoSavedProfileIds,'));
@@ -494,7 +501,8 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(forms.includes('role="alertdialog"'));
   assert.ok(forms.includes('This action cannot be undone.'));
   assert.equal(forms.includes('window.confirm('), false);
-  assert.ok(forms.includes('whitespace-nowrap'));
+  assert.ok(forms.includes('ListPlus'));
+  assert.ok(forms.includes('size-9 shrink-0 items-center justify-center'));
 });
 
 test('document generation uses saved manager prompt assignments and gates prompt access', () => {

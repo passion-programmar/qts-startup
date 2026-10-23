@@ -24,9 +24,11 @@ export default async function JobsPage() {
       company: jobs.company,
       description: jobs.description,
       location: jobs.location,
+      country: jobs.country,
       employmentType: jobs.employmentType,
       workplaceType: jobs.workplaceType,
       salary: jobs.salary,
+      jobReason: jobs.jobReason,
       url: jobs.jobUrl,
       date: jobs.date,
       status: jobs.status,
@@ -75,6 +77,7 @@ export default async function JobsPage() {
               company: row.company,
               description: row.description,
               location: row.location,
+              country: row.country,
               employmentType: row.employmentType,
               workplaceType: row.workplaceType,
               salary: row.salary,
@@ -100,6 +103,9 @@ export default async function JobsPage() {
                     {row.title}
                   </a>
                   <span className="mt-1 block text-xs text-slate-500">{row.company}</span>
+                  {row.jobReason && (
+                    <span className="mt-1 block text-xs text-slate-500">{row.jobReason}</span>
+                  )}
                 </div>,
                 <div key="status">
                   <span className="capitalize">{row.status.replaceAll("_", " ")}</span>

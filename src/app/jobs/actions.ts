@@ -22,6 +22,7 @@ export async function updateJobAction(
   const company = text(formData, "company", 500);
   const description = text(formData, "description", 100_000);
   const location = text(formData, "location", 500);
+  const country = text(formData, "country", 200);
   const employmentType = text(formData, "employmentType", 200);
   const workplaceType = text(formData, "workplaceType", 200);
   const salary = text(formData, "salary", 500);
@@ -69,6 +70,7 @@ export async function updateJobAction(
       candidateId, jobUrl: normalizedUrl, jobTitle, company,
       description: description || null,
       location: location || null,
+      country: country || null,
       employmentType: employmentType || null,
       workplaceType: workplaceType || null,
       salary: salary || null,

@@ -6,9 +6,11 @@ export type ExtensionSavedJob = {
   company: string;
   description: string;
   location: string | null;
+  country: string | null;
   employmentType: string | null;
   workplaceType: string | null;
   salary: string | null;
+  jobReason: string | null;
 };
 
 export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null {
@@ -20,9 +22,11 @@ export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null 
     typeof job.company !== "string" ||
     typeof job.description !== "string" ||
     typeof job.location !== "string" ||
+    !optionalTextWithinLimit(job.country, 200) ||
     !optionalTextWithinLimit(job.employmentType, 200) ||
     !optionalTextWithinLimit(job.workplaceType, 200) ||
     !optionalTextWithinLimit(job.salary, 500) ||
+    !optionalTextWithinLimit(job.reason, 1200) ||
     job.jobUrl.length > 2048 ||
     job.title.trim().length === 0 ||
     job.title.length > 500 ||
@@ -41,9 +45,11 @@ export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null 
     company: job.company.trim(),
     description: job.description.trim(),
     location: job.location.trim() || null,
+    country: optionalText(job.country),
     employmentType: optionalText(job.employmentType),
     workplaceType: optionalText(job.workplaceType),
     salary: optionalText(job.salary),
+    jobReason: optionalText(job.reason),
   };
 }
 

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { bids, jobs } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getJobBusinessDate, normalizeJobUrl } from "@/server/jobs/job-values";
@@ -26,9 +26,11 @@ export type ManagerJobPresence = {
 type NewGetJdJob = GetJdJobIdentity & {
   description: string;
   location: string | null;
+  country: string | null;
   employmentType: string | null;
   workplaceType: string | null;
   salary: string | null;
+  jobReason: string | null;
   managerId: string;
   candidateId: string;
   autoSavedByGetJd?: boolean;
@@ -158,9 +160,11 @@ export async function insertGetJdJob(
       company: job.company.trim(),
       description: job.description,
       location: job.location,
+      country: job.country,
       employmentType: job.employmentType,
       workplaceType: job.workplaceType,
       salary: job.salary,
+      jobReason: job.jobReason,
       autoSavedByGetJd: job.autoSavedByGetJd ?? false,
       managerId: job.managerId,
       candidateId: job.candidateId,
@@ -172,21 +176,41 @@ export async function insertGetJdJob(
 
   if (savedJob) return { status: "saved", jobId: savedJob.id };
 
+  await updateExistingGetJdJobDetails(job);
   const duplicate = await findGetJdDuplicate(
     job.managerId,
     job,
     job.candidateId,
   );
-  if (duplicate === "job_list" && job.description.trim()) {
-    await db
-      .update(jobs)
-      .set({ description: job.description.trim() })
-      .where(and(
-        eq(jobs.managerId, job.managerId),
-        eq(jobs.candidateId, job.candidateId),
-        duplicateConditions(jobs, job),
-        or(isNull(jobs.description), eq(jobs.description, "")),
-      ));
-  }
   return { status: duplicate ?? "job_list" };
+}
+
+export async function updateExistingGetJdJobDetails(
+  job: NewGetJdJob,
+): Promise<void> {
+  await db
+    .update(jobs)
+    .set({
+      description: sql`coalesce(nullif(btrim(${jobs.description}), ''), ${job.description.trim()})`,
+      location: sql`coalesce(nullif(btrim(${jobs.location}), ''), ${job.location})`,
+      country: sql`coalesce(nullif(btrim(${jobs.country}), ''), ${job.country})`,
+      employmentType: sql`coalesce(nullif(btrim(${jobs.employmentType}), ''), ${job.employmentType})`,
+      workplaceType: sql`coalesce(nullif(btrim(${jobs.workplaceType}), ''), ${job.workplaceType})`,
+      salary: sql`coalesce(nullif(btrim(${jobs.salary}), ''), ${job.salary})`,
+      jobReason: sql`coalesce(nullif(btrim(${jobs.jobReason}), ''), ${job.jobReason})`,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(jobs.managerId, job.managerId),
+      duplicateConditions(jobs, job),
+      or(
+        sql`nullif(btrim(${jobs.description}), '') is null`,
+        sql`nullif(btrim(${jobs.location}), '') is null`,
+        sql`nullif(btrim(${jobs.country}), '') is null`,
+        sql`nullif(btrim(${jobs.employmentType}), '') is null`,
+        sql`nullif(btrim(${jobs.workplaceType}), '') is null`,
+        sql`nullif(btrim(${jobs.salary}), '') is null`,
+        sql`nullif(btrim(${jobs.jobReason}), '') is null`,
+      ),
+    ));
 }

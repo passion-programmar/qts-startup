@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import {
   findGetJdDuplicate,
   insertGetJdJob,
+  updateExistingGetJdJobDetails,
 } from "@/server/jobs/get-jd-jobs";
 import { readExtensionSavedJob } from "@/server/jobs/get-jd-save-values";
 import { isGetJdEvaluationAccepted } from "@/server/gemini/job-evaluation-config";
@@ -98,13 +99,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         .join(" ") || "Candidate";
       const duplicate = await findGetJdDuplicate(manager.id, job, candidate.id);
       if (duplicate) {
-        if (duplicate === "job_list") {
-          await insertGetJdJob({
-            ...job,
-            managerId: manager.id,
-            candidateId: candidate.id,
-          });
-        }
+        await updateExistingGetJdJobDetails({
+          ...job,
+          managerId: manager.id,
+          candidateId: candidate.id,
+        });
         results.push({
           profileId: candidate.id,
           name,

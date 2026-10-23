@@ -309,6 +309,13 @@
       "when": 1792747800000,
       "tag": "0043_get_jd_result_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1792748400000,
+      "tag": "0044_save_gemini_job_details",
+      "breakpoints": true
     }
   ]
 }

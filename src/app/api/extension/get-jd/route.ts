@@ -35,6 +35,7 @@ import {
   findGetJdDuplicateDetails,
   findManagerJobPresence,
   insertGetJdJob,
+  updateExistingGetJdJobDetails,
 } from "@/server/jobs/get-jd-jobs";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 
@@ -228,23 +229,33 @@ export async function POST(request: Request): Promise<NextResponse> {
     const autoSavedJobs = new Map<string, string>();
     const autoSaveFailedProfileIds = new Set<string>();
     for (const candidate of candidateProfiles) {
-      if (!matchingProfileIds.has(candidate.id) || duplicateDetails.has(candidate.id)) {
+      if (!matchingProfileIds.has(candidate.id)) continue;
+      const jobToSave = {
+        jobUrl: classification.job.jobUrl,
+        jobTitle: classification.job.title,
+        company: classification.job.company,
+        description: classification.job.description,
+        location: classification.job.location,
+        country: classification.job.country,
+        employmentType: classification.job.employmentType,
+        workplaceType: classification.job.workplaceType,
+        salary: classification.job.salary,
+        jobReason: classification.job.reason,
+        managerId: manager.id,
+        candidateId: candidate.id,
+        autoSavedByGetJd: true,
+      };
+      if (duplicateDetails.has(candidate.id)) {
+        try {
+          await updateExistingGetJdJobDetails(jobToSave);
+        } catch (error) {
+          autoSaveFailedProfileIds.add(candidate.id);
+          logGetJdFailure(`get_jd_auto_save_${getGetJdFailureCode(error)}`);
+        }
         continue;
       }
       try {
-        const result = await insertGetJdJob({
-          jobUrl: classification.job.jobUrl,
-          jobTitle: classification.job.title,
-          company: classification.job.company,
-          description: classification.job.description,
-          location: classification.job.location,
-          employmentType: classification.job.employmentType,
-          workplaceType: classification.job.workplaceType,
-          salary: classification.job.salary,
-          managerId: manager.id,
-          candidateId: candidate.id,
-          autoSavedByGetJd: true,
-        });
+        const result = await insertGetJdJob(jobToSave);
         if (result.status === "saved") {
           autoSavedProfileIds.add(candidate.id);
           autoSavedJobs.set(candidate.id, result.jobId);
