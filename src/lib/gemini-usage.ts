@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
-import { settings } from "@/db/schema";
+import { geminiApiCallLogs, settings } from "@/db/schema";
 import { db } from "@/lib/db";
 import {
   defaultGeminiApiLimits,
@@ -13,6 +13,67 @@ import { geminiModel } from "@/server/gemini/gemini-request";
 
 export { geminiModel };
 export { defaultGeminiApiLimits, type GeminiApiLimits };
+
+export type GeminiApiOperation = "generate_content" | "count_tokens";
+
+const maxStoredGeminiResponseBytes = 1_000_000;
+
+export async function requestGeminiApi(
+  apiKey: string,
+  operation: GeminiApiOperation,
+  url: string,
+  init: RequestInit,
+): Promise<{ ok: boolean; status: number; body: string }> {
+  const [log] = await db
+    .insert(geminiApiCallLogs)
+    .values({
+      keyHash: getGeminiApiKeyHash(apiKey),
+      operation,
+      status: "pending",
+    })
+    .returning({ id: geminiApiCallLogs.id });
+  if (!log) throw new Error("Could not create Gemini API request log.");
+
+  const startedAt = Date.now();
+  let response: Response;
+  let body: string;
+  try {
+    response = await fetch(url, init);
+    body = await response.text();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown network error.";
+    await db
+      .update(geminiApiCallLogs)
+      .set({
+        status: "network_error",
+        errorMessage: errorMessage.replaceAll(apiKey, "[redacted]").slice(0, 500),
+        durationMs: Date.now() - startedAt,
+        completedAt: new Date(),
+      })
+      .where(eq(geminiApiCallLogs.id, log.id));
+    throw error;
+  }
+
+  const safeBody = body.replaceAll(apiKey, "[redacted]");
+  const bodyBuffer = Buffer.from(safeBody, "utf8");
+  const responseTruncated = bodyBuffer.byteLength > maxStoredGeminiResponseBytes;
+  const storedBody = responseTruncated
+    ? bodyBuffer.subarray(0, maxStoredGeminiResponseBytes).toString("utf8")
+    : safeBody;
+  await db
+    .update(geminiApiCallLogs)
+    .set({
+      status: response.ok ? "http_success" : "http_error",
+      httpStatus: response.status,
+      responseBody: storedBody,
+      responseTruncated,
+      durationMs: Date.now() - startedAt,
+      completedAt: new Date(),
+    })
+    .where(eq(geminiApiCallLogs.id, log.id));
+
+  return { ok: response.ok, status: response.status, body };
+}
 
 export async function getGeminiApiLimits(): Promise<GeminiApiLimits> {
   const [row] = await db

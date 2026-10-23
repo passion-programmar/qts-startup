@@ -317,14 +317,6 @@ async function readVisiblePageText(tabId) {
   return String(results?.[0]?.result || '');
 }
 
-async function readPageBodyHtml(tabId) {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => String(document.body?.outerHTML || '').slice(0, 2_000_000),
-  });
-  return String(results?.[0]?.result || '');
-}
-
 async function isPageDetectedAsJobForManager(tabId) {
   const result = await getManagerPageExclusions();
   if (result.success !== true) return false;
@@ -995,12 +987,12 @@ async function processGetJdPage(tabId, url, documentId = '') {
       throw new Error(modeResult.message || 'Could not load the Get JD matching mode.');
     }
     if (modeResult.mode === 'gemini') {
-      const bodyHtml = await readPageBodyHtml(tabId);
-      if (!bodyHtml) throw new Error('Could not read the loaded page body HTML.');
+      const pageText = (await readVisiblePageText(tabId)).slice(0, 100_000);
+      if (!pageText.trim()) throw new Error('Could not read visible text from the loaded page.');
       const geminiResult = await workerApiRequest('POST', '/api/extension/get-jd', {
         pageUrl: url,
         pageTitle: tab.title || documentId || url,
-        bodyHtml,
+        pageText,
       });
       if (geminiResult.success !== true) {
         throw new Error(geminiResult.message || 'Gemini candidate matching failed.');
@@ -1031,11 +1023,16 @@ async function processGetJdPage(tabId, url, documentId = '') {
         return;
       }
       const matchingIds = new Set(geminiResult.classification.matchingProfileIds || []);
+      const matchingAvailableProfiles = profiles.filter(
+        (profile) => profile.available !== false && matchingIds.has(profile.id),
+      );
       await saveGetJdResult(tabId, {
         ...initialResult,
         pageTitle: tab.title || '',
         status: 'complete',
-        message: geminiResult.message || 'Review Gemini candidate matches, then save.',
+        message: matchingAvailableProfiles.length
+          ? `Gemini recommended ${matchingAvailableProfiles.length} candidate${matchingAvailableProfiles.length === 1 ? '' : 's'}. Recommended available candidates are checked; review the list before saving.`
+          : 'Gemini did not recommend any available candidates from their matching notes. All available profiles are listed unchecked so you can review and select manually.',
         hasDuplicates: geminiResult.exists === true,
         toastKind: geminiResult.toastKind,
         toastMessage: geminiResult.toastMessage,
@@ -1043,9 +1040,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
         classification: geminiResult.classification,
         jobDescription: geminiResult.jobDescription || geminiResult.classification.job?.description || '',
         profiles,
-        selectedProfileIds: profiles
-          .filter((profile) => profile.available !== false && matchingIds.has(profile.id))
-          .map((profile) => profile.id),
+        selectedProfileIds: matchingAvailableProfiles.map((profile) => profile.id),
       });
       return;
     }

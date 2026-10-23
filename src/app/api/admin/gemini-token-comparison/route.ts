@@ -5,6 +5,7 @@ import {
   getGeminiApiKeys,
   getGeminiApiLimits,
   recordGeminiApiCall,
+  requestGeminiApi,
   releaseGeminiKey,
 } from "@/lib/gemini-usage";
 import { getCurrentUser } from "@/lib/session";
@@ -133,7 +134,9 @@ async function requestGoogleTokenCount(
   prompt: string,
 ): Promise<number> {
   await recordGeminiApiCall(apiKey, "count_tokens");
-  const response = await fetch(
+  const response = await requestGeminiApi(
+    apiKey,
+    "count_tokens",
     `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:countTokens`,
     {
       method: "POST",
@@ -157,7 +160,12 @@ async function requestGoogleTokenCount(
     throw new Error(`Gemini CountTokens returned HTTP ${response.status}.`);
   }
 
-  const data: unknown = await response.json();
+  let data: unknown;
+  try {
+    data = JSON.parse(response.body) as unknown;
+  } catch {
+    throw new Error("Gemini CountTokens returned invalid JSON.");
+  }
   if (
     !isRecord(data) ||
     typeof data.totalTokens !== "number" ||

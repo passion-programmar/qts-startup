@@ -993,6 +993,7 @@ async function initializeGetJdReviewOnce() {
             : `In Jobs · ${profile.jobStatus || 'not editable'}`
           : '';
       category.textContent = [
+        profile.recommended === true ? 'Gemini recommended' : '',
         profile.category || 'Uncategorized',
         saveResult?.message || availability,
       ].filter(Boolean).join(' · ');

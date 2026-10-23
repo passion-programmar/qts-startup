@@ -28,12 +28,12 @@ export const geminiJobEvaluationResponseSchema = {
         "jobUrl",
       ],
     },
-    matchingProfileIds: {
+    matchingProfileIndexes: {
       type: "ARRAY",
-      items: { type: "STRING" },
+      items: { type: "INTEGER" },
     },
   },
-  required: ["isJobPage", "isRemote", "job", "matchingProfileIds"],
+  required: ["isJobPage", "isRemote", "job", "matchingProfileIndexes"],
 } as const;
 
 export const geminiJobEvaluationGenerationConfig = {

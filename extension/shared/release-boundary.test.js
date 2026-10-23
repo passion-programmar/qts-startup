@@ -93,7 +93,9 @@ test('Get JD supports Super-selected manual and Gemini matching flows', () => {
   assert.ok(apiWorker.includes("path === '/api/extension/get-jd/mode'"));
   assert.ok(apiWorker.includes("path === '/api/extension/get-jd'"));
   assert.ok(serviceWorker.includes("modeResult.mode === 'gemini'"));
-  assert.ok(serviceWorker.includes('bodyHtml,'));
+  assert.ok(serviceWorker.includes('pageText,'));
+  assert.ok(serviceWorker.includes('document.body?.innerText'));
+  assert.ok(!serviceWorker.includes('bodyHtml'));
   assert.ok(serviceWorker.includes('matchingProfileIds'));
 });
 

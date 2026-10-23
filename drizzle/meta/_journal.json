@@ -225,6 +225,13 @@
       "when": 1792663200000,
       "tag": "0031_gemini_usage_history_removal",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792729200000,
+      "tag": "0032_gemini_api_response_logs",
+      "breakpoints": true
     }
   ]
 }

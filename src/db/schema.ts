@@ -640,6 +640,39 @@ export const geminiKeyUsageEvents = pgTable(
   ],
 );
 
+export const geminiApiCallLogs = pgTable(
+  "gemini_api_call_logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    keyHash: text("key_hash").notNull(),
+    operation: text("operation").notNull(),
+    status: text("status").notNull(),
+    httpStatus: integer("http_status"),
+    responseBody: text("response_body"),
+    responseTruncated: boolean("response_truncated").default(false).notNull(),
+    errorMessage: text("error_message"),
+    durationMs: integer("duration_ms"),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true, mode: "date" }),
+  },
+  (table) => [
+    check(
+      "gemini_api_call_logs_operation_check",
+      sql`${table.operation} in ('generate_content', 'count_tokens')`,
+    ),
+    check(
+      "gemini_api_call_logs_status_check",
+      sql`${table.status} in ('pending', 'http_success', 'http_error', 'network_error')`,
+    ),
+    index("gemini_api_call_logs_key_started_at_index").on(
+      table.keyHash,
+      table.startedAt,
+    ),
+  ],
+);
+
 export const geminiKeyBusyLeases = pgTable("gemini_key_busy_leases", {
   keyHash: text("key_hash").primaryKey(),
   leaseId: uuid("lease_id").notNull(),
