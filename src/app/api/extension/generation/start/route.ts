@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { educations, experiences, generationRuns, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -157,6 +157,20 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
     const promptTemplate = await getManagerDocumentPrompt(manager.id);
     const composedPrompt = composeGenerationPrompt(promptTemplate, normalizedJob, candidateProfile);
+    if (jobId) {
+      await db
+        .update(generationRuns)
+        .set({
+          status: "failed",
+          failureReason: "Superseded by a new Generation attempt.",
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(generationRuns.jobId, jobId),
+          eq(generationRuns.managerId, manager.id),
+          inArray(generationRuns.status, ["pending", "completed"]),
+        ));
+    }
     const [run] = await db
       .insert(generationRuns)
       .values({

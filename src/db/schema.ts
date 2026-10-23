@@ -40,6 +40,7 @@ export const promptPurpose = pgEnum("prompt_purpose", [
 export const generationRunStatus = pgEnum("generation_run_status", [
   "pending",
   "completed",
+  "delivered",
   "failed",
 ]);
 

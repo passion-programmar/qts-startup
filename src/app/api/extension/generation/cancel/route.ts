@@ -46,9 +46,6 @@ export async function POST(request: Request): Promise<NextResponse> {
         generationStatus: "not_queued",
         generationError: null,
         generationLeaseExpiresAt: null,
-        resumeLocalPath: null,
-        status: "todo",
-        failureReason: null,
         updatedAt: new Date(),
       })
       .where(and(

@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { jobs } from "@/db/schema";
+import { generationRuns, jobs } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
@@ -32,8 +32,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
   const jobId = readText(body.jobId, 36);
+  const generationId = readText(body.generationId, 36);
   const reason = readText(body.reason, 2000);
-  if (!uuidPattern.test(jobId) || !reason) {
+  const cancelled = body.cancelled === true;
+  if (!uuidPattern.test(jobId) || (generationId && !uuidPattern.test(generationId)) || !reason) {
     return NextResponse.json(
       { success: false, message: "A valid queued job ID and failure reason are required." },
       { status: 400 },
@@ -41,6 +43,20 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    if (generationId) {
+      await db
+        .update(generationRuns)
+        .set({ status: "failed", failureReason: reason, updatedAt: new Date() })
+        .where(and(
+          eq(generationRuns.id, generationId),
+          eq(generationRuns.jobId, jobId),
+          eq(generationRuns.managerId, manager.id),
+          eq(generationRuns.status, "completed"),
+        ));
+    }
+    if (cancelled) {
+      return NextResponse.json({ success: true, jobId, cancelled: true });
+    }
     const [failed] = await db
       .update(jobs)
       .set({

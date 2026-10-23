@@ -21,6 +21,7 @@ export async function getManagerDocumentPrompt(managerId: string): Promise<strin
         eq(managerPromptAssignments.managerId, managerId),
         eq(prompts.provider, "openai"),
         eq(prompts.purpose, "document_generation"),
+        eq(prompts.isActive, true),
       ))
       .limit(1),
     db

@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -20,9 +20,6 @@ export async function POST(request: Request): Promise<NextResponse> {
         generationStatus: "not_queued",
         generationError: null,
         generationLeaseExpiresAt: null,
-        resumeLocalPath: sql`case when ${jobs.generationStatus} = 'processing' then null else ${jobs.resumeLocalPath} end`,
-        status: sql`case when ${jobs.generationStatus} = 'processing' then 'todo' else ${jobs.status} end`,
-        failureReason: sql`case when ${jobs.generationStatus} = 'processing' then null else ${jobs.failureReason} end`,
         updatedAt: new Date(),
       })
       .where(and(

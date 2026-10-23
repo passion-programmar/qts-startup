@@ -285,12 +285,19 @@
     {
       "idx": 40,
       "version": "7",
+      "when": 1792746000000,
+      "tag": "0040_generation_delivery_reliability",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
       "when": 1792746600000,
       "tag": "0041_get_jd_is_remote_response",
       "breakpoints": true
     },
     {
-      "idx": 41,
+      "idx": 42,
       "version": "7",
       "when": 1792747200000,
       "tag": "0042_get_jd_remove_gemini_job_url",

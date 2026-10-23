@@ -312,14 +312,48 @@ test('Generation launcher shows a document icon and can cancel an active run', (
     path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'generation', 'cancel-all', 'route.ts'),
     'utf8',
   );
+  const claimRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'generation', 'claim', 'route.ts'),
+    'utf8',
+  );
 
   assert.ok(launcher.includes("['generation', 'Generation', '▤', 'generation']"));
   assert.ok(launcher.includes("button.dataset.modeAction = active ? 'cancel_status' : action"));
   assert.ok(serviceWorker.includes("'/api/extension/generation/cancel-all'"));
+  assert.ok(serviceWorker.includes("'/api/extension/generation/heartbeat'"));
+  assert.equal(serviceWorker.includes("'/api/extension/generation/queue'"), false);
+  assert.equal(serviceWorker.includes('Generation must be started from a job page.'), false);
+  assert.ok(serviceWorker.includes('Opening ChatGPT and loading the oldest Job'));
   assert.ok(serviceWorker.includes('ACTIVE_GENERATION_JOB_KEY'));
   assert.ok(serviceWorker.includes('removeQueuedGenerationDownloads(downloadIds)'));
   assert.ok(cancelAllRoute.includes('generationStatus: "not_queued"'));
   assert.ok(cancelAllRoute.includes('inArray(jobs.generationStatus, ["queued", "processing"])'));
+  assert.equal(cancelAllRoute.includes('status: sql`case when'), false);
+  assert.equal(cancelAllRoute.includes('resumeLocalPath: sql`case when'), false);
+  assert.ok(claimRoute.includes('.orderBy(asc(jobs.createdAt), asc(jobs.id))'));
+  assert.ok(claimRoute.includes('eq(jobs.status, "todo")'));
+  assert.ok(claimRoute.includes('inArray(jobs.generationStatus, ["not_queued", "failed"])'));
+  assert.ok(claimRoute.includes('eq(jobs.generationStatus, "queued")'));
+});
+
+test('Generation distinguishes generated documents from delivered files', () => {
+  const repositoryRoot = path.join(extensionRoot, '..');
+  const schema = fs.readFileSync(path.join(repositoryRoot, 'src', 'db', 'schema.ts'), 'utf8');
+  const completeRoute = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'api', 'extension', 'generation', 'complete', 'route.ts'),
+    'utf8',
+  );
+  const finalizeRoute = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'api', 'extension', 'generation', 'finalize', 'route.ts'),
+    'utf8',
+  );
+  const pdfPage = fs.readFileSync(path.join(repositoryRoot, 'src', 'app', 'pdf', 'page.tsx'), 'utf8');
+
+  assert.ok(schema.includes('"delivered"'));
+  assert.ok(completeRoute.includes('status: completed ? "completed" : "failed"'));
+  assert.ok(finalizeRoute.includes('.set({ status: "delivered"'));
+  assert.ok(finalizeRoute.includes('db.transaction(async (tx)'));
+  assert.ok(pdfPage.includes('eq(generationRuns.status, "delivered")'));
 });
 
 test('Get JD review lists candidates and reports per-candidate saves', () => {
@@ -490,6 +524,7 @@ test('document generation uses saved manager prompt assignments and gates prompt
 
   assert.ok(promptResolver.includes('managerPromptAssignments'));
   assert.ok(promptResolver.includes('assignedRows[0]?.promptTemplate'));
+  assert.ok(promptResolver.includes('eq(prompts.isActive, true)'));
   assert.ok(promptResolver.includes('MissingDocumentPromptError'));
   assert.ok(promptActions.includes('update manager_prompt_assignments'));
   assert.ok(!promptActions.includes('promptChoice === "random"'));

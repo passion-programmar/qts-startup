@@ -69,22 +69,37 @@ export async function POST(request: Request): Promise<NextResponse> {
       company: run.company,
       createdAt: run.createdAt,
     });
-    const [job] = await db
-      .update(jobs)
-      .set({
-        generationStatus: "completed",
-        generationError: null,
-        generationLeaseExpiresAt: null,
-        resumeLocalPath: downloadPaths.resume,
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(jobs.id, jobId),
-        eq(jobs.managerId, manager.id),
-        eq(jobs.generationStatus, "processing"),
-      ))
-      .returning({ id: jobs.id });
-    if (!job) {
+    const finalized = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .update(jobs)
+        .set({
+          generationStatus: "completed",
+          generationError: null,
+          generationLeaseExpiresAt: null,
+          resumeLocalPath: downloadPaths.resume,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(jobs.id, jobId),
+          eq(jobs.managerId, manager.id),
+          eq(jobs.generationStatus, "processing"),
+        ))
+        .returning({ id: jobs.id });
+      if (!job) return false;
+      const [delivered] = await tx
+        .update(generationRuns)
+        .set({ status: "delivered", updatedAt: new Date() })
+        .where(and(
+          eq(generationRuns.id, generationId),
+          eq(generationRuns.jobId, jobId),
+          eq(generationRuns.managerId, manager.id),
+          eq(generationRuns.status, "completed"),
+        ))
+        .returning({ id: generationRuns.id });
+      if (!delivered) throw new Error("The generated document package is no longer ready for delivery.");
+      return true;
+    });
+    if (!finalized) {
       return NextResponse.json(
         { success: false, message: "The queued job is no longer processing." },
         { status: 409 },

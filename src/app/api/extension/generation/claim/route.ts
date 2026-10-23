@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, isNotNull, lte } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, isNotNull, lte, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -49,7 +49,15 @@ export async function POST(request: Request): Promise<NextResponse> {
         .innerJoin(users, eq(users.id, profiles.userId))
         .where(and(
           eq(jobs.managerId, manager.id),
-          eq(jobs.generationStatus, "queued"),
+          or(
+            eq(jobs.generationStatus, "queued"),
+            and(
+              eq(jobs.status, "todo"),
+              inArray(jobs.generationStatus, ["not_queued", "failed"]),
+            ),
+          ),
+          isNotNull(jobs.description),
+          sql`length(btrim(${jobs.description})) > 0`,
           eq(users.parentUserId, manager.id),
           eq(users.role, "account"),
           isNull(users.blockedAt),
@@ -72,7 +80,13 @@ export async function POST(request: Request): Promise<NextResponse> {
         .where(and(
           eq(jobs.id, candidate.id),
           eq(jobs.managerId, manager.id),
-          eq(jobs.generationStatus, "queued"),
+          or(
+            eq(jobs.generationStatus, "queued"),
+            and(
+              eq(jobs.status, "todo"),
+              inArray(jobs.generationStatus, ["not_queued", "failed"]),
+            ),
+          ),
         ))
         .returning({ id: jobs.id });
       if (!claimed) continue;

@@ -137,9 +137,6 @@ export async function setJobGenerationQueueAction(
       generationStatus: "not_queued",
       generationError: null,
       generationLeaseExpiresAt: null,
-      resumeLocalPath: null,
-      status: "todo",
-      failureReason: null,
       updatedAt: new Date(),
     }).where(and(
       eq(jobs.id, id),

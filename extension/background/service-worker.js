@@ -2734,8 +2734,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
 
   async function ensureQueuedGenerationIsActive(jobId) {
     const result = await workerApiRequest(
-      'GET',
-      `/api/extension/generation/status?jobId=${encodeURIComponent(jobId)}`,
+      'POST',
+      '/api/extension/generation/heartbeat',
+      { jobId },
     );
     if (!result.success) {
       throw new Error(result.message || 'Could not check Generation status.');
@@ -3114,6 +3115,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const queuedJob = claim.job;
         let jobTabId = null;
         let chatTabId = null;
+        let generationId = '';
         const downloadIds = [];
         try {
           if (typeof queuedJob.id !== 'string' || typeof queuedJob.jobUrl !== 'string') {
@@ -3131,6 +3133,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           jobTabId = jobTab.id;
           await waitForTabSettled(jobTabId);
           const result = await runGenerationForTab(jobTabId, queuedJob);
+          generationId = result.generationId;
           chatTabId = result.chatTabId;
           await updateGenerationBrowserState({ phase: 'downloading' });
           await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds);
@@ -3161,21 +3164,25 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             }
           }
           const reason = handledError instanceof Error ? handledError.message : 'Generation failed.';
-          if (isGenerationCancelled(handledError)) {
+          if (downloadIds.length > 0) {
             await removeQueuedGenerationDownloads(downloadIds);
-          } else {
-            try {
-              const failed = await workerApiRequest(
-                'POST',
-                '/api/extension/generation/fail',
-                { jobId: queuedJob.id, reason },
-              );
-              if (!failed.success) {
-                console.error('[QTS Generation] Could not mark the queued job failed:', failed.message);
-              }
-            } catch (failureError) {
-              console.error('[QTS Generation] Could not report queued job failure:', failureError);
+          }
+          try {
+            const failed = await workerApiRequest(
+              'POST',
+              '/api/extension/generation/fail',
+              {
+                jobId: queuedJob.id,
+                generationId,
+                reason,
+                cancelled: isGenerationCancelled(handledError),
+              },
+            );
+            if (!failed.success) {
+              console.error('[QTS Generation] Could not mark the queued job failed:', failed.message);
             }
+          } catch (failureError) {
+            console.error('[QTS Generation] Could not report queued job failure:', failureError);
           }
           if (jobTabId != null) {
             await showGenerationPageStatus(
@@ -4127,30 +4134,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'generation') {
-        if (tabId == null) {
-          sendResponse({ ok: false, error: 'Generation must be started from a job page.' });
-          return;
-        }
         const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
         if (!token) {
           sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Generation.' });
-          return;
-        }
-        const jobUrl = sender.tab?.url || '';
-        if (!isExtractablePageUrl(jobUrl)) {
-          sendResponse({ ok: false, error: 'Open the saved job page before starting Generation.' });
-          return;
-        }
-        const queued = await workerApiRequest(
-          'POST',
-          '/api/extension/generation/queue',
-          { jobUrl },
-        );
-        if (!queued.success) {
-          sendResponse({
-            ok: false,
-            error: queued.message || 'Could not queue Generation for this job.',
-          });
           return;
         }
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'generation' });
@@ -4160,7 +4146,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({
           ok: true,
           status: 'generation',
-          message: `Generation started for ${queued.readyCount} candidate${queued.readyCount === 1 ? '' : 's'}. Opening ChatGPT...`,
+          message: 'Generation started. Opening ChatGPT and loading the oldest Job...',
         });
         processQueuedGenerationJobs().catch((error) => {
           console.error('[QTS Generation] Queue worker failed:', error);
