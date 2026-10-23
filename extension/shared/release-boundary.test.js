@@ -96,6 +96,30 @@ test('Get JD supports Super-selected manual and Gemini matching flows', () => {
   assert.ok(serviceWorker.includes('pageText,'));
   assert.ok(serviceWorker.includes('document.body?.innerText'));
   assert.ok(!serviceWorker.includes('bodyHtml'));
+  assert.ok(serviceWorker.includes("geminiResult.classification?.isJobPage !== true"));
+  assert.ok(serviceWorker.includes("result.classification?.isRemote !== true"));
+  assert.ok(serviceWorker.includes('isJobPage: result.classification.isJobPage'));
+  assert.ok(serviceWorker.includes('isRemote: result.classification.isRemote'));
+  assert.equal(serviceWorker.includes('passesJobPolicy'), false);
+  const saveRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'get-jd', 'save', 'route.ts'),
+    'utf8',
+  );
+  const evaluationRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'get-jd', 'route.ts'),
+    'utf8',
+  );
+  const reviewPanel = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'get-jd-review.js'),
+    'utf8',
+  );
+  assert.ok(saveRoute.includes('!isGetJdEvaluationAccepted(readEvaluationDecision(body))'));
+  assert.ok(evaluationRoute.includes('if (!classification.isJobPage)'));
+  assert.ok(evaluationRoute.includes('if (!classification.isRemote)'));
+  assert.ok(evaluationRoute.includes('jobUrl: pageUrl'));
+  assert.equal(evaluationRoute.includes('passesJobPolicy'), false);
+  assert.ok(reviewPanel.includes("currentResult.classification?.isRemote === true"));
+  assert.equal(reviewPanel.includes('passesJobPolicy'), false);
   assert.ok(serviceWorker.includes('matchingProfileIds'));
 });
 
@@ -319,6 +343,18 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
     path.join(extensionRoot, '..', 'src', 'server', 'jobs', 'get-jd-jobs.ts'),
     'utf8',
   );
+  const autoSavedJobRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'get-jd', 'auto-saved-jobs', '[jobId]', 'route.ts'),
+    'utf8',
+  );
+  const apiWorker = fs.readFileSync(
+    path.join(extensionRoot, 'shared', 'api-worker.js'),
+    'utf8',
+  );
+  const evaluationRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'get-jd', 'route.ts'),
+    'utf8',
+  );
 
   assert.ok(profilesRoute.includes('getExtensionManager(request)'));
   assert.ok(profilesRoute.includes('eq(users.parentUserId, manager.id)'));
@@ -345,7 +381,7 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(serviceWorker.includes('selectionModified: true'));
   assert.ok(serviceWorker.includes('profiles.filter((profile) => profile.available !== false)'));
   assert.ok(serviceWorker.includes("status: 'complete'"));
-  assert.ok(review.includes("checkbox.disabled = !selectionEnabled || profile.available === false"));
+  assert.ok(review.includes("profile.available === false && profile.autoSaved !== true"));
   assert.ok(review.includes('checkbox.checked = selectedIds.has(profile.id)'));
   assert.ok(review.includes('readSelectedIds().filter((id) => availableIds.has(id))'));
   assert.ok(review.includes("profile.jobStatus === 'todo'"));
@@ -355,7 +391,20 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes("? 'Already applied.'"));
   assert.ok(review.includes("? 'Already added.'"));
   assert.ok(review.includes("result.toastMessage || 'New job.'"));
-  assert.ok(serviceWorker.includes('if (result.allCandidatesAssigned === true || availableProfiles.length === 0)'));
+  assert.ok(evaluationRoute.includes('insertGetJdJob({'));
+  assert.ok(evaluationRoute.includes('autoSavedProfileIds: [...autoSavedProfileIds]'));
+  assert.ok(serviceWorker.includes('autoSavedProfileIds.length === 0'));
+  assert.ok(serviceWorker.includes('autoSavedProfileIds,'));
+  assert.ok(serviceWorker.includes("'DELETE'"));
+  assert.ok(serviceWorker.includes('/api/extension/get-jd/auto-saved-jobs/${encodeURIComponent(job.jobId)}'));
+  assert.ok(serviceWorker.includes('uncheckedAutoSavedJobs = autoSavedJobs.filter'));
+  assert.ok(autoSavedJobRoute.includes('eq(jobs.autoSavedByGetJd, true)'));
+  assert.ok(autoSavedJobRoute.includes('eq(jobs.managerId, manager.id)'));
+  assert.ok(autoSavedJobRoute.includes('eq(jobs.generationStatus, "not_queued")'));
+  assert.ok(apiWorker.includes("get-jd\\/auto-saved-jobs\\/"));
+  assert.ok(review.includes('profile.available === false && profile.autoSaved !== true'));
+  assert.ok(review.includes("profile.autoSaved === true ? 'Saved automatically' : ''"));
+  assert.ok(review.includes("result.autoSavedProfileIds.length > 0"));
   assert.equal(serviceWorker.includes('result.exists === true || result.allCandidatesAssigned === true'), false);
   assert.ok(serviceWorker.includes('.filter((profile) => profile.duplicateKind)'));
   assert.ok(duplicateCheckRoute.includes('findGetJdDuplicateDetails('));

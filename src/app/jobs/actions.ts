@@ -72,6 +72,7 @@ export async function updateJobAction(
       employmentType: employmentType || null,
       workplaceType: workplaceType || null,
       salary: salary || null,
+      autoSavedByGetJd: false,
       date, status: status as "todo" | "pending" | "applied" | "failed",
       failureReason: failureReason || null, updatedAt: new Date(),
     }).where(and(

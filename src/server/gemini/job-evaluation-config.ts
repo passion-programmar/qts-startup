@@ -9,23 +9,19 @@ export const geminiJobEvaluationResponseSchema = {
         title: { type: "STRING" },
         company: { type: "STRING" },
         description: { type: "STRING" },
-        location: { type: "STRING" },
         country: { type: "STRING" },
         employmentType: { type: "STRING" },
         workplaceType: { type: "STRING" },
         salary: { type: "STRING" },
-        jobUrl: { type: "STRING" },
       },
       required: [
         "title",
         "company",
         "description",
-        "location",
         "country",
         "employmentType",
         "workplaceType",
         "salary",
-        "jobUrl",
       ],
     },
     matchingProfileIndexes: {
@@ -33,7 +29,12 @@ export const geminiJobEvaluationResponseSchema = {
       items: { type: "INTEGER" },
     },
   },
-  required: ["isJobPage", "isRemote", "job", "matchingProfileIndexes"],
+  required: [
+    "isJobPage",
+    "isRemote",
+    "job",
+    "matchingProfileIndexes",
+  ],
 } as const;
 
 export const geminiJobEvaluationGenerationConfig = {
@@ -41,3 +42,10 @@ export const geminiJobEvaluationGenerationConfig = {
   responseSchema: geminiJobEvaluationResponseSchema,
   temperature: 0.2,
 } as const;
+
+export function isGetJdEvaluationAccepted(decision: {
+  isJobPage: boolean;
+  isRemote: boolean;
+}): boolean {
+  return decision.isJobPage === true && decision.isRemote === true;
+}

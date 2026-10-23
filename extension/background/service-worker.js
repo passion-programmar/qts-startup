@@ -844,14 +844,63 @@ async function updateGetJdSelection(tabId, profileIds) {
   if (profileIds.some((id) => !allowedIds.has(id))) {
     return { ok: false, error: 'One or more selected candidates are unavailable.' };
   }
+  const autoSavedJobs = Array.isArray(result.autoSavedJobs)
+    ? result.autoSavedJobs.filter((job) =>
+      job && typeof job.profileId === 'string' && typeof job.jobId === 'string',
+    )
+    : [];
+  const uncheckedAutoSavedJobs = autoSavedJobs.filter((job) => !profileIds.includes(job.profileId));
+  const removedAutoSavedProfileIds = new Set();
+  const failedAutoSavedProfileIds = new Set();
+  for (const job of uncheckedAutoSavedJobs) {
+    const response = await workerApiRequest(
+      'DELETE',
+      `/api/extension/get-jd/auto-saved-jobs/${encodeURIComponent(job.jobId)}`,
+    );
+    if (response.success === true) removedAutoSavedProfileIds.add(job.profileId);
+    else failedAutoSavedProfileIds.add(job.profileId);
+  }
+  const remainingAutoSavedJobs = autoSavedJobs.filter(
+    (job) => !removedAutoSavedProfileIds.has(job.profileId),
+  );
+  const selectedProfileIds = [...new Set([
+    ...profileIds,
+    ...failedAutoSavedProfileIds,
+  ])];
   const updated = {
     ...result,
-    selectedProfileIds: profileIds,
+    selectedProfileIds,
+    autoSavedJobs: remainingAutoSavedJobs,
+    autoSavedProfileIds: remainingAutoSavedJobs.map((job) => job.profileId),
+    profiles: (result.profiles || []).map((profile) => {
+      if (!removedAutoSavedProfileIds.has(profile.id)) return profile;
+      return {
+        ...profile,
+        autoSaved: false,
+        autoSaveJobId: null,
+        available: true,
+        duplicateKind: null,
+        jobStatus: null,
+      };
+    }),
     selectionModified: true,
     updatedAt: Date.now(),
   };
   await saveGetJdResult(tabId, updated, false);
-  return { ok: true };
+  if (failedAutoSavedProfileIds.size > 0) {
+    return {
+      ok: false,
+      error: 'Could not remove an automatically saved job. The affected candidate remains selected.',
+      selectedProfileIds,
+      result: updated,
+    };
+  }
+  return {
+    ok: true,
+    selectedProfileIds,
+    autoSavedChanged: removedAutoSavedProfileIds.size > 0,
+    result: updated,
+  };
 }
 
 async function cancelGetJdReview(tabId) {
@@ -863,7 +912,9 @@ async function cancelGetJdReview(tabId) {
     ...result,
     status: 'cancelled',
     reviewDismissed: true,
-    message: 'Cancelled. No Job List rows were saved.',
+    message: (result.autoSavedProfileIds || []).length > 0
+      ? 'Review closed. Automatically saved matching jobs remain in the Job List.'
+      : 'Cancelled. No Job List rows were saved.',
     updatedAt: Date.now(),
   });
   return { ok: true };
@@ -884,6 +935,13 @@ async function saveGetJdSelection(tabId, profileIds) {
     result.classification,
     result.jobDescription,
   );
+  if (
+    result.evaluationMode === 'gemini' &&
+    (result.classification?.isJobPage !== true ||
+      result.classification?.isRemote !== true)
+  ) {
+    return { ok: false, error: 'This job did not pass validation or remote eligibility.' };
+  }
   if (!job) {
     return { ok: false, error: 'The job description is missing. Run Get JD on the job page again.' };
   }
@@ -893,6 +951,14 @@ async function saveGetJdSelection(tabId, profileIds) {
     {
       job,
       profileIds,
+      ...(result.evaluationMode === 'gemini'
+        ? {
+          evaluation: {
+            isJobPage: result.classification.isJobPage,
+            isRemote: result.classification.isRemote,
+          },
+        }
+        : {}),
     },
   );
   if (response.success !== true) {
@@ -1007,8 +1073,25 @@ async function processGetJdPage(tabId, url, documentId = '') {
         });
         return;
       }
+      if (geminiResult.classification?.isRemote !== true) {
+        await saveGetJdResult(tabId, {
+          ...initialResult,
+          pageTitle: tab.title || '',
+          status: 'error',
+          message: geminiResult.message || 'This job does not pass the saved remote eligibility rules.',
+          classification: geminiResult.classification,
+          updatedAt: Date.now(),
+        });
+        return;
+      }
       const profiles = Array.isArray(geminiResult.profiles) ? geminiResult.profiles : [];
-      if (geminiResult.allCandidatesAssigned === true || profiles.every((profile) => profile.available === false)) {
+      const autoSavedProfileIds = Array.isArray(geminiResult.autoSavedProfileIds)
+        ? geminiResult.autoSavedProfileIds.filter((id) => typeof id === 'string')
+        : [];
+      if (
+        (geminiResult.allCandidatesAssigned === true || profiles.every((profile) => profile.available === false)) &&
+        autoSavedProfileIds.length === 0
+      ) {
         await saveGetJdResult(tabId, {
           ...initialResult,
           pageTitle: tab.title || '',
@@ -1030,17 +1113,26 @@ async function processGetJdPage(tabId, url, documentId = '') {
         ...initialResult,
         pageTitle: tab.title || '',
         status: 'complete',
-        message: matchingAvailableProfiles.length
-          ? `Gemini recommended ${matchingAvailableProfiles.length} candidate${matchingAvailableProfiles.length === 1 ? '' : 's'}. Recommended available candidates are checked; review the list before saving.`
+        message: autoSavedProfileIds.length
+          ? geminiResult.message
+          : geminiResult.autoSaveFailureCount > 0
+            ? geminiResult.message
+          : matchingAvailableProfiles.length
+            ? `Gemini recommended ${matchingAvailableProfiles.length} candidate${matchingAvailableProfiles.length === 1 ? '' : 's'}. Recommended available candidates are checked; review the list before saving.`
           : 'Gemini did not recommend any available candidates from their matching notes. All available profiles are listed unchecked so you can review and select manually.',
         hasDuplicates: geminiResult.exists === true,
         toastKind: geminiResult.toastKind,
         toastMessage: geminiResult.toastMessage,
         updatedAt: Date.now(),
         classification: geminiResult.classification,
+        evaluationMode: 'gemini',
         jobDescription: geminiResult.jobDescription || geminiResult.classification.job?.description || '',
         profiles,
-        selectedProfileIds: matchingAvailableProfiles.map((profile) => profile.id),
+        autoSavedProfileIds,
+        selectedProfileIds: [
+          ...autoSavedProfileIds,
+          ...matchingAvailableProfiles.map((profile) => profile.id),
+        ],
       });
       return;
     }

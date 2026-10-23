@@ -33,6 +33,7 @@ async function initializeGetJdReviewOnce() {
   let lastToastKey = '';
   let managerProfiles = [];
   let currentResult = null;
+  let selectionUpdateInProgress = false;
   let extensionStatus = null;
   let signedIn = false;
   let profilesLoaded = false;
@@ -932,17 +933,69 @@ async function initializeGetJdReviewOnce() {
   }
 
   async function sendSelection() {
-    if (currentResult?.status !== 'complete') return;
+    if (currentResult?.status !== 'complete' || selectionUpdateInProgress) return;
+    const previousSelectedProfileIds = currentResult.selectedProfileIds || [];
+    const elements = host.__qtsElements;
     currentResult = {
       ...currentResult,
       selectedProfileIds: readSelectedIds(),
       selectionModified: true,
     };
-    const response = await chrome.runtime.sendMessage({
-      type: 'UPDATE_GET_JD_SELECTION',
-      profileIds: currentResult.selectedProfileIds,
+    selectionUpdateInProgress = true;
+    elements.save.disabled = true;
+    elements.cancel.disabled = true;
+    root.querySelectorAll('input[data-profile-id]').forEach((input) => {
+      input.disabled = true;
     });
-    if (!response?.ok) throw new Error(response?.error || 'Could not save candidate selection.');
+
+    let errorMessage = '';
+    let refreshReview = false;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'UPDATE_GET_JD_SELECTION',
+        profileIds: currentResult.selectedProfileIds,
+      });
+      if (!response?.ok) {
+        currentResult = response.result || {
+          ...currentResult,
+          selectedProfileIds: response?.selectedProfileIds || previousSelectedProfileIds,
+        };
+        errorMessage = response?.error || 'Could not save candidate selection.';
+        refreshReview = true;
+      } else {
+        currentResult = response.result || {
+          ...currentResult,
+          selectedProfileIds: response.selectedProfileIds || currentResult.selectedProfileIds,
+        };
+        refreshReview = response.autoSavedChanged === true;
+      }
+    } catch (error) {
+      currentResult = {
+        ...currentResult,
+        selectedProfileIds: previousSelectedProfileIds,
+      };
+      errorMessage = error.message || 'Could not save candidate selection.';
+      refreshReview = true;
+    } finally {
+      selectionUpdateInProgress = false;
+    }
+
+    if (refreshReview) {
+      renderReview(currentResult);
+      if (errorMessage) elements.message.textContent = errorMessage;
+    } else {
+      const profileById = new Map(
+        (currentResult.profiles || []).map((profile) => [profile.id, profile]),
+      );
+      root.querySelectorAll('input[data-profile-id]').forEach((input) => {
+        const profile = profileById.get(input.dataset.profileId);
+        input.disabled = profile?.available === false && profile?.autoSaved !== true;
+      });
+      elements.save.disabled = !(currentResult.profiles || []).some(
+        (profile) => profile.available !== false,
+      );
+      elements.cancel.disabled = false;
+    }
   }
 
   function renderProfiles(profiles, options = {}) {
@@ -995,6 +1048,8 @@ async function initializeGetJdReviewOnce() {
       category.textContent = [
         profile.recommended === true ? 'Gemini recommended' : '',
         profile.category || 'Uncategorized',
+        profile.autoSaved === true ? 'Saved automatically' : '',
+        profile.autoSaveFailed === true ? 'Auto-save failed · select Save to retry' : '',
         saveResult?.message || availability,
       ].filter(Boolean).join(' · ');
       if (saveResult?.status === 'saved') category.classList.add('saved');
@@ -1005,7 +1060,9 @@ async function initializeGetJdReviewOnce() {
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.dataset.profileId = profile.id;
-        checkbox.disabled = !selectionEnabled || profile.available === false;
+        checkbox.disabled = !selectionEnabled || (
+          profile.available === false && profile.autoSaved !== true
+        );
         checkbox.checked = selectedIds.has(profile.id);
         if (profile.available === false) label.classList.add('unavailable');
         else if (checkbox.disabled) label.classList.add('inactive');
@@ -1070,9 +1127,10 @@ async function initializeGetJdReviewOnce() {
 
     const selectedIds = new Set([
       ...(Array.isArray(result.selectedProfileIds) ? result.selectedProfileIds : []),
+      ...(Array.isArray(result.autoSavedProfileIds) ? result.autoSavedProfileIds : []),
       ...(Array.isArray(result.profiles)
         ? result.profiles
-          .filter((profile) => profile.available === false)
+          .filter((profile) => profile.available === false && profile.autoSaved !== true)
           .map((profile) => profile.id)
         : []),
       ...(result.selectionModified === true
@@ -1098,14 +1156,23 @@ async function initializeGetJdReviewOnce() {
     const saveResults = new Map(
       (result.saveResponse?.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
     );
-    renderProfiles(candidates, { selectable: true, enabled: true, selectedIds, saveResults });
+    renderProfiles(candidates, {
+      selectable: true,
+      enabled: !selectionUpdateInProgress,
+      selectedIds,
+      saveResults,
+    });
 
     elements.save.hidden = false;
     elements.save.disabled = !candidates.some((profile) => profile.available !== false);
     elements.cancel.hidden = false;
     elements.save.textContent = 'Save';
     elements.cancel.disabled = false;
-    elements.cancel.textContent = 'Cancel';
+    elements.cancel.textContent = Array.isArray(result.autoSavedProfileIds) &&
+      result.autoSavedProfileIds.length > 0 &&
+      !candidates.some((profile) => profile.available !== false)
+      ? 'Done'
+      : 'Cancel';
     elements.save.onclick = async () => {
       const availableIds = new Set(
         candidates
@@ -1212,7 +1279,11 @@ async function initializeGetJdReviewOnce() {
       return;
     }
     setPanelVisible(true);
-    if (currentResult?.status === 'complete' && currentResult.classification?.isJobPage === true) {
+    if (
+      currentResult?.status === 'complete' &&
+      currentResult.classification?.isJobPage === true &&
+      currentResult.classification?.isRemote === true
+    ) {
       renderReview(currentResult);
       return;
     }
@@ -1317,7 +1388,7 @@ async function initializeGetJdReviewOnce() {
       renderIdlePanel(result.message || 'Get JD is checking this page...');
       return;
     }
-    if (!result.classification.isJobPage) {
+    if (!result.classification.isJobPage || !result.classification.isRemote) {
       currentResult = null;
       setPanelVisible(false);
       return;

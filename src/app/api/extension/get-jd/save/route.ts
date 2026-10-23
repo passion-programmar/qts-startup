@@ -8,6 +8,8 @@ import {
   insertGetJdJob,
 } from "@/server/jobs/get-jd-jobs";
 import { readExtensionSavedJob } from "@/server/jobs/get-jd-save-values";
+import { isGetJdEvaluationAccepted } from "@/server/gemini/job-evaluation-config";
+import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 
 const maxProfilesPerSave = 100;
 
@@ -47,8 +49,20 @@ export async function POST(request: Request): Promise<NextResponse> {
       400,
     );
   }
-
   try {
+    if (
+      await getGetJdMatchingMode() === "gemini" &&
+      !isGetJdEvaluationAccepted(readEvaluationDecision(body))
+    ) {
+      return jsonResponse(
+        {
+          success: false,
+          message: "This job has not passed Gemini job validation and remote eligibility.",
+        },
+        409,
+      );
+    }
+
     const candidates = await db
       .select({
         id: profiles.userId,
@@ -169,6 +183,18 @@ function readProfileIds(value: unknown): string[] | null {
     return null;
   }
   return profileIds;
+}
+
+function readEvaluationDecision(
+  value: unknown,
+): { isJobPage: boolean; isRemote: boolean } {
+  if (!isRecord(value) || !isRecord(value.evaluation)) {
+    return { isJobPage: false, isRemote: false };
+  }
+  return {
+    isJobPage: value.evaluation.isJobPage === true,
+    isRemote: value.evaluation.isRemote === true,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

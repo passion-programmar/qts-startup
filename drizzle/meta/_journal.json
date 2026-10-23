@@ -246,6 +246,55 @@
       "when": 1792734300000,
       "tag": "0034_refine_get_jd_evaluation_prompt",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792738800000,
+      "tag": "0035_get_jd_job_policy_response",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792741000000,
+      "tag": "0036_get_jd_remote_policy_semantics",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792742400000,
+      "tag": "0037_get_jd_auto_save_removal",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1792743000000,
+      "tag": "0038_get_jd_extraction_matching_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1792743600000,
+      "tag": "0039_remove_stale_get_jd_remote_references",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1792746600000,
+      "tag": "0041_get_jd_is_remote_response",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1792747200000,
+      "tag": "0042_get_jd_remove_gemini_job_url",
+      "breakpoints": true
     }
   ]
 }

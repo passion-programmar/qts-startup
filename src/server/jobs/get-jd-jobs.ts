@@ -31,6 +31,7 @@ type NewGetJdJob = GetJdJobIdentity & {
   salary: string | null;
   managerId: string;
   candidateId: string;
+  autoSavedByGetJd?: boolean;
 };
 
 function duplicateConditions(
@@ -160,6 +161,7 @@ export async function insertGetJdJob(
       employmentType: job.employmentType,
       workplaceType: job.workplaceType,
       salary: job.salary,
+      autoSavedByGetJd: job.autoSavedByGetJd ?? false,
       managerId: job.managerId,
       candidateId: job.candidateId,
       date: getJobBusinessDate(),

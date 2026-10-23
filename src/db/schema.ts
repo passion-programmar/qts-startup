@@ -400,6 +400,7 @@ export const jobs = pgTable(
     employmentType: text("employment_type"),
     workplaceType: text("workplace_type"),
     salary: text("salary"),
+    autoSavedByGetJd: boolean("auto_saved_by_get_jd").default(false).notNull(),
     candidateId: uuid("candidate_id")
       .notNull()
       .references(() => profiles.userId, { onDelete: "restrict" }),
