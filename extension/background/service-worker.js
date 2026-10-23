@@ -5,7 +5,6 @@ importScripts(
   '../shared/runtime-config.js',
   '../shared/application-flow.js',
   '../shared/job-detect.js',
-  '../shared/job-page-classifier.js',
   '../shared/job-detection-url-rules.js',
   '../shared/get-jd-save-payload.js',
   '../shared/api-prefetch.js',
@@ -76,6 +75,7 @@ let pageExclusionsRefreshPromise = null;
 const JOB_DETECTION_URL_RULES_STORAGE_KEY = 'qtsManagerJobDetectionUrlRules';
 const JOB_DETECTION_URL_RULES_UPDATED_AT_KEY = 'qtsManagerJobDetectionUrlRulesUpdatedAt';
 const JOB_DETECTION_URL_RULES_MANAGER_ID_KEY = 'qtsManagerJobDetectionUrlRulesManagerId';
+const JOB_DETECTION_URL_RULES_REFRESH_TTL_MS = 5 * 60_000;
 let jobDetectionUrlRulesRefreshPromise = null;
 const MANAGER_FEATURES_STORAGE_KEY = 'qtsManagerExtensionFeatures';
 const MANAGER_FEATURES_UPDATED_AT_KEY = 'qtsManagerExtensionFeaturesUpdatedAt';
@@ -235,13 +235,6 @@ async function savePageExclusionsResponse(result) {
   return { ...result, exclusions };
 }
 
-async function isPageExcludedForManager(url) {
-  const result = await getManagerPageExclusions();
-  if (!result.success) return false;
-  const rules = (result.exclusions || []).map((entry) => entry.url);
-  return self.__qtsPageExclusions.shouldSkipPage(url, rules);
-}
-
 async function refreshManagerJobDetectionUrlRules() {
   if (jobDetectionUrlRulesRefreshPromise) return jobDetectionUrlRulesRefreshPromise;
   jobDetectionUrlRulesRefreshPromise = (async () => {
@@ -278,12 +271,65 @@ async function getCachedManagerJobDetectionUrlRules() {
   if (!manager?.id || manager.role !== 'manager') return [];
   const stored = await chrome.storage.local.get([
     JOB_DETECTION_URL_RULES_STORAGE_KEY,
+    JOB_DETECTION_URL_RULES_UPDATED_AT_KEY,
     JOB_DETECTION_URL_RULES_MANAGER_ID_KEY,
   ]);
-  if (stored[JOB_DETECTION_URL_RULES_MANAGER_ID_KEY] !== manager.id) return [];
-  return Array.isArray(stored[JOB_DETECTION_URL_RULES_STORAGE_KEY])
+  const managerMatches = stored[JOB_DETECTION_URL_RULES_MANAGER_ID_KEY] === manager.id;
+  const cachedRules = managerMatches && Array.isArray(stored[JOB_DETECTION_URL_RULES_STORAGE_KEY])
     ? stored[JOB_DETECTION_URL_RULES_STORAGE_KEY]
     : [];
+  const cacheUpdatedAt = Number(stored[JOB_DETECTION_URL_RULES_UPDATED_AT_KEY]) || 0;
+  if (managerMatches && cacheUpdatedAt > 0
+    && Date.now() - cacheUpdatedAt < JOB_DETECTION_URL_RULES_REFRESH_TTL_MS) {
+    return cachedRules;
+  }
+
+  const result = await refreshManagerJobDetectionUrlRules();
+  if (result.success === true && Array.isArray(result.rules)) return result.rules;
+  if (managerMatches) {
+    console.warn(
+      '[QTS Get JD] Could not refresh database URL rules; using the Manager-scoped cached rules.',
+      result.message || 'Unknown URL-rule refresh error.',
+    );
+    return cachedRules;
+  }
+  console.warn(
+    '[QTS extension] Could not load the Manager blocked-URL rules.',
+    result.message || 'Unknown URL-rule refresh error.',
+  );
+  return [];
+}
+
+function isManagerBlockedUrl(url, rules) {
+  return rules.some((rule) =>
+    self.__qtsJobDetectionUrlRules.jobDetectionUrlRuleMatches(url, rule.url),
+  );
+}
+
+async function isPageBlockedForManager(url) {
+  return isManagerBlockedUrl(url, await getCachedManagerJobDetectionUrlRules());
+}
+
+function isManagerAllowedJobUrl(url, rules) {
+  return rules.some((rule) =>
+    self.__qtsPageExclusions.pageMatchesExclusion(url, rule.url),
+  );
+}
+
+async function isPageAllowedJobForManager(url) {
+  const result = await getManagerPageExclusions();
+  return result.success === true
+    && isManagerAllowedJobUrl(url, result.exclusions || []);
+}
+
+async function buildManagerDetectedJobEntry(tabId, pageUrl, data) {
+  const result = await getManagerPageExclusions();
+  const rules = result.success === true ? result.exclusions || [] : [];
+  const pageType = classifyJobPageUrl(
+    pageUrl,
+    isManagerAllowedJobUrl(pageUrl, rules),
+  );
+  return buildDetectedJobEntry(tabId, pageUrl, data, pageType);
 }
 
 async function saveManagerJobDetectionUrlRulesResponse(result) {
@@ -305,13 +351,24 @@ async function saveManagerJobDetectionUrlRulesResponse(result) {
 }
 
 async function notifyPageUrlAccess(tabId, url) {
-  const result = await getManagerPageExclusions();
-  if (!result.success) return;
-  const rules = (result.exclusions || []).map((entry) => entry.url);
+  const rules = await getCachedManagerJobDetectionUrlRules();
   await chrome.tabs.sendMessage(tabId, {
     type: 'QTS_PAGE_URL_CHANGED',
-    excluded: self.__qtsPageExclusions.shouldSkipPage(url, rules),
+    excluded: self.__qtsPageExclusions.shouldSkipPage(url)
+      || isManagerBlockedUrl(url, rules),
   }).catch(() => {});
+}
+
+async function recheckLoadedPagesForManagerJobRules() {
+  if (!(await isGetJdActive())) return;
+  const tabs = await chrome.tabs.query({ status: 'complete' });
+  for (const tab of tabs) {
+    if (!tab.id || !/^https?:/i.test(tab.url || '')) continue;
+    getJdLastPageByTab.delete(tab.id);
+    processGetJdPage(tab.id, tab.url, `rules:${Date.now()}`).catch((error) => {
+      console.warn('[QTS job-page matches] Could not check an open page:', error);
+    });
+  }
 }
 
 async function refreshGlobalTextHighlights() {
@@ -884,7 +941,11 @@ async function processGetJdPage(tabId, url, documentId = '') {
   if (getJdInFlightTabs.has(tabId)) return;
 
   if (!(await isGetJdActive())) return;
-  if (await isPageExcludedForManager(url)) return;
+  const tab = await getTab(tabId);
+  if (!tab?.id || tab.url !== url || tab.status !== 'complete') return;
+
+  if (await isPageBlockedForManager(url)) return;
+  if (!(await isPageAllowedJobForManager(url))) return;
 
   const pageKey = `${documentId}:${url}`;
   if (getJdLastPageByTab.get(tabId) === pageKey) return;
@@ -902,43 +963,6 @@ async function processGetJdPage(tabId, url, documentId = '') {
     classification: null,
   };
   try {
-    const tab = await getTab(tabId);
-    if (!tab?.id || tab.url !== url) return;
-
-    const managerUrlRules = await getCachedManagerJobDetectionUrlRules();
-    const configuredDetailUrl = managerUrlRules.some((rule) =>
-      self.__qtsJobDetectionUrlRules.jobDetectionUrlRuleMatches(url, rule.url),
-    );
-    let pageEvidence = await collectGetJdPageEvidence(tabId);
-    if (!(await isGetJdActive())) return;
-    let pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
-      ...pageEvidence,
-      urlType: classifyJobPageUrl(url),
-      configuredDetailUrl,
-    });
-    if (!pageClassification.isJobPage && !pageEvidence.documentReady) {
-      await waitForGetJdPageContent(tabId);
-      const currentTab = await getTab(tabId);
-      if (!currentTab?.id || currentTab.url !== url || !(await isGetJdActive())) return;
-      pageEvidence = await collectGetJdPageEvidence(tabId);
-      pageClassification = self.__qtsJobPageClassifier.classifyJobPageEvidence({
-        ...pageEvidence,
-        urlType: classifyJobPageUrl(url),
-        configuredDetailUrl,
-      });
-    }
-    if (!pageClassification.isJobPage) {
-      await saveGetJdResult(tabId, {
-        ...initialResult,
-        pageTitle: pageEvidence.title || tab.title || '',
-        status: 'not_job_page',
-        message: 'This is not a job page.',
-        updatedAt: Date.now(),
-        classification: { isJobPage: false, reason: pageClassification.reason },
-      });
-      return;
-    }
-
     await saveGetJdResult(tabId, {
       ...initialResult,
       classification: { isJobPage: true },
@@ -985,7 +1009,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
       });
       return;
     }
-    if (await isPageExcludedForManager(url)) return;
+    if (await isPageBlockedForManager(url) || !(await isPageAllowedJobForManager(url))) return;
     const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
       job: {
         jobUrl: extractedJobDetails.url,
@@ -1074,7 +1098,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
     await saveGetJdResult(tabId, {
       ...initialResult,
       status: 'error',
-      message: error instanceof Error ? error.message : 'Could not classify this page.',
+      message: error instanceof Error ? error.message : 'Could not process this job page.',
       updatedAt: Date.now(),
     });
   } finally {
@@ -1090,90 +1114,6 @@ async function processGetJdPage(tabId, url, documentId = '') {
       });
     }
   }
-}
-
-async function collectGetJdPageEvidence(tabId) {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      const readText = (element, maxLength) =>
-        String(element?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
-      const headings = Array.from(
-        document.querySelectorAll('h1,h2,h3,h4,[role="heading"]'),
-      )
-        .slice(0, 80)
-        .map((heading) => readText(heading, 140))
-        .filter(Boolean);
-      let description = '';
-      const descriptionElements = Array.from(document.querySelectorAll(
-        '[itemprop="description"],[data-testid*="description" i],[class*="job-description" i],[id*="job-description" i],[class*="jobDescription"],main article,article,main,[role="main"]',
-      )).slice(0, 10);
-      for (const element of descriptionElements) {
-        const content = readText(element, 12000);
-        if (content.length > description.length) description = content;
-        if (description.length >= 12000) break;
-      }
-      if (!description) {
-        description = String(
-          document.querySelector('meta[name="description"]')?.getAttribute('content') || '',
-        ).trim().slice(0, 2000);
-      }
-      let hasJobPosting = document.querySelector('[itemtype*="JobPosting" i]') != null;
-      const structuredData = Array.from(
-        document.querySelectorAll('script[type="application/ld+json"]'),
-      ).slice(0, 10);
-      for (const script of structuredData) {
-        if (hasJobPosting) break;
-        const source = String(script.textContent || '').slice(0, 100000);
-        if (!/"@type"\s*:\s*(?:"JobPosting"|\[[^\]]*"JobPosting")/i.test(source)) continue;
-        try {
-          const root = JSON.parse(source);
-          const pending = Array.isArray(root) ? [...root] : [root];
-          let inspected = 0;
-          while (pending.length && inspected < 500) {
-            const value = pending.pop();
-            inspected += 1;
-            if (!value || typeof value !== 'object') continue;
-            const types = Array.isArray(value['@type']) ? value['@type'] : [value['@type']];
-            if (types.some((type) => String(type || '').toLowerCase() === 'jobposting')) {
-              hasJobPosting = true;
-              break;
-            }
-            if (Array.isArray(value['@graph'])) pending.push(...value['@graph']);
-            if (Array.isArray(value.itemListElement)) pending.push(...value.itemListElement);
-          }
-        } catch {
-          // Invalid JSON-LD is ignored; visible page evidence remains available.
-        }
-      }
-      return {
-        title: readText(document.querySelector('h1'), 300) || String(document.title || '').trim().slice(0, 300),
-        headings,
-        description,
-        hasJobPosting,
-        documentReady: document.readyState !== 'loading',
-      };
-    },
-  });
-  return results[0]?.result || {
-    title: '',
-    headings: [],
-    description: '',
-    hasJobPosting: false,
-    documentReady: false,
-  };
-}
-
-async function waitForGetJdPageContent(tabId) {
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      if (document.readyState !== 'loading') return;
-      return new Promise((resolve) => {
-        document.addEventListener('DOMContentLoaded', resolve, { once: true });
-      });
-    },
-  });
 }
 
 async function enableGetJdForTab(tabId) {
@@ -3641,7 +3581,7 @@ async function autoDetectJob(
   if (!forcePipeline && !captureOnly && !(await isAutoApplyArmed())) return;
 
   if (!isExtractablePageUrl(url) || isIgnoredSite(url) || isChatGptHostUrl(url)) return;
-  if (await isPageExcludedForManager(url)) return;
+  if (await isPageBlockedForManager(url) || !(await isPageAllowedJobForManager(url))) return;
 
   const generation = (detectGenerationByTab.get(tabId) || 0) + 1;
   detectGenerationByTab.set(tabId, generation);
@@ -3657,7 +3597,7 @@ async function autoDetectJob(
   if (detectGenerationByTab.get(tabId) !== generation) return;
 
   const pageUrl = result.tab?.url || url;
-  const entry = buildDetectedJobEntry(tabId, pageUrl, result.data);
+  const entry = await buildManagerDetectedJobEntry(tabId, pageUrl, result.data);
   if (result.error) {
     entry.valid = false;
     entry.data = null;
@@ -3951,6 +3891,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           name: result.name || result.username,
         };
         await self.__qtsAccountAuth.storeAuth(result.token, sessionUser, result.expiresAt);
+        await Promise.allSettled([
+          refreshManagerJobDetectionUrlRules(),
+          fetchManagerPageExclusions(),
+          getManagerExtensionFeatures(true),
+        ]);
         sendResponse({ ok: true, signedIn: true });
         return;
       }
@@ -4276,33 +4221,77 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     return true;
   }
+  if (msg.type === 'MANAGE_GLOBAL_TEXT_HIGHLIGHT') {
+    (async () => {
+      const actions = {
+        create: { method: 'POST', path: '/api/extension/highlights' },
+        update: { method: 'PUT', path: `/api/extension/highlights/${String(msg.ruleId || '')}` },
+        delete: { method: 'DELETE', path: `/api/extension/highlights/${String(msg.ruleId || '')}` },
+      };
+      const action = Object.prototype.hasOwnProperty.call(actions, msg.action)
+        ? actions[msg.action]
+        : null;
+      if (!action) {
+        sendResponse({ success: false, message: 'Choose a valid highlight action.' });
+        return;
+      }
+      if (msg.action !== 'create' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(msg.ruleId || ''))) {
+        sendResponse({ success: false, message: 'Invalid highlight rule.' });
+        return;
+      }
+      const result = await workerApiRequest(
+        action.method,
+        action.path,
+        msg.action === 'delete' ? undefined : msg.rule,
+      );
+      if (!result.success || !Array.isArray(result.rules)) {
+        sendResponse({
+          success: false,
+          message: result.message || 'Could not update shared text highlights.',
+        });
+        return;
+      }
+      const highlighting = self.__qtsTextHighlighting;
+      if (!highlighting) {
+        sendResponse({ success: false, message: 'Text highlight helper is unavailable.' });
+        return;
+      }
+      const rules = highlighting.normalizeRules(result.rules);
+      await chrome.storage.local.set({
+        [highlighting.getGlobalStorageKey()]: rules,
+        [highlighting.getGlobalStorageTimestampKey()]: Date.now(),
+      });
+      sendResponse({ success: true, rules });
+    })().catch((error) => {
+      console.error('[QTS text highlights] Could not update shared rules:', error);
+      sendResponse({
+        success: false,
+        message: error instanceof Error ? error.message : 'Could not update shared text highlights.',
+      });
+    });
+    return true;
+  }
   if (msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED') {
     if (sender.tab?.id == null || !sender.tab?.url) {
       sendResponse({ ok: false, error: 'The current page is unavailable.' });
       return false;
     }
-    getManagerPageExclusions()
-      .then(async (result) => {
-        if (!result.success) {
-          sendResponse({
-            ok: false,
-            error: result.message || 'Could not verify excluded page URLs.',
-          });
-          return;
-        }
+    getCachedManagerJobDetectionUrlRules()
+      .then(async (rules) => {
         const features = await getManagerExtensionFeatures();
-        const rules = (result.exclusions || []).map((entry) => entry.url);
         sendResponse({
           ok: true,
-          excluded: self.__qtsPageExclusions.shouldSkipPage(sender.tab.url, rules),
-          canManagePageExclusions: result.canManagePageExclusions === true,
+          excluded: self.__qtsPageExclusions.shouldSkipPage(sender.tab.url)
+            || isManagerBlockedUrl(sender.tab.url, rules),
+          canManagePageExclusions: features.success === true
+            && features.features?.canManagePageExclusions === true,
           canManageJobDetectionUrlRules: features.success === true
             && features.features?.canManageJobDetectionUrlRules === true,
         });
       })
       .catch((error) => sendResponse({
         ok: false,
-        error: error instanceof Error ? error.message : 'Could not verify excluded page URLs.',
+        error: error instanceof Error ? error.message : 'Could not verify blocked page URLs.',
       }));
     return true;
   }
@@ -4333,6 +4322,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       const result = await workerApiRequest('POST', '/api/extension/page-exclusions', { url });
       const saved = await savePageExclusionsResponse(result);
+      if (saved.success === true) recheckLoadedPagesForManagerJobRules().catch(() => {});
       sendResponse({
         ok: saved.success === true,
         exclusions: saved.exclusions || [],
@@ -4356,6 +4346,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         `/api/extension/page-exclusions/${exclusionId}`,
       );
       const saved = await savePageExclusionsResponse(result);
+      if (saved.success === true) recheckLoadedPagesForManagerJobRules().catch(() => {});
       sendResponse({
         ok: saved.success === true,
         exclusions: saved.exclusions || [],
@@ -4385,6 +4376,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         { url },
       );
       const saved = await savePageExclusionsResponse(result);
+      if (saved.success === true) recheckLoadedPagesForManagerJobRules().catch(() => {});
       sendResponse({
         ok: saved.success === true,
         exclusions: saved.exclusions || [],
@@ -4569,7 +4561,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       const pageUrl = result.url || tab.url;
-      const entry = buildDetectedJobEntry(tab.id, pageUrl, result.data);
+      const entry = await buildManagerDetectedJobEntry(tab.id, pageUrl, result.data);
       await setDetectedJobForTab(entry);
 
       sendResponse({
@@ -4606,12 +4598,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     })().catch(() => sendResponse({ url: null, title: null, tabId: null }));
     return true;
-  }
-
-  if (msg.type === 'URL_CHANGED') {
-    const tabId = sender.tab?.id;
-    if (tabId && msg.url) maybeTrackAutoOpen(tabId, msg.url);
-    return false;
   }
 
   if (msg.type === 'APPLY_MODAL_CHANGED') {
@@ -5042,17 +5028,20 @@ const AUTO_APPLY_ENABLED_KEY = 'qtsAutoApplyEnabled';
 chrome.storage.onChanged.addListener((changes, area) => {
   if (
     area === 'local'
-    && (changes[PAGE_EXCLUSIONS_STORAGE_KEY] || changes[PAGE_EXCLUSIONS_MANAGER_ID_KEY])
+    && (
+      changes[JOB_DETECTION_URL_RULES_STORAGE_KEY]
+      || changes[JOB_DETECTION_URL_RULES_MANAGER_ID_KEY]
+    )
   ) {
     chrome.tabs.query({}).then((tabs) => {
       for (const tab of tabs) {
         if (!tab.id || !/^https?:/i.test(tab.url || '')) continue;
         notifyPageUrlAccess(tab.id, tab.url).catch((error) => {
-          console.warn('[QTS page exclusions] Could not refresh an open page:', error);
+          console.warn('[QTS blocked URLs] Could not refresh an open page:', error);
         });
       }
     }).catch((error) => {
-      console.warn('[QTS page exclusions] Could not find open pages to refresh:', error);
+      console.warn('[QTS blocked URLs] Could not find open pages to refresh:', error);
     });
   }
   if (area === 'local' && changes.authToken) {
@@ -5118,6 +5107,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!url || !isExtractablePageUrl(url)) return;
   if (changeInfo.status === 'complete') {
     (async () => {
+      await processGetJdPage(tabId, url, 'complete');
       if (await isAutoApplyArmed()) maybeDetectApplyMethodOnOpen(tabId, url);
       maybeTrackAutoOpen(tabId, url);
     })().catch(() => {});
@@ -5127,9 +5117,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
   if (!isExtractablePageUrl(details.url)) return;
-  processGetJdPage(details.tabId, details.url, details.documentId).catch((error) => {
-    console.error('[QTS Get JD] Could not process the loaded page:', error);
-  });
   if (isChatGptHostUrl(details.url)) return;
   injectedExtractorTabs.delete(details.tabId);
   maybePrewarmCustomGptOnJobPage(details.url);

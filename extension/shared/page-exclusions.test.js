@@ -27,7 +27,7 @@ test('excluded page URLs are blocked case-insensitively', () => {
   assert.equal(exclusions.shouldSkipPage('https://jobs.example.com/role'), false);
 });
 
-test('manager exclusions normalize valid domains and URL paths', () => {
+test('Manager excluded URL job-page rules normalize valid domains and paths', () => {
   const exclusions = loadPageExclusions();
   assert.equal(exclusions.normalizePageExclusion('WWW.Example.com/Jobs/'), 'example.com/Jobs');
   assert.equal(exclusions.normalizePageExclusion('https://example.com'), 'example.com');
@@ -36,7 +36,7 @@ test('manager exclusions normalize valid domains and URL paths', () => {
   assert.equal(exclusions.normalizePageExclusion('javascript:alert(1)'), null);
 });
 
-test('manager exclusions match subdomains and path descendants only', () => {
+test('Manager excluded URL job-page rules match subdomains and path descendants only', () => {
   const exclusions = loadPageExclusions();
   assert.equal(exclusions.pageMatchesExclusion('https://www.example.com/jobs/123', 'example.com'), true);
   assert.equal(exclusions.pageMatchesExclusion('https://jobs.example.com/openings/123', 'example.com/openings'), true);

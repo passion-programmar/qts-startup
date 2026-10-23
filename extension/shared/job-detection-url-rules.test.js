@@ -20,7 +20,7 @@ test('job-detection URL rules normalize domains and paths safely', () => {
   assert.equal(rules.normalizeJobDetectionUrlRule('javascript:alert(1)'), null);
 });
 
-test('job-detection URL rules match only the configured host and path descendants', () => {
+test('job-detection blocking rules match only the configured host and path descendants', () => {
   const rules = loadRules();
   assert.equal(rules.jobDetectionUrlRuleMatches('https://jobs.example.com/openings/123', 'example.com/openings'), true);
   assert.equal(rules.jobDetectionUrlRuleMatches('https://example.com/jobs-old', 'example.com/jobs'), false);

@@ -183,8 +183,8 @@ export default async function SettingsPage() {
               { label: "Manager", className: "w-[20%]" },
               { label: "Prompt assignment", className: "w-[28%]" },
               { label: "Text highlight access", className: "w-[17%]" },
-              { label: "Excluded URL access", className: "w-[17%]" },
-              { label: "Job-detection URL rules", className: "w-[18%]" },
+              { label: "Excluded rules · job match", className: "w-[17%]" },
+              { label: "Job-detection rules · block", className: "w-[18%]" },
             ]}
             emptyMessage="No active managers"
             rows={managerRows.map((manager) => ({

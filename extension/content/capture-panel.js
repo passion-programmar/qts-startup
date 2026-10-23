@@ -1,8 +1,20 @@
 (() => {
+  function hasValidExtensionContext() {
+    try {
+      return Boolean(chrome?.runtime?.id);
+    } catch {
+      return false;
+    }
+  }
+
   if (globalThis.__qtsCapturePanelInitialized) return;
   globalThis.__qtsCapturePanelInitialized = true;
 
   const hostId = 'qts-floating-panel-host';
+  if (!hasValidExtensionContext()) {
+    document.getElementById(hostId)?.remove();
+    return;
+  }
   let host = document.getElementById(hostId);
   let activeConfirmation = null;
 

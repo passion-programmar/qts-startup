@@ -10,10 +10,19 @@ The supported browser-extension workflow is deliberately narrow:
    displays Sign In or Sign Out from the stored Manager session.
 3. Sign In opens an embedded login panel; successful authentication closes it.
    The browser toolbar icon intentionally has no click behavior.
-4. Get JD enables persistent monitoring. Each loaded page is extracted locally,
-   checked against the Manager's Jobs and Bids, and reported in a page toast.
-   It does not invoke Gemini.
-5. Managers can queue Generation from a Jobs row. The signed-in extension
+4. Text Highlight and URL Settings render directly in the same docked in-page
+   panel as the candidate profile list. The panel reserves right-side page
+   space, does not open a popup/iframe, and returns to profiles with Back.
+5. Get JD enables persistent monitoring. After a page finishes loading, a
+   matching job-detection URL rule blocks QTS on that page. Every other page
+   must match an excluded URL rule saved for the signed-in Manager before Get JD
+   continues. Unmatched URLs are ignored without extraction or a server
+   duplicate check. Matching pages are extracted locally, checked against the
+   Manager's Jobs and Bids, and reported in a page toast. This flow does not
+   invoke Gemini.
+   A Manager with the corresponding Super-assigned permission can add, edit,
+   and delete only their own detection and exclusion URL rules.
+6. Managers can queue Generation from a Jobs row. The signed-in extension
    processes queued jobs sequentially through the job page and ChatGPT, then
    downloads résumé PDF, cover-letter PDF, and JD text files locally, and
    records the expected local resume path on the Jobs row.
@@ -23,7 +32,7 @@ The supported browser-extension workflow is deliberately narrow:
    application was submitted successfully. The extension's Generation action
    can cancel an active run, including a queued run; Apply remains a release
    placeholder.
-6. Sign Out clears persisted extension authentication and Get JD status.
+7. Sign Out clears persisted extension authentication and Get JD status.
 
 Gemini evaluation is disabled by the `geminiEvaluation` runtime feature flag.
 The server classification and idempotent save endpoints remain implemented for

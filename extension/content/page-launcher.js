@@ -1,4 +1,17 @@
+function hasValidExtensionContext() {
+  try {
+    return Boolean(chrome?.runtime?.id);
+  } catch {
+    return false;
+  }
+}
+
 async function initializeQtsPageLauncher() {
+  if (!hasValidExtensionContext()) {
+    document.querySelectorAll('[data-qts-page-launcher]').forEach((node) => node.remove());
+    globalThis.__qtsPageLauncher = { excluded: true };
+    return;
+  }
   if (globalThis.__qtsPageLauncher) return;
   if (globalThis.__qtsPageExclusions?.shouldSkipPage(location.href)) return;
   const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
@@ -54,11 +67,6 @@ async function initializeQtsPageLauncher() {
     .details dt { color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .details dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .description { max-height: 180px; overflow: auto; padding: 9px; border-radius: 8px; background: #f8fafc; }
-    .highlight-panel { position: fixed; top: 16px; right: 16px; z-index: 10; width: min(420px, calc(100vw - 32px)); height: min(620px, calc(100vh - 32px)); overflow: hidden; border: 1px solid #cbd5e1; border-radius: 16px; background: #fff; box-shadow: 0 20px 55px #0f172a40; pointer-events: auto; }
-    .highlight-panel[hidden] { display: none; }
-    .highlight-panel iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
-    .highlight-panel-close { position: absolute; top: 8px; right: 8px; z-index: 2; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #cbd5e1; border-radius: 50%; background: #fff; color: #334155; box-shadow: 0 2px 8px #0f172a24; font: 20px/1 system-ui, sans-serif; cursor: pointer; }
-    .highlight-panel-close:hover { background: #f1f5f9; }
     .launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }
     @media (max-width: 520px) {
       .launcher { right: calc(50vw - 29px); bottom: 18px; }
@@ -117,19 +125,6 @@ async function initializeQtsPageLauncher() {
   toast.setAttribute('role', 'status');
   toast.setAttribute('aria-live', 'polite');
 
-  const highlightPanel = document.createElement('section');
-  highlightPanel.className = 'highlight-panel';
-  highlightPanel.hidden = true;
-  highlightPanel.setAttribute('aria-label', 'Manager extension settings');
-  const highlightFrame = document.createElement('iframe');
-  highlightFrame.title = 'Manager extension settings';
-  const highlightClose = document.createElement('button');
-  highlightClose.className = 'highlight-panel-close';
-  highlightClose.type = 'button';
-  highlightClose.setAttribute('aria-label', 'Close Manager extension settings');
-  highlightClose.textContent = '×';
-  highlightPanel.append(highlightFrame, highlightClose);
-
   const signInForm = document.createElement('form');
   signInForm.className = 'sign-in-form';
   signInForm.hidden = true;
@@ -179,7 +174,7 @@ async function initializeQtsPageLauncher() {
   details.className = 'details';
   preview.append(previewHeader, localNote, details);
 
-  root.append(style, launcher, toast, signInForm, preview, highlightPanel);
+  root.append(style, launcher, toast, signInForm, preview);
   (document.documentElement || document.body).appendChild(host);
 
   let toastTimer = null;
@@ -216,11 +211,6 @@ async function initializeQtsPageLauncher() {
     setOpen(false);
     signInForm.hidden = false;
     userInput.focus();
-  }
-
-  function closeHighlightPanel() {
-    highlightPanel.hidden = true;
-    highlightFrame.src = 'about:blank';
   }
 
   async function syncTextHighlightAction() {
@@ -264,12 +254,16 @@ async function initializeQtsPageLauncher() {
       if (!Number.isInteger(response.tabId)) {
         throw new Error('The current page is unavailable for Manager settings.');
       }
-      const url = new URL(chrome.runtime.getURL('popup/popup.html'));
-      url.searchParams.set('embedded', '1');
-      url.searchParams.set('panel', panel);
-      url.searchParams.set('tabId', String(response.tabId));
-      highlightFrame.src = url.href;
-      highlightPanel.hidden = false;
+      await globalThis.__qtsInitializeGetJdReview?.();
+      const managerPanel = globalThis.__qtsGetJdReview;
+      if (typeof managerPanel?.openManagerSettings !== 'function') {
+        throw new Error('The QTS Manager panel is not ready. Reload this page and try again.');
+      }
+      await managerPanel.openManagerSettings(panel, response.tabId, {
+        canManageTextHighlights: response.canManageTextHighlights === true,
+        canManagePageExclusions: response.canManagePageExclusions === true,
+        canManageJobDetectionUrlRules: response.canManageJobDetectionUrlRules === true,
+      });
     } catch (error) {
       showToast(error?.message || 'Could not open Manager settings.', true);
     } finally {
@@ -432,12 +426,6 @@ async function initializeQtsPageLauncher() {
   launcher.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
   });
-  highlightClose.addEventListener('click', closeHighlightPanel);
-  window.addEventListener('message', (event) => {
-    if (event.source === highlightFrame.contentWindow && event.data?.type === 'QTS_CLOSE_TEXT_HIGHLIGHTS') {
-      closeHighlightPanel();
-    }
-  });
   close.addEventListener('click', () => { preview.hidden = true; });
   signInForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -447,7 +435,7 @@ async function initializeQtsPageLauncher() {
   passwordInput.addEventListener('change', submitSignIn);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.qtsManagerPageExclusions) {
+    if (changes.qtsManagerJobDetectionUrlRules || changes.authToken) {
       chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
         .then((response) => {
           if (!response?.ok) return;
@@ -465,7 +453,6 @@ async function initializeQtsPageLauncher() {
     if (changes.authToken || changes.authExpiresAt) {
       syncSessionAction().catch(() => {});
       syncTextHighlightAction().catch(() => {});
-      if (changes.authToken && !changes.authToken.newValue) closeHighlightPanel();
       if (changes.authToken?.newValue) {
         signInForm.hidden = true;
         passwordInput.value = '';
@@ -532,6 +519,11 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
   });
 }
 
-initializeQtsPageLauncher().catch((error) => {
-  console.error('[QTS extension] Could not verify page access:', error);
-});
+function initializePageLauncherAfterLoad() {
+  initializeQtsPageLauncher().catch((error) => {
+    console.error('[QTS extension] Could not verify page access:', error);
+  });
+}
+
+if (document.readyState === 'complete') initializePageLauncherAfterLoad();
+else window.addEventListener('load', initializePageLauncherAfterLoad, { once: true });

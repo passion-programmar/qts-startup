@@ -128,16 +128,23 @@ before sign-in. Clicking it opens a radial menu with **Get
 JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
 toolbar icon has no click behavior. Sign In opens the existing Manager login
 panel inside the current page and the panel closes after a successful login.
-Get JD stores persistent `get_jd` status and uses local page content and
-structured metadata to reject non-job pages before extraction or any
-job-existence server request. Confirmed job pages are checked against the
-authenticated Manager's Jobs and Bids for existing matches. Non-job pages show
-only a toast. This flow does not call Gemini. Managers can maintain URL
+Get JD stores persistent `get_jd` status and waits until a page has finished
+loading. A matching job-detection URL rule blocks QTS on that page. Otherwise,
+the page URL must match one of the signed-in Manager's excluded URL rules before
+extraction or any job-existence server request. Matching pages are checked
+against the authenticated Manager's Jobs and Bids for existing records.
+Unmatched URLs are ignored. This flow does not call Gemini. Managers can maintain URL
 exclusions and job-detection URL rules from URL Settings when a Super Admin
-grants the matching permissions. Detection rules match a domain and optional
-path prefix and act as a URL hint; page content must still look like a job
-posting. Excluded pages do not render QTS controls or run extension workflows.
-Exclusion updates also apply to already-open pages.
+grants the matching permissions. An assigned Manager can add, edit, and delete
+their own rules; every server mutation is scoped to that Manager. Both rule
+types match a domain and optional path prefix. Job-detection URL rules are the
+Manager blocklist. Excluded URL rules are the Manager job-page match list. There
+is no separate local job-page classification step.
+Exclusion updates also apply to already-open pages. Text Highlight and URL
+Settings render as native controls inside the same docked in-page panel as the
+candidate profile list, rather than opening a popup, iframe, or page-covering
+overlay. The panel reserves space at the right side of the page and returns to
+the profile list with its Back control.
 After a Manager signs in, text highlights from the shared rule set render
 automatically on all supported web pages, including pages excluded from the
 launcher and other extension workflows. The launcher editor is available only

@@ -157,7 +157,7 @@ async function refreshPageExclusions() {
   if (!managerPageExclusions.length) {
     const empty = document.createElement('li');
     empty.className = 'page-highlight-list-empty';
-    empty.textContent = 'No website URLs are excluded.';
+    empty.textContent = 'No job-page URL matches are configured.';
     list.appendChild(empty);
   } else {
     for (const exclusion of managerPageExclusions) {
@@ -171,13 +171,13 @@ async function refreshPageExclusions() {
       edit.className = 'btn btn-ghost btn-sm';
       edit.type = 'button';
       edit.textContent = 'Edit';
-      edit.setAttribute('aria-label', `Edit excluded URL ${exclusion.url}`);
+      edit.setAttribute('aria-label', `Edit job-page URL match ${exclusion.url}`);
       edit.addEventListener('click', () => selectPageExclusion(exclusion));
       const remove = document.createElement('button');
       remove.className = 'btn btn-ghost btn-sm';
       remove.type = 'button';
       remove.textContent = 'Delete';
-      remove.setAttribute('aria-label', `Delete excluded URL ${exclusion.url}`);
+      remove.setAttribute('aria-label', `Delete job-page URL match ${exclusion.url}`);
       remove.addEventListener('click', () => {
         removePageExclusion(exclusion.id).catch((error) => {
           setPageExclusionsStatus(error.message || 'Could not remove this URL.', true);
@@ -190,8 +190,8 @@ async function refreshPageExclusions() {
   }
   setPageExclusionsStatus(
     managerPageExclusions.length
-      ? `${managerPageExclusions.length} excluded URL(s) are active for this Manager.`
-      : 'No excluded URLs are configured.',
+      ? `${managerPageExclusions.length} job-page URL match(es) are active for this Manager.`
+      : 'No job-page URL matches are configured.',
   );
   scheduleFitPopup();
 }
@@ -202,7 +202,7 @@ function selectPageExclusion(exclusion) {
   document.getElementById('page-exclusion-submit').textContent = 'Save changes';
   document.getElementById('page-exclusion-cancel')?.classList.remove('hidden');
   document.getElementById('page-exclusion-delete')?.classList.remove('hidden');
-  document.getElementById('page-exclusions-status').textContent = 'Editing excluded URL.';
+  document.getElementById('page-exclusions-status').textContent = 'Editing job-page URL match.';
 }
 
 function clearSelectedPageExclusion() {
@@ -210,7 +210,7 @@ function clearSelectedPageExclusion() {
   const input = document.getElementById('page-exclusion-url');
   if (input) input.value = '';
   const submit = document.getElementById('page-exclusion-submit');
-  if (submit) submit.textContent = 'Exclude URL';
+  if (submit) submit.textContent = 'Add job-page match';
   document.getElementById('page-exclusion-cancel')?.classList.add('hidden');
   document.getElementById('page-exclusion-delete')?.classList.add('hidden');
 }
@@ -267,7 +267,7 @@ function renderJobDetectionUrlRules() {
   if (!managerJobDetectionUrlRules.length) {
     const empty = document.createElement('li');
     empty.className = 'page-highlight-list-empty';
-    empty.textContent = 'No job-detection URL rules are configured.';
+    empty.textContent = 'No blocked job-detection URLs are configured.';
     list.appendChild(empty);
   } else {
     for (const rule of managerJobDetectionUrlRules) {
@@ -300,8 +300,8 @@ function renderJobDetectionUrlRules() {
   }
   setJobDetectionUrlStatus(
     managerJobDetectionUrlRules.length
-      ? `${managerJobDetectionUrlRules.length} job-detection URL rule(s) are active for this Manager.`
-      : 'No job-detection URL rules are configured.',
+      ? `${managerJobDetectionUrlRules.length} blocked URL rule(s) are active for this Manager.`
+      : 'No blocked URL rules are configured.',
   );
   scheduleFitPopup();
 }
@@ -312,7 +312,7 @@ function selectJobDetectionUrlRule(rule) {
   document.getElementById('job-detection-url-submit').textContent = 'Save changes';
   document.getElementById('job-detection-url-cancel')?.classList.remove('hidden');
   document.getElementById('job-detection-url-delete')?.classList.remove('hidden');
-  document.getElementById('job-detection-url-status').textContent = 'Editing job-detection URL rule.';
+  document.getElementById('job-detection-url-status').textContent = 'Editing blocked URL rule.';
 }
 
 function clearSelectedJobDetectionUrlRule() {
@@ -320,7 +320,7 @@ function clearSelectedJobDetectionUrlRule() {
   const input = document.getElementById('job-detection-url');
   if (input) input.value = '';
   const submit = document.getElementById('job-detection-url-submit');
-  if (submit) submit.textContent = 'Add rule';
+  if (submit) submit.textContent = 'Add blocked URL';
   document.getElementById('job-detection-url-cancel')?.classList.add('hidden');
   document.getElementById('job-detection-url-delete')?.classList.add('hidden');
 }
@@ -3245,7 +3245,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       && currentUser?.role === 'manager'
     ) {
       await showPageExclusions();
-      if (!managerExtensionFeatures.canManagePageExclusions) {
+      if (
+        !managerExtensionFeatures.canManagePageExclusions
+        && !managerExtensionFeatures.canManageJobDetectionUrlRules
+      ) {
         window.parent.postMessage({ type: 'QTS_CLOSE_TEXT_HIGHLIGHTS' }, '*');
       }
     }

@@ -177,6 +177,11 @@ async function startPageTextHighlighter() {
   }).catch((error) => console.error('[QTS text highlights] Could not load saved rules:', error));
 }
 
-startPageTextHighlighter().catch((error) => {
-  console.error('[QTS text highlights] Could not verify page access:', error);
-});
+function startPageTextHighlighterAfterLoad() {
+  startPageTextHighlighter().catch((error) => {
+    console.error('[QTS text highlights] Could not verify page access:', error);
+  });
+}
+
+if (document.readyState === 'complete') startPageTextHighlighterAfterLoad();
+else window.addEventListener('load', startPageTextHighlighterAfterLoad, { once: true });

@@ -8,15 +8,18 @@ const {
   usablePartialJobDetails,
 } = require('./job-detect');
 
-test('ATS job identifiers classify custom-host pages as job details', () => {
+test('job URL detail mode comes only from the configured Manager job-page match rules', () => {
   assert.equal(
     classifyJobPageUrl('https://www.sentinelone.com/jobs/?gh_jid=7731266003'),
-    'detail',
+    'unknown',
   );
   assert.equal(
     classifyJobPageUrl('https://jobs.anyoneai.com/?ashby_jid=e80c2c62-6895-41f5-bf9d-89ae5207d2bf'),
-    'detail',
+    'unknown',
   );
+  assert.equal(classifyJobPageUrl('https://jobs.example.com/search'), 'unknown');
+  assert.equal(classifyJobPageUrl('https://jobs.example.com/search', true), 'detail');
+  assert.equal(classifyJobPageUrl('not-a-url', true), 'unknown');
 });
 
 test('Get JD check requires complete API-ready extracted job details', () => {

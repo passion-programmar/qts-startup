@@ -276,7 +276,7 @@ export function ManagerPageExclusionAccessForm({
         <input name="managerId" type="hidden" value={managerId} />
         <input name="enabled" type="hidden" value={String(!canManage)} />
         <span className={`text-xs font-medium ${canManage ? "text-emerald-700" : "text-slate-500"}`}>
-          {canManage ? "Can manage excluded URLs" : "No URL exclusions"}
+          {canManage ? "Can manage job-page URL matches" : "No job-page URL match access"}
         </span>
         <button
           className={`inline-flex h-8 items-center rounded-lg px-3 text-[11px] font-semibold disabled:opacity-60 ${
@@ -314,7 +314,7 @@ export function ManagerJobDetectionUrlAccessForm({
         <input name="managerId" type="hidden" value={managerId} />
         <input name="enabled" type="hidden" value={String(!canManage)} />
         <span className={`text-xs font-medium ${canManage ? "text-emerald-700" : "text-slate-500"}`}>
-          {canManage ? "Can manage job-detection URLs" : "No job-detection URL access"}
+          {canManage ? "Can manage blocked URLs" : "No blocked URL access"}
         </span>
         <button
           className={`inline-flex h-8 items-center rounded-lg px-3 text-[11px] font-semibold disabled:opacity-60 ${

@@ -40,8 +40,19 @@ test('the page launcher is the only user entry point', () => {
     path.join(extensionRoot, 'content', 'page-launcher.js'),
     'utf8',
   );
+  const review = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'get-jd-review.js'),
+    'utf8',
+  );
+  const highlighter = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'text-highlighter.js'),
+    'utf8',
+  );
   assert.ok(launcher.includes('initializeQtsPageLauncher().catch'));
-  assert.equal(launcher.includes("window.addEventListener('load', initializeQtsPageLauncher"), false);
+  assert.ok(launcher.includes('hasValidExtensionContext'));
+  assert.ok(launcher.includes("window.addEventListener('load', initializePageLauncherAfterLoad, { once: true })"));
+  assert.ok(review.includes("window.addEventListener('load', initializeGetJdReviewAfterLoad, { once: true })"));
+  assert.ok(highlighter.includes("window.addEventListener('load', startPageTextHighlighterAfterLoad, { once: true })"));
   assert.ok(launcher.includes('conic-gradient(from 0deg'));
   assert.ok(launcher.includes('qts-border-rotate'));
   assert.ok(launcher.includes('animation: qts-border-rotate 1.5s linear infinite'));
@@ -59,6 +70,7 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   );
 
   assert.ok(serviceWorker.includes("'/api/extension/get-jd/check'"));
+  assert.equal(serviceWorker.includes('requestGeminiJson'), false);
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'get_jd'"));
   assert.ok(launcher.includes("Let's start finding Your Remote Job!"));
   assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
@@ -75,28 +87,44 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(launcher.includes("'Sign Out'"));
 });
 
-test('Get JD locally rejects non-job pages before duplicate checks and profile requests', () => {
+test('Get JD applies Manager block and job-page match rules after load before duplicate checks', () => {
   const serviceWorker = fs.readFileSync(
     path.join(extensionRoot, 'background', 'service-worker.js'),
     'utf8',
   );
-  const review = fs.readFileSync(
-    path.join(extensionRoot, 'content', 'get-jd-review.js'),
-    'utf8',
+  const completedPageIndex = serviceWorker.indexOf("tab.status !== 'complete'");
+  const blockedRuleIndex = serviceWorker.indexOf(
+    'if (await isPageBlockedForManager(url)) return;',
   );
-  const preflightIndex = serviceWorker.indexOf('classifyJobPageEvidence({');
+  const allowedRuleIndex = serviceWorker.indexOf(
+    'if (!(await isPageAllowedJobForManager(url))) return;',
+    blockedRuleIndex,
+  );
+  const extractionIndex = serviceWorker.indexOf(
+    'const extraction = await extractJobFromTab(tabId, { requireCompany: true });',
+  );
   const duplicateCheckIndex = serviceWorker.indexOf("workerApiRequest('POST', '/api/extension/get-jd/check'");
 
-  assert.ok(preflightIndex >= 0);
-  assert.ok(duplicateCheckIndex > preflightIndex);
-  assert.ok(serviceWorker.includes("status: 'not_job_page'"));
+  assert.ok(completedPageIndex >= 0);
+  assert.ok(blockedRuleIndex > completedPageIndex);
+  assert.ok(allowedRuleIndex > blockedRuleIndex);
+  assert.ok(extractionIndex > allowedRuleIndex);
+  assert.ok(duplicateCheckIndex > extractionIndex);
+  assert.equal(serviceWorker.includes('classifyJobPageEvidence({'), false);
+  assert.equal(serviceWorker.includes("status: 'not_job_page'"), false);
   assert.ok(serviceWorker.includes("msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED'"));
-  assert.ok(review.includes("result.status === 'not_job_page'"));
-  assert.equal(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"), false);
-  assert.ok(serviceWorker.includes("document.addEventListener('DOMContentLoaded', resolve, { once: true })"));
+  assert.ok(serviceWorker.includes("workerApiRequest('GET', '/api/extension/job-detection-url-rules')"));
+  assert.ok(serviceWorker.includes('excluded: self.__qtsPageExclusions.shouldSkipPage(sender.tab.url)'));
+  assert.ok(serviceWorker.includes('|| isManagerBlockedUrl(sender.tab.url, rules)'));
+  assert.ok(serviceWorker.includes("await processGetJdPage(tabId, url, 'complete');"));
+  const committedListener = serviceWorker.slice(
+    serviceWorker.indexOf('chrome.webNavigation.onCommitted.addListener'),
+    serviceWorker.indexOf('chrome.webNavigation.onHistoryStateUpdated.addListener'),
+  );
+  assert.equal(committedListener.includes('processGetJdPage('), false);
 });
 
-test('manager URL exclusions are permission-gated and applied before page UI runs', () => {
+test('Manager URL rule CRUD is permission-gated and scoped to its owner', () => {
   const serviceWorker = fs.readFileSync(
     path.join(extensionRoot, 'background', 'service-worker.js'),
     'utf8',
@@ -113,10 +141,31 @@ test('manager URL exclusions are permission-gated and applied before page UI run
     path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'page-exclusions', 'route.ts'),
     'utf8',
   );
+  const exclusionItemRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'page-exclusions', '[exclusionId]', 'route.ts'),
+    'utf8',
+  );
 
   assert.ok(launcher.includes("type: 'CHECK_EXTENSION_PAGE_ALLOWED'"));
-  assert.ok(launcher.includes("url.searchParams.set('panel', panel)"));
+  assert.ok(launcher.includes('managerPanel.openManagerSettings(panel, response.tabId, {'));
+  assert.equal(launcher.includes('highlight-panel'), false);
   assert.ok(launcher.includes("'page-exclusions'"));
+  const review = fs.readFileSync(
+    path.join(extensionRoot, 'content', 'get-jd-review.js'),
+    'utf8',
+  );
+  assert.ok(review.includes('buildManagerSettingsView'));
+  assert.ok(review.includes('chrome?.runtime?.id'));
+  assert.ok(review.includes('managerSettingsOpen'));
+  assert.ok(review.includes('data-settings-view="text-highlights"'));
+  assert.ok(review.includes('data-settings-view="page-exclusions"'));
+  assert.ok(review.includes('manager-brand-header'));
+  assert.ok(review.includes('manager-settings-color-options'));
+  assert.ok(review.includes('data-highlight-preview'));
+  assert.ok(review.includes('manager-settings-rule-edit'));
+  assert.equal(review.includes('managerSettingsFrame'), false);
+  assert.equal(review.includes("chrome.runtime.getURL('popup/popup.html')"), false);
+  assert.ok(review.includes("type: 'MANAGE_GLOBAL_TEXT_HIGHLIGHT'"));
   assert.ok(serviceWorker.includes("'/api/extension/page-exclusions'"));
   assert.ok(featureRoute.includes('canManagePageExclusions'));
   assert.ok(exclusionsRoute.includes('managerCanManagePageExclusions(manager.id)'));
@@ -135,13 +184,31 @@ test('manager URL exclusions are permission-gated and applied before page UI run
   assert.ok(jobDetectionRoute.includes('managerCanManageJobDetectionUrlRules(manager.id)'));
   assert.ok(jobDetectionRoute.includes('export async function POST'));
   assert.ok(jobDetectionItemRoute.includes('export async function PUT'));
-  assert.ok(jobDetectionItemRoute.includes('export async function DELETE'));
-  assert.ok(managerSettings.includes('ManagerJobDetectionUrlAccessForm'));
-  assert.ok(serviceWorker.includes('configuredDetailUrl'));
+  assert.ok(jobDetectionItemRoute.includes('export async function DELETE')  );
+  assert.ok(jobDetectionItemRoute.includes('eq(extensionJobDetectionUrlRules.managerId, manager.id)'));
+  assert.ok(exclusionsRoute.includes('export async function POST'));
+  assert.ok(exclusionItemRoute.includes('export async function PUT'));
+  assert.ok(exclusionItemRoute.includes('export async function DELETE'));
+  assert.ok(exclusionItemRoute.includes('eq(extensionPageExclusions.managerId, manager.id)'));
+  assert.ok(serviceWorker.includes("msg.type === 'ADD_MANAGER_PAGE_EXCLUSION'"));
   assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_PAGE_EXCLUSION'"));
+  assert.ok(serviceWorker.includes("msg.type === 'DELETE_MANAGER_PAGE_EXCLUSION'"));
+  assert.ok(serviceWorker.includes("msg.type === 'ADD_MANAGER_JOB_DETECTION_URL_RULE'"));
+  assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_JOB_DETECTION_URL_RULE'"));
+  assert.ok(serviceWorker.includes("msg.type === 'DELETE_MANAGER_JOB_DETECTION_URL_RULE'"));
+  assert.ok(managerSettings.includes('ManagerJobDetectionUrlAccessForm'));
+  assert.ok(serviceWorker.includes('isManagerBlockedUrl'));
+  assert.ok(serviceWorker.includes('isManagerAllowedJobUrl'));
+  assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_PAGE_EXCLUSION'"));
+  const popup = fs.readFileSync(
+    path.join(extensionRoot, 'popup', 'popup.js'),
+    'utf8',
+  );
+  assert.ok(popup.includes('!managerExtensionFeatures.canManagePageExclusions'));
+  assert.ok(popup.includes('!managerExtensionFeatures.canManageJobDetectionUrlRules'));
 });
 
-test('manager URL exclusions update UI and workflows across SPA navigation', () => {
+test('Manager blocked URL rules update UI and workflows across SPA navigation', () => {
   const serviceWorker = fs.readFileSync(
     path.join(extensionRoot, 'background', 'service-worker.js'),
     'utf8',
@@ -163,7 +230,8 @@ test('manager URL exclusions update UI and workflows across SPA navigation', () 
   );
 
   assert.ok(navigationHandler.indexOf('notifyPageUrlAccess') < navigationHandler.indexOf('if (!isExtractablePageUrl'));
-  assert.ok(serviceWorker.includes('changes[PAGE_EXCLUSIONS_STORAGE_KEY]'));
+  assert.ok(serviceWorker.includes('changes[JOB_DETECTION_URL_RULES_STORAGE_KEY]'));
+  assert.ok(serviceWorker.includes('recheckLoadedPagesForManagerJobRules'));
   assert.ok(serviceWorker.includes("type: 'QTS_PAGE_URL_CHANGED'"));
   assert.ok(launcher.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
   assert.ok(review.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
@@ -251,7 +319,8 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes('transition: padding-right .28s'));
   assert.ok(review.includes('profile-skeleton'));
   assert.ok(review.includes('profilesLoaded = true'));
-  assert.ok(review.includes('visible && signedIn && profilesLoaded && extensionStatus === \'get_jd\''));
+  assert.ok(review.includes('managerSettingsOpen'));
+  assert.ok(review.includes('visible && profilesLoaded && extensionStatus === \'get_jd\''));
   assert.ok(review.includes('!profilesLoaded'));
   assert.ok(review.includes('Loading your candidate accounts...'));
   assert.ok(review.includes('prefers-reduced-motion: reduce'));
@@ -434,7 +503,8 @@ test('shared text highlights are manager-gated and available from the page launc
   assert.ok(worker.includes("'/api/extension/features/me'"));
   assert.ok(launcher.includes("['text_highlights', 'Text Highlight', '✎', 'text-highlights']"));
   assert.ok(launcher.includes("type: 'GET_MANAGER_EXTENSION_FEATURES'"));
-  assert.ok(launcher.includes("url.searchParams.set('panel', panel)"));
+  assert.ok(launcher.includes('managerPanel.openManagerSettings(panel, response.tabId, {'));
+  assert.ok(launcher.includes('await globalThis.__qtsInitializeGetJdReview?.()'));
   assert.ok(launcher.includes("highlightButton.hidden = response?.ok !== true || response.canManageTextHighlights !== true"));
   assert.ok(highlighter.includes('changes.authToken'));
   assert.ok(highlighter.includes('changes.authExpiresAt'));
