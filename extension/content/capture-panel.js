@@ -144,7 +144,18 @@
       @media (max-width: 560px) {
         .panel { top: 40px; right: 8px; width: calc(100vw - 16px); height: calc(100vh - 48px); }
       }
-    `;
+
+      .toast-host { position: fixed; top: 16px; left: 16px; z-index: 2147483647; display: flex; flex-direction: column; gap: 10px; width: min(390px, calc(100vw - 32px)); pointer-events: none; }
+      .toast-host .toast { --accent: #2563eb; position: relative; inset: auto; box-sizing: border-box; width: 100%; max-width: none; display: flex; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent) 20%, white); border-left: 4px solid var(--accent); border-radius: 14px; color: #172033; background: color-mix(in srgb, var(--accent) 7%, white); box-shadow: 0 12px 32px #0f172a20; font: 500 13px/1.45 system-ui, sans-serif; opacity: 1; transform: none; animation: qts-toast-enter .25s ease both; overflow-wrap: anywhere; }
+      .toast-host .toast.error, .toast-host .toast[data-type="error"], .toast-host .toast[data-type="fail"] { --accent: #dc2626; }
+      .toast-host .toast.success, .toast-host .toast[data-type="success"], .toast-host .toast[data-type="new-job"] { --accent: #15803d; }
+      .toast-host .toast[data-type="warn"] { --accent: #d97706; }
+      .toast-host .toast[data-type="applied"] { --accent: #7c3aed; }
+      .toast-host .toast.is-leaving { animation: qts-toast-exit .25s ease both; }
+      @keyframes qts-toast-enter { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: translateX(0); } }
+      @keyframes qts-toast-exit { to { opacity: 0; transform: translateX(36px); } }
+      @media (prefers-reduced-motion: reduce) { .toast-host .toast, .toast-host .toast.is-leaving { animation: none; } }
+`;
     const panel = document.createElement('section');
     panel.className = 'panel';
     panel.hidden = true;
@@ -190,14 +201,11 @@
       close.textContent = '\u00d7';
       close.addEventListener('click', () => toast.remove());
       toast.append(textElement, close);
-      toastHost.append(toast);
-      while (toastHost.children.length > 8) toastHost.firstElementChild?.remove();
-      const duration = Number.isFinite(message.durationMs) && message.durationMs >= 0
-        ? message.durationMs
-        : 3000;
-      if (message.persistUntilCleared !== true) {
-        setTimeout(() => toast.remove(), duration);
-      }
+      toastHost.prepend(toast);
+      setTimeout(() => {
+        toast.classList.add('is-leaving');
+        setTimeout(() => toast.remove(), 250);
+      }, 4000);
       if (Number.isFinite(message.closeTabAfterMs) && message.closeTabAfterMs >= 0) {
         setTimeout(() => {
           chrome.runtime.sendMessage({ type: 'QTS_CLOSE_PAGE_TAB' }).catch((error) => {

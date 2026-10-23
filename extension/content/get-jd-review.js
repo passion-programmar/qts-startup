@@ -29,7 +29,6 @@ async function initializeGetJdReviewOnce() {
   const RESULT_MESSAGE = 'QTS_GET_JD_RESULT_UPDATED';
   let host = null;
   let root = null;
-  let toastTimer = null;
   let lastToastKey = '';
   let managerProfiles = [];
   let currentResult = null;
@@ -201,11 +200,22 @@ async function initializeGetJdReviewOnce() {
       @media (prefers-reduced-motion: reduce) {
         .panel, .profile, button, .status.is-loading::before, .profile-skeleton { transition: none; animation: none; }
       }
-    `;
+
+      .toast-host { position: fixed; top: 16px; left: 16px; z-index: 2147483647; display: flex; flex-direction: column; gap: 10px; width: min(390px, calc(100vw - 32px)); pointer-events: none; }
+      .toast-host .toast { --accent: #2563eb; position: relative; inset: auto; box-sizing: border-box; width: 100%; max-width: none; display: flex; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent) 20%, white); border-left: 4px solid var(--accent); border-radius: 14px; color: #172033; background: color-mix(in srgb, var(--accent) 7%, white); box-shadow: 0 12px 32px #0f172a20; font: 500 13px/1.45 system-ui, sans-serif; opacity: 1; transform: none; animation: qts-toast-enter .25s ease both; overflow-wrap: anywhere; }
+      .toast-host .toast.error, .toast-host .toast[data-type="error"], .toast-host .toast[data-type="fail"] { --accent: #dc2626; }
+      .toast-host .toast.success, .toast-host .toast[data-type="success"], .toast-host .toast[data-type="new-job"] { --accent: #15803d; }
+      .toast-host .toast[data-type="warn"] { --accent: #d97706; }
+      .toast-host .toast[data-type="applied"] { --accent: #7c3aed; }
+      .toast-host .toast.is-leaving { animation: qts-toast-exit .25s ease both; }
+      @keyframes qts-toast-enter { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: translateX(0); } }
+      @keyframes qts-toast-exit { to { opacity: 0; transform: translateX(36px); } }
+      @media (prefers-reduced-motion: reduce) { .toast-host .toast, .toast-host .toast.is-leaving { animation: none; } }
+`;
     root.appendChild(style);
 
     const toast = document.createElement('div');
-    toast.className = 'toast';
+    toast.className = 'toast-host';
     toast.setAttribute('role', 'status');
     toast.setAttribute('aria-live', 'polite');
     root.appendChild(toast);
@@ -900,18 +910,14 @@ async function initializeGetJdReviewOnce() {
     if (key) lastToastKey = key;
     const elements = host?.__qtsElements;
     if (!elements) return;
-    elements.toast.textContent = message;
-    elements.toast.classList.toggle('error', type === 'error');
-    elements.toast.classList.toggle('success', type === 'success');
-    elements.toast.hidden = false;
-    requestAnimationFrame(() => elements.toast.classList.add('visible'));
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-      elements.toast.classList.remove('visible');
-      setTimeout(() => {
-        if (elements.toast) elements.toast.hidden = true;
-      }, 180);
-    }, 4200);
+    const card = document.createElement('div');
+    card.className = 'toast ' + (type === 'error' ? 'error' : type === 'success' ? 'success' : 'info');
+    card.textContent = message;
+    elements.toast.prepend(card);
+    setTimeout(() => {
+      card.classList.add('is-leaving');
+      setTimeout(() => card.remove(), 250);
+    }, 4000);
   }
 
   function appendDetail(container, label, value, extraClass = '') {
@@ -1114,6 +1120,7 @@ async function initializeGetJdReviewOnce() {
     elements.status.classList.remove('is-loading');
     elements.details.hidden = false;
     elements.details.replaceChildren();
+    appendDetail(elements.details, 'Eligibility reason', result.classification.job.reason);
     appendDetail(elements.details, 'Title', result.classification.job.title);
     appendDetail(elements.details, 'Company', result.classification.job.company);
     appendDetail(elements.details, 'Location', result.classification.job.location);

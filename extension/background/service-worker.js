@@ -1064,21 +1064,32 @@ async function processGetJdPage(tabId, url, documentId = '') {
         throw new Error(geminiResult.message || 'Gemini candidate matching failed.');
       }
       if (geminiResult.classification?.isJobPage !== true) {
+        const reason = geminiResult.classification?.job?.reason;
         await saveGetJdResult(tabId, {
           ...initialResult,
           pageTitle: tab.title || '',
           status: 'error',
-          message: geminiResult.message || 'Gemini determined this is not a job page.',
+          message: geminiResult.message || (
+            typeof reason === 'string' && reason.trim()
+              ? `Not a valid job page: ${reason.trim()}`
+              : 'Gemini determined this is not a job page.'
+          ),
+          classification: geminiResult.classification,
           updatedAt: Date.now(),
         });
         return;
       }
       if (geminiResult.classification?.isRemote !== true) {
+        const reason = geminiResult.classification?.job?.reason;
         await saveGetJdResult(tabId, {
           ...initialResult,
           pageTitle: tab.title || '',
           status: 'error',
-          message: geminiResult.message || 'This job does not pass the saved remote eligibility rules.',
+          message: geminiResult.message || (
+            typeof reason === 'string' && reason.trim()
+              ? `Not eligible: ${reason.trim()}`
+              : 'The job does not pass the saved remote eligibility rules.'
+          ),
           classification: geminiResult.classification,
           updatedAt: Date.now(),
         });

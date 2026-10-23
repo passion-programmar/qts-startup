@@ -7,10 +7,8 @@
 
   const TOAST_HOST_ID = 'qts-toast-host';
   const STYLE_ID = 'qts-toast-style';
-  const AUTO_HIDE_MS = 3000;
-  const APPLIED_HIDE_MS = 3000;
-  const MIN_HIDE_MS = 0;
-  const MAX_VISIBLE = 8;
+  const AUTO_HIDE_MS = 4000;
+  const APPLIED_HIDE_MS = 4000;
   const EXIT_MS = 320;
 
   const hideTimers = new WeakMap();
@@ -32,7 +30,7 @@
   }
 
   function resolveHideMs(type, durationMs) {
-    if (Number.isFinite(durationMs) && durationMs >= MIN_HIDE_MS) return durationMs;
+    // Use the same lifetime for every toast.
     if (type === 'applied') return APPLIED_HIDE_MS;
     return AUTO_HIDE_MS;
   }
@@ -64,23 +62,24 @@
         border: 1px solid #e2e8f0;
         border-left: 4px solid var(--qts-toast-accent, #64748b);
         border-radius: 14px;
-        background: rgba(255, 255, 255, 0.97);
+        box-sizing: border-box;
+        background: color-mix(in srgb, var(--qts-toast-accent, #2563eb) 7%, white);
         color: #172033;
         font: 500 13px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
         box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.06);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         opacity: 0;
-        transform: translateY(-8px) scale(0.985);
+        transform: translateX(-36px);
         transition: opacity 0.22s ease, transform 0.22s ease;
       }
       .qts-toast.is-visible {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translateX(0);
       }
       .qts-toast.is-leaving {
         opacity: 0;
-        transform: translateY(-5px) scale(0.985);
+        transform: translateX(36px);
       }
       .qts-toast-index {
         flex: 0 0 auto;
@@ -101,11 +100,11 @@
         overflow-wrap: anywhere;
       }
       .qts-toast--success { --qts-toast-accent: #15803d; }
-      .qts-toast--fail { --qts-toast-accent: #64748b; }
+      .qts-toast--fail { --qts-toast-accent: #dc2626; }
       .qts-toast--error { --qts-toast-accent: #dc2626; }
       .qts-toast--info { --qts-toast-accent: #2563eb; }
       .qts-toast--warn { --qts-toast-accent: #d97706; }
-      .qts-toast--applied { --qts-toast-accent: #ca8a04; }
+      .qts-toast--applied { --qts-toast-accent: #7c3aed; }
       @media (prefers-reduced-motion: reduce) {
         .qts-toast { transition: none; }
       }
@@ -133,13 +132,7 @@
     window.setTimeout(() => toast.remove(), EXIT_MS);
   }
 
-  function trimStack(host) {
-    const activeToasts = Array.from(host.children)
-      .filter((toast) => !toast.classList.contains('is-leaving'));
-    while (activeToasts.length > MAX_VISIBLE) {
-      dismissToast(activeToasts.pop());
-    }
-  }
+
 
   window.__showQtsDetectToast = function showQtsToast(message, typeOrSuccess = 'info', durationMs, oncePerPage) {
     ensureStyles();
@@ -173,7 +166,7 @@
     toast.appendChild(indexEl);
     toast.appendChild(textEl);
     host.insertBefore(toast, host.firstChild);
-    trimStack(host);
+
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => toast.classList.add('is-visible'));

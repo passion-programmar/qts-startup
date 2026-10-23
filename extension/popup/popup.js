@@ -1210,9 +1210,7 @@ async function verifyManagerScannerCapture(tabId, fields, rules, statusElement, 
           issues: ['missing_on_second'],
         },
       });
-      window.alert(
-        `Scanner did not find this field in its second capture, so it will remain untouched:\n\n${scannerDescribeCaptureField(discrepancy.first)}`
-      );
+      showToast(`Scanner did not find this field in its second capture, so it will remain untouched:\n\n${scannerDescribeCaptureField(discrepancy.first)}`, 'warn');
       outcomes.push(`${discrepancy.first?.label || 'A field'}: inconsistent between captures; left untouched.`);
       continue;
     }
@@ -7219,9 +7217,7 @@ function showJobSection() {
 
 let popupToastSeq = 0;
 const popupToastTimers = new WeakMap();
-const TOAST_AUTO_HIDE_MS = 3000;
-const TOAST_MIN_HIDE_MS = 0;
-const TOAST_MAX_VISIBLE = 8;
+const TOAST_AUTO_HIDE_MS = 4000;
 const TOAST_EXIT_MS = 320;
 
 function normalizeToastType(type) {
@@ -7240,17 +7236,11 @@ function dismissPopupToast(toast) {
   setTimeout(() => toast.remove(), TOAST_EXIT_MS);
 }
 
-function trimPopupToastStack(host) {
-  while (host.children.length > TOAST_MAX_VISIBLE) {
-    dismissPopupToast(host.children[0]);
-  }
-}
+
 
 function showToast(msg, type = 'info', durationMs = TOAST_AUTO_HIDE_MS, alertId = null) {
   const toastType = normalizeToastType(type);
-  const hideMs = Number.isFinite(durationMs) && durationMs >= TOAST_MIN_HIDE_MS
-    ? durationMs
-    : TOAST_AUTO_HIDE_MS;
+  const hideMs = TOAST_AUTO_HIDE_MS;
   const embedded = new URLSearchParams(window.location.search).get('embedded') === '1';
 
   if (embedded) {
@@ -7303,8 +7293,7 @@ function renderPopupToast(msg, toastType, hideMs, alertId) {
 
   toast.appendChild(indexEl);
   toast.appendChild(textEl);
-  host.appendChild(toast);
-  trimPopupToastStack(host);
+  host.prepend(toast);
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => toast.classList.add('is-visible'));

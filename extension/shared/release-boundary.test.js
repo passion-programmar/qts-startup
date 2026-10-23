@@ -117,8 +117,10 @@ test('Get JD supports Super-selected manual and Gemini matching flows', () => {
   assert.ok(evaluationRoute.includes('if (!classification.isJobPage)'));
   assert.ok(evaluationRoute.includes('if (!classification.isRemote)'));
   assert.ok(evaluationRoute.includes('jobUrl: pageUrl'));
+  assert.ok(evaluationRoute.includes('classification.job.reason'));
   assert.equal(evaluationRoute.includes('passesJobPolicy'), false);
   assert.ok(reviewPanel.includes("currentResult.classification?.isRemote === true"));
+  assert.ok(reviewPanel.includes("'Eligibility reason'"));
   assert.equal(reviewPanel.includes('passesJobPolicy'), false);
   assert.ok(serviceWorker.includes('matchingProfileIds'));
 });
@@ -665,8 +667,9 @@ test('page toasts use a modern theme and keep the newest notice on top', () => {
   );
 
   assert.ok(toast.includes('host.insertBefore(toast, host.firstChild)'));
-  assert.ok(toast.includes("!toast.classList.contains('is-leaving')"));
-  assert.ok(toast.includes('activeToasts.pop()'));
+  assert.ok(toast.includes('const AUTO_HIDE_MS = 4000;'));
+  assert.ok(toast.includes('transform: translateX(-36px)'));
+  assert.ok(toast.includes('transform: translateX(36px)'));
   assert.ok(toast.includes('backdrop-filter: blur(12px)'));
   assert.ok(toast.includes('border-left: 4px solid var(--qts-toast-accent'));
   assert.ok(toast.includes('@media (prefers-reduced-motion: reduce)'));

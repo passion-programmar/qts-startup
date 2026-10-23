@@ -67,6 +67,7 @@ type GetJdClassification = {
     workplaceType: string;
     salary: string;
     jobUrl: string;
+    reason: string;
   };
   matchingProfileIds: string[];
 };
@@ -198,14 +199,19 @@ export async function POST(request: Request): Promise<NextResponse> {
       candidatesForEvaluation,
     );
     if (!classification.isJobPage) {
-      return jsonResponse({ success: true, classification, profiles: [], message: "Gemini determined this is not a job page." });
+      return jsonResponse({
+        success: true,
+        classification,
+        profiles: [],
+        message: `Not a valid job page: ${classification.job.reason}`,
+      });
     }
     if (!classification.isRemote) {
       return jsonResponse({
         success: true,
         classification,
         profiles: [],
-        message: "This job does not pass the saved remote eligibility rules.",
+        message: `Not eligible: ${classification.job.reason}`,
       });
     }
     const jobIdentity = {
@@ -530,10 +536,12 @@ function validateClassification(
     "title",
     "company",
     "description",
+    "location",
     "country",
     "employmentType",
     "workplaceType",
     "salary",
+    "jobUrl",
   ] as const;
   for (const field of stringFields) {
     if (typeof job[field] !== "string") {
@@ -542,6 +550,20 @@ function validateClassification(
         "Gemini response contained an invalid job field.",
       );
     }
+  }
+  const reasonValue = job.reason;
+  if (typeof reasonValue !== "string") {
+    throw getJdError(
+      "gemini_invalid_job_field",
+      "Gemini response contained an invalid job field.",
+    );
+  }
+  const reason = reasonValue.trim();
+  if (!reason || reason.length > 1200) {
+    throw getJdError(
+      "gemini_invalid_job_field",
+      "Gemini response contained an invalid job field.",
+    );
   }
   const matchingProfileIds = mapMatchingProfileIndexes(
     value.matchingProfileIndexes,
@@ -561,12 +583,13 @@ function validateClassification(
       title: String(job.title).slice(0, 500),
       company: String(job.company).slice(0, 500),
       description: String(job.description).slice(0, maxJobTextLength),
-      location: "",
+      location: String(job.location).slice(0, 500),
       country: String(job.country).slice(0, 200),
       employmentType: String(job.employmentType).slice(0, 300),
       workplaceType: String(job.workplaceType).slice(0, 100),
       salary: String(job.salary).slice(0, 500),
       jobUrl: pageUrl,
+      reason,
     },
     matchingProfileIds,
   };

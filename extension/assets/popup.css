@@ -1609,3 +1609,12 @@
   color: #64748b;
   letter-spacing: 0.01em;
 }
+
+/* Consistent semantic notification cards. */
+.popup-app .qts-toast { --accent: #2563eb; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--accent) 20%, white); border-left: 4px solid var(--accent); border-radius: 14px; background: color-mix(in srgb, var(--accent) 7%, white); color: #172033; box-shadow: 0 12px 32px #0f172a20; font-weight: 500; }
+.popup-app .qts-toast-index { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, white); color: var(--accent); font-size: 11px; }
+.popup-app .qts-toast--success { --accent: #15803d; }
+.popup-app .qts-toast--fail, .popup-app .qts-toast--error { --accent: #dc2626; }
+.popup-app .qts-toast--warn { --accent: #d97706; }
+.popup-app .qts-toast--applied { --accent: #7c3aed; }
+@media (prefers-reduced-motion: reduce) { .popup-app .qts-toast { transition: none; } }
