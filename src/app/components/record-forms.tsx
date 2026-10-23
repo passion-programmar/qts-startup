@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, Trash2, X } from "lucide-react";
+import { ListPlus, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { useActionState, useId, useState } from "react";
 import { deleteBidAction, updateBidAction } from "@/app/bids/actions";
 import {
@@ -55,12 +55,18 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
       <input name="intent" type="hidden" value={cancellable ? "cancel" : "queue"} />
       <button
         aria-label={accessibleLabel}
-        className="inline-flex min-h-9 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60"
+        className="inline-flex min-h-9 w-full min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-60"
         title={accessibleLabel}
         disabled={pending}
         type="submit"
       >
-        {pending && <LoadingIcon className="size-3.5" />}
+        {pending
+          ? <LoadingIcon className="size-3.5" />
+          : cancellable
+            ? <X aria-hidden="true" className="size-3.5" />
+            : record.generationStatus === "failed"
+              ? <RotateCcw aria-hidden="true" className="size-3.5" />
+              : <ListPlus aria-hidden="true" className="size-3.5" />}
         {pending ? "Updating…" : label}
       </button>
       {(state.error || state.success) && (
