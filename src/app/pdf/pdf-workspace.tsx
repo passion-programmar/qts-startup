@@ -1,7 +1,7 @@
 "use client";
 
 import html2canvas from "html2canvas";
-import { ArrowLeftRight, Download, ExternalLink } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PdfPackage } from "@/app/pdf/document-data";
@@ -15,6 +15,14 @@ import {
 } from "@/server/pdf/pdf-templates";
 
 type PreviewDocumentType = "resume" | "cover-letter";
+type PreviewStatus = "loading" | "ready" | "error";
+
+type PendingPreview = {
+  documentType: PreviewDocumentType;
+  resolve: () => void;
+  reject: (reason: Error) => void;
+  timeoutId: number;
+};
 
 const example = JSON.stringify(sampleFull, null, 2);
 
@@ -26,7 +34,9 @@ export function PdfWorkspace({
   managerName: string;
 }) {
   const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>("qts-standard");
-  const [resumeOnLeft, setResumeOnLeft] = useState(true);
+  const [activeDocument, setActiveDocument] = useState<PreviewDocumentType>("resume");
+  const [previewGeneration, setPreviewGeneration] = useState(0);
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus>("loading");
   const [source, setSource] = useState(example);
   const [parsed, setParsed] = useState<PdfPackage | null>(
     () => tryParsePdfPackage(example),
@@ -34,28 +44,56 @@ export function PdfWorkspace({
   const [error, setError] = useState<string | null>(
     () => initialDocumentError(),
   );
-  const [previewStatuses, setPreviewStatuses] = useState<Record<PreviewDocumentType, "loading" | "ready" | "error">>({
-    resume: "loading",
-    "cover-letter": "loading",
-  });
   const [busy, setBusy] = useState(false);
-  const resumeFrameRef = useRef<HTMLIFrameElement>(null);
-  const coverLetterFrameRef = useRef<HTMLIFrameElement>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
+  const pendingPreviewRef = useRef<PendingPreview | null>(null);
+  const activeDocumentRef = useRef<PreviewDocumentType>("resume");
   const sampleSourceSelected = source === example;
   const previewData = parsed ?? samplePreviewData;
-  const previewOrder: PreviewDocumentType[] = resumeOnLeft
-    ? ["resume", "cover-letter"]
-    : ["cover-letter", "resume"];
   const templateData = useMemo(
     () => toResumeTemplateData(previewData, selectedTemplate),
     [previewData, selectedTemplate],
   );
   const updatePreviewStatus = useCallback(
-    (documentType: PreviewDocumentType, status: "loading" | "ready" | "error") => {
-      setPreviewStatuses((current) => ({ ...current, [documentType]: status }));
+    (documentType: PreviewDocumentType, status: PreviewStatus) => {
+      if (documentType === activeDocumentRef.current) setPreviewStatus(status);
+      const pending = pendingPreviewRef.current;
+      if (pending?.documentType !== documentType || status === "loading") return;
+      window.clearTimeout(pending.timeoutId);
+      pendingPreviewRef.current = null;
+      if (status === "ready") pending.resolve();
+      else pending.reject(new Error(`The ${documentType} document could not be rendered.`));
     },
     [],
   );
+
+  function showDocument(documentType: PreviewDocumentType) {
+    activeDocumentRef.current = documentType;
+    setActiveDocument(documentType);
+    setPreviewStatus("loading");
+    setPreviewGeneration((generation) => generation + 1);
+  }
+
+  function prepareDocument(documentType: PreviewDocumentType): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (pendingPreviewRef.current) {
+        reject(new Error("A document preview is already being prepared."));
+        return;
+      }
+      const timeoutId = window.setTimeout(() => {
+        pendingPreviewRef.current = null;
+        reject(new Error(`The ${documentType} document did not finish rendering.`));
+      }, 20_000);
+      pendingPreviewRef.current = { documentType, resolve, reject, timeoutId };
+      showDocument(documentType);
+    });
+  }
+
+  function captureDocument(documentType: PreviewDocumentType): Promise<Uint8Array> {
+    return prepareDocument(documentType).then(() =>
+      renderTemplatePdf(previewFrameRef.current, documentType),
+    );
+  }
 
   function updateSource(nextSource: string) {
     setSource(nextSource);
@@ -67,17 +105,16 @@ export function PdfWorkspace({
     try { setParsed(parsePdfPackage(nextSource)); setError(null); } catch (reason) { setParsed(null); setError(reason instanceof Error ? reason.message : "JSON is invalid."); }
   }
   async function downloadPair() {
+    const startingDocument = activeDocumentRef.current;
     try {
       if (!parsed) throw new Error("Enter valid résumé and cover-letter JSON before downloading.");
-      if (previewStatuses.resume !== "ready" || previewStatuses["cover-letter"] !== "ready") {
-        throw new Error("Wait for both document previews to finish rendering.");
-      }
       setBusy(true);
       setError(null);
-      const [resume, coverLetter] = await Promise.all([
-        renderTemplatePdf(resumeFrameRef.current, "resume"),
-        renderTemplatePdf(coverLetterFrameRef.current, "cover-letter"),
-      ]);
+      const resume = await captureDocument("resume");
+      const coverLetter = await captureDocument("cover-letter");
+      if (startingDocument !== "cover-letter") {
+        await prepareDocument(startingDocument);
+      }
       const candidateName = safePathPart(parsed.resume.candidate.fullName);
       const jobTitle = safePathPart(parsed.resume.targetRole);
       const company = safePathPart(parsed.resume.targetCompany ?? parsed.coverLetter.targetCompany);
@@ -89,6 +126,13 @@ export function PdfWorkspace({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The resume and cover letter could not be downloaded.");
     } finally {
+      const pending = pendingPreviewRef.current;
+      if (pending) {
+        window.clearTimeout(pending.timeoutId);
+        pendingPreviewRef.current = null;
+        pending.reject(new Error("The PDF download was cancelled."));
+      }
+      if (activeDocumentRef.current !== startingDocument) showDocument(startingDocument);
       setBusy(false);
     }
   }
@@ -96,10 +140,6 @@ export function PdfWorkspace({
   return (
     <main className="py-1 xl:flex xl:h-[calc(100dvh-8.5rem)] xl:min-h-[28rem] xl:flex-col">
       <header className="mb-4 flex shrink-0 flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Resume</h1>
-          <p className="mt-1 text-sm text-slate-500">Choose a resume template and create a matching cover letter from one JSON object. Processing stays in this browser.</p>
-        </div>
         <a
           className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
           href="/resume-template"
@@ -127,7 +167,7 @@ export function PdfWorkspace({
             <div className="mt-4">
               <button
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={busy || !parsed || previewStatuses.resume !== "ready" || previewStatuses["cover-letter"] !== "ready"}
+                disabled={busy || !parsed || previewStatus !== "ready"}
                 onClick={() => void downloadPair()}
                 type="button"
               >
@@ -138,31 +178,39 @@ export function PdfWorkspace({
           </div>
         </section>
         <section className="min-w-0 space-y-4 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-2">
-          <div className="flex justify-end">
+          <nav aria-label="Document preview selection" className="flex items-center justify-between gap-3">
             <button
-              aria-label="Switch resume and cover letter sides"
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              onClick={() => setResumeOnLeft((current) => !current)}
+              aria-label="Show resume"
+              className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={busy || activeDocument === "resume"}
+              onClick={() => showDocument("resume")}
               type="button"
             >
-              <ArrowLeftRight aria-hidden="true" className="size-4" />
-              Switch sides
+              <ChevronLeft aria-hidden="true" className="size-5" />
             </button>
-          </div>
+            <span className="text-sm font-semibold text-slate-700" aria-live="polite">
+              {activeDocument === "resume" ? "Resume" : "Cover letter"}
+            </span>
+            <button
+              aria-label="Show cover letter"
+              className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={busy || activeDocument === "cover-letter"}
+              onClick={() => showDocument("cover-letter")}
+              type="button"
+            >
+              <ChevronRight aria-hidden="true" className="size-5" />
+            </button>
+          </nav>
           {!parsed && <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
-          <div className="grid items-start gap-4 md:grid-cols-2">
-            {previewOrder.map((documentType) => (
-              <PdfTemplatePreviewFrame
-                key={documentType}
-                documentData={templateData}
-                documentType={documentType}
-                template={selectedTemplate}
-                title={`${documentType === "resume" ? "Resume" : "Cover letter"} preview · ${pdfTemplateLabels[selectedTemplate]}`}
-                iframeRef={documentType === "resume" ? resumeFrameRef : coverLetterFrameRef}
-                onStatusChange={updatePreviewStatus}
-              />
-            ))}
-          </div>
+          <PdfTemplatePreviewFrame
+            key={`${activeDocument}-${previewGeneration}`}
+            documentData={templateData}
+            documentType={activeDocument}
+            template={selectedTemplate}
+            title={`${activeDocument === "resume" ? "Resume" : "Cover letter"} · ${pdfTemplateLabels[selectedTemplate]}`}
+            iframeRef={previewFrameRef}
+            onStatusChange={updatePreviewStatus}
+          />
         </section>
       </div>
     </main>
@@ -182,7 +230,7 @@ function PdfTemplatePreviewFrame({
   template: PdfTemplate;
   title: string;
   iframeRef: RefObject<HTMLIFrameElement | null>;
-  onStatusChange: (documentType: PreviewDocumentType, status: "loading" | "ready" | "error") => void;
+  onStatusChange: (documentType: PreviewDocumentType, status: PreviewStatus) => void;
 }) {
   const requestId = useRef("");
   const previewRef = useRef<HTMLDivElement>(null);
@@ -266,7 +314,7 @@ function PdfTemplatePreviewFrame({
     </div>
     {status === "error" && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{message}</p>}
     {warnings && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{warnings}</p>}
-    {status === "loading" && <p className="mb-3 text-xs text-slate-500" role="status">Rendering {documentType} template…</p>}
+    {status === "loading" && <p className="mb-3 text-xs text-slate-500" role="status">Loading document…</p>}
     <div ref={previewRef} className="overflow-hidden rounded-sm bg-white shadow-xl shadow-slate-900/15">
       <div style={{ height: frameSize.height * scale, position: "relative" }}>
       <iframe
