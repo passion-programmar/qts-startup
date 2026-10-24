@@ -649,23 +649,17 @@ test('page Sign In uses the two-field top-right form instead of the embedded pan
   assert.equal(signInBranch.includes('openCapturePanel'), false);
 });
 
-test('PDF downloads use the extension bridge without a directory picker', () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
+test('resume PDF downloads remember a user-selected folder without requiring the extension', () => {
   const workspace = fs.readFileSync(
     path.join(extensionRoot, '..', 'src', 'app', 'pdf', 'pdf-workspace.tsx'),
     'utf8',
   );
-  const worker = fs.readFileSync(
-    path.join(extensionRoot, 'background', 'service-worker.js'),
-    'utf8',
-  );
-  const contentScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
 
-  assert.ok(contentScripts.includes('content/pdf-download-bridge.js'));
-  assert.equal(workspace.includes('showDirectoryPicker'), false);
-  assert.ok(workspace.includes('QTS_DOWNLOAD_APPLICATION_FILES'));
-  assert.ok(worker.includes("filename: file.downloadPath"));
-  assert.ok(worker.includes('saveAs: false'));
+  assert.ok(workspace.includes('showDirectoryPicker'));
+  assert.ok(workspace.includes('qts-resume-downloads'));
+  assert.ok(workspace.includes('savePdfPairToDirectory'));
+  assert.ok(workspace.includes('downloadPdfPairInBrowser'));
+  assert.equal(workspace.includes('QTS_DOWNLOAD_APPLICATION_FILES'), false);
 });
 
 test('page toasts use a modern theme and keep the newest notice on top', () => {

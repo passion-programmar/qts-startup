@@ -335,16 +335,22 @@
 
   async function loadTemplate(id) {
     if (directRenderMode) {
+      const current = styleRoot.querySelector("#template-css");
+      if (current?.dataset.templateId === id) return;
       const response = await fetch(`/resume-templates/templates/${id}.css`);
       if (!response.ok) throw new Error(`The ${id} resume template stylesheet could not be loaded.`);
-      let style = styleRoot.querySelector("#template-css");
-      if (!style) {
-        style = el("style");
-        style.id = "template-css";
-      }
+      const style = el("style");
+      style.id = "template-css";
       style.textContent = await response.text();
-      if (scopeDirectStyle) scopeDirectStyle(style);
-      styleRoot.insertBefore(style, runtimeStyle());
+      styleRoot.insertBefore(style, current || runtimeStyle());
+      try {
+        if (scopeDirectStyle) scopeDirectStyle(style);
+      } catch (reason) {
+        style.remove();
+        throw reason;
+      }
+      style.dataset.templateId = id;
+      current?.remove();
       return;
     }
     const href = `templates/${id}.css`;
@@ -422,6 +428,61 @@
       }
     }
     return article;
+  }
+
+  function nodeKey(node) {
+    if (node.nodeType !== 1) return "";
+    return node.getAttribute("data-section") || node.id || "";
+  }
+
+  function canReuseNode(current, next) {
+    if (!current || current.nodeType !== next.nodeType) return false;
+    if (current.nodeType !== 1 || current.localName !== next.localName) return current.nodeType !== 1;
+    return nodeKey(current) === nodeKey(next);
+  }
+
+  function reconcileNode(current, next) {
+    if (current.nodeType === 3 || current.nodeType === 8) {
+      if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+      return;
+    }
+    if (current.nodeType !== 1) return;
+
+    for (const attribute of Array.from(current.attributes)) {
+      if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
+    }
+    for (const attribute of Array.from(next.attributes)) {
+      if (current.getAttribute(attribute.name) !== attribute.value) {
+        current.setAttribute(attribute.name, attribute.value);
+      }
+    }
+
+    let cursor = current.firstChild;
+    for (const nextChild of Array.from(next.childNodes)) {
+      let match = canReuseNode(cursor, nextChild) ? cursor : null;
+      const key = nodeKey(nextChild);
+      if (!match && key) {
+        for (let candidate = cursor?.nextSibling; candidate; candidate = candidate.nextSibling) {
+          if (canReuseNode(candidate, nextChild)) {
+            match = candidate;
+            break;
+          }
+        }
+      }
+      if (!match) {
+        match = nextChild.cloneNode(true);
+        current.insertBefore(match, cursor);
+      } else {
+        if (match !== cursor) current.insertBefore(match, cursor);
+        reconcileNode(match, nextChild);
+      }
+      cursor = match.nextSibling;
+    }
+    while (cursor) {
+      const following = cursor.nextSibling;
+      cursor.remove();
+      cursor = following;
+    }
   }
 
 
@@ -655,10 +716,20 @@
     await loadTemplate(template.id);
     if (run !== renderCount) return null;
 
-    const article =
+    let article =
       DOCUMENT === "resume" ? renderResumeDocument(data, settings, labels) : renderLetterDocument(data, settings, labels);
     if (theme.contentConsistency === "uniform") article.classList.add("doc--uniform-content");
-    mount.replaceChildren(article);
+    if (directRenderMode) {
+      const currentArticle = mount.querySelector(".doc");
+      if (currentArticle) {
+        reconcileNode(currentArticle, article);
+        article = currentArticle;
+      } else {
+        mount.replaceChildren(article);
+      }
+    } else {
+      mount.replaceChildren(article);
+    }
 
     if (document.fonts) await document.fonts.ready;
     if (run !== renderCount) return null;

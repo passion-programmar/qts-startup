@@ -32,6 +32,11 @@ type DirectRenderContext = {
   scopeStyle: (style: HTMLStyleElement) => void;
 };
 
+type ResumeDownloadDirectory = FileSystemDirectoryHandle & {
+  queryPermission: (options: { mode: "readwrite" }) => Promise<PermissionState>;
+  requestPermission: (options: { mode: "readwrite" }) => Promise<PermissionState>;
+};
+
 declare global {
   interface Window {
     QTS_RESUME_DIRECT_RENDER?: boolean;
@@ -42,6 +47,10 @@ declare global {
       overrides: { template: PdfTemplate },
       context: DirectRenderContext,
     ) => Promise<unknown>;
+    showDirectoryPicker?: (options?: {
+      mode?: "read" | "readwrite";
+      startIn?: "downloads";
+    }) => Promise<ResumeDownloadDirectory>;
   }
 }
 
@@ -65,19 +74,43 @@ export function PdfWorkspace({
   const [parsed, setParsed] = useState<PdfPackage | null>(
     () => tryParsePdfPackage(example),
   );
+  const [previewSource, setPreviewSource] = useState(example);
+  const [previewPackage, setPreviewPackage] = useState(samplePreviewData);
   const [error, setError] = useState<string | null>(
     () => initialDocumentError(),
   );
   const [busy, setBusy] = useState(false);
+  const [downloadDirectoryName, setDownloadDirectoryName] = useState<string | null>(null);
+  const [downloadDirectoryReady, setDownloadDirectoryReady] = useState(false);
   const previewHostRef = useRef<HTMLDivElement>(null);
   const pendingPreviewRef = useRef<PendingPreview | null>(null);
   const activeDocumentRef = useRef<PreviewDocumentType>("resume");
-  const sampleSourceSelected = source === example;
-  const previewData = parsed ?? samplePreviewData;
+  const downloadDirectoryRef = useRef<ResumeDownloadDirectory | null>(null);
   const templateData = useMemo(
-    () => toResumeTemplateData(previewData, selectedTemplate),
-    [previewData, selectedTemplate],
+    () => toResumeTemplateData(previewPackage, selectedTemplate),
+    [previewPackage, selectedTemplate],
   );
+  const previewOutOfDate = source !== previewSource;
+  useEffect(() => {
+    let cancelled = false;
+    readSavedDownloadDirectory()
+      .then((directory) => {
+        if (cancelled) return;
+        downloadDirectoryRef.current = directory;
+        setDownloadDirectoryName(directory?.name ?? null);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setError(reason instanceof Error ? reason.message : "The saved download folder could not be loaded.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDownloadDirectoryReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const updatePreviewStatus = useCallback(
     (documentType: PreviewDocumentType, status: PreviewStatus) => {
       if (documentType === activeDocumentRef.current) setPreviewStatus(status);
@@ -99,6 +132,15 @@ export function PdfWorkspace({
   }
 
   function prepareDocument(documentType: PreviewDocumentType): Promise<void> {
+    const root = previewHostRef.current?.querySelector<HTMLElement>(".qts-document-host");
+    if (
+      activeDocumentRef.current === documentType
+      && previewStatus === "ready"
+      && root?.dataset.document === documentType
+      && root.dataset.renderState === "ready"
+    ) {
+      return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       if (pendingPreviewRef.current) {
         reject(new Error("A document preview is already being prepared."));
@@ -126,14 +168,53 @@ export function PdfWorkspace({
       setError(null);
       return;
     }
-    try { setParsed(parsePdfPackage(nextSource)); setError(null); } catch (reason) { setParsed(null); setError(reason instanceof Error ? reason.message : "JSON is invalid."); }
+    try {
+      const nextParsed = parsePdfPackage(nextSource);
+      setParsed(nextParsed);
+      setPreviewPackage(nextParsed);
+      setPreviewSource(nextSource);
+      setError(null);
+    } catch (reason) {
+      setParsed(null);
+      setError(reason instanceof Error ? reason.message : "JSON is invalid.");
+    }
   }
+
+  async function changeDownloadDirectory() {
+    try {
+      const directory = await pickDownloadDirectory();
+      if (!directory) {
+        setError("This browser does not support selecting a download folder.");
+        return;
+      }
+      await saveDownloadDirectory(directory);
+      downloadDirectoryRef.current = directory;
+      setDownloadDirectoryName(directory.name);
+      setError(null);
+    } catch (reason) {
+      setError(
+        reason instanceof DOMException && reason.name === "AbortError"
+          ? "Folder selection was canceled; the previously saved folder is unchanged."
+          : reason instanceof Error
+            ? reason.message
+            : "The download folder could not be saved.",
+      );
+    }
+  }
+
   async function downloadPair() {
     const startingDocument = activeDocumentRef.current;
     try {
       if (!parsed) throw new Error("Enter valid résumé and cover-letter JSON before downloading.");
       setBusy(true);
       setError(null);
+      const directory = await getDownloadDirectoryForSave(
+        downloadDirectoryRef.current,
+        (selected) => {
+          downloadDirectoryRef.current = selected;
+          setDownloadDirectoryName(selected.name);
+        },
+      );
       const resume = await captureDocument("resume");
       const coverLetter = await captureDocument("cover-letter");
       if (startingDocument !== "cover-letter") {
@@ -143,12 +224,23 @@ export function PdfWorkspace({
       const jobTitle = safePathPart(parsed.resume.targetRole);
       const company = safePathPart(parsed.resume.targetCompany ?? parsed.coverLetter.targetCompany);
       const folder = `QTS_Resume/${safePathPart(managerName)}/${candidateName}/${packageTimestamp()}_${jobTitle}_${company}`;
-      await requestExtensionDownloads([
-        { downloadPath: `${folder}/${candidateName}.pdf`, mimeType: "application/pdf", base64: bytesToBase64(resume) },
-        { downloadPath: `${folder}/${candidateName}_Cover_Letter.pdf`, mimeType: "application/pdf", base64: bytesToBase64(coverLetter) },
-      ]);
+      const files = [
+        { name: `${candidateName}.pdf`, bytes: resume },
+        { name: `${candidateName}_Cover_Letter.pdf`, bytes: coverLetter },
+      ];
+      if (directory) {
+        await savePdfPairToDirectory(directory, folder, files);
+      } else {
+        downloadPdfPairInBrowser(files);
+      }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The resume and cover letter could not be downloaded.");
+      setError(
+        reason instanceof DOMException && reason.name === "AbortError"
+          ? "Folder selection was canceled; no PDFs were saved."
+          : reason instanceof Error
+            ? reason.message
+            : "The resume and cover letter could not be downloaded.",
+      );
     } finally {
       const pending = pendingPreviewRef.current;
       if (pending) {
@@ -209,12 +301,28 @@ export function PdfWorkspace({
             </label>
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="h-[min(36vh,28rem)] min-h-[180px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
-            {sampleSourceSelected && <p className="text-xs text-amber-800">Sample template JSON is prefilled for preview. Replace it with your generated resume data before saving files.</p>}
-            <p className="text-xs text-slate-500">Download both PDFs using the selected template. Files save under Downloads / QTS_Resume / {managerName} / candidate.</p>
+            {previewOutOfDate && <p className="rounded-lg bg-blue-50 p-3 text-sm text-blue-900">The preview is showing the last valid JSON while the current edits are incomplete or invalid.</p>}
+            {previewSource === example && <p className="text-xs text-amber-800">The preview currently shows sample template JSON. Enter valid resume data to update it.</p>}
+            <div className="space-y-2 rounded-lg bg-slate-50 p-3">
+              <p className="text-xs text-slate-600">
+                {downloadDirectoryName
+                  ? `Saved folder: ${downloadDirectoryName}. This browser will remember it for future downloads.`
+                  : "Choose a folder once in supported browsers; otherwise PDFs use the normal download location."}
+              </p>
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={busy || !downloadDirectoryReady}
+                onClick={() => void changeDownloadDirectory()}
+                type="button"
+              >
+                {downloadDirectoryName ? "Change download folder" : "Choose download folder"}
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">Both PDFs are saved under QTS_Resume / {managerName} / candidate within your chosen folder. Browsers without folder access use their normal download location.</p>
             <div className="mt-4">
               <button
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={busy || !parsed || previewStatus !== "ready"}
+                disabled={busy || !parsed || previewOutOfDate || previewStatus !== "ready" || !downloadDirectoryReady}
                 onClick={() => void downloadPair()}
                 type="button"
               >
@@ -259,6 +367,7 @@ function PdfTemplatePreviewFrame({
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState("");
   const [warnings, setWarnings] = useState("");
+  const [hasRendered, setHasRendered] = useState(false);
 
   useEffect(() => onStatusChange(documentType, status), [documentType, onStatusChange, status]);
 
@@ -297,8 +406,9 @@ function PdfTemplatePreviewFrame({
         { template },
         { documentType, mount, root, styleRoot: document.head, scopeStyle },
       ) as { warnings?: string[] } | null;
-      if (cancelled) return;
+      if (cancelled || !result) return;
       setWarnings(Array.isArray(result?.warnings) ? result.warnings.join(" ") : "");
+      setHasRendered(true);
       setStatus("ready");
     }
 
@@ -319,7 +429,7 @@ function PdfTemplatePreviewFrame({
     </div>
     {status === "error" && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{message}</p>}
     {warnings && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{warnings}</p>}
-    {status === "loading" && <p className="mb-3 text-xs text-slate-500" role="status">Loading document…</p>}
+    {status === "loading" && !hasRendered && <p className="mb-3 text-xs text-slate-500" role="status">Loading document…</p>}
     <div ref={hostRef} className="min-h-[calc(100dvh-14rem)] overflow-auto rounded-sm bg-white shadow-xl shadow-slate-900/15 xl:min-h-[calc(100dvh-16rem)]" />
   </section>;
 }
@@ -333,7 +443,12 @@ async function loadBaseStyles(): Promise<void> {
         style.dataset.qtsResumeBase = "true";
         style.textContent = (await response.text()).replace(/^\s*@charset[^;]+;\s*/i, "");
         document.head.append(style);
-        scopeResumeStyles(style);
+        try {
+          scopeResumeStyles(style);
+        } catch (reason) {
+          style.remove();
+          throw reason;
+        }
       })
       .catch((reason: unknown) => {
         baseStylesPromise = null;
@@ -412,11 +527,16 @@ function scopeCssRules(
 }
 
 function scopeResumeSelector(selector: string): string {
-  let scoped = selector.replace(/:root\b|html\b|body\b/g, ".qts-document-host");
+  const host = ".qts-document-host";
+  let scoped = selector
+    .replace(/:root\b/g, host)
+    .replace(/(^|[\s>+~])html(?=$|[\s.#:[>+~])/g, `$1${host}`)
+    .replace(/(^|[\s>+~])body(?=$|[\s.#:[>+~])/g, `$1${host}`);
   scoped = scoped
-    .replace(/^\.is-embed\s+\.qts-document-host\b/, ".qts-document-host.is-embed")
-    .replace(/^\[dir=(["']?)(ltr|rtl)\1\]\s+\.qts-document-host$/, '.qts-document-host[dir="$2"]');
-  return scoped === selector ? `.qts-document-host ${selector}` : scoped;
+    .replace(/^\.is-embed(?=$|[\s>+~.#:[\]])/, `${host}.is-embed`)
+    .replace(new RegExp(`^${host}\\.is-embed\\s+${host}(?=$|[\\s>+~.#:[\\]])`), `${host}.is-embed`)
+    .replace(/^\[dir=(["']?)(ltr|rtl)\1\]\s+\.qts-document-host$/, `${host}[dir="$2"]`);
+  return scoped === selector ? `${host} ${selector}` : scoped;
 }
 
 function splitCssSelectorList(selectors: string): string[] {
@@ -471,7 +591,13 @@ async function renderTemplatePdf(
 ): Promise<Uint8Array> {
   const root = host?.querySelector<HTMLElement>(".qts-document-host");
   const article = host?.querySelector<HTMLElement>(".doc");
-  if (!host || !root || !article || root.dataset.renderState !== "ready") {
+  if (
+    !host
+    || !root
+    || !article
+    || root.dataset.document !== documentType
+    || root.dataset.renderState !== "ready"
+  ) {
     throw new Error(`The ${documentType} preview is not ready to download.`);
   }
 
@@ -480,32 +606,21 @@ async function renderTemplatePdf(
   const pageHeightMm = cssMillimeters(window.getComputedStyle(root).getPropertyValue("--page-height"));
   const pageWidthPoints = pageWidthMm * 72 / 25.4;
   const pageHeightPoints = pageHeightMm * 72 / 25.4;
-  const captureStyle = document.createElement("style");
-  captureStyle.textContent = ".sheet { background: #fff !important; box-shadow: none !important; }";
-  document.head.append(captureStyle);
-  scopeResumeStyles(captureStyle);
-
-  let canvas: HTMLCanvasElement;
-  try {
-    canvas = await html2canvas(article, {
-      backgroundColor: "#ffffff",
-      height: article.scrollHeight,
-      logging: false,
-      scale: 2,
-      useCORS: true,
-      width: article.scrollWidth,
-      windowHeight: Math.max(document.documentElement.clientHeight, article.scrollHeight),
-      windowWidth: Math.max(document.documentElement.clientWidth, article.scrollWidth),
-      scrollX: 0,
-      scrollY: 0,
-    });
-  } finally {
-    captureStyle.remove();
-  }
+  const canvas = await html2canvas(article, {
+    backgroundColor: "#ffffff",
+    height: article.scrollHeight,
+    logging: false,
+    scale: 2,
+    useCORS: true,
+    width: article.scrollWidth,
+    windowHeight: Math.max(document.documentElement.clientHeight, article.scrollHeight),
+    windowWidth: Math.max(document.documentElement.clientWidth, article.scrollWidth),
+    scrollX: 0,
+    scrollY: 0,
+  });
 
   const pixelsPerPage = canvas.width * pageHeightMm / pageWidthMm;
-  const previewPages = Number(root.dataset.pages) || 1;
-  const pageCount = Math.max(1, previewPages, Math.ceil(canvas.height / pixelsPerPage - 0.01));
+  const pageCount = Math.max(1, Math.ceil(canvas.height / pixelsPerPage - 0.01));
   const { PDFDocument } = await import("pdf-lib");
   const pdf = await PDFDocument.create();
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
@@ -562,41 +677,129 @@ function packageTimestamp(date = new Date()): string {
   return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}_${part(date.getHours())}-${part(date.getMinutes())}-${part(date.getSeconds())}`;
 }
 
-type ExtensionDownloadFile = {
-  downloadPath: string;
-  mimeType: "application/pdf";
-  base64: string;
-};
+const DOWNLOAD_DIRECTORY_DATABASE = "qts-resume-downloads";
+const DOWNLOAD_DIRECTORY_STORE = "settings";
+const DOWNLOAD_DIRECTORY_KEY = "output-folder";
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
+function openDownloadDirectoryDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DOWNLOAD_DIRECTORY_DATABASE, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(DOWNLOAD_DIRECTORY_STORE)) {
+        request.result.createObjectStore(DOWNLOAD_DIRECTORY_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Could not access saved download-folder settings."));
+    request.onblocked = () => reject(new Error("Saved download-folder settings are blocked by another browser tab."));
+  });
 }
 
-async function requestExtensionDownloads(files: ExtensionDownloadFile[]): Promise<void> {
-  const requestId = crypto.randomUUID();
-  await new Promise<void>((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
-      window.removeEventListener("message", onMessage);
-      reject(new Error("The QTS extension did not answer. Reload the updated extension, refresh this page, and try again."));
-    }, 10_000);
-    function onMessage(event: MessageEvent) {
-      if (
-        event.source !== window
-        || event.origin !== window.location.origin
-        || event.data?.type !== "QTS_DOWNLOAD_APPLICATION_FILES_RESULT"
-        || event.data.requestId !== requestId
-      ) return;
-      window.clearTimeout(timeoutId);
-      window.removeEventListener("message", onMessage);
-      if (event.data.ok) resolve();
-      else reject(new Error(event.data.error || "The QTS extension could not start the downloads."));
-    }
-    window.addEventListener("message", onMessage);
-    window.postMessage({ type: "QTS_DOWNLOAD_APPLICATION_FILES", requestId, files }, window.location.origin);
-  });
+async function readSavedDownloadDirectory(): Promise<ResumeDownloadDirectory | null> {
+  const database = await openDownloadDirectoryDatabase();
+  try {
+    const transaction = database.transaction(DOWNLOAD_DIRECTORY_STORE, "readonly");
+    const request = transaction.objectStore(DOWNLOAD_DIRECTORY_STORE).get(DOWNLOAD_DIRECTORY_KEY);
+    const handle: unknown = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error("Could not read the saved download folder."));
+    });
+    if (isResumeDownloadDirectory(handle)) return handle;
+    return null;
+  } finally {
+    database.close();
+  }
+}
+
+function isResumeDownloadDirectory(value: unknown): value is ResumeDownloadDirectory {
+  return typeof value === "object"
+    && value !== null
+    && "kind" in value
+    && value.kind === "directory"
+    && "name" in value
+    && typeof value.name === "string"
+    && "getDirectoryHandle" in value
+    && typeof value.getDirectoryHandle === "function"
+    && "getFileHandle" in value
+    && typeof value.getFileHandle === "function"
+    && "queryPermission" in value
+    && typeof value.queryPermission === "function"
+    && "requestPermission" in value
+    && typeof value.requestPermission === "function";
+}
+
+async function saveDownloadDirectory(directory: ResumeDownloadDirectory): Promise<void> {
+  const database = await openDownloadDirectoryDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(DOWNLOAD_DIRECTORY_STORE, "readwrite");
+      transaction.objectStore(DOWNLOAD_DIRECTORY_STORE).put(directory, DOWNLOAD_DIRECTORY_KEY);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error("Could not save the selected download folder."));
+      transaction.onabort = () => reject(transaction.error ?? new Error("Saving the selected download folder was aborted."));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function pickDownloadDirectory(): Promise<ResumeDownloadDirectory | null> {
+  if (typeof window.showDirectoryPicker !== "function") return null;
+  const directory = await window.showDirectoryPicker({ mode: "readwrite", startIn: "downloads" });
+  const permission = await directory.requestPermission({ mode: "readwrite" });
+  if (permission !== "granted") {
+    throw new Error("Write access was not granted for the selected download folder.");
+  }
+  return directory;
+}
+
+async function getDownloadDirectoryForSave(
+  savedDirectory: ResumeDownloadDirectory | null,
+  onSelected: (directory: ResumeDownloadDirectory) => void,
+): Promise<ResumeDownloadDirectory | null> {
+  if (typeof window.showDirectoryPicker !== "function") return null;
+  if (savedDirectory) {
+    const permission = await savedDirectory.queryPermission({ mode: "readwrite" });
+    const renewedPermission = permission === "granted"
+      ? permission
+      : await savedDirectory.requestPermission({ mode: "readwrite" });
+    if (renewedPermission === "granted") return savedDirectory;
+  }
+  const directory = await pickDownloadDirectory();
+  if (!directory) return null;
+  await saveDownloadDirectory(directory);
+  onSelected(directory);
+  return directory;
+}
+
+async function savePdfPairToDirectory(
+  directory: ResumeDownloadDirectory,
+  folderPath: string,
+  files: Array<{ name: string; bytes: Uint8Array }>,
+): Promise<void> {
+  let destination: FileSystemDirectoryHandle = directory;
+  for (const segment of folderPath.split("/")) {
+    destination = await destination.getDirectoryHandle(segment, { create: true });
+  }
+  for (const file of files) {
+    const handle = await destination.getFileHandle(file.name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(new Blob([Uint8Array.from(file.bytes).buffer], { type: "application/pdf" }));
+    await writable.close();
+  }
+}
+
+function downloadPdfPairInBrowser(files: Array<{ name: string; bytes: Uint8Array }>): void {
+  for (const file of files) {
+    const blob = new Blob([Uint8Array.from(file.bytes).buffer], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = file.name;
+    anchor.hidden = true;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
 }
