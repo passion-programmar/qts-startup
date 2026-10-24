@@ -246,6 +246,15 @@ async function initializeQtsPageLauncher() {
     }
   }
 
+  // The Get JD panel is injected on demand instead of on every page.
+  async function ensureGetJdPanel() {
+    if (typeof globalThis.__qtsInitializeGetJdReview !== 'function') {
+      const response = await chrome.runtime.sendMessage({ type: 'QTS_ENSURE_GET_JD_PANEL' });
+      if (!response?.ok) throw new Error(response?.error || 'The QTS panel could not load on this page.');
+    }
+    await globalThis.__qtsInitializeGetJdReview?.();
+  }
+
   async function openManagerPanel(button, panel, permissionKey, permissionName) {
     setOpen(false);
     button.disabled = true;
@@ -264,7 +273,7 @@ async function initializeQtsPageLauncher() {
       if (!Number.isInteger(response.tabId)) {
         throw new Error('The current page is unavailable for Manager settings.');
       }
-      await globalThis.__qtsInitializeGetJdReview?.();
+      await ensureGetJdPanel();
       const managerPanel = globalThis.__qtsGetJdReview;
       if (typeof managerPanel?.openManagerSettings !== 'function') {
         throw new Error('The QTS Manager panel is not ready. Reload this page and try again.');
@@ -474,6 +483,13 @@ async function initializeQtsPageLauncher() {
 
   syncSessionAction().catch(() => {});
   syncModeActions().catch(() => {});
+  chrome.storage.local.get(['qtsExtensionStatus', 'authExpiresAt'])
+    .then((stored) => {
+      // Restore a saved review after reloads while Get JD is active.
+      if (stored.qtsExtensionStatus !== 'get_jd' || !((Number(stored.authExpiresAt) || 0) > Date.now())) return;
+      return ensureGetJdPanel();
+    })
+    .catch((error) => console.warn('[QTS Get JD] Could not restore the review panel:', error));
   syncTextHighlightAction().catch((error) => {
     console.warn('[QTS text highlights] Could not verify Manager access:', error);
   });

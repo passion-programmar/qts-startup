@@ -802,6 +802,27 @@ async function extractJobFromTab(tabId, { requireCompany = false } = {}) {
   }
 }
 
+const GET_JD_PANEL_FILE = 'content/get-jd-review.js';
+const getJdPanelInjections = new Map();
+
+// The Get JD panel is large, so it is injected only into tabs that need it.
+async function ensureGetJdPanel(tabId) {
+  if (!getJdPanelInjections.has(tabId)) {
+    getJdPanelInjections.set(tabId, (async () => {
+      const target = { tabId, frameIds: [0] };
+      const [probe] = await chrome.scripting.executeScript({
+        target,
+        func: () => typeof globalThis.__qtsInitializeGetJdReview === 'function',
+      });
+      // Re-running the file would redeclare its top-level bindings, so inject it only once per page.
+      if (!probe?.result) {
+        await chrome.scripting.executeScript({ target, files: [GET_JD_PANEL_FILE] });
+      }
+    })().finally(() => getJdPanelInjections.delete(tabId)));
+  }
+  return getJdPanelInjections.get(tabId);
+}
+
 async function saveGetJdResult(tabId, result, notifyPage = true) {
   const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
   const results = stored[GET_JD_RESULTS_KEY] || {};
@@ -814,6 +835,12 @@ async function saveGetJdResult(tabId, result, notifyPage = true) {
   }
   await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
   if (notifyPage) {
+    if (result?.status !== 'cancelled') {
+      // A freshly injected panel loads the stored result itself, so a missed message below is harmless.
+      await ensureGetJdPanel(tabId).catch((error) => {
+        console.warn('[QTS Get JD] Could not load the review panel on this page:', error);
+      });
+    }
     chrome.tabs.sendMessage(tabId, {
       type: 'QTS_GET_JD_RESULT_UPDATED',
       result,
@@ -4251,6 +4278,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
+  if (msg.type === 'QTS_ENSURE_GET_JD_PANEL') {
+    const tabId = sender.tab?.id;
+    if (tabId == null || sender.frameId !== 0) {
+      sendResponse({ ok: false, error: 'The QTS panel can only load on a web page.' });
+      return false;
+    }
+    ensureGetJdPanel(tabId)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : 'The QTS panel could not load on this page.',
+      }));
+    return true;
+  }
+
   if (msg.type === 'QTS_CLOSE_SIGN_IN_FRAME') {
     if (sender.url === chrome.runtime.getURL('signin/signin.html') && sender.tab?.id != null) {
       chrome.tabs.sendMessage(sender.tab.id, { type: 'QTS_HIDE_SIGN_IN_FRAME' }, { frameId: 0 })

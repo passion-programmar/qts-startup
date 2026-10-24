@@ -763,6 +763,24 @@ test('page Sign In collects credentials only inside the extension-origin frame',
   assert.equal(signInBranch.includes('openCapturePanel'), false);
 });
 
+test('the Get JD panel is injected on demand instead of on every page', () => {
+  const read = (...parts) => fs.readFileSync(path.join(extensionRoot, ...parts), 'utf8');
+  const manifest = JSON.parse(read('manifest.json'));
+  const pageScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
+  const worker = read('background', 'service-worker.js');
+  const launcher = read('content', 'page-launcher.js');
+  const saveResult = worker.slice(
+    worker.indexOf('async function saveGetJdResult('),
+    worker.indexOf('async function readGetJdResultForTab('),
+  );
+
+  assert.equal(pageScripts.includes('content/get-jd-review.js'), false);
+  assert.ok(saveResult.includes('await ensureGetJdPanel(tabId)'));
+  assert.ok(worker.includes("msg.type === 'QTS_ENSURE_GET_JD_PANEL'"));
+  assert.ok(launcher.includes("type: 'QTS_ENSURE_GET_JD_PANEL'"));
+  assert.ok(launcher.includes("stored.qtsExtensionStatus !== 'get_jd'"));
+});
+
 test('content scripts never read the bearer token', () => {
   const contentScripts = ['page-launcher.js', 'get-jd-review.js', 'text-highlighter.js'];
   for (const file of contentScripts) {
