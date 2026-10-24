@@ -56,6 +56,11 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(launcher.includes('conic-gradient(from 0deg'));
   assert.ok(launcher.includes('qts-border-rotate'));
   assert.ok(launcher.includes('animation: qts-border-rotate 1.5s linear infinite'));
+  assert.ok(launcher.includes('.launcher:not(.signed-in)::before'));
+  assert.ok(launcher.includes('.launcher:not(.signed-in) .action'));
+  assert.ok(launcher.includes('.launcher.signed-in .main { border-color: #c7d2fe; background: #fff; }'));
+  assert.ok(launcher.includes("launcher.classList.toggle('signed-in', signedIn)"));
+  assert.ok(launcher.includes("if (!signedIn) {\n      showSignInForm();"));
   assert.equal(launcher.includes("launcher.classList.toggle('loading'"), false);
 });
 
@@ -318,6 +323,11 @@ test('Generation launcher shows a document icon and can cancel an active run', (
     path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'generation', 'claim', 'route.ts'),
     'utf8',
   );
+  const releaseRoute = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'generation', 'release', 'route.ts'),
+    'utf8',
+  );
+  const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
 
   assert.ok(launcher.includes("['generation', 'Generation', '▤', 'generation']"));
   assert.ok(launcher.includes("button.dataset.modeAction = active ? 'cancel_status' : action"));
@@ -325,17 +335,56 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(serviceWorker.includes("'/api/extension/generation/heartbeat'"));
   assert.equal(serviceWorker.includes("'/api/extension/generation/queue'"), false);
   assert.equal(serviceWorker.includes('Generation must be started from a job page.'), false);
-  assert.ok(serviceWorker.includes('Opening ChatGPT and loading the oldest Job'));
+  assert.ok(serviceWorker.includes('Checking the oldest eligible saved job'));
+  assert.ok(serviceWorker.includes('pinned: true'));
+  assert.ok(serviceWorker.includes('while (Date.now() - waitStartedAt < 120000)'));
+  assert.ok(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'));
+  assert.ok(serviceWorker.includes('persistGenerationQueueRun(runId, excludedJobIds)'));
+  assert.ok(serviceWorker.includes('notifyGenerationManager'));
   assert.ok(serviceWorker.includes('ACTIVE_GENERATION_JOB_KEY'));
   assert.ok(serviceWorker.includes('removeQueuedGenerationDownloads(downloadIds)'));
-  assert.ok(cancelAllRoute.includes('generationStatus: "not_queued"'));
-  assert.ok(cancelAllRoute.includes('inArray(jobs.generationStatus, ["queued", "processing"])'));
+  assert.ok(cancelAllRoute.includes('generationStatus: "queued"'));
+  assert.ok(cancelAllRoute.includes('eq(jobs.generationStatus, "processing")'));
+  assert.ok(cancelAllRoute.includes('generationAttemptCount: sql`greatest'));
   assert.equal(cancelAllRoute.includes('status: sql`case when'), false);
   assert.equal(cancelAllRoute.includes('resumeLocalPath: sql`case when'), false);
+  assert.ok(manifest.permissions.includes('notifications'));
+  assert.ok(releaseRoute.includes('generationStatus: "queued"'));
+  assert.ok(releaseRoute.includes('generationAttemptCount: sql`greatest'));
   assert.ok(claimRoute.includes('.orderBy(asc(jobs.createdAt), asc(jobs.id))'));
-  assert.ok(claimRoute.includes('eq(jobs.status, "todo")'));
-  assert.ok(claimRoute.includes('inArray(jobs.generationStatus, ["not_queued", "failed"])'));
-  assert.ok(claimRoute.includes('eq(jobs.generationStatus, "queued")'));
+  assert.equal(claimRoute.includes('jobs.status'), false);
+  assert.ok(claimRoute.includes('sql`length(btrim(${profiles.jdMatching})) > 0`'));
+  assert.ok(claimRoute.includes('isNull(jobs.resumeLocalPath)'));
+  assert.ok(claimRoute.includes('lt(jobs.generationAttemptCount, 2)'));
+  assert.ok(claimRoute.includes('if (activeJob)'));
+});
+
+test('queued Generation prompts use saved job and profile data only', () => {
+  const repositoryRoot = path.join(extensionRoot, '..');
+  const startRoute = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'api', 'extension', 'generation', 'start', 'route.ts'),
+    'utf8',
+  );
+  const schema = fs.readFileSync(path.join(repositoryRoot, 'src', 'db', 'schema.ts'), 'utf8');
+  const jobsPage = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'jobs', 'page.tsx'),
+    'utf8',
+  );
+  const actions = fs.readFileSync(
+    path.join(repositoryRoot, 'src', 'app', 'jobs', 'actions.ts'),
+    'utf8',
+  );
+
+  assert.ok(startRoute.includes('jobUrl: normalizeJobUrl(savedJob.jobUrl)'));
+  assert.ok(startRoute.includes('jobDescription: savedJob.description'));
+  assert.ok(startRoute.includes('jdMatching: savedJob.jdMatching'));
+  assert.ok(startRoute.includes('educations'));
+  assert.ok(startRoute.includes('experiences'));
+  assert.equal(startRoute.includes('readGenerationJob'), false);
+  assert.ok(schema.includes('generationAttemptCount: integer("generation_attempt_count")'));
+  assert.ok(actions.includes('Reset is available only after both Generation attempts fail.'));
+  assert.ok(actions.includes('generationAttemptCount: 0'));
+  assert.ok(jobsPage.includes('generationAttemptCount: jobs.generationAttemptCount'));
 });
 
 test('Generation distinguishes generated documents from delivered files', () => {
@@ -353,8 +402,10 @@ test('Generation distinguishes generated documents from delivered files', () => 
 
   assert.ok(schema.includes('"delivered"'));
   assert.ok(completeRoute.includes('status: completed ? "completed" : "failed"'));
+  assert.ok(completeRoute.includes('jobDescription: generationRuns.jobDescription'));
+  assert.equal(completeRoute.includes('readText(body.jobDescription'), false);
   assert.ok(finalizeRoute.includes('.set({ status: "delivered"'));
-  assert.ok(finalizeRoute.includes('db.transaction(async (tx)'));
+  assert.ok(finalizeRoute.includes('db.batch(['));
   assert.ok(pdfPage.includes('eq(generationRuns.status, "delivered")'));
 });
 
@@ -502,6 +553,7 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(forms.includes('This action cannot be undone.'));
   assert.equal(forms.includes('window.confirm('), false);
   assert.ok(forms.includes('ListPlus'));
+  assert.ok(forms.includes('"Reset Generation"'));
   assert.ok(forms.includes('size-9 shrink-0 items-center justify-center'));
 });
 

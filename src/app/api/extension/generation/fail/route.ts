@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { generationRuns, jobs } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -51,10 +51,24 @@ export async function POST(request: Request): Promise<NextResponse> {
           eq(generationRuns.id, generationId),
           eq(generationRuns.jobId, jobId),
           eq(generationRuns.managerId, manager.id),
-          eq(generationRuns.status, "completed"),
+          inArray(generationRuns.status, ["pending", "completed"]),
         ));
     }
     if (cancelled) {
+      await db
+        .update(jobs)
+        .set({
+          generationStatus: "queued",
+          generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)`,
+          generationError: null,
+          generationLeaseExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(jobs.id, jobId),
+          eq(jobs.managerId, manager.id),
+          eq(jobs.generationStatus, "processing"),
+        ));
       return NextResponse.json({ success: true, jobId, cancelled: true });
     }
     const [failed] = await db

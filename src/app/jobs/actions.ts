@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, eq, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -103,20 +103,56 @@ export async function setJobGenerationQueueAction(
   }
   const id = text(formData, "id", 36);
   const intent = text(formData, "intent", 20);
-  if (!uuid(id) || !["queue", "cancel"].includes(intent)) {
+  if (!uuid(id) || !["queue", "cancel", "reset"].includes(intent)) {
     return { error: "Invalid Generation queue action.", success: null };
   }
 
   const [job] = await db
-    .select({ generationStatus: jobs.generationStatus })
+    .select({
+      generationStatus: jobs.generationStatus,
+      generationAttemptCount: jobs.generationAttemptCount,
+      description: jobs.description,
+      resumeLocalPath: jobs.resumeLocalPath,
+      jdMatching: profiles.jdMatching,
+    })
     .from(jobs)
+    .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
     .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id)))
     .limit(1);
   if (!job) return { error: "Job was not found.", success: null };
 
-  if (intent === "queue") {
+  if (intent === "reset") {
+    if (job.generationStatus !== "failed" || job.generationAttemptCount < 2) {
+      return { error: "Reset is available only after both Generation attempts fail.", success: null };
+    }
+    const [reset] = await db.update(jobs).set({
+      generationStatus: "not_queued",
+      generationAttemptCount: 0,
+      generationError: null,
+      generationLeaseExpiresAt: null,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(jobs.id, id),
+      eq(jobs.managerId, manager.id),
+      eq(jobs.generationStatus, "failed"),
+      sql`${jobs.generationAttemptCount} >= 2`,
+    )).returning({ id: jobs.id });
+    if (!reset) return { error: "Generation state changed; refresh and try again.", success: null };
+  } else if (intent === "queue") {
     if (job.generationStatus === "processing") {
       return { error: "This job is already being processed.", success: null };
+    }
+    if (job.generationStatus === "completed") {
+      return { error: "This job has already completed Generation.", success: null };
+    }
+    if (job.generationAttemptCount >= 2) {
+      return { error: "Both Generation attempts failed. Use Reset Generation before retrying.", success: null };
+    }
+    if (!job.description?.trim() || !job.jdMatching?.trim() || job.resumeLocalPath !== null) {
+      return {
+        error: "Generation requires a saved job description, candidate JD-matching notes, and no resume path.",
+        success: null,
+      };
     }
     const [queued] = await db.update(jobs).set({
       generationStatus: "queued",
@@ -135,25 +171,28 @@ export async function setJobGenerationQueueAction(
     if (!["queued", "processing"].includes(job.generationStatus)) {
       return { error: "Only queued or processing Generation jobs can be cancelled.", success: null };
     }
+    const processing = job.generationStatus === "processing";
     const [cancelled] = await db.update(jobs).set({
-      generationStatus: "not_queued",
+      generationStatus: processing ? "queued" : "not_queued",
+      ...(processing
+        ? { generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)` }
+        : {}),
       generationError: null,
       generationLeaseExpiresAt: null,
       updatedAt: new Date(),
     }).where(and(
       eq(jobs.id, id),
       eq(jobs.managerId, manager.id),
-      inArray(jobs.generationStatus, ["queued", "processing"]),
+      eq(jobs.generationStatus, job.generationStatus),
     )).returning({ id: jobs.id });
     if (!cancelled) {
       return { error: "This job is no longer queued.", success: null };
     }
   }
   revalidatePath("/jobs");
-  return {
-    error: null,
-    success: intent === "queue" ? "Generation queued." : "Generation queue cancelled.",
-  };
+  return { error: null, success: intent === "reset"
+    ? "Generation failure state reset. The job can be queued again."
+    : intent === "queue" ? "Generation queued." : "Generation queue cancelled." };
 }
 
 export async function deleteJobAction(

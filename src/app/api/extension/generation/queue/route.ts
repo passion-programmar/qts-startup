@@ -1,6 +1,6 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { jobs } from "@/db/schema";
+import { jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
@@ -39,9 +39,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       .select({
         id: jobs.id,
         description: jobs.description,
+        jdMatching: profiles.jdMatching,
+        resumeLocalPath: jobs.resumeLocalPath,
+        generationAttemptCount: jobs.generationAttemptCount,
         generationStatus: jobs.generationStatus,
       })
       .from(jobs)
+      .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
       .where(and(
         eq(jobs.managerId, manager.id),
         sql`regexp_replace(split_part(btrim(${jobs.jobUrl}), '#', 1), '/+$', '') = ${normalizedUrl}`,
@@ -57,13 +61,17 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const queueableIds = rows
-      .filter((row) =>
-        !["queued", "processing"].includes(row.generationStatus)
-        && Boolean(row.description?.trim()),
-      )
+    const eligibleRows = rows.filter((row) =>
+      ["not_queued", "queued", "processing", "failed"].includes(row.generationStatus)
+      && row.generationAttemptCount < 2
+      && Boolean(row.description?.trim())
+      && Boolean(row.jdMatching?.trim())
+      && row.resumeLocalPath === null,
+    );
+    const queueableIds = eligibleRows
+      .filter((row) => !["queued", "processing"].includes(row.generationStatus))
       .map((row) => row.id);
-    const alreadyReady = rows.filter((row) =>
+    const alreadyReady = eligibleRows.filter((row) =>
       ["queued", "processing"].includes(row.generationStatus),
     ).length;
     const missingDescription = rows.filter((row) => !row.description?.trim()).length;
@@ -80,6 +88,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         .where(and(
           eq(jobs.managerId, manager.id),
           inArray(jobs.id, queueableIds),
+          inArray(jobs.generationStatus, ["not_queued", "failed"]),
+          lt(jobs.generationAttemptCount, 2),
+          isNull(jobs.resumeLocalPath),
+          sql`length(btrim(${jobs.description})) > 0`,
+          sql`length(btrim(${profiles.jdMatching})) > 0`,
         ));
     }
 
@@ -88,7 +101,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json(
         {
           success: false,
-          message: "The saved candidates do not have a job description. Run Get JD again before Generation.",
+          message: "No saved candidate job meets Generation eligibility requirements.",
         },
         { status: 409 },
       );

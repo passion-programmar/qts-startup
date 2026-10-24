@@ -104,5 +104,20 @@ test('expired token is removed from local extension storage', async () => {
   });
 
   assert.equal(await loadAuthStorage(storage, now).hydratePopupAuth(), false);
-  assert.deepEqual(storage.data, {});
+  assert.deepEqual(storage.data, { qtsExtensionStatus: null });
+});
+
+test('clearing an extension session resets the active extension status', async () => {
+  const storage = createStorageArea({
+    authToken: createToken(Math.floor(Date.now() / 1000) + 60),
+    authExpiresAt: Date.now() + 60_000,
+    qtsSessionUser: { id: 'manager-id', username: 'manager', role: 'manager' },
+    qtsExtensionStatus: 'generation',
+  });
+
+  await loadAuthStorage(storage).clearAuth();
+
+  assert.equal(storage.data.authToken, undefined);
+  assert.equal(storage.data.qtsSessionUser, undefined);
+  assert.equal(storage.data.qtsExtensionStatus, null);
 });

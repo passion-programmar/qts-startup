@@ -31,7 +31,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ success: false, message: "Generation result is required." }, { status: 400 });
   }
   const generationId = readText(body.generationId, 36);
-  const jobDescription = readText(body.jobDescription, 100_000);
   const responseText = readText(body.responseText, maxResponseLength);
   const failureReason = readText(body.failureReason, 2000);
   const responseJson = isRecord(body.responseJson) ? body.responseJson : null;
@@ -48,33 +47,36 @@ export async function POST(request: Request): Promise<NextResponse> {
   const completed = Boolean(responseText && validPackage);
   if (
     !uuidPattern.test(generationId)
-    || !jobDescription
     || (completed && !validPackage)
     || (!completed && !failureReason)
   ) {
     return NextResponse.json(
-      { success: false, message: "A valid Generation ID, JD, and a valid document package or failure reason are required." },
+      { success: false, message: "A valid Generation ID and document package or failure reason are required." },
       { status: 400 },
     );
   }
 
   try {
+    const [run] = await db
+      .select({
+        jobId: generationRuns.jobId,
+        jobDescription: generationRuns.jobDescription,
+      })
+      .from(generationRuns)
+      .where(and(
+        eq(generationRuns.id, generationId),
+        eq(generationRuns.managerId, manager.id),
+        eq(generationRuns.status, "pending"),
+      ))
+      .limit(1);
+    if (!run) {
+      return NextResponse.json(
+        { success: false, message: "This Generation run was not found or was already completed." },
+        { status: 404 },
+      );
+    }
+    const jobDescription = run.jobDescription;
     if (completed) {
-      const [run] = await db
-        .select({ jobId: generationRuns.jobId })
-        .from(generationRuns)
-        .where(and(
-          eq(generationRuns.id, generationId),
-          eq(generationRuns.managerId, manager.id),
-          eq(generationRuns.status, "pending"),
-        ))
-        .limit(1);
-      if (!run) {
-        return NextResponse.json(
-          { success: false, message: "This Generation run was not found or was already completed." },
-          { status: 404 },
-        );
-      }
       if (run.jobId && parsedPackage) {
         const [candidate] = await db
           .select({

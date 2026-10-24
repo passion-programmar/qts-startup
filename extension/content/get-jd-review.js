@@ -1052,7 +1052,7 @@ async function initializeGetJdReviewOnce() {
             : `In Jobs · ${profile.jobStatus || 'not editable'}`
           : '';
       category.textContent = [
-        profile.recommended === true ? 'Gemini recommended' : '',
+        profile.recommended === true ? 'Recommended' : '',
         profile.category || 'Uncategorized',
         profile.autoSaved === true ? 'Saved automatically' : '',
         profile.autoSaveFailed === true ? 'Auto-save failed · select Save to retry' : '',

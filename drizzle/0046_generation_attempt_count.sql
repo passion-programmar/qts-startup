@@ -1,0 +1,2 @@
+ALTER TABLE "jobs" ADD COLUMN "generation_attempt_count" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "jobs" ADD CONSTRAINT "jobs_generation_attempt_count_nonnegative" CHECK ("jobs"."generation_attempt_count" >= 0);

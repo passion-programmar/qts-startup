@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -17,18 +17,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     const cancelled = await db
       .update(jobs)
       .set({
-        generationStatus: "not_queued",
+        generationStatus: "queued",
+        generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)`,
         generationError: null,
         generationLeaseExpiresAt: null,
         updatedAt: new Date(),
       })
       .where(and(
         eq(jobs.managerId, manager.id),
-        inArray(jobs.generationStatus, ["queued", "processing"]),
+        eq(jobs.generationStatus, "processing"),
       ))
       .returning({ id: jobs.id });
 
-    return NextResponse.json({ success: true, cancelledCount: cancelled.length });
+    return NextResponse.json({ success: true, requeuedCount: cancelled.length });
   } catch (error) {
     console.error("Could not cancel extension Generation queue.", error);
     return NextResponse.json(

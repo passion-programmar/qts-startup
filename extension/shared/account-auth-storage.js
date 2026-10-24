@@ -114,6 +114,7 @@
 
   async function clearPersistedAuth() {
     await removeLocalKeys(AUTH_KEYS);
+    await writeLocalArea({ qtsExtensionStatus: null });
   }
 
   function applyAuthToMemory(token, user, expiresAt) {

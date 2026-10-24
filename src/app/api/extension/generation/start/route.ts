@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { educations, experiences, generationRuns, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { isRecord, readGenerationJob } from "@/server/generation/generation-values";
+import { isRecord, readText } from "@/server/generation/generation-values";
 import {
   composeGenerationPrompt,
   getManagerDocumentPrompt,
@@ -29,26 +29,21 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 400 },
     );
   }
-  const job = readGenerationJob(body);
-  if (!job) {
+  if (!isRecord(body)) {
     return NextResponse.json(
-      { success: false, message: "A URL, title, company, and job description are required." },
+      { success: false, message: "A claimed job ID is required." },
       { status: 400 },
     );
   }
 
   try {
-    const jobIdValue = isRecord(body) ? body.jobId : undefined;
-    const jobId = typeof jobIdValue === "string" ? jobIdValue : null;
-    if (jobId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
-      return NextResponse.json({ success: false, message: "Invalid queued job ID." }, { status: 400 });
+    const jobId = readText(body.jobId, 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
+      return NextResponse.json({ success: false, message: "Invalid claimed job ID." }, { status: 400 });
     }
 
-    let candidateProfile: unknown = {};
-    let normalizedJob = { ...job, jobUrl: normalizeJobUrl(job.jobUrl) };
-    if (jobId) {
-      const [savedJob] = await db
-        .select({
+    const [savedJob] = await db
+      .select({
           jobUrl: jobs.jobUrl,
           jobTitle: jobs.jobTitle,
           company: jobs.company,
@@ -57,6 +52,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           workplaceType: jobs.workplaceType,
           salary: jobs.salary,
           description: jobs.description,
+          resumeLocalPath: jobs.resumeLocalPath,
           candidateId: profiles.userId,
           firstName: profiles.firstName,
           lastName: profiles.lastName,
@@ -83,13 +79,24 @@ export async function POST(request: Request): Promise<NextResponse> {
           isNull(users.blockedAt),
         ))
         .limit(1);
-      if (!savedJob) {
-        return NextResponse.json(
-          { success: false, message: "The claimed job is no longer available to this manager." },
-          { status: 409 },
-        );
-      }
-      const [education, experience] = await Promise.all([
+    if (!savedJob) {
+      return NextResponse.json(
+        { success: false, message: "The claimed job is no longer available to this manager." },
+        { status: 409 },
+      );
+    }
+    if (
+      !savedJob.description?.trim() ||
+      !savedJob.jdMatching?.trim() ||
+      savedJob.resumeLocalPath !== null
+    ) {
+      return NextResponse.json(
+        { success: false, message: "The claimed job no longer meets Generation eligibility requirements." },
+        { status: 409 },
+      );
+    }
+    const promptTemplate = await getManagerDocumentPrompt(manager.id);
+    const [education, experience] = await Promise.all([
         db.select({
           institution: educations.institution,
           degree: educations.degree,
@@ -123,64 +130,53 @@ export async function POST(request: Request): Promise<NextResponse> {
             asc(experiences.sortOrder),
           ),
       ]);
-      const fullName = [savedJob.firstName, savedJob.lastName].filter(Boolean).join(" ");
-      if (!fullName || !savedJob.email) {
-        return NextResponse.json(
-          { success: false, message: "Complete the candidate name and email before starting Generation." },
-          { status: 409 },
-        );
-      }
-      candidateProfile = {
-        fullName,
-        email: savedJob.email,
-        phone: savedJob.phone,
-        headline: savedJob.headline,
-        linkedinUrl: savedJob.linkedinUrl,
-        location: [
-          savedJob.addressLine1,
-          savedJob.city,
-          savedJob.province,
-          savedJob.country,
-          savedJob.postalCode,
-        ].filter(Boolean).join(", "),
-        jdMatching: savedJob.jdMatching,
-        education,
-        experience,
-      };
-      normalizedJob = {
-        ...job,
-        jobUrl: normalizeJobUrl(savedJob.jobUrl),
-        jobTitle: savedJob.jobTitle,
-        company: savedJob.company,
-        location: savedJob.location || job.location,
-        employmentType: job.employmentType || savedJob.employmentType || "",
-        workplaceType: job.workplaceType || savedJob.workplaceType || "",
-        salary: job.salary || savedJob.salary || "",
-        jobDescription: job.jobDescription || savedJob.description || "",
-      };
-      if (!normalizedJob.jobDescription) {
-        return NextResponse.json(
-          { success: false, message: "The job page did not provide a job description." },
-          { status: 422 },
-        );
-      }
+    const fullName = [savedJob.firstName, savedJob.lastName].filter(Boolean).join(" ");
+    if (!fullName || !savedJob.email) {
+      return NextResponse.json(
+        { success: false, message: "Complete the candidate name and email before starting Generation." },
+        { status: 409 },
+      );
     }
-    const promptTemplate = await getManagerDocumentPrompt(manager.id);
+    const candidateProfile = {
+      fullName,
+      email: savedJob.email,
+      phone: savedJob.phone,
+      headline: savedJob.headline,
+      linkedinUrl: savedJob.linkedinUrl,
+      location: [
+        savedJob.addressLine1,
+        savedJob.city,
+        savedJob.province,
+        savedJob.country,
+        savedJob.postalCode,
+      ].filter(Boolean).join(", "),
+      jdMatching: savedJob.jdMatching,
+      education,
+      experience,
+    };
+    const normalizedJob = {
+      jobUrl: normalizeJobUrl(savedJob.jobUrl),
+      jobTitle: savedJob.jobTitle,
+      company: savedJob.company,
+      location: savedJob.location || "",
+      employmentType: savedJob.employmentType || "",
+      workplaceType: savedJob.workplaceType || "",
+      salary: savedJob.salary || "",
+      jobDescription: savedJob.description,
+    };
     const composedPrompt = composeGenerationPrompt(promptTemplate, normalizedJob, candidateProfile);
-    if (jobId) {
-      await db
-        .update(generationRuns)
-        .set({
-          status: "failed",
-          failureReason: "Superseded by a new Generation attempt.",
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(generationRuns.jobId, jobId),
-          eq(generationRuns.managerId, manager.id),
-          inArray(generationRuns.status, ["pending", "completed"]),
-        ));
-    }
+    await db
+      .update(generationRuns)
+      .set({
+        status: "failed",
+        failureReason: "Superseded by a new Generation attempt.",
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(generationRuns.jobId, jobId),
+        eq(generationRuns.managerId, manager.id),
+        inArray(generationRuns.status, ["pending", "completed"]),
+      ));
     const [run] = await db
       .insert(generationRuns)
       .values({
@@ -204,7 +200,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     console.error("Could not start extension generation.", error);
     if (error instanceof MissingDocumentPromptError) {
       return NextResponse.json(
-        { success: false, message: "No saved resume and cover-letter prompt is available. Ask your Super Admin to configure one." },
+        {
+          success: false,
+          errorCode: "generation_prompt_missing",
+          message: "No saved resume and cover-letter prompt is available. Ask your Super Admin to configure one.",
+        },
         { status: 409 },
       );
     }

@@ -52,13 +52,13 @@ const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
 const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
 const GENERATION_BROWSER_STATE_KEY = 'qtsGenerationBrowserState';
-const PREWARMED_GENERATION_CHAT_TAB_KEY = 'qtsPrewarmedGenerationChatTabId';
+const GENERATION_NOTICE_KEY = 'qtsGenerationNotice';
+const GENERATION_QUEUE_RUN_KEY = 'qtsGenerationQueueRun';
 const getJdInFlightTabs = new Set();
 const getJdLastPageByTab = new Map();
 const generationInFlightTabs = new Set();
 const generationCancellationByTab = new Map();
 let generationQueueInFlight = false;
-let generationPrewarmPromise = null;
 const GENERATION_QUEUE_ALARM = 'qts-generation-queue';
 let lastSourceTabId = null;
 const lastAutoDetectKeyByTab = new Map();
@@ -1129,8 +1129,8 @@ async function processGetJdPage(tabId, url, documentId = '') {
           : geminiResult.autoSaveFailureCount > 0
             ? geminiResult.message
           : matchingAvailableProfiles.length
-            ? `Gemini recommended ${matchingAvailableProfiles.length} candidate${matchingAvailableProfiles.length === 1 ? '' : 's'}. Recommended available candidates are checked; review the list before saving.`
-          : 'Gemini did not recommend any available candidates from their matching notes. All available profiles are listed unchecked so you can review and select manually.',
+            ? `Recommended ${matchingAvailableProfiles.length} candidate${matchingAvailableProfiles.length === 1 ? '' : 's'}. Recommended available candidates are checked; review the list before saving.`
+          : 'Did not recommend any available candidates from their matching notes. All available profiles are listed unchecked so you can review and select manually.',
         hasDuplicates: geminiResult.exists === true,
         toastKind: geminiResult.toastKind,
         toastMessage: geminiResult.toastMessage,
@@ -2614,6 +2614,15 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
+  async function persistGenerationQueueRun(runId, excludedJobIds) {
+    await chrome.storage.local.set({
+      [GENERATION_QUEUE_RUN_KEY]: {
+        runId,
+        excludedJobIds: [...excludedJobIds],
+      },
+    });
+  }
+
   async function clearGenerationBrowserState(generationId = '') {
     if (generationId) {
       const stored = await chrome.storage.local.get(GENERATION_BROWSER_STATE_KEY);
@@ -2623,41 +2632,68 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     await chrome.storage.local.remove(GENERATION_BROWSER_STATE_KEY);
   }
 
-  async function readGenerationChatTab(tabId) {
-    if (!Number.isInteger(tabId)) return null;
+  async function notifyGenerationManager(message) {
+    let sessionUser = null;
     try {
-      const tab = await chrome.tabs.get(tabId);
-      return self.__qtsGptWorkerHandoff?.isChatGptHost?.(tab.url || '', tab.pendingUrl || '')
-        ? tab
-        : null;
-    } catch {
-      return null;
+      sessionUser = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+    } catch (error) {
+      console.error('[QTS Generation] Could not read the Manager session for the notification:', error);
     }
-  }
-
-  async function prewarmGenerationChatGptTab() {
-    if (generationPrewarmPromise) return generationPrewarmPromise;
-    generationPrewarmPromise = (async () => {
-      const stored = await chrome.storage.local.get(PREWARMED_GENERATION_CHAT_TAB_KEY);
-      const existing = await readGenerationChatTab(stored[PREWARMED_GENERATION_CHAT_TAB_KEY]);
-      if (existing) {
-        await chrome.tabs.update(existing.id, { active: true }).catch(() => {});
-        return existing;
-      }
-      const created = await chrome.tabs.create({ url: 'https://chatgpt.com/', active: true });
-      if (created?.id == null) throw new Error('Could not open ChatGPT.');
-      await chrome.storage.local.set({ [PREWARMED_GENERATION_CHAT_TAB_KEY]: created.id });
-      return created;
-    })().finally(() => {
-      generationPrewarmPromise = null;
+    const notice = {
+      managerId: sessionUser?.role === 'manager' ? sessionUser.id : null,
+      message: String(message || '').trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    if (!notice.message) return;
+    try {
+      await chrome.storage.local.set({ [GENERATION_NOTICE_KEY]: notice });
+    } catch (error) {
+      console.error('[QTS Generation] Could not retain the Manager notice in extension storage:', error);
+    }
+    if (!chrome.notifications?.create) {
+      console.error('[QTS Generation] Chrome notifications are unavailable; the notice is available in the popup.');
+      return;
+    }
+    await new Promise((resolve) => {
+      chrome.notifications.create(
+        `qts-generation-${Date.now()}`,
+        {
+          type: 'basic',
+          iconUrl: chrome.runtime.getURL('assets/icon128.png'),
+          title: 'QTS Generation',
+          message: notice.message,
+        },
+        () => {
+          const error = chrome.runtime.lastError;
+          if (error) console.error('[QTS Generation] Could not show a Chrome notification:', error.message);
+          resolve();
+        },
+      );
     });
-    return generationPrewarmPromise;
   }
 
   async function acquireGenerationChatGptTab() {
-    const tab = await prewarmGenerationChatGptTab();
-    await chrome.storage.local.remove(PREWARMED_GENERATION_CHAT_TAB_KEY);
-    return tab;
+    const created = await chrome.tabs.create({
+      url: 'https://chatgpt.com/',
+      active: true,
+      pinned: true,
+    });
+    if (created?.id == null) throw new Error('Could not open a new pinned ChatGPT tab.');
+    const existingTabs = await chrome.tabs.query({});
+    const otherChatTabs = existingTabs.filter((tab) =>
+      tab.id != null &&
+      tab.id !== created.id &&
+      isChatGptHostUrl(tab.url || tab.pendingUrl || ''),
+    );
+    for (const tab of otherChatTabs) {
+      try {
+        await chrome.tabs.remove(tab.id);
+      } catch (error) {
+        console.error('[QTS Generation] Could not close an existing ChatGPT tab:', error);
+        throw new Error('Could not close all existing ChatGPT tabs before Generation.');
+      }
+    }
+    return created;
   }
 
   async function sendGenerationPromptWithRecovery(chatTabId, prompt) {
@@ -2761,68 +2797,50 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     if (!queuedJob?.id) {
       throw new Error('Generation requires a saved candidate Job. Run Get JD and save candidates first.');
     }
-    if (generationInFlightTabs.has(jobTabId)) {
-      throw new Error('Generation is already running for this page.');
+    const cancellationKey = jobTabId ?? queuedJob.id;
+    if (generationInFlightTabs.has(cancellationKey)) {
+      throw new Error('Generation is already running for this job.');
     }
-    generationInFlightTabs.add(jobTabId);
-    const cancellationToken = (generationCancellationByTab.get(jobTabId) || 0) + 1;
-    generationCancellationByTab.set(jobTabId, cancellationToken);
+    generationInFlightTabs.add(cancellationKey);
+    const cancellationToken = (generationCancellationByTab.get(cancellationKey) || 0) + 1;
+    generationCancellationByTab.set(cancellationKey, cancellationToken);
     let generationId = '';
-    let jobDescription = '';
+    const jobDescription = String(queuedJob.description || '').trim();
     let chatTabId = null;
     try {
       await updateGenerationBrowserState({
-        phase: 'reading_job',
+        phase: 'preparing_prompt',
         jobId: queuedJob.id,
         jobTabId,
       });
       await ensureQueuedGenerationIsActive(queuedJob.id);
-      await showGenerationPageStatus(jobTabId, 'Reading job details for Generation...');
-      let extractedDetails = {};
-      try {
-        const extraction = await extractJobFromTab(jobTabId, { requireCompany: true });
-        if (!extraction.error) {
-          extractedDetails = normalizeDetectedJobData(
-            extraction.data,
-            extraction.url || extraction.tab?.url,
-          );
-        }
-      } catch {
-        // The saved queued Job remains authoritative when its source page cannot be read again.
+      await showGenerationPageStatus(jobTabId, 'Preparing the prompt from the saved job and candidate profile...');
+      if (
+        !queuedJob.jobTitle?.trim() ||
+        !queuedJob.company?.trim() ||
+        !jobDescription ||
+        !queuedJob.jobUrl?.trim()
+      ) {
+        throw new Error('The saved job is missing its URL, title, company, or description.');
       }
-      const details = {
-        ...extractedDetails,
-        title: queuedJob.jobTitle || extractedDetails.title,
-        company: queuedJob.company || extractedDetails.company,
-        description: queuedJob.description || extractedDetails.description,
-        url: queuedJob.jobUrl || extractedDetails.url,
-        location: queuedJob.location || extractedDetails.location || extractedDetails.country || '',
-        employmentType: queuedJob.employmentType || extractedDetails.employmentType || '',
-        workplaceType: queuedJob.workplaceType || extractedDetails.workplaceType || '',
-        salary: queuedJob.salary || extractedDetails.salary || '',
-      };
-      if (!details.title || !details.company || !details.description || !details.url) {
-        throw new Error('Could not extract the job title, company, URL, and job description from this page.');
-      }
-      jobDescription = details.description;
-      ensureGenerationIsActive(jobTabId, cancellationToken);
+      ensureGenerationIsActive(cancellationKey, cancellationToken);
       await ensureQueuedGenerationIsActive(queuedJob.id);
-      await updateGenerationBrowserState({ phase: 'preparing_prompt' });
-      const started = await workerApiRequest('POST', '/api/extension/generation/start', {
-        jobId: queuedJob.id,
-        job: {
-          jobUrl: details.url,
-          jobTitle: details.title,
-          company: details.company,
-          location: details.location || details.country || '',
-          employmentType: details.employmentType || '',
-          workplaceType: details.workplaceType || '',
-          salary: details.salary || '',
-          jobDescription,
-        },
-      });
+      const started = await workerApiRequest(
+        'POST',
+        '/api/extension/generation/start',
+        { jobId: queuedJob.id },
+      );
       if (!started.success || !started.generationId || !started.prompt) {
-        throw new Error(started.message || 'QTS could not prepare the Generation prompt.');
+        const error = new Error(started.message || 'QTS could not prepare the Generation prompt.');
+        if (
+          started.errorCode === 'generation_prompt_missing' ||
+          started._httpStatus >= 500 ||
+          started._sessionExpired ||
+          started.message === 'Cannot connect to the server.'
+        ) {
+          error.name = 'GenerationSetupError';
+        }
+        throw error;
       }
       generationId = started.generationId;
       const generationPrompt = self.__qtsGenerationChatGpt?.buildTaskPrompt?.(
@@ -2830,7 +2848,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         generationId,
       );
       if (!generationPrompt) throw new Error('QTS could not create a task-specific Generation prompt.');
-      ensureGenerationIsActive(jobTabId, cancellationToken);
+      ensureGenerationIsActive(cancellationKey, cancellationToken);
       await showGenerationPageStatus(jobTabId, 'Opening ChatGPT and sending the Generation prompt...');
 
       await updateGenerationBrowserState({
@@ -2840,7 +2858,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       const chatTab = await acquireGenerationChatGptTab();
       chatTabId = chatTab.id;
       await updateGenerationBrowserState({ chatTabId });
-      ensureGenerationIsActive(jobTabId, cancellationToken);
+      ensureGenerationIsActive(cancellationKey, cancellationToken);
       await updateGenerationBrowserState({ phase: 'sending_prompt' });
       const handoff = await sendGenerationPromptWithRecovery(chatTab.id, generationPrompt);
 
@@ -2851,9 +2869,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       let stableSince = 0;
       let responseText = '';
       let lastStatusCheck = 0;
-      while (Date.now() - waitStartedAt < 240000) {
+      while (Date.now() - waitStartedAt < 120000) {
         await sleep(750);
-        ensureGenerationIsActive(jobTabId, cancellationToken);
+        ensureGenerationIsActive(cancellationKey, cancellationToken);
         if (Date.now() - lastStatusCheck >= 3000) {
           await ensureQueuedGenerationIsActive(queuedJob.id);
           lastStatusCheck = Date.now();
@@ -2875,7 +2893,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         }
       }
       if (!responseText) throw new Error('Timed out waiting for ChatGPT to finish. Check the ChatGPT tab before retrying.');
-      ensureGenerationIsActive(jobTabId, cancellationToken);
+      ensureGenerationIsActive(cancellationKey, cancellationToken);
       await ensureQueuedGenerationIsActive(queuedJob.id);
       await updateGenerationBrowserState({ phase: 'validating_response' });
       const responseJson = self.__qtsGenerationChatGpt?.extractJsonObject?.(responseText) || null;
@@ -2884,7 +2902,6 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       }
       const saved = await workerApiRequest('POST', '/api/extension/generation/complete', {
         generationId,
-        jobDescription,
         responseText,
         responseJson,
       });
@@ -2897,14 +2914,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       return { ok: true, status: 'generation', message, generationId, parsed: true, chatTabId };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Generation failed.';
-      if (generationId && jobDescription) {
+      if (generationId && jobDescription && !isGenerationCancelled(error)) {
         try {
           const failed = await workerApiRequest('POST', '/api/extension/generation/complete', {
             generationId,
-            jobDescription,
-            failureReason: isGenerationCancelled(error)
-              ? 'Generation cancelled by the manager.'
-              : message,
+            failureReason: message,
           });
           if (!failed.success) {
             console.error('[QTS Generation] Could not record the failed run:', failed.message);
@@ -2913,9 +2927,6 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           console.error('[QTS Generation] Could not record the failed run:', saveError);
         }
       }
-      if (queuedJob && chatTabId != null) {
-        await chrome.tabs.remove(chatTabId).catch(() => {});
-      }
       await showGenerationPageStatus(
         jobTabId,
         message,
@@ -2923,7 +2934,14 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       );
       throw error;
     } finally {
-      generationInFlightTabs.delete(jobTabId);
+      generationInFlightTabs.delete(cancellationKey);
+      if (Number.isInteger(chatTabId)) {
+        try {
+          await chrome.tabs.remove(chatTabId);
+        } catch (error) {
+          console.error('[QTS Generation] Could not close the temporary ChatGPT tab:', error);
+        }
+      }
       try {
         const stored = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (
@@ -3095,24 +3113,49 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   async function processQueuedGenerationJobs() {
     if (generationQueueInFlight) return;
     generationQueueInFlight = true;
+    let runId = '';
+    const excludedJobIds = new Set();
+    let completedCount = 0;
+    let failedCount = 0;
+    let shouldStop = false;
     try {
+      const storedRun = await chrome.storage.local.get(GENERATION_QUEUE_RUN_KEY);
+      const savedRun = storedRun[GENERATION_QUEUE_RUN_KEY];
+      runId = typeof savedRun?.runId === 'string' && savedRun.runId
+        ? savedRun.runId
+        : crypto.randomUUID();
+      for (const id of Array.isArray(savedRun?.excludedJobIds) ? savedRun.excludedJobIds : []) {
+        if (typeof id === 'string') excludedJobIds.add(id);
+      }
+      await persistGenerationQueueRun(runId, excludedJobIds);
       const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
-      if (!token) return;
+      if (!token) {
+        const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+        if (current[EXTENSION_STATUS_KEY] === 'generation') {
+          await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        }
+        await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
+        return;
+      }
       for (;;) {
         const storedStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (storedStatus[EXTENSION_STATUS_KEY] !== 'generation') return;
         const claim = await workerApiRequest(
           'POST',
           '/api/extension/generation/claim',
-          {},
+          { excludedJobIds: [...excludedJobIds] },
         );
         if (claim.success !== true) {
           const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
           if (current[EXTENSION_STATUS_KEY] === 'generation') {
             await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
           }
+          await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
           if (!claim._sessionExpired) {
             console.error('[QTS Generation] Could not claim a queued job:', claim.message);
+            await notifyGenerationManager(
+              `Generation stopped because QTS could not claim the next job: ${claim.message || 'server error'}`,
+            );
           }
           return;
         }
@@ -3121,31 +3164,55 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (current[EXTENSION_STATUS_KEY] === 'generation') {
             await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
           }
+          await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
+          if (claim.processing) {
+            await notifyGenerationManager(
+              'Generation is already processing a job in another extension session. This run did not open another ChatGPT tab.',
+            );
+          } else if (completedCount || failedCount) {
+            await notifyGenerationManager(
+              `Generation run finished: ${completedCount} job(s) completed and ${failedCount} job(s) failed. Failed jobs can be retried on a later run; after two failures, use Reset Generation on the Jobs page.`,
+            );
+          } else {
+            await notifyGenerationManager(
+              'No eligible jobs are available. Jobs need a description, candidate JD-matching notes, and no saved resume path. Reset exhausted failures from the Jobs page.',
+            );
+          }
           return;
         }
         const queuedJob = claim.job;
         let jobTabId = null;
-        let chatTabId = null;
         let generationId = '';
         const downloadIds = [];
         try {
-          if (typeof queuedJob.id !== 'string' || typeof queuedJob.jobUrl !== 'string') {
+          if (
+            typeof queuedJob.id !== 'string' ||
+            typeof queuedJob.jobUrl !== 'string' ||
+            !queuedJob.id
+          ) {
             throw new Error('QTS returned an invalid queued job.');
           }
-          await chrome.storage.local.set({
-            [EXTENSION_STATUS_KEY]: 'generation',
-            [ACTIVE_GENERATION_JOB_KEY]: queuedJob.id,
-          });
-          const jobTab = await chrome.tabs.create({
-            url: queuedJob.jobUrl,
-            active: false,
-          });
-          if (jobTab?.id == null) throw new Error('Could not open the queued job page.');
-          jobTabId = jobTab.id;
-          await waitForTabSettled(jobTabId);
+          await chrome.storage.local.set({ [ACTIVE_GENERATION_JOB_KEY]: queuedJob.id });
+          const statusBeforePageOpen = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+          if (statusBeforePageOpen[EXTENSION_STATUS_KEY] !== 'generation') {
+            throw generationCancelledError();
+          }
+          try {
+            const jobTab = await chrome.tabs.create({
+              url: queuedJob.jobUrl,
+              active: false,
+            });
+            if (jobTab?.id == null) throw new Error('The browser did not return a job tab.');
+            jobTabId = jobTab.id;
+            await waitForTabSettled(jobTabId);
+          } catch (error) {
+            console.warn(
+              '[QTS Generation] Could not load the temporary job page; continuing with saved job data:',
+              error,
+            );
+          }
           const result = await runGenerationForTab(jobTabId, queuedJob);
           generationId = result.generationId;
-          chatTabId = result.chatTabId;
           await updateGenerationBrowserState({ phase: 'downloading' });
           await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds);
           const finalized = await workerApiRequest(
@@ -3163,8 +3230,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             'Generation complete. Resume, cover letter, and JD text were downloaded.',
             'success',
           );
-          if (Number.isInteger(chatTabId)) await chrome.tabs.remove(chatTabId).catch(() => {});
-          await chrome.tabs.remove(jobTabId).catch(() => {});
+          completedCount += 1;
         } catch (error) {
           let handledError = error;
           if (!isGenerationCancelled(handledError)) {
@@ -3178,22 +3244,45 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (downloadIds.length > 0) {
             await removeQueuedGenerationDownloads(downloadIds);
           }
-          try {
+          if (handledError?.name === 'GenerationSetupError') {
+            const released = await workerApiRequest(
+              'POST',
+              '/api/extension/generation/release',
+              { jobId: queuedJob.id },
+            );
+            if (!released.success) {
+              console.error('[QTS Generation] Could not release the job after shared setup failed:', released.message);
+            }
+            await notifyGenerationManager(`Generation stopped because setup is incomplete: ${reason}`);
+            shouldStop = true;
+          } else if (!isGenerationCancelled(handledError)) {
+            excludedJobIds.add(queuedJob.id);
+            await persistGenerationQueueRun(runId, excludedJobIds);
+            failedCount += 1;
             const failed = await workerApiRequest(
+              'POST',
+              '/api/extension/generation/fail',
+              { jobId: queuedJob.id, generationId, reason },
+            );
+            if (!failed.success) {
+              console.error('[QTS Generation] Could not mark the queued job failed:', failed.message);
+            }
+            console.error('[QTS Generation] Queued job failed:', queuedJob.id, reason);
+            await notifyGenerationManager(`Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason}`);
+          } else {
+            await workerApiRequest(
               'POST',
               '/api/extension/generation/fail',
               {
                 jobId: queuedJob.id,
                 generationId,
                 reason,
-                cancelled: isGenerationCancelled(handledError),
+                cancelled: true,
               },
             );
-            if (!failed.success) {
-              console.error('[QTS Generation] Could not mark the queued job failed:', failed.message);
-            }
-          } catch (failureError) {
-            console.error('[QTS Generation] Could not report queued job failure:', failureError);
+            excludedJobIds.add(queuedJob.id);
+            await persistGenerationQueueRun(runId, excludedJobIds);
+            await notifyGenerationManager('Generation was cancelled. The current job has been returned to the queue.');
           }
           if (jobTabId != null) {
             await showGenerationPageStatus(
@@ -3201,14 +3290,20 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
               reason,
               isGenerationCancelled(handledError) ? 'info' : 'error',
             );
-            await chrome.tabs.remove(jobTabId).catch(() => {});
-          }
-          if (Number.isInteger(chatTabId)) await chrome.tabs.remove(chatTabId).catch(() => {});
-          if (!isGenerationCancelled(handledError)) {
-            console.error('[QTS Generation] Queued job failed:', queuedJob.id, reason);
           }
         } finally {
-          await clearGenerationBrowserState().catch(() => {});
+          if (jobTabId != null) {
+            try {
+              await chrome.tabs.remove(jobTabId);
+            } catch (error) {
+              console.error('[QTS Generation] Could not close the temporary job page:', error);
+            }
+          }
+          try {
+            await clearGenerationBrowserState();
+          } catch (error) {
+            console.error('[QTS Generation] Could not clear its browser state:', error);
+          }
           try {
             const activeGeneration = await chrome.storage.local.get([
               EXTENSION_STATUS_KEY,
@@ -3226,9 +3321,33 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             console.error('[QTS Generation] Could not clear the active queue status:', storageError);
           }
         }
+        if (shouldStop) {
+          const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+          if (current[EXTENSION_STATUS_KEY] === 'generation') {
+            await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+          }
+          return;
+        }
       }
     } finally {
       generationQueueInFlight = false;
+      try {
+        const current = await chrome.storage.local.get([
+          EXTENSION_STATUS_KEY,
+          ACTIVE_GENERATION_JOB_KEY,
+        ]);
+        if (
+          current[EXTENSION_STATUS_KEY] === 'cancel' &&
+          !current[ACTIVE_GENERATION_JOB_KEY]
+        ) {
+          await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        }
+        if (current[EXTENSION_STATUS_KEY] !== 'generation') {
+          await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
+        }
+      } catch (error) {
+        console.error('[QTS Generation] Could not finalize queue-run state:', error);
+      }
     }
   }
 
@@ -4150,14 +4269,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Generation.' });
           return;
         }
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'generation' });
-        prewarmGenerationChatGptTab().catch((error) => {
-          console.error('[QTS Generation] Could not prewarm ChatGPT:', error);
+        const currentStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'generation') {
+          sendResponse({ ok: true, status: 'generation', message: 'Generation is already running.' });
+          return;
+        }
+        await chrome.storage.local.remove(GENERATION_NOTICE_KEY);
+        await chrome.storage.local.set({
+          [GENERATION_QUEUE_RUN_KEY]: {
+            runId: crypto.randomUUID(),
+            excludedJobIds: [],
+          },
         });
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'generation' });
         sendResponse({
           ok: true,
           status: 'generation',
-          message: 'Generation started. Opening ChatGPT and loading the oldest Job...',
+          message: 'Generation started. Checking the oldest eligible saved job...',
         });
         processQueuedGenerationJobs().catch((error) => {
           console.error('[QTS Generation] Queue worker failed:', error);

@@ -14,7 +14,7 @@ import { LoadingIcon } from "@/app/components/loading-icon";
 
 export type CandidateOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };
-export type EditableJob = CommonRecord & { description: string | null; country: string | null; employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationError: string | null };
+export type EditableJob = CommonRecord & { description: string | null; country: string | null; employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationAttemptCount: number; generationError: string | null };
 export type EditableBid = CommonRecord & { employmentType: string | null; workplaceType: string | null; salary: string | null; resumeLocalPath: string; googleDrivePath: string | null; appliedAt: string };
 
 export function JobEditAction({ record, candidates }: { record: EditableJob; candidates: CandidateOption[] }) {
@@ -38,17 +38,22 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
   const queued = record.generationStatus === "queued";
   const processing = record.generationStatus === "processing";
   const cancellable = queued || processing;
+  const resetRequired = record.generationStatus === "failed" && record.generationAttemptCount >= 2;
+  if (record.generationStatus === "completed") {
+    return <span className="text-xs text-slate-500">Complete</span>;
+  }
+  const intent = resetRequired ? "reset" : cancellable ? "cancel" : "queue";
   const accessibleLabel = cancellable
     ? processing ? "Cancel running Generation" : "Cancel queued Generation"
-    : record.generationStatus === "failed"
+    : resetRequired
+        ? "Reset Generation"
+        : record.generationStatus === "failed"
         ? "Retry Generation"
-        : record.generationStatus === "completed"
-          ? "Queue Generation again"
-          : "Queue Generation";
+        : "Queue Generation";
   return (
     <form action={action}>
       <input name="id" type="hidden" value={record.id} />
-      <input name="intent" type="hidden" value={cancellable ? "cancel" : "queue"} />
+      <input name="intent" type="hidden" value={intent} />
       <button
         aria-label={accessibleLabel}
         className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-60"
@@ -60,6 +65,8 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
           ? <LoadingIcon className="size-3.5" />
           : cancellable
             ? <X aria-hidden="true" className="size-3.5" />
+            : resetRequired
+              ? <RotateCcw aria-hidden="true" className="size-3.5" />
             : record.generationStatus === "failed"
               ? <RotateCcw aria-hidden="true" className="size-3.5" />
               : <ListPlus aria-hidden="true" className="size-3.5" />}

@@ -417,6 +417,7 @@ export const jobs = pgTable(
     generationStatus: generationQueueStatus("generation_status")
       .default("not_queued")
       .notNull(),
+    generationAttemptCount: integer("generation_attempt_count").default(0).notNull(),
     generationError: text("generation_error"),
     generationLeaseExpiresAt: timestamp("generation_lease_expires_at", {
       withTimezone: true,
@@ -430,6 +431,10 @@ export const jobs = pgTable(
       .notNull(),
   },
   (table) => [
+    check(
+      "jobs_generation_attempt_count_nonnegative",
+      sql`${table.generationAttemptCount} >= 0`,
+    ),
     uniqueIndex("jobs_manager_candidate_normalized_url_unique").on(
       table.managerId,
       table.candidateId,

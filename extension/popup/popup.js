@@ -3215,6 +3215,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   const logoEl = document.getElementById('header-logo');
   if (logoEl) logoEl.src = chrome.runtime.getURL('assets/account-logo.png');
+  document.getElementById('btn-dismiss-generation-notice')?.addEventListener('click', async () => {
+    try {
+      await chrome.storage.local.remove('qtsGenerationNotice');
+      document.getElementById('generation-notice')?.classList.add('hidden');
+    } catch (error) {
+      console.error('[QTS Generation] Could not dismiss the Manager notice:', error);
+    }
+  });
   targetTabId = getQueryTabId() || await resolveTargetTabOnLoad();
   if (targetTabId) {
     try {
@@ -6882,10 +6890,31 @@ function showAuthenticatedScreen(user) {
   document.getElementById('action-bar').classList.add('hidden');
   document.getElementById('authenticated-name').textContent = user.name || user.username;
   document.getElementById('authenticated-login').textContent = `@${user.username}`;
+  restoreGenerationNotice(user).catch((error) => {
+    console.error('[QTS Generation] Could not restore the Manager notice:', error);
+  });
   refreshGetJdView().catch((error) => {
     console.error('[QTS Get JD] Could not restore mode state:', error);
   });
   scheduleFitPopup();
+}
+
+async function restoreGenerationNotice(user) {
+  const container = document.getElementById('generation-notice');
+  const message = document.getElementById('generation-notice-message');
+  if (!container || !message) return;
+  if (user?.role !== 'manager') {
+    container.classList.add('hidden');
+    return;
+  }
+  const stored = await chrome.storage.local.get('qtsGenerationNotice');
+  const notice = stored.qtsGenerationNotice;
+  if (!notice || notice.managerId !== user.id || typeof notice.message !== 'string') {
+    container.classList.add('hidden');
+    return;
+  }
+  message.textContent = notice.message;
+  container.classList.remove('hidden');
 }
 
 async function refreshGetJdView() {

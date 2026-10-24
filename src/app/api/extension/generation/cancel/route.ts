@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -40,10 +40,24 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    const [job] = await db
+      .select({ generationStatus: jobs.generationStatus })
+      .from(jobs)
+      .where(and(eq(jobs.id, jobId), eq(jobs.managerId, manager.id)))
+      .limit(1);
+    if (!job || !["queued", "processing"].includes(job.generationStatus)) {
+      return NextResponse.json(
+        { success: false, message: "The job is no longer queued or processing." },
+        { status: 409 },
+      );
+    }
     const [cancelled] = await db
       .update(jobs)
       .set({
-        generationStatus: "not_queued",
+        generationStatus: job.generationStatus === "processing" ? "queued" : "not_queued",
+        ...(job.generationStatus === "processing"
+          ? { generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)` }
+          : {}),
         generationError: null,
         generationLeaseExpiresAt: null,
         updatedAt: new Date(),
@@ -51,12 +65,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       .where(and(
         eq(jobs.id, jobId),
         eq(jobs.managerId, manager.id),
-        inArray(jobs.generationStatus, ["queued", "processing"]),
+        eq(jobs.generationStatus, job.generationStatus),
       ))
       .returning({ id: jobs.id });
     if (!cancelled) {
       return NextResponse.json(
-        { success: false, message: "The job is no longer queued or processing." },
+        { success: false, message: "The job changed before it could be cancelled." },
         { status: 409 },
       );
     }

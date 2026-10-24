@@ -35,6 +35,7 @@ export default async function JobsPage() {
       failureReason: jobs.failureReason,
       resumeLocalPath: jobs.resumeLocalPath,
       generationStatus: jobs.generationStatus,
+      generationAttemptCount: jobs.generationAttemptCount,
       generationError: jobs.generationError,
       candidateId: jobs.candidateId,
       firstName: profiles.firstName,
@@ -86,6 +87,7 @@ export default async function JobsPage() {
               status: row.status,
               failureReason: row.failureReason,
               generationStatus: row.generationStatus,
+              generationAttemptCount: row.generationAttemptCount,
               generationError: row.generationError,
             };
             return {

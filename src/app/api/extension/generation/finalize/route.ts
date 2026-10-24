@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, exists } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -69,9 +69,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       company: run.company,
       createdAt: run.createdAt,
     });
-    const finalized = await db.transaction(async (tx) => {
-      const [job] = await tx
-        .update(jobs)
+    const [, delivered] = await db.batch([
+      db.update(jobs)
         .set({
           generationStatus: "completed",
           generationError: null,
@@ -83,23 +82,31 @@ export async function POST(request: Request): Promise<NextResponse> {
           eq(jobs.id, jobId),
           eq(jobs.managerId, manager.id),
           eq(jobs.generationStatus, "processing"),
+          exists(db.select({ id: generationRuns.id }).from(generationRuns).where(and(
+            eq(generationRuns.id, generationId),
+            eq(generationRuns.jobId, jobId),
+            eq(generationRuns.managerId, manager.id),
+            eq(generationRuns.status, "completed"),
+          ))),
         ))
-        .returning({ id: jobs.id });
-      if (!job) return false;
-      const [delivered] = await tx
-        .update(generationRuns)
+        .returning({ id: jobs.id }),
+      db.update(generationRuns)
         .set({ status: "delivered", updatedAt: new Date() })
         .where(and(
           eq(generationRuns.id, generationId),
           eq(generationRuns.jobId, jobId),
           eq(generationRuns.managerId, manager.id),
           eq(generationRuns.status, "completed"),
+          exists(db.select({ id: jobs.id }).from(jobs).where(and(
+            eq(jobs.id, jobId),
+            eq(jobs.managerId, manager.id),
+            eq(jobs.generationStatus, "completed"),
+            eq(jobs.resumeLocalPath, downloadPaths.resume),
+          ))),
         ))
-        .returning({ id: generationRuns.id });
-      if (!delivered) throw new Error("The generated document package is no longer ready for delivery.");
-      return true;
-    });
-    if (!finalized) {
+        .returning({ id: generationRuns.id }),
+    ]);
+    if (!delivered.length) {
       return NextResponse.json(
         { success: false, message: "The queued job is no longer processing." },
         { status: 409 },

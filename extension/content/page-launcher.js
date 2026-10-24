@@ -30,13 +30,17 @@ async function initializeQtsPageLauncher() {
     * { box-sizing: border-box; }
     .launcher { position: fixed; right: 180px; bottom: 24px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
     .launcher::before { content: ""; position: absolute; inset: -5px; z-index: 1; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0deg 245deg, #3b82f6 285deg, #22d3ee 325deg, #818cf8 350deg, transparent 360deg); opacity: 1; transform: rotate(0deg); animation: qts-border-rotate 1.5s linear infinite; pointer-events: none; }
+    .launcher:not(.signed-in)::before { opacity: 0; animation: none; }
     @keyframes qts-border-rotate { to { transform: rotate(360deg); } }
-    .main { position: absolute; inset: 4px; z-index: 3; display: grid; place-items: center; width: 50px; height: 50px; padding: 4px; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease; }
-    .main:hover { transform: scale(1.06); background: #f8fafc; }
+    .main { position: absolute; inset: 4px; z-index: 3; display: grid; place-items: center; width: 50px; height: 50px; padding: 4px; border: 1px solid #475569; border-radius: 50%; background: #334155; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease, border-color .18s ease; }
+    .launcher.signed-in .main { border-color: #c7d2fe; background: #fff; }
+    .main:hover { transform: scale(1.06); background: #1e293b; }
+    .launcher.signed-in .main:hover { background: #f8fafc; }
     .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
     .brand-icon { display: block; width: 40px; height: 40px; object-fit: contain; object-position: center; }
     .action { --x: 0px; --y: 0px; position: absolute; top: 50%; left: 50%; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 72px; margin: -36px 0 0 -36px; padding: 7px; aspect-ratio: 1; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; color: #1e293b; box-shadow: 0 9px 24px #0f172a30; font: 700 10px/1.05 system-ui, sans-serif; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.45); transition: transform .2s ease, opacity .16s ease, visibility .2s; }
     .action[hidden] { display: none; }
+    .launcher:not(.signed-in) .action { display: none; }
     .action:hover { color: #3730a3; background: #eef2ff; border-color: #818cf8; }
     .action-icon { color: #4f46e5; font-size: 20px; line-height: 1; }
     .launcher.open .action { opacity: 1; visibility: visible; transform: translate(var(--x), var(--y)) scale(1); }
@@ -191,7 +195,12 @@ async function initializeQtsPageLauncher() {
   function setOpen(open) {
     launcher.classList.toggle('open', open);
     main.setAttribute('aria-expanded', String(open));
-    main.setAttribute('aria-label', open ? 'Close QTS actions' : 'Open QTS actions');
+    main.setAttribute(
+      'aria-label',
+      launcher.classList.contains('signed-in')
+        ? open ? 'Close QTS actions' : 'Open QTS actions'
+        : 'Sign in to QTS',
+    );
   }
 
   function syncGetJdDocking() {
@@ -229,8 +238,7 @@ async function initializeQtsPageLauncher() {
     const highlightButton = launcher.querySelector('[data-action="text_highlights"]');
     const exclusionsButton = launcher.querySelector('[data-action="page_exclusions"]');
     if (!highlightButton && !exclusionsButton) return;
-    const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
-    const signedIn = Boolean(stored.authToken && Number(stored.authExpiresAt) > Date.now());
+    const signedIn = await syncSessionAction();
     if (!signedIn) {
       if (highlightButton) highlightButton.hidden = true;
       if (exclusionsButton) exclusionsButton.hidden = true;
@@ -319,6 +327,7 @@ async function initializeQtsPageLauncher() {
       passwordInput.value = '';
       signInForm.hidden = true;
       await syncSessionAction();
+      await syncTextHighlightAction();
     } catch (error) {
       showToast(error?.message || 'Could not sign in.', true);
       passwordInput.select();
@@ -351,7 +360,7 @@ async function initializeQtsPageLauncher() {
 
   async function syncSessionAction() {
     const button = launcher.querySelector('[data-action="session"], [data-session-action]');
-    if (!button) return false;
+    if (!button) return launcher.classList.contains('signed-in');
     const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
     let expiresAt = Number(stored.authExpiresAt) || 0;
     if (stored.authToken) {
@@ -365,12 +374,25 @@ async function initializeQtsPageLauncher() {
       }
     }
     const signedIn = Boolean(stored.authToken && expiresAt > Date.now());
+    launcher.classList.toggle('signed-in', signedIn);
     button.dataset.sessionAction = signedIn ? 'sign_out' : 'sign_in';
     button.setAttribute('aria-label', signedIn ? 'Sign Out' : 'Sign In');
     const icon = button.querySelector('.action-icon');
     const label = button.querySelector('.action-icon + span');
     if (icon) icon.textContent = signedIn ? '↪' : '→';
     if (label) label.textContent = signedIn ? 'Sign Out' : 'Sign In';
+    if (!signedIn) {
+      setOpen(false);
+      signInForm.hidden = true;
+      userInput.value = '';
+      passwordInput.value = '';
+      preview.hidden = true;
+      if (stored.authToken && expiresAt > 0) {
+        chrome.storage.local.set({ qtsExtensionStatus: null }).catch((error) => {
+          console.error('[QTS extension] Could not clear expired extension status:', error);
+        });
+      }
+    }
     return signedIn;
   }
 
@@ -414,6 +436,10 @@ async function initializeQtsPageLauncher() {
         showSignInForm();
         return;
       }
+      if (resolvedAction !== 'sign_out' && !(await syncSessionAction())) {
+        showSignInForm();
+        return;
+      }
       const response = await chrome.runtime.sendMessage({
         type: 'QTS_PAGE_ACTION',
         action: resolvedAction,
@@ -421,7 +447,10 @@ async function initializeQtsPageLauncher() {
       if (!response?.ok) throw new Error(response?.error || 'Could not run this QTS action.');
       if (resolvedAction === 'sign_out') {
         preview.hidden = true;
-        showToast(response.message || 'Signed out.');
+        signInForm.hidden = true;
+        userInput.value = '';
+        passwordInput.value = '';
+        toast.replaceChildren();
         await syncSessionAction();
       } else if (resolvedAction === 'get_jd' || resolvedAction === 'generation' || resolvedAction === 'cancel_status') {
         showToast(response.message || (resolvedAction === 'cancel_status' ? 'Get JD cancelled.' : "Let's start finding Your Remote Job!"));
@@ -434,7 +463,15 @@ async function initializeQtsPageLauncher() {
     }
   }
 
-  main.addEventListener('click', () => setOpen(!launcher.classList.contains('open')));
+  main.addEventListener('click', async () => {
+    const signedIn = await syncSessionAction();
+    if (!signedIn) {
+      showSignInForm();
+      return;
+    }
+    signInForm.hidden = true;
+    setOpen(!launcher.classList.contains('open'));
+  });
   launcher.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
   });
@@ -463,8 +500,9 @@ async function initializeQtsPageLauncher() {
         .catch((error) => console.error('[QTS extension] Could not apply URL exclusions:', error));
     }
     if (changes.authToken || changes.authExpiresAt) {
-      syncSessionAction().catch(() => {});
-      syncTextHighlightAction().catch(() => {});
+      syncSessionAction()
+        .then(() => syncTextHighlightAction())
+        .catch(() => {});
       if (changes.authToken?.newValue) {
         signInForm.hidden = true;
         passwordInput.value = '';

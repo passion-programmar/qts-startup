@@ -160,17 +160,25 @@ After a Manager signs in, text highlights from the shared rule set render
 automatically on all supported web pages, including pages excluded from the
 launcher and other extension workflows. The launcher editor is available only
 to Managers granted `canManageTextHighlights` by a Super Admin.
-Managers start document generation with **Queue Generation** on a Jobs row;
-the signed-in extension processes queued jobs one at a time and downloads a
-résumé PDF, cover-letter PDF, and JD text file to the local Downloads folder.
-Generated files are rendered in memory and are not stored on the server. The
-Jobs row records the expected resume path relative to local Downloads. Cancelling
-Generation clears that path and resets the application status to `todo`;
-Generation itself never marks the job as applied. `applied` is reserved for a
-successfully submitted job application.
-The extension's Generation action can be toggled to cancel an active run;
-Apply remains a release placeholder. While the extension processes a queued
-Generation, the same action cancels that queued run.
+Managers start document generation from the extension. The worker claims the
+oldest eligible saved Jobs row (`createdAt`), requiring a nonblank job
+description, nonblank candidate JD-matching notes, and a null resume path. It
+does not use or change the job's application status. A temporary job page is
+opened only for that job's prompt-fetching step and is closed when the job
+finishes. The server builds each prompt from the saved job and structured
+candidate profile, using the Manager's active prompt assignment or the active
+global default. The extension opens a fresh pinned ChatGPT tab for each job and
+closes every other ChatGPT tab, waits up to two minutes for stable JSON, then
+downloads the résumé PDF, cover-letter PDF, and JD text file to local Downloads.
+PDF and JD download files are assembled for delivery rather than stored as
+server files; the Generation run retains the prompt and validated response.
+The Jobs row records the expected resume path after successful delivery.
+Generation failures are retried once on a later start; after the second failure,
+Managers must use **Reset Generation** on the Jobs row. Reset only clears
+Generation failure/retry state. Cancelling a run returns its in-progress job to
+the queue and leaves application status unchanged. Queue completion and failures
+are reported with Chrome notifications and retained in the extension popup.
+Apply remains a release placeholder.
 Sign Out clears the stored extension session and Get JD mode. The legacy popup
 Gemini mode is hard-disabled by the shared runtime feature configuration so an
 old stored mode cannot start background classification.
