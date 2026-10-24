@@ -447,7 +447,8 @@ test('Generation distinguishes generated documents from delivered files', () => 
   assert.equal(completeRoute.includes('readText(body.jobDescription'), false);
   assert.ok(finalizeRoute.includes('.set({ status: "delivered"'));
   assert.ok(finalizeRoute.includes('db.batch(['));
-  assert.ok(pdfPage.includes('eq(generationRuns.status, "delivered")'));
+  // The Resume page no longer lists saved Generation runs, so it must not query them at all.
+  assert.equal(pdfPage.includes('generationRuns'), false);
 });
 
 test('Get JD review lists candidates and reports per-candidate saves', () => {
@@ -635,7 +636,7 @@ test('document generation uses saved manager prompt assignments and gates prompt
   assert.ok(promptPage.includes('modeRows[0]?.value !== "private"'));
   assert.ok(workspaceShell.includes('modeRows[0]?.value === "private"'));
   assert.ok(workspaceClient.includes('user.role === "manager" && managerPromptEnabled'));
-  assert.ok(workspaceClient.includes('useState(true)'));
+  assert.ok(workspaceClient.includes('const [sidebarCollapsed, setSidebarCollapsed] = useState(false)'));
 });
 
 test('candidate profiles use grouped subcategories and legacy assignments are preserved', () => {
