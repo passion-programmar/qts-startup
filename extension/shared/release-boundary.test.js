@@ -786,6 +786,9 @@ test('resume PDF downloads remember a user-selected folder without requiring the
   assert.ok(workspace.includes('savePdfPairToDirectory'));
   assert.ok(workspace.includes('downloadPdfPairInBrowser'));
   assert.equal(workspace.includes('QTS_DOWNLOAD_APPLICATION_FILES'), false);
+  const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
+  const pageScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
+  assert.equal(pageScripts.includes('content/pdf-download-bridge.js'), false);
 });
 
 test('page toasts use a modern theme and keep the newest notice on top', () => {

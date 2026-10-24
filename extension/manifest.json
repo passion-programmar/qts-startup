@@ -17,7 +17,6 @@
         "shared/page-exclusions.js",
         "shared/text-highlighting.js",
         "content/text-highlighter.js",
-        "content/pdf-download-bridge.js",
         "content/page-launcher.js",
         "content/get-jd-review.js"
       ],
