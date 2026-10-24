@@ -62,13 +62,77 @@ test("the supplied full template sample parses and retains its content and theme
 
   const adapted = toResumeTemplateData(parsed, "classic");
   assert.equal(adapted.theme.template, "classic");
-  assert.equal(adapted.candidate.links?.[0].label, "Portfolio");
+  assert.deepEqual(adapted.candidate.links, []);
+  assert.deepEqual(
+    adapted.resume.sections.map((section) => section.title),
+    ["Experience", "Projects", "Education", "Skills", "Certifications"],
+  );
   assert.equal(adapted.resume.sections[3].type, "skills");
   assert.deepEqual(adapted.resume.sections[3].items[0].bullets[0], {
     name: "Planning",
     detail: "Advanced",
   });
+  assert.equal(
+    adapted.resume.sections.find((section) => section.id === "projects")?.items[0].link,
+    undefined,
+  );
   assert.equal(adapted.coverLetter.recipient?.company, "Example Employer");
+});
+
+test("the template adapter omits portfolio contact links but keeps other contact websites", () => {
+  const candidate = {
+    fullName: "Test Candidate",
+    email: "test@example.com",
+    links: [
+      { label: " Portfolio ", url: "https://portfolio.example.com" },
+      { label: "Personal website", url: "https://example.com" },
+    ],
+  };
+  const packageWithLinks = {
+    ...validPackage,
+    resume: { ...validPackage.resume, candidate },
+    coverLetter: { ...validPackage.coverLetter, candidate },
+  };
+
+  const adapted = toResumeTemplateData(
+    parsePdfPackage(JSON.stringify(packageWithLinks)),
+    "classic",
+  );
+
+  assert.deepEqual(adapted.candidate.links, [
+    { label: "Personal website", url: "https://example.com" },
+  ]);
+  assert.deepEqual(adapted.coverLetter.candidate.links, [
+    { label: "Personal website", url: "https://example.com" },
+  ]);
+});
+
+test("the template adapter removes links from project sections but preserves other section links", () => {
+  const packageWithProjectLink = {
+    ...validPackage,
+    resume: {
+      ...validPackage.resume,
+      sections: [
+        {
+          id: "selected-projects",
+          title: "Selected Projects",
+          items: [{ heading: "Dashboard", link: "https://example.com/dashboard" }],
+        },
+        {
+          title: "Experience",
+          items: [{ heading: "Coordinator", link: "https://example.com/experience" }],
+        },
+      ],
+    },
+  };
+
+  const adapted = toResumeTemplateData(
+    parsePdfPackage(JSON.stringify(packageWithProjectLink)),
+    "classic",
+  );
+
+  assert.equal(adapted.resume.sections[0].items[0].link, undefined);
+  assert.equal(adapted.resume.sections[1].items[0].link, "https://example.com/experience");
 });
 
 test("PDF document data rejects missing document sections", () => {

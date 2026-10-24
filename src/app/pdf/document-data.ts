@@ -196,19 +196,26 @@ export function toResumeTemplateData(data: PdfPackage, template: string) {
       targetCompany: data.resume.targetCompany ?? data.coverLetter.targetCompany,
       targetJobsite: data.resume.targetJobsite,
       summary: data.resume.summary,
-      sections: data.resume.sections.map((section) => ({
-        id: section.id,
-        title: section.title,
-        type: section.type,
-        items: section.items.map((item) => ({
-          heading: item.heading,
-          subheading: item.subheading,
-          dateRange: item.dateRange,
-          description: item.description,
-          link: item.link,
-          bullets: item.bullets ?? [],
-        })),
-      })),
+      sections: data.resume.sections
+        .filter((section) => !/\b(?:languages?|volunteering|volunteer\s+experience)\b/i.test(
+          `${section.id ?? ""} ${section.title}`,
+        ))
+        .map((section) => {
+          const isProjectsSection = /\bprojects?\b/i.test(`${section.id ?? ""} ${section.title}`);
+          return {
+            id: section.id,
+            title: section.title,
+            type: section.type,
+            items: section.items.map((item) => ({
+              heading: item.heading,
+              subheading: item.subheading,
+              dateRange: item.dateRange,
+              description: item.description,
+              link: isProjectsSection ? undefined : item.link,
+              bullets: item.bullets ?? [],
+            })),
+          };
+        }),
     },
     coverLetter: {
       candidate: candidateForTemplate(data.coverLetter.candidate),
@@ -362,7 +369,7 @@ function candidateForTemplate(candidate: DocumentCandidate) {
     linkedinUrl: candidate.linkedinUrl,
     location: candidate.location,
     headline: candidate.headline,
-    links: candidate.links,
+    links: candidate.links?.filter((link) => link.label?.trim().toLowerCase() !== "portfolio"),
   };
 }
 

@@ -889,7 +889,7 @@ function movePdfTitleRulesBelowText(clonedDocument: Document, article: HTMLEleme
     rule.setAttribute("aria-hidden", "true");
     rule.style.position = "absolute";
     rule.style.insetInline = "0";
-    rule.style.bottom = "-7px";
+    rule.style.bottom = "-10px";
     rule.style.borderTop = `${style.borderBottomWidth} ${style.borderBottomStyle} ${style.borderBottomColor}`;
     title.style.position = style.position === "static" ? "relative" : style.position;
     title.style.borderBottomColor = "transparent";
