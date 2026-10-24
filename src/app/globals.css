@@ -161,8 +161,8 @@ body {
   }
 }
 
-/* Desktop: use all available width, expanding only when cell content needs it. */
-@media (min-width: 1280px) {
+/* Laptop and standard desktop: use all available content width. */
+@media (min-width: 1280px) and (max-width: 1919px) {
   .paginated-table__scroll {
     overflow-x: auto;
   }
@@ -170,6 +170,24 @@ body {
   .paginated-table__grid {
     min-width: 100%;
     table-layout: auto;
+  }
+}
+
+/* Wide desktop: expand the workspace and add breathing room to dense tables. */
+@media (min-width: 1920px) {
+  .paginated-table__scroll {
+    overflow-x: auto;
+  }
+
+  .paginated-table__grid {
+    min-width: 100%;
+    table-layout: auto;
+  }
+
+  .paginated-table__grid th,
+  .paginated-table__grid td {
+    padding-right: 1rem;
+    padding-left: 1rem;
   }
 }
 

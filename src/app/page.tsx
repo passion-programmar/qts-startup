@@ -178,7 +178,7 @@ export default async function Home() {
 
   return (
     <WorkspaceShell activeHref="/" user={currentUser}>
-      <main className="mx-auto max-w-[1440px] py-1">
+      <main className="mx-auto max-w-[1440px] py-1 2xl:max-w-none">
           <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
