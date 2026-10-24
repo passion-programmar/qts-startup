@@ -109,7 +109,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const profileResult = await loadManagerCandidateProfiles(manager.id);
     if (profileResult.tooMany) {
       return jsonResponse(
-        { success: false, message: "This Manager has too many active Accounts to evaluate at once." },
+        { success: false, message: "You have too many active candidates to evaluate at once." },
         413,
       );
     }
@@ -117,7 +117,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return jsonResponse(
         {
           success: false,
-          message: "Create an active candidate Account before evaluating jobs.",
+          message: "Add an active candidate before evaluating jobs.",
         },
         409,
       );
@@ -150,7 +150,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         {
           success: false,
           message:
-            "Gemini is not configured on the QTS server. Set GEMINI_API_KEYS or GEMINI_API_KEY in the server environment and restart QTS.",
+            "Gemini matching is unavailable right now. Ask your Super Admin to check the Gemini setup.",
         },
         503,
       );
@@ -322,17 +322,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     });
   } catch (error) {
     const diagnosticCode = getGetJdFailureCode(error);
-    logGetJdFailure(diagnosticCode);
+    logGetJdFailure(diagnosticCode, getGetJdProviderMessage(error));
     const status = /^gemini_(?:count_tokens_)?http_429$/.test(diagnosticCode)
       ? 429
       : 502;
     return jsonResponse(
       {
         success: false,
-        message: getGetJdFailureMessage(
-          diagnosticCode,
-          getGetJdProviderMessage(error),
-        ),
+        message: getGetJdFailureMessage(diagnosticCode),
         diagnosticCode,
       },
       status,
@@ -691,55 +688,27 @@ function getGetJdFailureCode(error: unknown): string {
   return error instanceof Error ? error.name.slice(0, 80) : "unknown";
 }
 
-function getGetJdFailureMessage(
-  code: string,
-  providerMessage?: string,
-): string {
-  const httpStatus = /^gemini_http_(\d{3})$/.exec(code)?.[1];
-  if (httpStatus === "400") {
-    if (
-      providerMessage?.toLowerCase().includes("user location is not supported")
-    ) {
-      return "Google rejected the Gemini API request because the server's network location is not supported. This is not a prompt or API-key configuration error. If QTS is running in a supported region, check its VPN, proxy, or network egress location. Otherwise, use Gemini through Google Cloud Gemini Enterprise Agent Platform in a supported region. Diagnostic: gemini_http_400.";
-    }
-    const explanation = providerMessage
-      ? ` Google reported: ${providerMessage}`
-      : " Check the Gemini request format and model compatibility.";
-    return `Gemini rejected the evaluation request (HTTP 400).${explanation} Diagnostic: ${code}.`;
+// Managers see a plain explanation and who can fix it. Provider details and the
+// diagnostic code stay in the server log and the response's diagnosticCode field.
+function getGetJdFailureMessage(code: string): string {
+  const httpStatus = /^gemini_(?:count_tokens_)?http_(d{3})$/.exec(code)?.[1];
+  if (httpStatus === "429") {
+    return "Gemini is busy or its quota is used up. Wait a minute and try again.";
   }
   if (httpStatus === "401" || httpStatus === "403") {
-    const explanation = providerMessage
-      ? ` Google reported: ${providerMessage}`
-      : "";
-    return `Gemini rejected the API key or its permissions (HTTP ${httpStatus}). Verify that the key is valid and Gemini API access is enabled.${explanation} Diagnostic: ${code}.`;
-  }
-  if (httpStatus === "404") {
-    const explanation = providerMessage
-      ? ` Google reported: ${providerMessage}`
-      : "";
-    return `Gemini could not find the requested model or resource (HTTP 404).${explanation} Diagnostic: ${code}.`;
-  }
-  if (httpStatus === "429") {
-    const explanation = providerMessage
-      ? ` Google reported: ${providerMessage}`
-      : "";
-    return `Gemini rate limit or quota was reached (HTTP 429). Check the API quota and billing configuration.${explanation} Diagnostic: ${code}.`;
+    return "Gemini rejected the server's access. Ask your Super Admin to check the Gemini API key.";
   }
   if (httpStatus && Number(httpStatus) >= 500) {
-    const explanation = providerMessage
-      ? ` Google reported: ${providerMessage}`
-      : "";
-    return `Gemini service returned HTTP ${httpStatus}. Try again later.${explanation} Diagnostic: ${code}.`;
+    return "Gemini is temporarily unavailable. Try again in a few minutes.";
   }
   if (code === "gemini_timeout" || code === "gemini_network_error") {
-    return `QTS could not reach Gemini or the request timed out. Check server connectivity and try again. Diagnostic: ${code}.`;
+    return "QTS could not reach Gemini in time. Try again.";
   }
-  if (code.startsWith("gemini_")) {
-    return `Gemini returned a response QTS could not use. Check the Gemini request and default job-evaluation prompt. Diagnostic: ${code}.`;
-  }
-  return `QTS could not complete classification. Check the QTS server log for diagnostic ${code}.`;
+  return "Gemini could not evaluate this page. Try again, or ask your Super Admin if it keeps failing.";
 }
 
-function logGetJdFailure(code: string): void {
-  console.error(`Get JD classification failed (code: ${code}).`);
+function logGetJdFailure(code: string, providerMessage?: string): void {
+  console.error(
+    `Get JD classification failed (code: ${code}).${providerMessage ? ` Provider: ${providerMessage}` : ""}`,
+  );
 }

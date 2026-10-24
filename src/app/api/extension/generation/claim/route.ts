@@ -57,7 +57,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       .set({
         generationStatus: "queued",
         generationLeaseExpiresAt: null,
-        generationError: "The previous worker stopped before Generation completed. Queued for retry.",
+        generationError: "Generation was interrupted and has been queued again.",
         updatedAt: now,
       })
       .where(and(
@@ -71,7 +71,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       .set({
         generationStatus: "failed",
         generationLeaseExpiresAt: null,
-        generationError: "The worker stopped after the final Generation attempt. Use Reset Generation to retry.",
+        generationError: "Generation was interrupted on its final attempt. Use Reset Generation to retry.",
         updatedAt: now,
       })
       .where(and(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Check, Trash2 } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import {
@@ -45,7 +45,7 @@ export function PromptModeForm({ mode }: { mode: "global" | "private" }) {
           id="promptMode"
           name="promptMode"
         >
-          <option value="global">Hide manager prompt tab</option>
+          <option value="global">Hide Manager prompt tab</option>
           <option value="private">Show assigned prompt to Managers</option>
         </select>
       </div>
@@ -207,6 +207,8 @@ export function PromptAssignmentForm({
     assignPromptAction,
     initialState,
   );
+  // Only the most recent of the two forms reports, so an old "assigned" note never sits beside "removed".
+  const [lastSubmitted, setLastSubmitted] = useState<"assign" | "unassign" | null>(null);
   const [unassignState, unassignAction, unassignPending] = useActionState(
     unassignPromptAction,
     initialState,
@@ -219,7 +221,7 @@ export function PromptAssignmentForm({
           {assignedPromptName ?? "No prompt assigned"}
         </span>
         {assignedPromptName && (
-          <form action={unassignAction}>
+          <form action={unassignAction} onSubmit={() => setLastSubmitted("unassign")}>
             <input name="managerId" type="hidden" value={managerId} />
             <button
               className="inline-flex h-7 items-center gap-1 rounded border border-rose-200 px-2 text-[10px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
@@ -232,7 +234,7 @@ export function PromptAssignmentForm({
           </form>
         )}
       </div>
-      <form action={assignAction} className="flex flex-col gap-2 sm:flex-row">
+      <form action={assignAction} className="flex flex-col gap-2 sm:flex-row" onSubmit={() => setLastSubmitted("assign")}>
         <input name="managerId" type="hidden" value={managerId} />
         <select
           className="h-9 min-w-0 flex-1 rounded border border-slate-300 bg-white px-2 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
@@ -258,8 +260,8 @@ export function PromptAssignmentForm({
           {assignPending ? "Saving..." : assignedPromptId ? "Update assignment" : "Assign"}
         </button>
       </form>
-      <ActionFeedback state={assignState} />
-      <ActionFeedback state={unassignState} />
+      {lastSubmitted === "assign" && <ActionFeedback state={assignState} />}
+      {lastSubmitted === "unassign" && <ActionFeedback state={unassignState} />}
     </div>
   );
 }

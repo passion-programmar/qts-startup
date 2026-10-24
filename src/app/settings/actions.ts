@@ -191,7 +191,12 @@ export async function updatePromptModeAction(
   revalidatePath("/");
   revalidatePath("/settings");
   revalidatePath("/prompts");
-  return { error: null, success: `Prompt mode changed to ${mode}.` };
+  return {
+    error: null,
+    success: mode === "private"
+      ? "Saved. Managers now see their assigned prompt."
+      : "Saved. The Manager prompt tab is hidden.",
+  };
 }
 
 export async function updateGetJdMatchingModeAction(
@@ -220,7 +225,10 @@ export async function updateGetJdMatchingModeAction(
     return { ...emptyState, error: "Get JD matching mode could not be updated." };
   }
   revalidatePath("/settings");
-  return { error: null, success: `Get JD matching mode changed to ${mode}.` };
+  return {
+    error: null,
+    success: `Get JD matching set to ${mode === "gemini" ? "Gemini candidate matching" : "Manual candidate selection"}.`,
+  };
 }
 
 export async function updateGeminiTokenCountModeAction(
@@ -239,7 +247,10 @@ export async function updateGeminiTokenCountModeAction(
     return { ...emptyState, error: "Token counting mode could not be updated." };
   }
   revalidatePath("/settings");
-  return { error: null, success: `Gemini token counting changed to ${mode}.` };
+  return {
+    error: null,
+    success: `Token counting set to ${mode === "gemini" ? "Gemini CountTokens API" : "Local estimate"}.`,
+  };
 }
 
 export async function saveGeminiApiLimitsAction(
@@ -303,7 +314,7 @@ export async function deleteGeminiUsageEventAction(
   }
 
   try {
-    await db
+    const removed = await db
       .update(geminiKeyUsageEvents)
       .set({ deletedAt: new Date() })
       .where(
@@ -311,7 +322,11 @@ export async function deleteGeminiUsageEventAction(
           eq(geminiKeyUsageEvents.id, eventId),
           isNull(geminiKeyUsageEvents.deletedAt),
         ),
-      );
+      )
+      .returning({ id: geminiKeyUsageEvents.id });
+    if (removed.length === 0) {
+      return { ...emptyState, error: "That usage record was already removed. Refresh the page." };
+    }
   } catch (error) {
     logPromptActionFailure("removing a Gemini usage record", error);
     return { ...emptyState, error: "The Gemini usage record could not be removed." };
@@ -443,9 +458,13 @@ export async function unassignPromptAction(
   }
 
   try {
-    await db
+    const removed = await db
       .delete(managerPromptAssignments)
-      .where(eq(managerPromptAssignments.managerId, managerId));
+      .where(eq(managerPromptAssignments.managerId, managerId))
+      .returning({ managerId: managerPromptAssignments.managerId });
+    if (removed.length === 0) {
+      return { ...emptyState, error: "This Manager has no assigned prompt." };
+    }
   } catch (error) {
     logPromptActionFailure("unassigning a prompt", error);
     return {

@@ -115,7 +115,8 @@ export default async function JobsPage() {
                     Generation: {row.generationStatus.replaceAll("_", " ")}
                   </span>
                   {row.generationError && (
-                    <span className="mt-1 block text-xs text-rose-700">
+                    // Only a failed job shows its note as an error; a requeued job's note is informational.
+                    <span className={`mt-1 block text-xs ${row.generationStatus === "failed" ? "text-rose-700" : "text-slate-500"}`}>
                       {row.generationError}
                     </span>
                   )}

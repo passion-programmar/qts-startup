@@ -31,7 +31,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   try {
     if (!(await managerCanManagePageExclusions(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign job-page keyword management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Ask your Super Admin for access to manage job-page detection keywords." }, 403);
     }
     const body: unknown = await request.json().catch(() => null);
     const keyword = readPageDetectionKeyword(isRecord(body) ? (body.keyword ?? body.url) : null);

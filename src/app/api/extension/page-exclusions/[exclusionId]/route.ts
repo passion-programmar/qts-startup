@@ -16,7 +16,7 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
   }
   try {
     if (!(await managerCanManagePageExclusions(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign job-page keyword management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Ask your Super Admin for access to manage job-page detection keywords." }, 403);
     }
     const { exclusionId } = await context.params;
     if (!isUuid(exclusionId)) {
@@ -57,7 +57,7 @@ export async function DELETE(request: Request, context: RouteContext): Promise<N
   }
   try {
     if (!(await managerCanManagePageExclusions(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign job-page keyword management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Ask your Super Admin for access to manage job-page detection keywords." }, 403);
     }
     const { exclusionId } = await context.params;
     if (!isUuid(exclusionId)) {

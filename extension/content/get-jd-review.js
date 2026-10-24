@@ -541,7 +541,7 @@ async function initializeGetJdReviewOnce() {
         && !managerSettingsPermissions.canManagePageExclusions
         && !managerSettingsPermissions.canManageJobDetectionUrlRules)
     ) {
-      throw new Error('Super must assign this Manager settings permission.');
+      throw new Error('Ask your Super Admin for access to these settings.');
     }
     managerSettingsOpen = true;
     elements.panelContent.hidden = true;

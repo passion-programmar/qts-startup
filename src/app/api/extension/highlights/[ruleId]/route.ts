@@ -16,7 +16,7 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
   if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     if (!(await managerCanManageTextHighlights(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign text highlight management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Ask your Super Admin for access to manage text highlights." }, 403);
     }
     const { ruleId } = await context.params;
     if (!isUuid(ruleId)) return jsonResponse({ success: false, message: "Invalid highlight rule ID." }, 400);
@@ -41,7 +41,7 @@ export async function DELETE(request: Request, context: RouteContext): Promise<N
   if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     if (!(await managerCanManageTextHighlights(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign text highlight management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Ask your Super Admin for access to manage text highlights." }, 403);
     }
     const { ruleId } = await context.params;
     if (!isUuid(ruleId)) return jsonResponse({ success: false, message: "Invalid highlight rule ID." }, 400);

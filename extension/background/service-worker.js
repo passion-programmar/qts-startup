@@ -434,7 +434,7 @@ async function verifyManagerScannerAccess() {
     ? { allowed: true }
     : {
       allowed: false,
-      message: result.message || 'Super must assign job-site Scanner access to this Manager account.',
+      message: result.message || 'Ask your Super Admin for job-site Scanner access.',
     };
 }
 

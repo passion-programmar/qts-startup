@@ -63,13 +63,13 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     if (candidateRows.length > maxManagerAccounts) {
       return jsonResponse(
-        { success: false, message: "This Manager has too many active Accounts to display at once." },
+        { success: false, message: "You have too many active candidates to show at once." },
         413,
       );
     }
     if (candidateRows.length === 0) {
       return jsonResponse(
-        { success: false, message: "Create an active candidate Account before saving jobs." },
+        { success: false, message: "Add an active candidate before saving jobs." },
         409,
       );
     }

@@ -150,7 +150,7 @@ export async function setJobGenerationQueueAction(
     }
     if (!job.description?.trim() || !job.jdMatching?.trim() || job.resumeLocalPath !== null) {
       return {
-        error: "Generation requires a saved job description, candidate JD-matching notes, and no resume path.",
+        error: "Generation needs a saved job description and the candidate's JD-matching notes, and the job must not already have a resume.",
         success: null,
       };
     }
@@ -186,13 +186,13 @@ export async function setJobGenerationQueueAction(
       eq(jobs.generationStatus, job.generationStatus),
     )).returning({ id: jobs.id });
     if (!cancelled) {
-      return { error: "This job is no longer queued.", success: null };
+      return { error: "Generation state changed; refresh and try again.", success: null };
     }
   }
   revalidatePath("/jobs");
   return { error: null, success: intent === "reset"
     ? "Generation failure state reset. The job can be queued again."
-    : intent === "queue" ? "Generation queued." : "Generation queue cancelled." };
+    : intent === "queue" ? "Generation queued." : "Generation cancelled. Queue it again to retry." };
 }
 
 export async function deleteJobAction(

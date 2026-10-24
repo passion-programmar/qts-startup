@@ -38,7 +38,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     if (rows.length > maxManagerAccounts) {
       return NextResponse.json(
-        { success: false, message: "This Manager has too many active Accounts to display at once." },
+        { success: false, message: "You have too many active candidates to show at once." },
         { status: 413, headers: { "Cache-Control": "no-store" } },
       );
     }

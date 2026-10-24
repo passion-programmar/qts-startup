@@ -27,7 +27,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     if (!(await managerCanManageJobDetectionUrlRules(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign job-detection URL rule management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Ask your Super Admin for access to manage blocked URLs." }, 403);
     }
     const body: unknown = await request.json().catch(() => null);
     const urlRule = normalizeJobDetectionUrlRule(isRecord(body) ? body.url : null);

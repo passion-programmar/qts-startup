@@ -55,7 +55,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json(
         {
           success: false,
-          message: "No saved candidates exist for this job. Run Get JD and save candidates first.",
+          message: "This job has not been saved for any candidate yet. Run Get JD and save it first.",
         },
         { status: 404 },
       );

@@ -81,7 +81,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         .limit(1);
     if (!savedJob) {
       return NextResponse.json(
-        { success: false, message: "The claimed job is no longer available to this manager." },
+        { success: false, message: "This job is no longer available for Generation. Refresh the Jobs page." },
         { status: 409 },
       );
     }

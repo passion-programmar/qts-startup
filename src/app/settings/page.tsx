@@ -202,7 +202,7 @@ export default async function SettingsPage() {
               { label: "Excluded rules · job match", className: "w-[17%]" },
               { label: "Job-detection rules · block", className: "w-[18%]" },
             ]}
-            emptyMessage="No active managers"
+            emptyMessage="No active Managers"
             rows={managerRows.map((manager) => ({
               id: manager.id,
               cells: [

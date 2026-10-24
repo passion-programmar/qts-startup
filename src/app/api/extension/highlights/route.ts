@@ -37,7 +37,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     if (!(await managerCanManageTextHighlights(manager.id))) {
-      return jsonResponse({ success: false, message: "Super must assign text highlight management to this Manager." }, 403);
+      return jsonResponse({ success: false, message: "Ask your Super Admin for access to manage text highlights." }, 403);
     }
     const body: unknown = await request.json().catch(() => null);
     const rule = readTextHighlightRule(body);

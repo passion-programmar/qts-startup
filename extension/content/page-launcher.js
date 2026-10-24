@@ -243,7 +243,7 @@ async function initializeQtsPageLauncher() {
         : response?.[permissionKey] === true;
       if (!response?.ok || !hasPermission) {
         button.hidden = true;
-        throw new Error(response?.error || `Super must assign ${permissionName} to this Manager account.`);
+        throw new Error(response?.error || `Ask your Super Admin for ${permissionName}.`);
       }
       if (!Number.isInteger(response.tabId)) {
         throw new Error('The current page is unavailable for Manager settings.');

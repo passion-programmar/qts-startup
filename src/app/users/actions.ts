@@ -86,7 +86,7 @@ export async function createUserAction(
         (typeof value !== "string" || value.length > Number(maxLength));
     })
   ) {
-    return { ...emptyState, error: "One or more profile fields are too long." };
+    return { ...emptyState, error: "One or more profile fields are missing or too long." };
   }
   if (!educationRows || !experienceRows) {
     return {
@@ -145,7 +145,7 @@ export async function createUserAction(
   } else if (!loginName) {
     return {
       ...emptyState,
-      error: "Enter a username for the staff account.",
+      error: "Enter a login name for the staff account.",
     };
   }
 
@@ -344,7 +344,7 @@ export async function updateCandidateProfileAction(
       return typeof value !== "string" || value.length > maxLength;
     })
   ) {
-    return { ...emptyState, error: "One or more profile fields are invalid." };
+    return { ...emptyState, error: "One or more profile fields are missing or too long." };
   }
   if (!educationRows || !experienceRows) {
     return {
@@ -523,7 +523,10 @@ export async function updateUserCredentialsAction(
   const userId = readText(formData, "userId", 64);
   const loginName = readText(formData, "loginName", 128);
   const password = readSecret(formData, "password");
-  if (!isUuid(userId) || (!loginName && !password)) {
+  if (!isUuid(userId)) {
+    return { ...emptyState, error: "Select a valid staff account." };
+  }
+  if (!loginName && !password) {
     return {
       ...emptyState,
       error: "Enter a login name or a new password.",
@@ -765,8 +768,9 @@ export async function deleteStaffUserAction(
     logUserActionFailure("deleting a staff user", error);
     return {
       ...emptyState,
-      error:
-        "This account could not be deleted because related records still depend on it.",
+      error: isForeignKeyViolation(error)
+        ? "This account could not be deleted because related records still depend on it."
+        : "This account could not be deleted. Please try again.",
     };
   }
 
@@ -905,6 +909,15 @@ function isUniqueViolation(error: unknown): boolean {
     error !== null &&
     "code" in error &&
     error.code === "23505"
+  );
+}
+
+function isForeignKeyViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "23503"
   );
 }
 

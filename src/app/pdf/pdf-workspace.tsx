@@ -102,7 +102,7 @@ export function PdfWorkspace({
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "The saved download folder could not be loaded.");
+          setError(describeBrowserError(reason, "The saved download folder could not be loaded."));
         }
       })
       .finally(() => {
@@ -195,10 +195,8 @@ export function PdfWorkspace({
     } catch (reason) {
       setError(
         reason instanceof DOMException && reason.name === "AbortError"
-          ? "Folder selection was canceled; the previously saved folder is unchanged."
-          : reason instanceof Error
-            ? reason.message
-            : "The download folder could not be saved.",
+          ? "Folder selection was cancelled; the previously saved folder is unchanged."
+          : describeBrowserError(reason, "The download folder could not be saved."),
       );
     }
   }
@@ -206,7 +204,7 @@ export function PdfWorkspace({
   async function downloadPair() {
     const startingDocument = activeDocumentRef.current;
     try {
-      if (!parsed) throw new Error("Enter valid résumé and cover-letter JSON before downloading.");
+      if (!parsed) throw new Error("Enter valid resume and cover-letter JSON before downloading.");
       setBusy(true);
       setError(null);
       const directory = await getDownloadDirectoryForSave(
@@ -237,10 +235,8 @@ export function PdfWorkspace({
     } catch (reason) {
       setError(
         reason instanceof DOMException && reason.name === "AbortError"
-          ? "Folder selection was canceled; no PDFs were saved."
-          : reason instanceof Error
-            ? reason.message
-            : "The resume and cover letter could not be downloaded.",
+          ? "Folder selection was cancelled; no PDFs were saved."
+          : describeBrowserError(reason, "The resume and cover letter could not be downloaded."),
       );
     } finally {
       const pending = pendingPreviewRef.current;
@@ -328,7 +324,7 @@ export function PdfWorkspace({
                 type="button"
               >
                 <Download className="size-4" />
-                {busy ? "Preparing PDFs..." : "Download résumé and cover letter"}
+                {busy ? "Preparing PDFs..." : "Download resume and cover letter"}
               </button>
             </div>
           </div>
@@ -757,6 +753,16 @@ function tryParsePdfPackage(source: string): PdfPackage | null {
   } catch {
     return null;
   }
+}
+
+// Browser storage and file-system errors carry technical text; show what the Manager can do instead.
+function describeBrowserError(reason: unknown, fallback: string): string {
+  if (reason instanceof DOMException) {
+    return reason.name === "NotAllowedError" || reason.name === "SecurityError"
+      ? "The browser blocked access to the download folder. Choose the folder again and allow access."
+      : fallback;
+  }
+  return reason instanceof Error ? reason.message : fallback;
 }
 
 function initialDocumentError(): string | null {
