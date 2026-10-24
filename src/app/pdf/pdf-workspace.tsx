@@ -14,18 +14,6 @@ import {
   type PdfTemplate,
 } from "@/server/pdf/pdf-templates";
 
-type PdfSavedJob = {
-  id: string;
-  candidateName: string;
-  jobTitle: string;
-  company: string;
-  jobUrl: string;
-  location: string;
-  description: string;
-  generatedDocument: unknown;
-  pdfTemplate: PdfTemplate;
-};
-
 type PreviewDocumentType = "resume" | "cover-letter";
 
 const example = JSON.stringify(sampleFull, null, 2);
@@ -34,21 +22,16 @@ const samplePreviewData = parsePdfPackage(example);
 
 export function PdfWorkspace({
   managerName,
-  savedJobs,
 }: {
   managerName: string;
-  savedJobs: PdfSavedJob[];
 }) {
-  const [selectedJobId, setSelectedJobId] = useState(savedJobs[0]?.id ?? "");
-  const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>(
-    savedJobs[0]?.pdfTemplate ?? "qts-standard",
-  );
-  const [source, setSource] = useState(() => initialDocumentSource(savedJobs));
+  const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>("qts-standard");
+  const [source, setSource] = useState(example);
   const [parsed, setParsed] = useState<PdfPackage | null>(
-    () => tryParsePdfPackage(initialDocumentSource(savedJobs)),
+    () => tryParsePdfPackage(example),
   );
   const [error, setError] = useState<string | null>(
-    () => initialDocumentError(savedJobs),
+    () => initialDocumentError(),
   );
   const [previewStatuses, setPreviewStatuses] = useState<Record<PreviewDocumentType, "loading" | "ready" | "error">>({
     resume: "loading",
@@ -57,9 +40,7 @@ export function PdfWorkspace({
   const [busy, setBusy] = useState(false);
   const resumeFrameRef = useRef<HTMLIFrameElement>(null);
   const coverLetterFrameRef = useRef<HTMLIFrameElement>(null);
-  const prettySize = useMemo(() => new Blob([source]).size.toLocaleString(), [source]);
-  const selectedJob = savedJobs.find((job) => job.id === selectedJobId) ?? null;
-  const sampleSourceSelected = source === example && !selectedJob?.generatedDocument;
+  const sampleSourceSelected = source === example;
   const previewData = parsed ?? samplePreviewData;
   const templateData = useMemo(
     () => toResumeTemplateData(previewData, selectedTemplate),
@@ -80,11 +61,6 @@ export function PdfWorkspace({
       return;
     }
     try { setParsed(parsePdfPackage(nextSource)); setError(null); } catch (reason) { setParsed(null); setError(reason instanceof Error ? reason.message : "JSON is invalid."); }
-  }
-  function selectSavedJob(jobId: string) {
-    setSelectedJobId(jobId);
-    const job = savedJobs.find((savedJob) => savedJob.id === jobId) ?? null;
-    updateSource(job ? generatedDocumentSource(job) || example : example);
   }
   async function downloadPair() {
     try {
@@ -132,20 +108,7 @@ export function PdfWorkspace({
       </header>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,3.5fr)_minmax(0,6fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-100 px-5 py-4"><h2 className="font-semibold">Document package</h2><p className="text-xs text-slate-500">{prettySize} bytes · resume + cover letter</p><p className="mt-1 text-xs font-semibold text-blue-700">{pdfTemplateLabels[selectedTemplate]} template</p></div>
           <div className="space-y-4 p-5">
-            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-saved-job">Saved job from extension
-              <select className={inputClass} id="pdf-saved-job" onChange={(event) => selectSavedJob(event.target.value)} value={selectedJobId}>
-                {!savedJobs.length && <option value="">No saved jobs</option>}
-                {savedJobs.map((job) => <option key={job.id} value={job.id}>{job.candidateName} · {job.jobTitle} · {job.company}</option>)}
-              </select>
-            </label>
-            {selectedJob && <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3">
-              <p className="text-xs font-semibold text-slate-700">Job description captured by the extension</p>
-              <p className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-slate-600">{selectedJob.description || "No saved description is available for this job."}</p>
-              <a className="mt-2 inline-block break-all text-xs text-blue-700 underline" href={selectedJob.jobUrl} rel="noreferrer" target="_blank">{selectedJob.jobUrl}</a>
-              {!selectedJob.generatedDocument && <p className="mt-2 text-xs text-amber-800">No completed extension Generation result is linked to this saved job yet. Start Generation from its job page, then return here to load the generated documents.</p>}
-            </div>}
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Resume and cover-letter template
               <select className={inputClass} id="pdf-template" onChange={(event) => {
                 if (isPdfTemplate(event.target.value)) setSelectedTemplate(event.target.value);
@@ -274,22 +237,6 @@ function PdfTemplatePreviewFrame({
   </section>;
 }
 
-function initialDocumentSource(savedJobs: PdfSavedJob[]): string {
-  if (!savedJobs.length) return example;
-  return generatedDocumentSource(savedJobs[0]) || example;
-}
-
-function generatedDocumentSource(job: PdfSavedJob): string {
-  if (
-    typeof job.generatedDocument !== "object"
-    || job.generatedDocument === null
-    || Array.isArray(job.generatedDocument)
-  ) {
-    return "";
-  }
-  return JSON.stringify(job.generatedDocument, null, 2);
-}
-
 function tryParsePdfPackage(source: string): PdfPackage | null {
   if (!source.trim()) return null;
   try {
@@ -299,11 +246,9 @@ function tryParsePdfPackage(source: string): PdfPackage | null {
   }
 }
 
-function initialDocumentError(savedJobs: PdfSavedJob[]): string | null {
-  const source = initialDocumentSource(savedJobs);
-  if (!source.trim()) return null;
+function initialDocumentError(): string | null {
   try {
-    parsePdfPackage(source);
+    parsePdfPackage(example);
     return null;
   } catch (reason) {
     return reason instanceof Error ? reason.message : "Generated JSON is invalid.";
