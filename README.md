@@ -114,27 +114,35 @@ The extension authenticates active Manager accounts against
 `POST /api/extension/auth/login`. It receives a signed bearer token valid for
 24 hours and can verify it through `GET /api/extension/auth/me`. Each
 verification reloads the Manager from Neon, so blocked accounts and sessions
-invalidated by an auth-version change are rejected. The extension stores the
-token in extension local storage and clears its local copy on logout; the
-server-issued token expires after 24 hours. Use HTTPS for
-deployed environments. The extension source is in `extension/` and defaults
-to `https://qts-job-system.vercel.app` for sign-in and API requests. For local
-extension testing, set `qtsServerUrl` in Chrome extension local storage. Popup
-and background requests share that value through the runtime configuration
-module.
+invalidated by an auth-version change are rejected. The extension keeps the
+token in its own IndexedDB, which content scripts on web pages cannot read;
+extension local storage holds only the expiry and session user. Sign Out
+deletes the token, and the server-issued token expires after 24 hours. Server
+URLs must use HTTPS, except `http://localhost` for development. The extension
+source is in `extension/` and defaults to `https://qts-job-system.vercel.app`
+for sign-in and API requests. For local extension testing, set `qtsServerUrl`
+in Chrome extension local storage. Popup and background requests share that
+value through the runtime configuration module.
 
 To load the unpacked extension in Chrome, open `chrome://extensions`, enable
 Developer mode, select **Load unpacked**, and choose the repository's
 `extension/` folder. After pulling extension changes, use **Reload** on the
 extension's card.
 
+To give Managers a minified build, run `npm run build:extension`. It writes
+`dist/extension/` (load that folder unpacked) and
+`dist/qts-extension-<version>.zip` with the same files. Bump `version` in
+`extension/manifest.json` before each build you share so Managers can tell
+releases apart. Minification makes the code harder to read, not secret.
+
 The extension content scripts start at `document_start`, so the floating QTS
 icon and page features can initialize while the page is still loading. The
 extension renders the icon directly on every supported web page, including
 before sign-in. Clicking it opens a radial menu with **Get
 JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
-toolbar icon has no click behavior. Sign In opens the existing Manager login
-panel inside the current page and the panel closes after a successful login.
+toolbar icon has no click behavior. Sign In opens the Manager login form in an
+extension-origin frame on the current page, so the page cannot observe the
+credentials, and the frame closes after a successful login.
 Get JD stores persistent `get_jd` status and waits until a page has finished
 loading. A matching Manager-owned blocked URL fragment blocks QTS on that page. There is no built-in URL blocklist. Otherwise,
 at least two distinct Manager-owned detection keywords must appear in the visible page text before
