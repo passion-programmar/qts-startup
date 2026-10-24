@@ -1,0 +1,14 @@
+/* Banded: Arial with a slate-blue accent rule under the header.
+   Layout defaults: section titles on tinted bands for fast scanning, skill
+   rows with dashed details.
+   Fonts: Arial. Best for: operations, logistics, healthcare. */
+
+:root {
+  --color-accent: #2b4c7e;
+  --space-title: 6pt;
+}
+
+.resume-header {
+  padding-bottom: 8pt;
+  border-bottom: 1pt solid var(--color-accent);
+}

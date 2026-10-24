@@ -1,0 +1,24 @@
+/* Startup: a modern sans with a purple accent and the headline as a tag.
+   Layout defaults: pill-shaped section titles, boxed summary, tinted skill
+   tags with colon details.
+   Fonts: Arial. Best for: startups, growth, tech. */
+
+:root {
+  --color-accent: #6d28d9;
+  --color-keyword: var(--color-accent);
+  --color-marker: var(--color-accent);
+  --text-name: 24pt;
+  --subheading-style: normal;
+  --date-separator: "\00B7";
+  --space-title: 6pt;
+}
+
+.candidate-headline {
+  display: inline-block;
+  margin-top: 5pt;
+  padding: 1.5pt 9pt;
+  border-radius: 9pt;
+  background: var(--color-tint);
+  font-weight: 700;
+  color: var(--color-accent);
+}

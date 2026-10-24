@@ -1,0 +1,26 @@
+/* Slate: Tahoma with a thick slate accent bar beside the header.
+   Layout defaults: labelled contacts, uppercase titles over dotted rules,
+   divided entries, skills grid with bracketed details.
+   Fonts: Tahoma (Verdana fallback). Best for: engineering, construction, public sector. */
+
+:root {
+  --font-body: var(--font-tahoma);
+  --color-accent: #334155;
+  --title-rule: 1pt dotted var(--color-accent);
+  --text-contact: 9pt;
+  --text-section: 10.5pt;
+  --text-item: 10pt;
+  --text-body: 10pt;
+  --text-meta: 9pt;
+}
+
+.resume-header {
+  padding-block: 2pt;
+  padding-inline-start: 11pt;
+  border-inline-start: 5pt solid var(--color-accent);
+}
+
+.doc[data-header-align="center"] .resume-header {
+  padding-inline: 11pt;
+  border-inline-end: 5pt solid var(--color-accent);
+}

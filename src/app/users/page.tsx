@@ -346,7 +346,7 @@ export default async function UsersPage() {
                           pdfTemplate: candidate.pdf_template
                             && isPdfTemplate(candidate.pdf_template)
                             ? candidate.pdf_template
-                            : "heritage",
+                            : "qts-standard",
                           candidateEmail: candidate.candidate_email,
                           phone: candidate.phone,
                           headline: candidate.headline,

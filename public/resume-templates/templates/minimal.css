@@ -1,0 +1,35 @@
+/* Minimal: no rules or colour blocks, wide margins, a regular-weight name and
+   quiet grey section titles.
+   Layout defaults: plain titles, dates on their own line, dash bullets,
+   compact skills with dashed details.
+   Fonts: Arial. Best for: design-aware and research roles. */
+
+:root {
+  --color-accent: #2f3640;
+  --color-name: var(--color-ink);
+  --color-section: #6b7178;
+  --text-name: 26pt;
+  --weight-name: 400;
+  --text-section: 9.5pt;
+  --subheading-style: normal;
+  --space-header: 18pt;
+  --space-section: 15pt;
+  --space-title: 6pt;
+  --space-item: 9pt;
+  --page-margin-top: 18mm;
+  --page-margin-inline: 20mm;
+  --page-margin-bottom: 18mm;
+}
+
+@page {
+  margin: 18mm 20mm 18mm;
+}
+
+.candidate-headline {
+  margin-top: 4pt;
+  color: var(--color-accent);
+}
+
+.contact {
+  margin-top: 8pt;
+}

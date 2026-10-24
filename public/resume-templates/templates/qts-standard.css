@@ -1,0 +1,14 @@
+/* QTS Standard: clean Arial with a navy accent rule under the header.
+   Layout defaults (js/templates.js): ruled uppercase titles, inline dates,
+   skill rows with bracketed details. The default template.
+   Fonts: Arial. Best for: any role. */
+
+:root {
+  --color-accent: #1f3a5f;
+  --color-keyword: var(--color-accent);
+}
+
+.resume-header {
+  padding-bottom: 8pt;
+  border-bottom: 1.25pt solid var(--color-accent);
+}

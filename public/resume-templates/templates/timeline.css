@@ -1,0 +1,21 @@
+/* Timeline: friendly Trebuchet with an indigo accent and bold accent dates.
+   Layout defaults: a vertical line with markers linking each entry, plain
+   uppercase titles, dates below titles, outlined skill tags with dashed details.
+   Fonts: Trebuchet MS (Arial fallback). Best for: career progression stories. */
+
+:root {
+  --font-body: var(--font-trebuchet);
+  --color-accent: #4338ca;
+  --color-keyword: var(--color-accent);
+  --text-body: 10pt;
+  --subheading-style: normal;
+  --date-color: var(--color-accent);
+  --date-weight: 700;
+  --pill-bg: transparent;
+  --pill-border: 0.75pt solid var(--color-rule);
+}
+
+.resume-header {
+  padding-bottom: 8pt;
+  border-bottom: 1pt solid var(--color-rule);
+}

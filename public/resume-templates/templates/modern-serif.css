@@ -1,0 +1,19 @@
+/* Modern Serif: a large Cambria name and headings over Calibri text, teal accent.
+   Layout defaults: short teal bar above each title, entries with a soft
+   accent border, quoted summary, skills grid with bracketed details.
+   Fonts: Cambria + Calibri (Caladea + Carlito on Linux). Best for: consulting, policy, communications. */
+
+:root {
+  --font-body: var(--font-calibri);
+  --font-heading: var(--font-cambria);
+  --color-accent: #0e7490;
+  --color-keyword: var(--color-accent);
+  --title-accent: 2.5pt;
+  --item-accent: 1.5pt solid color-mix(in srgb, var(--color-accent) 40%, #ffffff);
+  --text-name: 26pt;
+  --text-contact: 10pt;
+  --text-section: 13pt;
+  --text-item: 11pt;
+  --text-body: 11pt;
+  --text-meta: 10pt;
+}

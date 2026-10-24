@@ -1,0 +1,22 @@
+/* Corporate: Calibri, a blue accent and a tinted header panel.
+   Layout defaults: labelled contacts, accent bars beside titles, boxed
+   summary, skill rows with bracketed details.
+   Fonts: Calibri (Carlito on Linux). Best for: corporate, sales, operations. */
+
+:root {
+  --font-body: var(--font-calibri);
+  --color-accent: #1e5aa8;
+  --color-keyword: var(--color-accent);
+  --color-marker: var(--color-accent);
+  --text-contact: 10pt;
+  --text-section: 11.5pt;
+  --text-item: 11pt;
+  --text-body: 11pt;
+  --text-meta: 10pt;
+}
+
+.resume-header {
+  padding: 12pt 14pt;
+  border-radius: 3pt;
+  background: var(--color-tint);
+}

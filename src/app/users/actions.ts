@@ -44,7 +44,7 @@ export async function createUserAction(
   const firstName = readText(formData, "firstName", 120);
   const lastName = readText(formData, "lastName", 120);
   const birthday = readText(formData, "birthday", 10);
-  const pdfTemplate = readText(formData, "pdfTemplate", 20) || "heritage";
+  const pdfTemplate = readText(formData, "pdfTemplate", 20) || "qts-standard";
   const candidateEmail = readText(formData, "candidateEmail", 320);
   const phone = readText(formData, "phone", 64);
   const headline = readText(formData, "headline", 256);
@@ -307,7 +307,7 @@ export async function updateCandidateProfileAction(
     firstName: readText(formData, "firstName", limits.firstName),
     lastName: readText(formData, "lastName", limits.lastName),
     birthday: readText(formData, "birthday", limits.birthday),
-    pdfTemplate: readText(formData, "pdfTemplate", limits.pdfTemplate) || "heritage",
+    pdfTemplate: readText(formData, "pdfTemplate", limits.pdfTemplate) || "qts-standard",
     candidateEmail: readText(formData, "candidateEmail", limits.candidateEmail),
     phone: readText(formData, "phone", limits.phone),
     headline: readText(formData, "headline", limits.headline),

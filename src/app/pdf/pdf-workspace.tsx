@@ -1,10 +1,12 @@
 "use client";
 
-import { Download, FileText } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import html2canvas from "html2canvas";
+import { Download } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import type { PdfPackage } from "@/app/pdf/document-data";
-import { parsePdfPackage } from "@/app/pdf/document-data";
-import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
+import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
+import sampleFull from "@/app/pdf/sample-full.json";
 import {
   isPdfTemplate,
   pdfTemplateLabels,
@@ -24,80 +26,11 @@ type PdfSavedJob = {
   pdfTemplate: PdfTemplate;
 };
 
-const example = JSON.stringify({
-  resume: {
-    candidate: { fullName: "Jordan Taylor", email: "jordan@example.com", phone: "+1 555 0100", linkedinUrl: "https://linkedin.com/in/jordan-taylor", location: "Austin, TX", headline: "Software Engineer" },
-    targetRole: "Software Engineer", targetCompany: "Example Company",
-    summary: "Software engineer with experience building dependable web applications, improving service performance, and collaborating across product teams. Skilled at turning complex requirements into maintainable software and measurable customer improvements.",
-    sections: [
-      {
-        title: "Experience",
-        items: [
-          {
-            heading: "Senior Software Engineer",
-            subheading: "Northstar Digital · Austin, TX",
-            dateRange: "2021 – Present",
-            bullets: [
-              "Designed Node.js services supporting customer workflows and improved peak-load reliability through targeted performance work.",
-              "Reduced common API response times by optimizing database access patterns and adding focused query monitoring.",
-              "Built reusable React and TypeScript components with product and design partners, improving consistency across key screens.",
-              "Introduced automated integration checks in the delivery pipeline, helping the team release changes with fewer regressions.",
-              "Mentored four engineers through design reviews, pairing sessions, and practical documentation.",
-            ],
-          },
-          {
-            heading: "Software Engineer",
-            subheading: "Cedar Labs · Dallas, TX",
-            dateRange: "2018 – 2021",
-            bullets: [
-              "Delivered customer-facing features using React, Express, and PostgreSQL from technical discovery through production support.",
-              "Integrated external payment and identity services with clear error handling and operational logging.",
-              "Expanded automated test coverage for high-use application flows using Jest and Cypress.",
-              "Worked with support and analytics teams to investigate recurring issues and prioritize durable fixes.",
-              "Helped migrate legacy interface modules to smaller, accessible components that were easier to maintain.",
-            ],
-          },
-        ],
-      },
-      {
-        title: "Education",
-        items: [{
-          heading: "Bachelor of Science in Computer Science",
-          subheading: "Hillview State University · Austin, TX",
-          dateRange: "2014 – 2018",
-          bullets: ["Focus: Software systems and applied mathematics", "Graduated with honors"],
-        }],
-      },
-      {
-        title: "Skills",
-        items: [{
-          bullets: [
-            "JavaScript", "TypeScript", "React", "Node.js", "Express",
-            "REST APIs", "PostgreSQL", "MongoDB", "Jest", "Cypress",
-            "Git", "CI/CD", "AWS", "Docker", "Agile delivery",
-          ],
-        }],
-      },
-    ],
-  },
-  coverLetter: {
-    candidate: { fullName: "Jordan Taylor", email: "jordan@example.com", phone: "+1 555 0100", linkedinUrl: "https://linkedin.com/in/jordan-taylor" },
-    targetRole: "Software Engineer", targetCompany: "Example Company", date: "October 20, 2026", salutation: "Dear Hiring Manager,",
-    bodyParagraphs: ["I am interested in the Software Engineer role at Example Company. I have built web products across the stack and enjoy making complex workflows clear and dependable for customers.", "In recent roles I have delivered React interfaces and Node.js services, improved performance through careful measurement, and partnered across engineering, product, and support. I would welcome the opportunity to bring that practical, collaborative approach to your team."],
-    closing: "Sincerely,", signatureName: "Jordan Taylor",
-  },
-}, null, 2);
+type PreviewDocumentType = "resume" | "cover-letter";
+
+const example = JSON.stringify(sampleFull, null, 2);
 
 const samplePreviewData = parsePdfPackage(example);
-
-type RenderedPreview = {
-  data: PdfPackage;
-  template: PdfTemplate;
-  resumeUrl: string;
-  coverLetterUrl: string;
-  resumeBytes: Uint8Array;
-  coverLetterBytes: Uint8Array;
-};
 
 export function PdfWorkspace({
   managerName,
@@ -107,7 +40,9 @@ export function PdfWorkspace({
   savedJobs: PdfSavedJob[];
 }) {
   const [selectedJobId, setSelectedJobId] = useState(savedJobs[0]?.id ?? "");
-  const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>("vellum");
+  const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>(
+    savedJobs[0]?.pdfTemplate ?? "qts-standard",
+  );
   const [source, setSource] = useState(() => initialDocumentSource(savedJobs));
   const [parsed, setParsed] = useState<PdfPackage | null>(
     () => tryParsePdfPackage(initialDocumentSource(savedJobs)),
@@ -115,67 +50,27 @@ export function PdfWorkspace({
   const [error, setError] = useState<string | null>(
     () => initialDocumentError(savedJobs),
   );
-  const [previewError, setPreviewError] = useState<{
-    data: PdfPackage;
-    template: PdfTemplate;
-    message: string;
-  } | null>(null);
-  const [renderedPreview, setRenderedPreview] = useState<RenderedPreview | null>(null);
+  const [previewStatuses, setPreviewStatuses] = useState<Record<PreviewDocumentType, "loading" | "ready" | "error">>({
+    resume: "loading",
+    "cover-letter": "loading",
+  });
   const [busy, setBusy] = useState(false);
+  const resumeFrameRef = useRef<HTMLIFrameElement>(null);
+  const coverLetterFrameRef = useRef<HTMLIFrameElement>(null);
   const prettySize = useMemo(() => new Blob([source]).size.toLocaleString(), [source]);
   const selectedJob = savedJobs.find((job) => job.id === selectedJobId) ?? null;
   const sampleSourceSelected = source === example && !selectedJob?.generatedDocument;
   const previewData = parsed ?? samplePreviewData;
-  const currentPreview = renderedPreview?.data === previewData
-    && renderedPreview.template === selectedTemplate
-    ? renderedPreview
-    : null;
-  const currentPreviewError = previewError?.data === previewData
-    && previewError.template === selectedTemplate
-    ? previewError.message
-    : null;
-
-  useEffect(() => {
-    let cancelled = false;
-    let objectUrls: string[] = [];
-
-    void renderPdfPackage(previewData, selectedTemplate).then((pdfs) => {
-      if (cancelled) return;
-      const resumeUrl = URL.createObjectURL(new Blob([
-        Uint8Array.from(pdfs.resume).buffer,
-      ], { type: "application/pdf" }));
-      const coverLetterUrl = URL.createObjectURL(new Blob([
-        Uint8Array.from(pdfs.coverLetter).buffer,
-      ], { type: "application/pdf" }));
-      objectUrls = [resumeUrl, coverLetterUrl];
-      setPreviewError(null);
-      setRenderedPreview({
-        data: previewData,
-        template: selectedTemplate,
-        resumeUrl,
-        coverLetterUrl,
-        resumeBytes: pdfs.resume,
-        coverLetterBytes: pdfs.coverLetter,
-      });
-    }).catch((reason: unknown) => {
-      if (!cancelled) {
-        setPreviewError(
-          {
-            data: previewData,
-            template: selectedTemplate,
-            message: reason instanceof Error
-              ? reason.message
-              : "The PDF preview could not be rendered.",
-          },
-        );
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      objectUrls.forEach((url) => URL.revokeObjectURL(url));
-    };
-  }, [previewData, selectedTemplate]);
+  const templateData = useMemo(
+    () => toResumeTemplateData(previewData, selectedTemplate),
+    [previewData, selectedTemplate],
+  );
+  const updatePreviewStatus = useCallback(
+    (documentType: PreviewDocumentType, status: "loading" | "ready" | "error") => {
+      setPreviewStatuses((current) => ({ ...current, [documentType]: status }));
+    },
+    [],
+  );
 
   function updateSource(nextSource: string) {
     setSource(nextSource);
@@ -193,23 +88,29 @@ export function PdfWorkspace({
   }
   async function downloadPair() {
     try {
-      if (!selectedJob) throw new Error("Select a saved extension job before downloading.");
       if (!parsed) throw new Error("Enter valid résumé and cover-letter JSON before downloading.");
-      if (!currentPreview) {
-        throw new Error("Wait for the preview of the selected template to finish rendering.");
+      if (previewStatuses.resume !== "ready" || previewStatuses["cover-letter"] !== "ready") {
+        throw new Error("Wait for both document previews to finish rendering.");
       }
-      const data = parsed;
-      setError(null); setBusy(true);
-      const candidateName = safePathPart(data.resume.candidate.fullName);
-      const jobTitle = safePathPart(data.resume.targetRole);
-      const company = safePathPart(data.resume.targetCompany ?? data.coverLetter.targetCompany);
+      setBusy(true);
+      setError(null);
+      const [resume, coverLetter] = await Promise.all([
+        renderTemplatePdf(resumeFrameRef.current, "resume"),
+        renderTemplatePdf(coverLetterFrameRef.current, "cover-letter"),
+      ]);
+      const candidateName = safePathPart(parsed.resume.candidate.fullName);
+      const jobTitle = safePathPart(parsed.resume.targetRole);
+      const company = safePathPart(parsed.resume.targetCompany ?? parsed.coverLetter.targetCompany);
       const folder = `QTS_Resume/${safePathPart(managerName)}/${candidateName}/${packageTimestamp()}_${jobTitle}_${company}`;
       await requestExtensionDownloads([
-        { downloadPath: `${folder}/${candidateName}.pdf`, mimeType: "application/pdf", base64: bytesToBase64(currentPreview.resumeBytes) },
-        { downloadPath: `${folder}/${candidateName}_Cover_Letter.pdf`, mimeType: "application/pdf", base64: bytesToBase64(currentPreview.coverLetterBytes) },
-        { downloadPath: `${folder}/JD.txt`, mimeType: "text/plain;charset=utf-8", base64: bytesToBase64(new TextEncoder().encode(selectedJob.description)) },
+        { downloadPath: `${folder}/${candidateName}.pdf`, mimeType: "application/pdf", base64: bytesToBase64(resume) },
+        { downloadPath: `${folder}/${candidateName}_Cover_Letter.pdf`, mimeType: "application/pdf", base64: bytesToBase64(coverLetter) },
       ]);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "PDF pair could not be created."); } finally { setBusy(false); }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The resume and cover letter could not be downloaded.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -231,7 +132,7 @@ export function PdfWorkspace({
               <a className="mt-2 inline-block break-all text-xs text-blue-700 underline" href={selectedJob.jobUrl} rel="noreferrer" target="_blank">{selectedJob.jobUrl}</a>
               {!selectedJob.generatedDocument && <p className="mt-2 text-xs text-amber-800">No completed extension Generation result is linked to this saved job yet. Start Generation from its job page, then return here to load the generated documents.</p>}
             </div>}
-            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Built-in PDF template
+            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Resume and cover-letter template
               <select className={inputClass} id="pdf-template" onChange={(event) => {
                 if (isPdfTemplate(event.target.value)) setSelectedTemplate(event.target.value);
               }} value={selectedTemplate}>
@@ -240,28 +141,121 @@ export function PdfWorkspace({
             </label>
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="min-h-[440px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
-            <p className="mt-3 text-xs text-slate-500">Files save automatically under Downloads / QTS_Resume / {managerName} / candidate / date_time_job title_company. No folder selection is required.</p>
             {sampleSourceSelected && <p className="text-xs text-amber-800">Sample template JSON is prefilled for preview. Replace it with your generated resume data before saving files.</p>}
-            <div className="mt-4 flex flex-wrap gap-2"><button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" disabled={busy || !selectedJob || !parsed || !currentPreview} onClick={() => void downloadPair()} type="button"><Download className="size-4" />{busy ? "Creating application files..." : sampleSourceSelected ? "Download sample preview" : "Save résumé and cover letter"}</button></div>
+            <p className="text-xs text-slate-500">Download both PDFs using the selected template. Files save under Downloads / QTS_Resume / {managerName} / candidate.</p>
+            <div className="mt-4">
+              <button
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={busy || !parsed || previewStatuses.resume !== "ready" || previewStatuses["cover-letter"] !== "ready"}
+                onClick={() => void downloadPair()}
+                type="button"
+              >
+                <Download className="size-4" />
+                {busy ? "Preparing PDFs..." : "Download résumé and cover letter"}
+              </button>
+            </div>
           </div>
         </section>
         <section className="space-y-5">
           {!parsed && <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
-          {currentPreviewError && <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{currentPreviewError}</p>}
-          {currentPreview ? <>
-            <PdfPreviewFrame title={`Resume preview · ${pdfTemplateLabels[selectedTemplate]}`} url={currentPreview.resumeUrl} />
-            <PdfPreviewFrame title={`Cover letter preview · ${pdfTemplateLabels[selectedTemplate]}`} url={currentPreview.coverLetterUrl} />
-          </> : !currentPreviewError && <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500"><FileText className="mx-auto mb-3 size-8" />Rendering template preview…</div>}
+          <PdfTemplatePreviewFrame
+            documentData={templateData}
+            documentType="resume"
+            template={selectedTemplate}
+            title={`Resume preview · ${pdfTemplateLabels[selectedTemplate]}`}
+            iframeRef={resumeFrameRef}
+            onStatusChange={updatePreviewStatus}
+          />
+          <PdfTemplatePreviewFrame
+            documentData={templateData}
+            documentType="cover-letter"
+            template={selectedTemplate}
+            title={`Cover letter preview · ${pdfTemplateLabels[selectedTemplate]}`}
+            iframeRef={coverLetterFrameRef}
+            onStatusChange={updatePreviewStatus}
+          />
         </section>
       </div>
     </main>
   );
 }
 
-function PdfPreviewFrame({ title, url }: { title: string; url: string }) {
+function PdfTemplatePreviewFrame({
+  documentData,
+  documentType,
+  template,
+  title,
+  iframeRef,
+  onStatusChange,
+}: {
+  documentData: ReturnType<typeof toResumeTemplateData>;
+  documentType: PreviewDocumentType;
+  template: PdfTemplate;
+  title: string;
+  iframeRef: RefObject<HTMLIFrameElement | null>;
+  onStatusChange: (documentType: PreviewDocumentType, status: "loading" | "ready" | "error") => void;
+}) {
+  const requestId = useRef("");
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [message, setMessage] = useState("");
+  const [warnings, setWarnings] = useState("");
+
+  useEffect(() => onStatusChange(documentType, status), [documentType, onStatusChange, status]);
+
+  useEffect(() => {
+    function sendDocument() {
+      const frame = iframeRef.current;
+      if (!iframeLoaded || !frame?.contentWindow) return;
+      const id = crypto.randomUUID();
+      requestId.current = id;
+      setStatus("loading");
+      setMessage("");
+      setWarnings("");
+      frame.contentWindow.postMessage({
+        type: "QTS_RESUME_TEMPLATE_RENDER",
+        requestId: id,
+        document: documentData,
+        template,
+      }, window.location.origin);
+    }
+
+    function handleRender(event: MessageEvent) {
+      if (
+        event.origin !== window.location.origin
+        || event.source !== iframeRef.current?.contentWindow
+        || event.data?.type !== "QTS_RESUME_TEMPLATE_RENDERED"
+        || event.data.requestId !== requestId.current
+      ) return;
+      if (event.data.ok) {
+        setWarnings(typeof event.data.warnings === "string" ? event.data.warnings : "");
+        setStatus("ready");
+      } else {
+        setMessage(typeof event.data.error === "string" ? event.data.error : "The preview could not be rendered.");
+        setStatus("error");
+      }
+    }
+
+    window.addEventListener("message", handleRender);
+    sendDocument();
+    return () => window.removeEventListener("message", handleRender);
+  }, [documentData, iframeLoaded, iframeRef, template]);
+
   return <section aria-label={title} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-5">
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
+    </div>
+    {status === "error" && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{message}</p>}
+    {warnings && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{warnings}</p>}
+    {status === "loading" && <p className="mb-3 text-xs text-slate-500" role="status">Rendering {documentType} template…</p>}
     <div className="mx-auto max-w-[820px] overflow-hidden rounded-sm bg-white shadow-xl shadow-slate-900/15">
-      <iframe className="block h-[1100px] w-full border-0 bg-white" src={`${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} title={title} />
+      <iframe
+        className="block h-[1100px] w-full border-0 bg-white"
+        onLoad={() => setIframeLoaded(true)}
+        ref={iframeRef}
+        src={`/resume-templates/${documentType === "resume" ? "resume" : "cover-letter"}.html?embed=1`}
+        title={title}
+      />
     </div>
   </section>;
 }
@@ -304,14 +298,108 @@ function initialDocumentError(savedJobs: PdfSavedJob[]): string | null {
 
 const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
-function safePathPart(value: string): string { return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").replace(/[. ]+$/g, "").trim() || "Unknown"; }
+async function renderTemplatePdf(
+  frame: HTMLIFrameElement | null,
+  documentType: PreviewDocumentType,
+): Promise<Uint8Array> {
+  const frameDocument = frame?.contentDocument;
+  const root = frameDocument?.documentElement;
+  const article = frameDocument?.querySelector<HTMLElement>(".doc");
+  if (!frameDocument || !root || !article || root.dataset.renderState !== "ready") {
+    throw new Error(`The ${documentType} preview is not ready to download.`);
+  }
+
+  await frameDocument.fonts.ready;
+  const frameWindow = frame?.contentWindow;
+  if (!frameWindow) throw new Error(`The ${documentType} preview window is unavailable.`);
+  const pageWidthMm = cssMillimeters(frameWindow.getComputedStyle(root).getPropertyValue("--page-width"));
+  const pageHeightMm = cssMillimeters(frameWindow.getComputedStyle(root).getPropertyValue("--page-height"));
+  const pageWidthPoints = pageWidthMm * 72 / 25.4;
+  const pageHeightPoints = pageHeightMm * 72 / 25.4;
+  const captureStyle = frameDocument.createElement("style");
+  captureStyle.textContent = ".sheet { background: #fff !important; box-shadow: none !important; }";
+  frameDocument.head.append(captureStyle);
+
+  let canvas: HTMLCanvasElement;
+  try {
+    canvas = await html2canvas(article, {
+      backgroundColor: "#ffffff",
+      height: article.scrollHeight,
+      logging: false,
+      scale: 2,
+      useCORS: true,
+      width: article.scrollWidth,
+      windowHeight: Math.max(frameDocument.documentElement.clientHeight, article.scrollHeight),
+      windowWidth: Math.max(frameDocument.documentElement.clientWidth, article.scrollWidth),
+      scrollX: 0,
+      scrollY: 0,
+    });
+  } finally {
+    captureStyle.remove();
+  }
+
+  const pixelsPerPage = canvas.width * pageHeightMm / pageWidthMm;
+  const previewPages = Number(root.dataset.pages) || 1;
+  const pageCount = Math.max(previewPages, Math.ceil(canvas.height / pixelsPerPage - 0.01));
+  const { PDFDocument } = await import("pdf-lib");
+  const pdf = await PDFDocument.create();
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const pageCanvas = frameDocument.createElement("canvas");
+    pageCanvas.width = canvas.width;
+    pageCanvas.height = Math.ceil(pixelsPerPage);
+    const context = pageCanvas.getContext("2d");
+    if (!context) throw new Error("The browser could not prepare a PDF page.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+    const sourceY = Math.round(pageIndex * pixelsPerPage);
+    const sourceHeight = Math.max(
+      0,
+      Math.min(Math.ceil(pixelsPerPage), canvas.height - sourceY),
+    );
+    if (sourceHeight) {
+      context.drawImage(
+        canvas,
+        0,
+        sourceY,
+        canvas.width,
+        sourceHeight,
+        0,
+        0,
+        pageCanvas.width,
+        Math.ceil(pixelsPerPage),
+      );
+    }
+    const image = await pdf.embedPng(pageCanvas.toDataURL("image/png"));
+    const page = pdf.addPage([pageWidthPoints, pageHeightPoints]);
+    page.drawImage(image, { x: 0, y: 0, width: pageWidthPoints, height: pageHeightPoints });
+  }
+  return pdf.save();
+}
+
+function cssMillimeters(value: string): number {
+  const normalized = value.trim();
+  const amount = Number.parseFloat(normalized);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("The preview has invalid page dimensions.");
+  }
+  if (normalized.endsWith("mm")) return amount;
+  if (normalized.endsWith("in")) return amount * 25.4;
+  if (normalized.endsWith("px")) return amount * 25.4 / 96;
+  throw new Error("The preview page size is not supported for PDF download.");
+}
+
+function safePathPart(value: string): string {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").replace(/[. ]+$/g, "").trim() || "Unknown";
+}
+
 function packageTimestamp(date = new Date()): string {
   const part = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}_${part(date.getHours())}-${part(date.getMinutes())}-${part(date.getSeconds())}`;
 }
+
 type ExtensionDownloadFile = {
   downloadPath: string;
-  mimeType: "application/pdf" | "text/plain;charset=utf-8";
+  mimeType: "application/pdf";
   base64: string;
 };
 

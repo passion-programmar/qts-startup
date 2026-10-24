@@ -1,0 +1,25 @@
+/* Harvard: monochrome Times in the style of university career-office guides,
+   with an uppercase name and black rules.
+   Layout defaults: centred header, ruled uppercase titles, em-dash dates,
+   skill rows with dashed details.
+   Fonts: Times New Roman. Best for: graduates, consulting, banking. */
+
+:root {
+  --font-body: var(--font-times);
+  --color-accent: #111111;
+  --color-muted: #333333;
+  --color-rule: #111111;
+  --title-rule: 0.75pt solid var(--color-ink);
+  --text-name: 20pt;
+  --text-contact: 10pt;
+  --text-section: 11pt;
+  --text-item: 11pt;
+  --text-body: 11pt;
+  --text-meta: 10.5pt;
+  --date-separator: "\2014";
+  --space-section: 11pt;
+}
+
+.candidate-name {
+  text-transform: uppercase;
+}

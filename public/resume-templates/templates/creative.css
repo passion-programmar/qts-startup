@@ -1,0 +1,31 @@
+/* Creative: friendly Trebuchet, a raspberry accent and a short accent bar
+   under the name.
+   Layout defaults: square markers before titles, boxed summary, tinted
+   skill tags with bracketed details.
+   Fonts: Trebuchet MS (Arial fallback). Best for: creative and customer-facing roles. */
+
+:root {
+  --font-body: var(--font-trebuchet);
+  --color-accent: #be185d;
+  --color-keyword: var(--color-accent);
+  --color-marker: var(--color-accent);
+  --text-name: 24pt;
+  --text-section: 12pt;
+  --text-body: 10pt;
+  --subheading-style: normal;
+  --date-separator: "\00B7";
+}
+
+.candidate-name::after {
+  content: "";
+  display: block;
+  width: 36pt;
+  height: 3pt;
+  margin-block: 6pt 1pt;
+  border-radius: 2pt;
+  background: var(--color-accent);
+}
+
+.doc[data-header-align="center"] .candidate-name::after {
+  margin-inline: auto;
+}

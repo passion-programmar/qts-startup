@@ -1,11 +1,13 @@
 import type {
   CoverLetterDocument,
+  DocumentBullet,
   PdfPackage,
   ResumeDocument,
 } from "@/app/pdf/document-data";
 import {
   pdfTemplateDesigns,
   type PdfTemplate,
+  type LegacyPdfTemplate,
 } from "@/server/pdf/pdf-templates";
 import type { PDFFont } from "pdf-lib";
 
@@ -31,6 +33,15 @@ type PdfWriter = {
 
 type ResumeSectionItem = ResumeDocument["sections"][number]["items"][number];
 
+function pdfBulletText(bullet: DocumentBullet): string {
+  const text = typeof bullet === "string"
+    ? bullet
+    : bullet.detail
+      ? `${bullet.name} (${bullet.detail})`
+      : bullet.name;
+  return text.replaceAll("**", "");
+}
+
 export async function renderPdfPackage(
   data: PdfPackage,
   template: PdfTemplate,
@@ -44,7 +55,7 @@ export async function renderPdfPackage(
 
 async function renderResumePdf(
   document: ResumeDocument,
-  template: PdfTemplate,
+  template: PdfTemplate | LegacyPdfTemplate,
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 2);
   const headline = document.candidate.headline ?? document.targetRole;
@@ -85,7 +96,7 @@ async function renderResumePdf(
         item.heading ?? "",
         item.dateRange,
         item.subheading,
-        (item.bullets ?? []).map((bullet) => bullet.replaceAll("**", "")),
+        (item.bullets ?? []).map(pdfBulletText),
         index < section.items.length - 1,
       );
     });
@@ -95,7 +106,7 @@ async function renderResumePdf(
 
 async function renderCoverLetterPdf(
   document: CoverLetterDocument,
-  template: PdfTemplate,
+  template: PdfTemplate | LegacyPdfTemplate,
 ): Promise<Uint8Array> {
   const pdf = await createWriter(template, 1);
   const coverContactParts = [
@@ -131,7 +142,7 @@ async function renderCoverLetterPdf(
 }
 
 async function createWriter(
-  template: PdfTemplate,
+  template: PdfTemplate | LegacyPdfTemplate,
   maxPages: number,
 ): Promise<PdfWriter> {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
@@ -727,7 +738,7 @@ async function createWriter(
     const measuredGroupGap = isFlowCv ? 0 : 4;
     const groups = items.map((item) => ({
       heading: item.heading?.replaceAll("**", "").trim() ?? "",
-      skills: [item.subheading, item.dateRange, ...(item.bullets ?? [])]
+      skills: [item.subheading, item.dateRange, ...(item.bullets ?? []).map(pdfBulletText)]
         .filter((value): value is string => Boolean(value))
         .map((value) => value.replaceAll("**", "").trim())
         .filter(Boolean),
@@ -800,7 +811,7 @@ async function createWriter(
       skills: [
         item.subheading,
         item.dateRange,
-        ...(item.bullets ?? []),
+        ...(item.bullets ?? []).map(pdfBulletText),
       ].filter((value): value is string => Boolean(value))
         .map((value) => value.replaceAll("**", "").trim())
         .filter(Boolean),

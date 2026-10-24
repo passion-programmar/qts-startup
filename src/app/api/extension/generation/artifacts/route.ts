@@ -54,7 +54,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
 
     const data = parsePdfPackage(JSON.stringify(row.responseJson));
-    const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "heritage";
+    const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "qts-standard";
     const pdfs = await renderPdfPackage(data, template);
     const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
     const paths = generationDownloadPaths({

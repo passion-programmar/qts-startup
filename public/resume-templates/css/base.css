@@ -1,0 +1,831 @@
+@charset "UTF-8";
+
+/* =============================================================================
+   QTS resume templates · base.css
+   Shared by every template and both documents (resume and cover letter):
+   structure, every layout option, pagination, print and screen preview.
+
+   How a template is put together
+   - templates/<id>.css sets the tokens in section 1 (fonts, colours, sizes)
+     and decorates the header. It never styles sections directly.
+   - Layout options are data attributes on the document (<article class="doc">),
+     set by render.js from the template defaults, the JSON and URL parameters:
+       data-header-align  data-contact-style  data-title-style  data-title-case
+       data-date-position data-bullet-style   data-item-style   data-summary-style
+       data-skills-layout data-skill-detail   data-letter-layout
+     Each option below works with every template.
+
+   ATS rules every template follows (verified by extracting PDF text):
+   - One column in reading order. Dates stay inline with their entry or on the
+     next line; there is no right-aligned date column, sidebar or table.
+   - No letter-spacing anywhere: extractors split tracked capitals into
+     single letters ("E D U C A T I O N").
+   - No ligatures and no automatic hyphenation.
+   - Bullets, separators, skill details and brackets are real characters.
+   - Text is always dark on a light background, so a copy printed without
+     background colours stays readable.
+
+   Contents
+     1. Design tokens      6. Skills                 11. Pagination
+     2. Page setup         7. Bold keywords          12. Density
+     3. Base               8. Cover letter           13. Screen preview
+     4. Header & contact   9. Section title styles   14. Embedded preview
+     5. Sections & items  10. Entry & summary styles 15. Print
+   ========================================================================== */
+
+
+/* 1. Design tokens ----------------------------------------------------------- */
+
+:root {
+  /* Page: A4 by default; render.js switches to US Letter when asked. */
+  --page-width: 210mm;
+  --page-height: 297mm;
+  --page-margin-top: 15mm;
+  --page-margin-inline: 16mm;
+  --page-margin-bottom: 17mm;
+
+  /* Font stacks. Each ends with free, metric-compatible fonts for Linux
+     render servers, so line and page breaks match the designer's machine.
+     theme.fontFamily / theme.headingFont pick one of these by name. */
+  --font-arial: Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
+  --font-georgia: Georgia, Gelasio, "Times New Roman", serif;
+  --font-times: "Times New Roman", "Liberation Serif", Tinos, Times, serif;
+  --font-calibri: Calibri, Carlito, "Segoe UI", Arial, sans-serif;
+  --font-cambria: Cambria, Caladea, Georgia, serif;
+  --font-palatino: "Palatino Linotype", Palatino, "Book Antiqua", "TeX Gyre Pagella", Georgia, serif;
+  --font-verdana: Verdana, "DejaVu Sans", Arial, sans-serif;
+  --font-tahoma: Tahoma, Verdana, "DejaVu Sans", sans-serif;
+  --font-trebuchet: "Trebuchet MS", Arial, sans-serif;
+  --font-mono: Consolas, "Liberation Mono", Cousine, "Courier New", monospace;
+
+  /* Font roles */
+  --font-body: var(--font-arial);
+  --font-heading: var(--font-body);
+  --font-name: var(--font-heading);
+  --font-item: var(--font-body);
+  --font-meta: var(--font-body);
+  --font-scale: 1;
+
+  /* Type scale (every size is multiplied by --font-scale) */
+  --text-name: 22pt;
+  --text-headline: 11.5pt;
+  --text-contact: 9.5pt;
+  --text-section: 10.5pt;
+  --text-item: 10.5pt;
+  --text-body: 10.5pt;
+  --text-meta: 9.5pt;
+  --leading-body: 1.35;
+  --leading-tight: 1.2;
+  --leading-letter: 1.45;
+  --weight-name: 700;
+  --weight-section: 700;
+  --weight-item: 700;
+
+  /* Colour. theme.accentColor and theme.keywordColor override these; tints
+     are derived from the accent, so one colour recolours the template. */
+  --color-accent: #1f3a5f;
+  --color-ink: #1a1a1a;
+  --color-muted: #4a4f55;
+  --color-rule: #b4bec8;
+  --color-name: var(--color-accent);
+  --color-section: var(--color-accent);
+  --color-marker: var(--color-muted);
+  --color-keyword: var(--color-ink);
+  --color-tint: color-mix(in srgb, var(--color-accent) 9%, #ffffff);
+
+  /* Details used by the layout options */
+  --headline-style: normal;
+  --subheading-style: italic;
+  --subheading-color: var(--color-muted);
+  --separator: "|";
+  --date-separator: var(--separator);
+  --date-color: var(--color-muted);
+  --date-weight: 400;
+  --date-style: normal;
+  --title-align: start;
+  --title-rule: 0.75pt solid var(--color-rule);
+  --title-accent: 2pt;
+  --title-band: var(--color-tint);
+  --topline: 1.5pt solid var(--color-accent);
+  --item-rule: 0.5pt solid var(--color-rule);
+  --item-accent: 2pt solid var(--color-accent);
+  --summary-bg: var(--color-tint);
+  --skill-columns: 3;
+  --skill-title-color: var(--color-ink);
+  --pill-bg: var(--color-tint);
+  --pill-border: 0.75pt solid transparent;
+  --pill-color: var(--color-ink);
+
+  /* Vertical rhythm */
+  --space-header: 12pt;
+  --space-section: 12pt;
+  --space-title: 5pt;
+  --space-item: 7pt;
+  --space-bullet: 1.5pt;
+  --indent-bullet: 10pt;
+}
+
+
+/* 2. Page setup ---------------------------------------------------------------
+   @page cannot read custom properties. A template that changes the margins
+   updates both this rule and the --page-margin-* tokens. */
+
+@page {
+  size: A4;
+  margin: 15mm 16mm 17mm;
+
+  /* Page numbers from page 2 on (Chromium 131+, WeasyPrint, Prince). */
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
+    font-size: 8pt;
+    color: #5f666d;
+  }
+}
+
+@page :first {
+  @bottom-right {
+    content: none;
+  }
+}
+
+
+/* 3. Base -------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: calc(var(--text-body) * var(--font-scale));
+  line-height: var(--leading-body);
+  text-align: start;
+  hyphens: manual;
+  overflow-wrap: break-word;
+  font-kerning: normal;
+  font-variant-ligatures: none;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* Arabic-script shaping can rely on ligatures; keep them for RTL documents. */
+[dir="rtl"] body {
+  font-variant-ligatures: normal;
+}
+
+/* Arabic and Hebrew have no true italics; a slanted fallback hurts
+   legibility, so italics are switched off for RTL documents. */
+:root[dir="rtl"] .doc * {
+  font-style: normal;
+}
+
+.doc {
+  line-height: var(--leading-body);
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+address {
+  margin: 0;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+address {
+  font-style: normal;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+
+/* 4. Header and contact line ------------------------------------------------- */
+
+.resume-header {
+  margin-bottom: var(--space-header);
+}
+
+.doc[data-header-align="center"] .resume-header {
+  text-align: center;
+}
+
+.candidate-name {
+  font-family: var(--font-name);
+  font-size: calc(var(--text-name) * var(--font-scale));
+  font-weight: var(--weight-name);
+  line-height: var(--leading-tight);
+  color: var(--color-name);
+}
+
+.candidate-headline {
+  margin-top: 2pt;
+  font-size: calc(var(--text-headline) * var(--font-scale));
+  font-style: var(--headline-style);
+  line-height: var(--leading-tight);
+  color: var(--color-muted);
+}
+
+.contact {
+  margin-top: 6pt;
+  font-family: var(--font-meta);
+  font-size: calc(var(--text-contact) * var(--font-scale));
+}
+
+/* A wrapping flex row: missing fields simply aren't rendered, so the rest
+   close up and stay aligned with the header (centred when it is centred).
+   Each separator ends the previous field, so no line starts with "|". */
+.contact-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  row-gap: 1pt;
+  list-style: none;
+}
+
+.doc[data-header-align="center"] .contact-list {
+  justify-content: center;
+}
+
+.contact-list li {
+  white-space: nowrap;
+}
+
+.contact-list li:not(:last-child)::after {
+  content: var(--separator);
+  margin-inline: 6pt;
+  color: var(--color-rule);
+}
+
+.contact-label {
+  font-weight: 700;
+}
+
+
+/* 5. Sections and items ------------------------------------------------------ */
+
+.section + .section {
+  margin-top: var(--space-section);
+}
+
+.section-title {
+  margin-bottom: var(--space-title);
+  font-family: var(--font-heading);
+  font-size: calc(var(--text-section) * var(--font-scale));
+  font-weight: var(--weight-section);
+  line-height: var(--leading-tight);
+  text-align: var(--title-align);
+  color: var(--color-section);
+}
+
+.doc[data-title-case="upper"] .section-title {
+  text-transform: uppercase;
+}
+
+.doc[data-title-case="lower"] .section-title {
+  text-transform: lowercase;
+}
+
+/* Keeps line breaks typed into a multi-paragraph summary. */
+.summary {
+  white-space: pre-line;
+}
+
+.item + .item {
+  margin-top: var(--space-item);
+}
+
+.item > :first-child {
+  margin-top: 0;
+}
+
+.item-header {
+  line-height: var(--leading-tight);
+}
+
+.item-heading {
+  display: inline;
+  font-family: var(--font-item);
+  font-size: calc(var(--text-item) * var(--font-scale));
+  font-weight: var(--weight-item);
+}
+
+.item-date {
+  display: inline;
+  font-family: var(--font-meta);
+  font-size: calc(var(--text-meta) * var(--font-scale));
+  font-style: var(--date-style);
+  font-weight: var(--date-weight);
+  color: var(--date-color);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* datePosition: inline = "Role | Jan 2022 – Present", below = own line,
+   parentheses = "Role (Jan 2022 – Present)" (brackets are real text). */
+.doc[data-date-position="inline"] .item-heading + .item-date::before {
+  content: var(--date-separator);
+  margin-inline: 3pt 6pt;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--color-rule);
+}
+
+.doc[data-date-position="below"] .item-date {
+  display: block;
+  margin-top: 1pt;
+}
+
+.item-subheading {
+  margin-top: 1pt;
+  font-style: var(--subheading-style);
+  color: var(--subheading-color);
+}
+
+.item-link {
+  margin-top: 1pt;
+  font-family: var(--font-meta);
+  font-size: calc(var(--text-meta) * var(--font-scale));
+  color: var(--color-muted);
+}
+
+.item-description {
+  margin-top: 2pt;
+}
+
+/* Text markers (Chromium paints the default disc as a shape), so each bullet
+   starts with a real character in the extracted text. */
+.item-bullets {
+  margin-top: 3pt;
+  padding-inline-start: var(--indent-bullet);
+  list-style: disc outside;
+  list-style-type: "\2022";
+}
+
+.doc[data-bullet-style="dash"] .item-bullets {
+  list-style-type: "\2013";
+}
+
+.doc[data-bullet-style="chevron"] .item-bullets {
+  list-style-type: "\203A";
+}
+
+.item-bullets li {
+  padding-inline-start: 5pt;
+}
+
+.item-bullets li + li {
+  margin-top: var(--space-bullet);
+}
+
+.item-bullets li::marker {
+  color: var(--color-marker);
+}
+
+
+/* 6. Skills -------------------------------------------------------------------
+   Skill groups ("Tools") hold skills, each with an optional detail. The
+   detail punctuation (colon, dash, brackets) and list commas are real text
+   written by render.js, so every layout extracts as readable words. */
+
+.skill-group-title {
+  font-family: var(--font-item);
+  font-weight: var(--weight-item);
+  color: var(--skill-title-color);
+}
+
+.skill-detail {
+  color: var(--color-muted);
+}
+
+/* rows: one group per line, "Tools: A, B (Advanced), C" */
+.doc[data-skills-layout="rows"] .skill-group + .skill-group {
+  margin-top: 2pt;
+}
+
+.doc[data-skills-layout="rows"] :is(.skill-group-title, .skill-list, .skill) {
+  display: inline;
+}
+
+/* compact: every group flows in one paragraph, groups split by " · " */
+.doc[data-skills-layout="compact"] :is(.skill-group, .skill-group-title, .skill-list, .skill, .skill-group-sep) {
+  display: inline;
+}
+
+.doc[data-skills-layout="compact"] .skill-group-sep {
+  color: var(--color-rule);
+}
+
+/* grid: each group is one column (title, then its skills stacked), and a
+   single group flows its skills down even columns. Text extractors read a
+   grid either line by line or column by column; with one group per column,
+   both orders keep every skill with its own group. */
+.doc[data-skills-layout="grid"] .skills {
+  display: grid;
+  grid-template-columns: repeat(var(--skill-columns), minmax(0, 1fr));
+  gap: 6pt 14pt;
+}
+
+.doc[data-skills-layout="grid"] .skills[data-groups="1"] {
+  display: block;
+}
+
+.doc[data-skills-layout="grid"] .skills[data-groups="1"] .skill-list {
+  columns: var(--skill-columns);
+  column-gap: 14pt;
+}
+
+.doc[data-skills-layout="grid"] .skill-group-title {
+  margin-bottom: 2pt;
+}
+
+.doc[data-skills-layout="grid"] .skill-list {
+  list-style: none;
+}
+
+.doc[data-skills-layout="grid"] .skill {
+  break-inside: avoid;
+}
+
+/* bubbles: label, then each skill as a tag */
+.doc[data-skills-layout="bubbles"] .skill-group + .skill-group {
+  margin-top: 3pt;
+}
+
+.doc[data-skills-layout="bubbles"] .skill-group-title {
+  display: inline;
+  margin-inline-end: 4pt;
+}
+
+.doc[data-skills-layout="bubbles"] .skill-list {
+  display: inline;
+}
+
+.doc[data-skills-layout="bubbles"] .skill {
+  display: inline-block;
+  margin-block: 1.5pt;
+  margin-inline: 0 4pt;
+  padding: 0.5pt 7pt;
+  border: var(--pill-border);
+  border-radius: 8pt;
+  background: var(--pill-bg);
+  color: var(--pill-color);
+  line-height: 1.35;
+}
+
+
+/* 7. Bold keywords -------------------------------------------------------------
+   **text** in summaries, bullets, descriptions and letter paragraphs renders
+   as <strong class="keyword">. theme.keywordColor sets the colour. */
+
+.keyword {
+  font-weight: 700;
+  color: var(--color-keyword);
+}
+
+
+/* 8. Cover letter -------------------------------------------------------------- */
+
+.letter {
+  line-height: var(--leading-letter);
+}
+
+.letter-date {
+  margin-bottom: 12pt;
+}
+
+.letter-recipient {
+  margin-bottom: 12pt;
+  line-height: var(--leading-body);
+}
+
+.letter-recipient p:first-child {
+  font-weight: 700;
+}
+
+.letter-subject {
+  margin-bottom: 10pt;
+  font-family: var(--font-heading);
+  font-size: calc(var(--text-section) * var(--font-scale));
+  font-weight: var(--weight-section);
+  line-height: var(--leading-tight);
+  color: var(--color-section);
+}
+
+.letter-greeting {
+  margin-bottom: 8pt;
+}
+
+.letter-paragraph + .letter-paragraph {
+  margin-top: 8pt;
+}
+
+.letter-signoff {
+  margin-top: 16pt;
+}
+
+.letter-signature {
+  margin-top: 24pt;
+  font-weight: 700;
+}
+
+/* letterLayout "modified": date and sign-off start at the centre line. */
+.doc[data-letter-layout="modified"] :is(.letter-date, .letter-signoff) {
+  padding-inline-start: 50%;
+}
+
+
+/* 9. Section title styles -------------------------------------------------------
+   Also applied to the cover letter subject so the pair matches. */
+
+.doc[data-title-style="rule"] :is(.section-title, .letter-subject) {
+  padding-bottom: 2pt;
+  border-bottom: var(--title-rule);
+}
+
+.doc[data-title-style="band"] :is(.section-title, .letter-subject) {
+  padding: 2.5pt 6pt;
+  background: var(--title-band);
+}
+
+.doc[data-title-style="bar"] :is(.section-title, .letter-subject) {
+  padding-inline-start: 7pt;
+  border-inline-start: 3pt solid var(--color-accent);
+}
+
+.doc[data-title-style="pill"] :is(.section-title, .letter-subject) {
+  display: table;
+  padding: 2pt 9pt;
+  border-radius: 9pt;
+  background: var(--title-band);
+}
+
+.doc[data-title-style="flanked"] .section-title {
+  display: flex;
+  align-items: center;
+  gap: 8pt;
+}
+
+.doc[data-title-style="flanked"] .section-title::before,
+.doc[data-title-style="flanked"] .section-title::after {
+  content: "";
+  flex: 1 1 0;
+  border-top: var(--title-rule);
+}
+
+.doc[data-title-style="flanked"] .letter-subject {
+  text-align: center;
+}
+
+.doc[data-title-style="topline"] .section {
+  padding-top: 5pt;
+  border-top: var(--topline);
+}
+
+.doc[data-title-style="topline"] .letter-subject {
+  padding-top: 5pt;
+  border-top: var(--topline);
+}
+
+.doc[data-title-style="double"] :is(.section-title, .letter-subject) {
+  padding-block: 2pt;
+  border-block: var(--title-rule);
+}
+
+.doc[data-title-style="overbar"] :is(.section-title, .letter-subject)::before {
+  content: "";
+  display: block;
+  width: 22pt;
+  height: var(--title-accent);
+  margin-bottom: 4pt;
+  background: var(--color-accent);
+}
+
+.doc[data-title-style="underbar"] :is(.section-title, .letter-subject)::after {
+  content: "";
+  display: block;
+  width: 26pt;
+  height: var(--title-accent);
+  margin-top: 3pt;
+  background: var(--color-accent);
+}
+
+.doc[data-title-style="marker"] :is(.section-title, .letter-subject)::before {
+  content: "";
+  display: inline-block;
+  width: 7pt;
+  height: 7pt;
+  margin-inline-end: 6pt;
+  border-radius: 1.5pt;
+  background: var(--color-accent);
+  vertical-align: 0.5pt;
+}
+
+.doc[data-title-style="underline"] :is(.section-title, .letter-subject) {
+  display: table;
+  padding-bottom: 1.5pt;
+  border-bottom: var(--title-accent) solid var(--color-accent);
+}
+
+/* Centred titles (--title-align) keep their shrink-wrapped decoration centred. */
+.doc:is([data-title-style="pill"], [data-title-style="underline"]) .section-title {
+  margin-inline: var(--title-margin-inline, 0 auto);
+}
+
+
+/* 10. Entry and summary styles -------------------------------------------------- */
+
+.doc[data-item-style="divided"] .item + .item {
+  padding-top: var(--space-item);
+  border-top: var(--item-rule);
+}
+
+.doc[data-item-style="bordered"] .item {
+  padding-inline-start: 9pt;
+  border-inline-start: var(--item-accent);
+}
+
+/* timeline: a line down the start edge with a marker per entry. Padding, not
+   margin, between entries keeps the line unbroken. */
+.doc[data-item-style="timeline"] .item {
+  position: relative;
+  padding-inline-start: 13pt;
+  padding-bottom: var(--space-item);
+  border-inline-start: 1.25pt solid var(--color-rule);
+}
+
+.doc[data-item-style="timeline"] .item + .item {
+  margin-top: 0;
+}
+
+.doc[data-item-style="timeline"] .item::before {
+  content: "";
+  position: absolute;
+  top: 2.5pt;
+  inset-inline-start: -4.6pt;
+  width: 8pt;
+  height: 8pt;
+  border: 1.5pt solid var(--color-accent);
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.doc[data-summary-style="boxed"] .summary {
+  padding: 7pt 10pt;
+  border-radius: 2pt;
+  background: var(--summary-bg);
+}
+
+.doc[data-summary-style="quote"] .summary {
+  padding-inline-start: 9pt;
+  border-inline-start: 2pt solid var(--color-accent);
+}
+
+
+/* 11. Pagination -----------------------------------------------------------------
+   Long items may split across pages, but never between a heading and its
+   first line, and never inside a single bullet or skill group. */
+
+.resume-header,
+.section--summary,
+.item-header,
+.item-bullets li,
+.doc:not([data-skills-layout="compact"]) .skill-group,
+.letter-recipient,
+.letter-signoff {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.section-title,
+.item-header,
+.item-subheading,
+.item-link,
+.letter-subject,
+.letter-greeting {
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+p,
+li {
+  orphans: 2;
+  widows: 2;
+}
+
+
+/* 12. Density ---------------------------------------------------------------------
+   render.js adds .doc--compact when content runs past its page budget
+   (density "auto") or when asked ("compact"). Spacing only; font sizes never
+   shrink. */
+
+.doc--compact {
+  --leading-body: 1.27;
+  --leading-letter: 1.35;
+  --space-header: 8pt;
+  --space-section: 8pt;
+  --space-title: 3pt;
+  --space-item: 4pt;
+  --space-bullet: 0.5pt;
+}
+
+
+/* 13. Screen preview ---------------------------------------------------------------
+   Each document appears as a sheet of paper. The thin red line marks the end
+   of each page's content area: a preview of where print page breaks fall. */
+
+@media screen {
+  html,
+  body {
+    background: #e9ecf0;
+  }
+
+  body {
+    padding: 24px 16px 64px;
+  }
+
+  .sheet {
+    width: var(--page-width);
+    max-width: 100%;
+    min-height: var(--page-height);
+    margin: 0 auto;
+    padding: var(--page-margin-top) var(--page-margin-inline) var(--page-margin-bottom);
+    background:
+      linear-gradient(to bottom, transparent calc(100% - 1px), rgba(200, 30, 30, 0.45) calc(100% - 1px))
+        0 0 / 100% calc(var(--page-height) - var(--page-margin-top) - var(--page-margin-bottom)) repeat-y content-box,
+      #ffffff;
+    box-shadow:
+      0 1px 2px rgba(16, 24, 40, 0.08),
+      0 8px 24px rgba(16, 24, 40, 0.08);
+  }
+}
+
+@media screen and (max-width: 640px) {
+  html:not(.is-embed) .sheet {
+    padding: 24px 16px;
+  }
+}
+
+
+/* 14. Embedded preview (gallery thumbnails, ?embed=1) ---------------------------- */
+
+@media screen {
+  .is-embed,
+  .is-embed body {
+    background: #ffffff;
+  }
+
+  .is-embed body {
+    padding: 0;
+  }
+
+  .is-embed .sheet {
+    max-width: none;
+    margin: 0;
+    background: #ffffff;
+    box-shadow: none;
+  }
+}
+
+
+/* 15. Print ---------------------------------------------------------------------- */
+
+@media print {
+  html,
+  body {
+    background: #ffffff;
+  }
+
+  body {
+    padding: 0;
+  }
+
+  .sheet {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

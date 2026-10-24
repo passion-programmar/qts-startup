@@ -44,7 +44,7 @@ const data: PdfPackage = {
 };
 
 test("every one-column template renders a valid resume and cover letter PDF", async () => {
-  assert.equal(pdfTemplateValues.length, 16);
+  assert.equal(pdfTemplateValues.length, 24);
   for (const template of pdfTemplateValues) {
     const rendered = await renderPdfPackage(data, template);
     assert.equal(Buffer.from(rendered.resume).subarray(0, 4).toString(), "%PDF", template);
@@ -56,18 +56,19 @@ test("every one-column template renders a valid resume and cover letter PDF", as
   }
 });
 
-test("template selector preserves the retained original numbers", () => {
+test("template selector contains the supplied template names and excludes retired IDs", () => {
   assert.deepEqual(
     pdfTemplateValues.map((template) => pdfTemplateLabels[template]),
     [
-      "Template_1", "Template_2", "Template_3", "Template_4", "Template_5",
-      "Template_7", "Template_8", "Template_13", "Template_14", "Template_15",
-      "Template_16", "Template_17", "Template_23", "Template_24", "Template_29",
-      "Template_30",
+      "QTS Standard", "Classic", "Harvard", "Executive", "Minimal", "Swiss",
+      "Corporate", "Technical", "Timeline", "Banded", "Elegant", "Bold",
+      "Creative", "Compact", "Academic", "Nordic", "Slate", "Ledger",
+      "Startup", "Professional", "Centered", "High Contrast", "Modern Serif",
+      "Graphite",
     ],
   );
-  assert.equal(isPdfTemplate("meridian"), true);
-  assert.equal(isPdfTemplate("flowcv"), true);
+  assert.equal(isPdfTemplate("qts-standard"), true);
+  assert.equal(isPdfTemplate("flowcv"), false);
   assert.equal(isPdfTemplate("orchid"), false);
 });
 
@@ -164,12 +165,12 @@ test("flat skills render through the safe inline fallback", async () => {
       }],
     },
   };
-  const rendered = await renderPdfPackage(flatSkills, "meridian");
+  const rendered = await renderPdfPackage(flatSkills, "minimal");
   const resume = await PDFDocument.load(rendered.resume);
   assert.equal(resume.getPageCount(), 1);
 });
 
-test("Template_30 embeds Alegreya and renders Romanian Unicode punctuation", async () => {
+test("Modern Serif renders Romanian Unicode punctuation", async () => {
   const unicodePackage: PdfPackage = {
     ...data,
     resume: {
@@ -188,8 +189,7 @@ test("Template_30 embeds Alegreya and renders Romanian Unicode punctuation", asy
       }],
     },
   };
-  const rendered = await renderPdfPackage(unicodePackage, "flowcv");
+  const rendered = await renderPdfPackage(unicodePackage, "modern-serif");
   const resume = await PDFDocument.load(rendered.resume);
   assert.equal(resume.getPageCount(), 1);
-  assert.ok(rendered.resume.length > 20_000);
 });

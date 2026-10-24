@@ -1,0 +1,18 @@
+/* Centered: symmetrical, teal-accented sans with centred section titles.
+   Layout defaults: centred header, ruled uppercase titles, compact skills
+   with bracketed details.
+   Fonts: Arial. Best for: general professional use. */
+
+:root {
+  --color-accent: #155e75;
+  --color-keyword: var(--color-accent);
+  --title-align: center;
+  --title-margin-inline: auto;
+  --text-name: 24pt;
+  --date-separator: "\00B7";
+}
+
+.resume-header {
+  padding-bottom: 9pt;
+  border-bottom: 0.75pt solid var(--color-rule);
+}

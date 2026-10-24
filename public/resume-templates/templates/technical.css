@@ -1,0 +1,27 @@
+/* Technical: monospaced headings, dates and contact details with a teal
+   accent and a monospaced headline.
+   Layout defaults: lowercase titles over dashed rules, chevron bullets,
+   outlined skill tags with bracketed details.
+   Fonts: Arial + Consolas (Liberation Mono on Linux). Best for: software, data, IT. */
+
+:root {
+  --font-heading: var(--font-mono);
+  --font-name: var(--font-arial);
+  --font-meta: var(--font-mono);
+  --color-accent: #0f766e;
+  --color-keyword: var(--color-accent);
+  --color-marker: var(--color-accent);
+  --text-headline: 10.5pt;
+  --text-contact: 9pt;
+  --text-meta: 9pt;
+  --subheading-style: normal;
+  --date-separator: "\00B7";
+  --title-rule: 0.75pt dashed var(--color-accent);
+  --pill-bg: transparent;
+  --pill-border: 0.75pt solid var(--color-accent);
+}
+
+.candidate-headline {
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+}

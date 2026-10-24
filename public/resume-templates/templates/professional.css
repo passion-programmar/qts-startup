@@ -1,0 +1,26 @@
+/* Professional: Calibri with a blue accent name and generous 11pt text.
+   Layout defaults: title-case titles over a thick blue rule, three-column
+   skills grid with colon details, modified-block letter.
+   Fonts: Calibri (Carlito on Linux). Best for: business and management. */
+
+:root {
+  --font-body: var(--font-calibri);
+  --color-accent: #1d4ed8;
+  --color-keyword: var(--color-accent);
+  --title-rule: 1.5pt solid var(--color-accent);
+  --text-name: 24pt;
+  --text-contact: 10pt;
+  --text-section: 12.5pt;
+  --text-item: 11pt;
+  --text-body: 11pt;
+  --text-meta: 10pt;
+}
+
+.resume-header {
+  padding-bottom: 4pt;
+}
+
+.candidate-headline {
+  font-weight: 700;
+  color: var(--color-ink);
+}

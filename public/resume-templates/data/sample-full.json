@@ -1,0 +1,166 @@
+{
+  "$schema": "./resume.schema.json",
+  "candidate": {
+    "fullName": "Sample Candidate",
+    "email": "sample.candidate@example.com",
+    "phone": "+00 0000 000 000",
+    "location": "City, Country",
+    "linkedinUrl": "https://www.linkedin.com/in/sample-candidate",
+    "headline": "Operations & Project Coordinator",
+    "links": [{ "label": "Portfolio", "url": "https://portfolio.example.com" }]
+  },
+  "resume": {
+    "targetRole": "Project Coordinator",
+    "targetCompany": "Example Employer",
+    "summary": "Sample summary. Two to four sentences that connect the candidate's experience to the target role: years of experience and core strengths such as **project coordination** and **process improvement** first, then the kind of problems they solve, then the value they would bring to the team.",
+    "sections": [
+      {
+        "id": "experience",
+        "title": "Experience",
+        "items": [
+          {
+            "heading": "Project Coordinator",
+            "subheading": "Example Company Ltd. · City, Country",
+            "dateRange": "Jan 2022 – Present",
+            "bullets": [
+              "Sample bullet: start with an action verb, say what was done, and end with a measurable result, for example \"cut report turnaround from **[5] days to [2]**\".",
+              "Coordinated a **cross-functional team** of [n] people across [n] workstreams, keeping delivery on schedule and within budget.",
+              "Introduced a [process or tool] that improved [metric] by **[x%]**; replace with a verified achievement.",
+              "Keep each bullet to one or two lines; three to five bullets per role is usually enough."
+            ]
+          },
+          {
+            "heading": "Operations Assistant",
+            "subheading": "Example Organisation · City, Country",
+            "dateRange": "Mar 2019 – Dec 2021",
+            "bullets": [
+              "Maintained [type of] records for [n] accounts with [x%] accuracy, supporting monthly reporting.",
+              "Streamlined the [name] workflow by documenting each step and removing duplicate approvals.",
+              "Trained [n] new team members on internal tools and procedures."
+            ]
+          },
+          {
+            "heading": "Customer Service Representative",
+            "subheading": "Example Retail Group · City, Country",
+            "dateRange": "Jun 2017 – Feb 2019",
+            "bullets": [
+              "Resolved an average of [n] customer enquiries per day across phone, email and chat.",
+              "Proposed an FAQ update on [topic] that reduced repeat enquiries."
+            ]
+          }
+        ]
+      },
+      {
+        "id": "projects",
+        "title": "Projects",
+        "items": [
+          {
+            "heading": "Operations Dashboard (sample project)",
+            "subheading": "Personal project",
+            "dateRange": "2023",
+            "link": "https://portfolio.example.com/dashboard",
+            "description": "One sentence on what the project is and who it helps.",
+            "bullets": [
+              "Built with [tools]; describe your role and the measurable outcome, such as **[n] hours saved** per month."
+            ]
+          }
+        ]
+      },
+      {
+        "id": "education",
+        "title": "Education",
+        "items": [
+          {
+            "heading": "Bachelor of Science in [Field of Study]",
+            "subheading": "Example University · City, Country",
+            "dateRange": "Sep 2013 – Jun 2017",
+            "bullets": ["Relevant coursework, thesis title or capstone project (optional)."]
+          }
+        ]
+      },
+      {
+        "id": "skills",
+        "title": "Skills",
+        "type": "skills",
+        "items": [
+          {
+            "heading": "Project management",
+            "bullets": [
+              { "name": "Planning", "detail": "Advanced" },
+              { "name": "Scheduling", "detail": "Advanced" },
+              "Risk tracking",
+              "Stakeholder updates"
+            ]
+          },
+          {
+            "heading": "Tools",
+            "bullets": [
+              { "name": "Spreadsheets", "detail": "5 years" },
+              "Project tracking software",
+              "Presentation software"
+            ]
+          },
+          {
+            "heading": "Data",
+            "bullets": ["Reporting", "Data validation", "Basic dashboards"]
+          }
+        ]
+      },
+      {
+        "id": "certifications",
+        "title": "Certifications",
+        "items": [
+          { "heading": "[Certification Name]", "subheading": "Issuing Organisation", "dateRange": "2023" },
+          { "heading": "[Certification Name]", "subheading": "Issuing Organisation", "dateRange": "2021" }
+        ]
+      },
+      {
+        "id": "languages",
+        "title": "Languages",
+        "type": "skills",
+        "items": [
+          {
+            "bullets": [
+              { "name": "Language A", "detail": "Native" },
+              { "name": "Language B", "detail": "Professional" },
+              { "name": "Language C", "detail": "Basic" }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "volunteering",
+        "title": "Volunteer Experience",
+        "items": [
+          {
+            "heading": "Volunteer Coordinator",
+            "subheading": "Example Community Group · City, Country",
+            "bullets": ["Organised [n] community events with teams of up to [n] volunteers."]
+          }
+        ]
+      }
+    ]
+  },
+  "coverLetter": {
+    "recipient": {
+      "name": "[Recipient Name]",
+      "title": "Hiring Manager",
+      "company": "Example Employer",
+      "address": ["[Street Address]", "City, Country"]
+    },
+    "paragraphs": [
+      "Sample opening paragraph. Name the role, **Project Coordinator**, and say in one or two sentences why this company and this role interest you.",
+      "Sample middle paragraph. Connect two or three achievements from the resume to the job description, for example how you **coordinated a team of [n] people** or **cut turnaround time by [x%]**. Keep it specific and measurable, and avoid repeating the resume word for word.",
+      "Sample closing paragraph. Restate your interest, mention your availability for an interview, and thank the reader for their time. The whole letter should fit on one page."
+    ]
+  },
+  "theme": {
+    "template": "qts-standard",
+    "sectionOrder": ["summary", "experience", "skills", "projects", "education", "certifications", "languages", "volunteering"],
+    "hiddenSections": [],
+    "density": "auto",
+    "paper": "A4",
+    "language": "en",
+    "direction": "ltr"
+  }
+}

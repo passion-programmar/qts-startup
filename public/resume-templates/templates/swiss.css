@@ -1,0 +1,28 @@
+/* Swiss: an oversized name, strong black type and a bold red headline.
+   Layout defaults: a red rule opening each section, slash dates, a
+   four-column skills grid with colon details.
+   Fonts: Arial. Best for: marketing, product, communications. */
+
+:root {
+  --color-accent: #c8102e;
+  --color-keyword: var(--color-accent);
+  --color-name: var(--color-ink);
+  --color-section: var(--color-ink);
+  --text-name: 30pt;
+  --text-section: 12.5pt;
+  --subheading-style: normal;
+  --date-separator: "/";
+  --topline: 2pt solid var(--color-accent);
+  --skill-columns: 4;
+  --space-header: 14pt;
+}
+
+.candidate-name {
+  line-height: 1.05;
+}
+
+.candidate-headline {
+  margin-top: 4pt;
+  font-weight: 700;
+  color: var(--color-accent);
+}

@@ -1254,7 +1254,7 @@ function CurrentStatusCheckbox({
 
 function PdfTemplateField({
   id,
-  defaultValue = "heritage",
+  defaultValue = "qts-standard",
 }: {
   id: string;
   defaultValue?: PdfTemplate;

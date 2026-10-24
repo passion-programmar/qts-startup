@@ -1,0 +1,18 @@
+/* Academic: CV style in Cambria with a dark blue headline and italic dates.
+   Layout defaults: centred header, titles between two blue rules, dates
+   below titles, skill rows with bracketed details, modified-block letter.
+   Fonts: Cambria (Caladea on Linux). Best for: research, teaching, publications. */
+
+:root {
+  --font-body: var(--font-cambria);
+  --color-accent: #1e3a8a;
+  --color-name: var(--color-ink);
+  --title-rule: 0.75pt solid var(--color-accent);
+  --text-name: 21pt;
+  --text-section: 10.5pt;
+  --date-style: italic;
+}
+
+.candidate-headline {
+  color: var(--color-accent);
+}

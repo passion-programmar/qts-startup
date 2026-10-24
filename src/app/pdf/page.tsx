@@ -76,7 +76,7 @@ export default async function PdfPage() {
       location: job.location ?? "",
       description: job.description || generation?.jobDescription || "",
       generatedDocument: generation?.responseJson ?? null,
-      pdfTemplate: isPdfTemplate(job.pdfTemplate) ? job.pdfTemplate : "heritage",
+      pdfTemplate: isPdfTemplate(job.pdfTemplate) ? job.pdfTemplate : "qts-standard",
     };
   });
   return (

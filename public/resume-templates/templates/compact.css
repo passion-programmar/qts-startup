@@ -1,0 +1,41 @@
+/* Compact: tighter spacing and narrower margins for long careers that must
+   stay within two pages. Body text never goes below 10pt.
+   Layout defaults: thin ruled uppercase titles, compact skills with dashed
+   details.
+   Fonts: Arial. Best for: experienced candidates with long histories. */
+
+:root {
+  --color-accent: #334155;
+  --title-rule: 0.5pt solid var(--color-rule);
+  --text-name: 19pt;
+  --text-headline: 10.5pt;
+  --text-contact: 9pt;
+  --text-section: 10pt;
+  --text-item: 10pt;
+  --text-body: 10pt;
+  --text-meta: 9pt;
+  --leading-body: 1.28;
+  --leading-letter: 1.38;
+  --indent-bullet: 9pt;
+  --space-header: 8pt;
+  --space-section: 9pt;
+  --space-title: 3pt;
+  --space-item: 5pt;
+  --space-bullet: 0.5pt;
+  --page-margin-top: 12mm;
+  --page-margin-inline: 14mm;
+  --page-margin-bottom: 14mm;
+}
+
+@page {
+  margin: 12mm 14mm 14mm;
+}
+
+.resume-header {
+  padding-bottom: 6pt;
+  border-bottom: 1pt solid var(--color-accent);
+}
+
+.contact {
+  margin-top: 4pt;
+}

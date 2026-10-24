@@ -1,0 +1,56 @@
+<!doctype html>
+<!--
+  QTS resume · cover letter page
+  Renders the cover letter that pairs with resume.html, from the same JSON
+  (candidate + resume + coverLetter) and the same template:
+    cover-letter.html?template=classic&data=data/sample-full.json
+
+  For PDF generation, use it exactly like resume.html (see README.md). The
+  letter is designed to fit on one page.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Cover Letter</title>
+  <meta name="author" content="">
+  <meta name="description" content="">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/app.css">
+  <!-- js/render.js adds the template stylesheet (templates/<id>.css) here. -->
+</head>
+<body data-document="cover-letter">
+
+  <div class="toolbar no-print" role="toolbar" aria-label="Preview controls">
+    <a class="toolbar-link" href="index.html">All templates</a>
+    <nav class="toolbar-switch" aria-label="Document">
+      <a data-doc-link="resume.html" href="resume.html">Resume</a>
+      <a data-doc-link="cover-letter.html" href="cover-letter.html">Cover letter</a>
+    </nav>
+    <label class="toolbar-field">
+      <span>Template</span>
+      <select id="template-select"></select>
+    </label>
+    <label class="toolbar-field">
+      <span>Load JSON</span>
+      <input type="file" id="data-file" accept=".json,application/json">
+    </label>
+    <button type="button" class="toolbar-button" id="print-button">Print / Save as PDF</button>
+    <output class="toolbar-status" id="render-status" aria-live="polite"></output>
+  </div>
+
+  <main id="resume-root" class="resume-root">
+    <noscript>
+      <p class="load-error">This page needs JavaScript to turn the JSON data into a cover letter.</p>
+    </noscript>
+  </main>
+
+  <!-- Optional: embed the JSON here instead of loading a file.
+  <script type="application/json" id="resume-data">{ "candidate": { ... }, "resume": { ... }, "coverLetter": { ... } }</script>
+  -->
+
+  <script src="js/templates.js"></script>
+  <script src="js/render.js"></script>
+</body>
+</html>

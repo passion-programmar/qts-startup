@@ -166,7 +166,7 @@ export const profiles = pgTable(
     firstName: text("first_name"),
     lastName: text("last_name"),
     birthday: date("birthday", { mode: "string" }),
-    pdfTemplate: text("pdf_template").default("heritage").notNull(),
+    pdfTemplate: text("pdf_template").default("qts-standard").notNull(),
     candidateEmail: text("candidate_email"),
     phone: text("phone"),
     headline: text("headline"),
@@ -191,7 +191,7 @@ export const profiles = pgTable(
       .where(sql`${table.candidateEmail} is not null`),
     check(
       "profiles_pdf_template_check",
-      sql`${table.pdfTemplate} in ('heritage', 'laurel', 'vellum', 'pewter', 'regent', 'onyx', 'palette', 'indigo', 'amber-crest', 'garnet', 'reef', 'verdant', 'ember', 'terminal', 'meridian', 'flowcv')`,
+      sql`${table.pdfTemplate} in ('qts-standard', 'classic', 'harvard', 'executive', 'minimal', 'swiss', 'corporate', 'technical', 'timeline', 'banded', 'elegant', 'bold', 'creative', 'compact', 'academic', 'nordic', 'slate', 'ledger', 'startup', 'professional', 'centered', 'high-contrast', 'modern-serif', 'graphite')`,
     ),
   ],
 );

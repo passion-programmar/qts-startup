@@ -1,0 +1,29 @@
+/* Classic: traditional Georgia serif in black ink with a double rule under
+   the name and a dark red headline.
+   Layout defaults: title-case ruled titles, dates in parentheses, skills as
+   one flowing paragraph, modified-block letter.
+   Fonts: Georgia. Best for: law, finance, administration. */
+
+:root {
+  --font-body: var(--font-georgia);
+  --color-accent: #7f1d1d;
+  --color-name: var(--color-ink);
+  --color-section: var(--color-ink);
+  --title-rule: 0.75pt solid var(--color-ink);
+  --text-name: 24pt;
+  --text-section: 12pt;
+  --text-item: 10.5pt;
+  --text-body: 10pt;
+  --text-meta: 9.5pt;
+  --leading-body: 1.38;
+  --headline-style: italic;
+}
+
+.resume-header {
+  padding-bottom: 7pt;
+  border-bottom: 3pt double var(--color-ink);
+}
+
+.candidate-headline {
+  color: var(--color-accent);
+}

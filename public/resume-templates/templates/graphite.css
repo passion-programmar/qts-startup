@@ -1,0 +1,21 @@
+/* Graphite: a dark grey palette with a bold uppercase headline.
+   Layout defaults: uppercase titles underlined beneath the words, slash
+   dates, chevron bullets, grey skill tags with dashed details,
+   modified-block letter.
+   Fonts: Arial. Best for: engineering, architecture, analytics. */
+
+:root {
+  --color-accent: #374151;
+  --color-name: #111827;
+  --title-accent: 2pt;
+  --text-name: 24pt;
+  --text-headline: 10.5pt;
+  --date-separator: "/";
+}
+
+.candidate-headline {
+  margin-top: 3pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--color-accent);
+}
