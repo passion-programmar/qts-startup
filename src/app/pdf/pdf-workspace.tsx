@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
+import { paginatePdfCanvas } from "@/app/pdf/pdf-pagination";
 import sampleFull from "@/app/pdf/sample-full.json";
 import {
   isPdfTemplate,
@@ -813,20 +814,33 @@ async function renderTemplatePdf(
   });
 
   const pixelsPerMm = canvas.width / pageWidthMm;
-  // The preview's page guides repeat over the usable content height, not full paper height.
-  const firstPageContentEndMm = pageHeightMm - pageMarginBottomMm;
-  const estimatedPageCount = Math.max(
-    1,
-    Math.ceil(((canvas.height / pixelsPerMm - pageMarginTopMm - pageMarginBottomMm) / pageContentHeightMm) - 0.01),
-  );
-  const renderedPageCount = Number.parseInt(root.dataset.pages ?? "", 10);
-  const pageCount = Math.max(
-    estimatedPageCount,
-    Number.isFinite(renderedPageCount) && renderedPageCount > 0 ? renderedPageCount : 1,
+  const articleRect = article.getBoundingClientRect();
+  const cssPixelsPerMm = articleRect.width / pageWidthMm;
+  const breakConstraints = Array.from(article.querySelectorAll<HTMLElement>(
+    ".resume-header, .section--summary, .section-title, .item-header, .item-subheading, .item-link, "
+      + ".item-bullets li, .doc:not([data-skills-layout=\"compact\"]) .skill-group, "
+      + ".letter-recipient, .letter-signoff, .letter-subject, .letter-greeting",
+  ))
+    .map((element) => {
+      const style = window.getComputedStyle(element);
+      if (style.breakInside !== "avoid" && style.breakAfter !== "avoid") return null;
+      const bounds = element.getBoundingClientRect();
+      return {
+        startMm: (bounds.top - articleRect.top) / cssPixelsPerMm,
+        endMm: (bounds.bottom - articleRect.top) / cssPixelsPerMm,
+      };
+    })
+    .filter((range): range is { startMm: number; endMm: number } => range !== null);
+  const pageSlices = paginatePdfCanvas(
+    canvas.height / pixelsPerMm,
+    pageHeightMm,
+    pageMarginTopMm,
+    pageMarginBottomMm,
+    breakConstraints,
   );
   const { PDFDocument } = await import("pdf-lib");
   const pdf = await PDFDocument.create();
-  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+  for (const [pageIndex, pageSlice] of pageSlices.entries()) {
     const pageCanvas = document.createElement("canvas");
     pageCanvas.width = canvas.width;
     pageCanvas.height = Math.ceil(pixelsPerMm * pageHeightMm);
@@ -834,15 +848,11 @@ async function renderTemplatePdf(
     if (!context) throw new Error("The browser could not prepare a PDF page.");
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-    const sourceStartMm = pageIndex === 0
-      ? 0
-      : firstPageContentEndMm + (pageIndex - 1) * pageContentHeightMm;
-    const sourceEndMm = firstPageContentEndMm + pageIndex * pageContentHeightMm;
-    const sourceY = Math.round(sourceStartMm * pixelsPerMm);
+    const sourceY = Math.round(pageSlice.sourceStartMm * pixelsPerMm);
     const sourceHeight = Math.max(
       0,
       Math.min(
-        Math.round(sourceEndMm * pixelsPerMm) - sourceY,
+        Math.round(pageSlice.sourceEndMm * pixelsPerMm) - sourceY,
         canvas.height - sourceY,
       ),
     );
