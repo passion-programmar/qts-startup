@@ -857,7 +857,7 @@ async function renderTemplatePdf(
       ),
     );
     if (sourceHeight) {
-      const destinationY = pageIndex === 0 ? 0 : Math.round(pageMarginTopMm * pixelsPerMm);
+      const destinationY = Math.round(pageMarginTopMm * pixelsPerMm);
       context.drawImage(
         canvas,
         0,
