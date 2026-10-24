@@ -337,13 +337,14 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.equal(serviceWorker.includes('Generation must be started from a job page.'), false);
   assert.ok(serviceWorker.includes('Checking the oldest eligible saved job'));
   assert.ok(serviceWorker.includes('pinned: true'));
-  assert.ok(serviceWorker.includes('while (Date.now() - waitStartedAt < 120000)'));
+  assert.ok(serviceWorker.includes('while (Date.now() - waitStartedAt < GENERATION_RESPONSE_MAX_WAIT_MS)'));
+  assert.ok(serviceWorker.includes('GENERATION_RESPONSE_START_TIMEOUT_MS'));
   assert.ok(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'));
   assert.ok(serviceWorker.includes('persistGenerationQueueRun(runId, excludedJobIds)'));
   assert.ok(serviceWorker.includes('notifyGenerationManager'));
   assert.ok(serviceWorker.includes('ACTIVE_GENERATION_JOB_KEY'));
   assert.ok(serviceWorker.includes('removeQueuedGenerationDownloads(downloadIds)'));
-  assert.ok(cancelAllRoute.includes('generationStatus: "queued"'));
+  assert.ok(cancelAllRoute.includes('generationStatus: "cancelled"'));
   assert.ok(cancelAllRoute.includes('eq(jobs.generationStatus, "processing")'));
   assert.ok(cancelAllRoute.includes('generationAttemptCount: sql`greatest'));
   assert.equal(cancelAllRoute.includes('status: sql`case when'), false);
@@ -357,6 +358,46 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(claimRoute.includes('isNull(jobs.resumeLocalPath)'));
   assert.ok(claimRoute.includes('lt(jobs.generationAttemptCount, 2)'));
   assert.ok(claimRoute.includes('if (activeJob)'));
+});
+
+test('cancelled Generation jobs stay out of the queue until queued again', () => {
+  const routeSource = (name) => fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'generation', name, 'route.ts'),
+    'utf8',
+  );
+  const schema = fs.readFileSync(path.join(extensionRoot, '..', 'src', 'db', 'schema.ts'), 'utf8');
+  const jobActions = fs.readFileSync(path.join(extensionRoot, '..', 'src', 'app', 'jobs', 'actions.ts'), 'utf8');
+
+  assert.ok(schema.includes('"cancelled",'));
+  assert.ok(routeSource('cancel').includes('generationStatus: "cancelled"'));
+  assert.ok(routeSource('fail').includes('generationStatus: "cancelled"'));
+  assert.ok(jobActions.includes('generationStatus: "cancelled"'));
+  assert.equal(routeSource('claim').includes('"cancelled"'), false);
+  assert.ok(routeSource('queue').includes('["not_queued", "failed", "cancelled"]'));
+});
+
+test('queued Generation recovers from restarts, lost finalize responses, and sign-out', () => {
+  const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  const queueLoop = worker.slice(
+    worker.indexOf('async function processQueuedGenerationJobs()'),
+    worker.indexOf('self.chrome?.runtime?.onStartup'),
+  );
+  const signOutBranch = worker.slice(
+    worker.indexOf("if (action === 'sign_out')"),
+    worker.indexOf("if (action === 'cancel_status')"),
+  );
+  const heartbeat = worker.slice(
+    worker.indexOf('async function ensureQueuedGenerationIsActive(jobId)'),
+    worker.indexOf('async function readQueuedGenerationStatus(jobId)'),
+  );
+
+  assert.ok(queueLoop.indexOf('await recoverInterruptedGeneration()') < queueLoop.indexOf("'/api/extension/generation/claim'"));
+  assert.ok(queueLoop.indexOf("if (serverStatus === 'completed')") < queueLoop.indexOf('removeQueuedGenerationDownloads(downloadIds)'));
+  assert.ok(queueLoop.includes('!deliveryUnknown'));
+  assert.ok(signOutBranch.indexOf("'/api/extension/generation/release'") < signOutBranch.indexOf('clearAuth'));
+  assert.ok(heartbeat.includes('result._httpStatus === 409) throw generationCancelledError()'));
+  assert.ok(heartbeat.includes('GENERATION_HEARTBEAT_GRACE_MS'));
+  assert.equal(worker.includes("throw new Error('Generation cancelled.')"), false);
 });
 
 test('queued Generation prompts use saved job and profile data only', () => {

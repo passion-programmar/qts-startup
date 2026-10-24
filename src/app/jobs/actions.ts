@@ -173,7 +173,7 @@ export async function setJobGenerationQueueAction(
     }
     const processing = job.generationStatus === "processing";
     const [cancelled] = await db.update(jobs).set({
-      generationStatus: processing ? "queued" : "not_queued",
+      generationStatus: "cancelled",
       ...(processing
         ? { generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)` }
         : {}),

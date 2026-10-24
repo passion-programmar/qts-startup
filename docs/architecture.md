@@ -35,9 +35,12 @@ The supported browser-extension workflow is deliberately narrow:
    processes queued jobs sequentially through the job page and ChatGPT, then
    downloads résumé PDF, cover-letter PDF, and JD text files locally, and
    records the expected local resume path on the Jobs row.
-   Generation cancellation resets the application status to `todo` and
-   clears the resume path, and attempts to remove files already downloaded by
-   that run. Generation does not mark the job as applied; `applied` means the
+   Cancelling Generation marks the job `cancelled`, refunds the attempt in
+   progress, and removes files already downloaded by that run. Cancelled jobs
+   are not claimed again until the Manager queues them from the Jobs page.
+   If the service worker restarts mid-run, the next queue tick returns the
+   interrupted job to the queue; signing out does the same before the token
+   is cleared. Generation does not mark the job as applied; `applied` means the
    application was submitted successfully. The extension's Generation action
    can cancel an active run, including a queued run; Apply remains a release
    placeholder.

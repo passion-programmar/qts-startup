@@ -59,6 +59,11 @@ const getJdLastPageByTab = new Map();
 const generationInFlightTabs = new Set();
 const generationCancellationByTab = new Map();
 let generationQueueInFlight = false;
+const generationHeartbeatOkAt = new Map();
+// The server lease lasts 20 minutes, so brief heartbeat outages are safe to ride out.
+const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
+const GENERATION_RESPONSE_START_TIMEOUT_MS = 3 * 60 * 1000;
+const GENERATION_RESPONSE_MAX_WAIT_MS = 10 * 60 * 1000;
 const GENERATION_QUEUE_ALARM = 'qts-generation-queue';
 let lastSourceTabId = null;
 const lastAutoDetectKeyByTab = new Map();
@@ -2765,7 +2770,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
 
   function ensureGenerationIsActive(jobTabId, cancellationToken) {
     if (generationCancellationByTab.get(jobTabId) !== cancellationToken) {
-      throw new Error('Generation cancelled.');
+      throw generationCancelledError();
     }
   }
 
@@ -2785,12 +2790,27 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       '/api/extension/generation/heartbeat',
       { jobId },
     );
-    if (!result.success) {
-      throw new Error(result.message || 'Could not check Generation status.');
+    if (result.success) {
+      if (result.generationStatus !== 'processing') throw generationCancelledError();
+      generationHeartbeatOkAt.set(jobId, Date.now());
+      return;
     }
-    if (result.generationStatus !== 'processing') {
-      throw generationCancelledError();
+    // 409 means the job is no longer processing, for example after a cancel.
+    if (result._httpStatus === 409) throw generationCancelledError();
+    const transient = !result._sessionExpired && result.message !== 'Not logged in.';
+    if (transient && Date.now() - (generationHeartbeatOkAt.get(jobId) || 0) < GENERATION_HEARTBEAT_GRACE_MS) {
+      console.warn('[QTS Generation] Heartbeat failed; retrying on the next check:', result.message);
+      return;
     }
+    throw new Error(result.message || 'Could not check Generation status.');
+  }
+
+  async function readQueuedGenerationStatus(jobId) {
+    const result = await workerApiRequest(
+      'GET',
+      `/api/extension/generation/status?jobId=${encodeURIComponent(jobId)}`,
+    );
+    return result.success && typeof result.generationStatus === 'string' ? result.generationStatus : '';
   }
 
   async function runGenerationForTab(jobTabId, queuedJob = null) {
@@ -2812,6 +2832,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         phase: 'preparing_prompt',
         jobId: queuedJob.id,
         jobTabId,
+        jobUrl: queuedJob.jobUrl,
       });
       await ensureQueuedGenerationIsActive(queuedJob.id);
       await showGenerationPageStatus(jobTabId, 'Preparing the prompt from the saved job and candidate profile...');
@@ -2869,7 +2890,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       let stableSince = 0;
       let responseText = '';
       let lastStatusCheck = 0;
-      while (Date.now() - waitStartedAt < 120000) {
+      let responseStarted = false;
+      while (Date.now() - waitStartedAt < GENERATION_RESPONSE_MAX_WAIT_MS) {
         await sleep(750);
         ensureGenerationIsActive(cancellationKey, cancellationToken);
         if (Date.now() - lastStatusCheck >= 3000) {
@@ -2877,6 +2899,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           lastStatusCheck = Date.now();
         }
         const snapshot = await scannerChatGptSnapshot(chatTab.id, generationId);
+        if (snapshot?.isNew && (snapshot.text || snapshot.generating)) responseStarted = true;
+        if (!responseStarted && Date.now() - waitStartedAt >= GENERATION_RESPONSE_START_TIMEOUT_MS) break;
         if (!snapshot?.isNew || !snapshot.text || snapshot.generating) {
           previousText = '';
           stableSince = 0;
@@ -2892,7 +2916,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           break;
         }
       }
-      if (!responseText) throw new Error('Timed out waiting for ChatGPT to finish. Check the ChatGPT tab before retrying.');
+      if (!responseText) {
+        throw new Error(responseStarted
+          ? 'Timed out waiting for ChatGPT to finish. Check the ChatGPT tab before retrying.'
+          : 'ChatGPT did not start responding. Check the ChatGPT tab before retrying.');
+      }
       ensureGenerationIsActive(cancellationKey, cancellationToken);
       await ensureQueuedGenerationIsActive(queuedJob.id);
       await updateGenerationBrowserState({ phase: 'validating_response' });
@@ -3110,9 +3138,70 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
   }
 
+  async function reportQueuedGenerationDelivered(jobTabId) {
+    await updateGenerationBrowserState({ phase: 'completed' });
+    await showGenerationPageStatus(
+      jobTabId,
+      'Generation complete. Resume, cover letter, and JD text were downloaded.',
+      'success',
+    );
+  }
+
+  async function closeInterruptedGenerationTabs(browserState) {
+    const sameOrigin = (url, expectedUrl) => {
+      try {
+        return new URL(url).origin === new URL(expectedUrl).origin;
+      } catch {
+        return false;
+      }
+    };
+    const runTabs = [
+      [browserState?.chatTabId, (tab) => tab.pinned && isChatGptHostUrl(tab.url || tab.pendingUrl || '')],
+      [browserState?.jobTabId, (tab) => sameOrigin(tab.url || tab.pendingUrl || '', browserState?.jobUrl)],
+    ];
+    for (const [tabId, belongsToRun] of runTabs) {
+      if (!Number.isInteger(tabId)) continue;
+      try {
+        // Tab IDs restart with the browser, so only close a tab that still looks like this run's tab.
+        const tab = await chrome.tabs.get(tabId);
+        if (belongsToRun(tab)) await chrome.tabs.remove(tabId);
+      } catch {
+        // The tab is already closed.
+      }
+    }
+  }
+
+  async function recoverInterruptedGeneration() {
+    const stored = await chrome.storage.local.get([
+      ACTIVE_GENERATION_JOB_KEY,
+      GENERATION_BROWSER_STATE_KEY,
+      EXTENSION_STATUS_KEY,
+    ]);
+    const jobId = stored[ACTIVE_GENERATION_JOB_KEY];
+    if (typeof jobId !== 'string' || !jobId) return;
+    // No run is in flight, so a previous service-worker instance stopped mid-job.
+    const cancelRequested = stored[EXTENSION_STATUS_KEY] === 'cancel';
+    const recovered = await workerApiRequest(
+      'POST',
+      cancelRequested ? '/api/extension/generation/cancel' : '/api/extension/generation/release',
+      { jobId },
+    );
+    if (!recovered.success && !recovered._httpStatus && recovered.message !== 'Not logged in.') {
+      return;
+    }
+    await closeInterruptedGenerationTabs(stored[GENERATION_BROWSER_STATE_KEY]);
+    await chrome.storage.local.remove([ACTIVE_GENERATION_JOB_KEY, GENERATION_BROWSER_STATE_KEY]);
+    if (cancelRequested) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+  }
+
   async function processQueuedGenerationJobs() {
     if (generationQueueInFlight) return;
     generationQueueInFlight = true;
+    try {
+      await recoverInterruptedGeneration();
+    } catch (error) {
+      console.error('[QTS Generation] Could not recover an interrupted job:', error);
+    }
     let runId = '';
     const excludedJobIds = new Set();
     let completedCount = 0;
@@ -3183,7 +3272,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const queuedJob = claim.job;
         let jobTabId = null;
         let generationId = '';
+        let finalizeAttempted = false;
         const downloadIds = [];
+        generationHeartbeatOkAt.set(queuedJob.id, Date.now());
         try {
           if (
             typeof queuedJob.id !== 'string' ||
@@ -3204,6 +3295,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             });
             if (jobTab?.id == null) throw new Error('The browser did not return a job tab.');
             jobTabId = jobTab.id;
+            await updateGenerationBrowserState({ jobId: queuedJob.id, jobTabId, jobUrl: queuedJob.jobUrl });
             await waitForTabSettled(jobTabId);
           } catch (error) {
             console.warn(
@@ -3215,36 +3307,41 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           generationId = result.generationId;
           await updateGenerationBrowserState({ phase: 'downloading' });
           await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds);
+          finalizeAttempted = true;
           const finalized = await workerApiRequest(
             'POST',
             '/api/extension/generation/finalize',
             { jobId: queuedJob.id, generationId: result.generationId },
           );
           if (!finalized.success) {
-            await ensureQueuedGenerationIsActive(queuedJob.id);
             throw new Error(finalized.message || 'QTS could not finish the queued job.');
           }
-          await updateGenerationBrowserState({ phase: 'completed' });
-          await showGenerationPageStatus(
-            jobTabId,
-            'Generation complete. Resume, cover letter, and JD text were downloaded.',
-            'success',
-          );
+          await reportQueuedGenerationDelivered(jobTabId);
           completedCount += 1;
         } catch (error) {
           let handledError = error;
-          if (!isGenerationCancelled(handledError)) {
-            try {
-              await ensureQueuedGenerationIsActive(queuedJob.id);
-            } catch (statusError) {
-              if (isGenerationCancelled(statusError)) handledError = statusError;
-            }
+          const serverStatus = await readQueuedGenerationStatus(queuedJob.id);
+          if (serverStatus === 'completed') {
+            // Finalize committed even though its response was lost; keep the delivered files.
+            await reportQueuedGenerationDelivered(jobTabId);
+            completedCount += 1;
+            continue;
+          }
+          if (serverStatus && !['processing', 'failed'].includes(serverStatus)) {
+            handledError = generationCancelledError();
           }
           const reason = handledError instanceof Error ? handledError.message : 'Generation failed.';
-          if (downloadIds.length > 0) {
+          // Without a status answer, a sent finalize may have committed, so the files might be the delivery.
+          const deliveryUnknown = finalizeAttempted && !serverStatus;
+          if (downloadIds.length > 0 && !deliveryUnknown) {
             await removeQueuedGenerationDownloads(downloadIds);
           }
-          if (handledError?.name === 'GenerationSetupError') {
+          if (deliveryUnknown) {
+            await notifyGenerationManager(
+              `QTS could not confirm whether ${queuedJob.jobTitle || 'a job'} was delivered. The downloaded files were kept; check the Jobs page.`,
+            );
+            shouldStop = true;
+          } else if (handledError?.name === 'GenerationSetupError') {
             const released = await workerApiRequest(
               'POST',
               '/api/extension/generation/release',
@@ -3282,7 +3379,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             );
             excludedJobIds.add(queuedJob.id);
             await persistGenerationQueueRun(runId, excludedJobIds);
-            await notifyGenerationManager('Generation was cancelled. The current job has been returned to the queue.');
+            await notifyGenerationManager('Generation was cancelled. Queue the job again from the Jobs page to retry it.');
           }
           if (jobTabId != null) {
             await showGenerationPageStatus(
@@ -3292,6 +3389,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             );
           }
         } finally {
+          generationHeartbeatOkAt.delete(queuedJob.id);
           if (jobTabId != null) {
             try {
               await chrome.tabs.remove(jobTabId);
@@ -4201,6 +4299,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'sign_out') {
+        const activeGeneration = await chrome.storage.local.get(ACTIVE_GENERATION_JOB_KEY);
+        const activeJobId = activeGeneration[ACTIVE_GENERATION_JOB_KEY];
+        if (typeof activeJobId === 'string' && activeJobId) {
+          // Return the running job to the queue while the token can still authorize the request.
+          const released = await workerApiRequest(
+            'POST',
+            '/api/extension/generation/release',
+            { jobId: activeJobId },
+          );
+          if (!released.success) {
+            console.warn('[QTS Generation] Could not release the running job before sign-out:', released.message);
+          }
+        }
         await self.__qtsAccountAuth?.clearAuth?.();
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
         getJdInFlightTabs.clear();
@@ -4214,18 +4325,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (action === 'cancel_status') {
         const stored = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         const cancelledStatus = stored[EXTENSION_STATUS_KEY];
+        let serverCancelError = '';
         if (cancelledStatus === 'generation') {
+          // Stop locally even if the server is unreachable; the run's cancel path retries server-side.
           const cancellation = await workerApiRequest(
             'POST',
             '/api/extension/generation/cancel-all',
             {},
           );
           if (!cancellation.success) {
-            sendResponse({
-              ok: false,
-              error: cancellation.message || 'Could not cancel the Generation queue.',
-            });
-            return;
+            serverCancelError = cancellation.message || 'Could not reach QTS.';
           }
         }
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
@@ -4251,7 +4360,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ok: true,
           status: 'cancel',
           cancelledStatus,
-          message: `${cancelledLabel} cancelled.`,
+          message: serverCancelError
+            ? `${cancelledLabel} stopped in this browser. QTS was not updated yet: ${serverCancelError}`
+            : `${cancelledLabel} cancelled.`,
         });
         return;
       }

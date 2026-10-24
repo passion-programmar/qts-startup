@@ -62,7 +62,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const eligibleRows = rows.filter((row) =>
-      ["not_queued", "queued", "processing", "failed"].includes(row.generationStatus)
+      ["not_queued", "queued", "processing", "failed", "cancelled"].includes(row.generationStatus)
       && row.generationAttemptCount < 2
       && Boolean(row.description?.trim())
       && Boolean(row.jdMatching?.trim())
@@ -88,7 +88,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         .where(and(
           eq(jobs.managerId, manager.id),
           inArray(jobs.id, queueableIds),
-          inArray(jobs.generationStatus, ["not_queued", "failed"]),
+          inArray(jobs.generationStatus, ["not_queued", "failed", "cancelled"]),
           lt(jobs.generationAttemptCount, 2),
           isNull(jobs.resumeLocalPath),
           sql`length(btrim(${jobs.description})) > 0`,

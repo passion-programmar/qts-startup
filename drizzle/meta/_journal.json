@@ -330,6 +330,13 @@
       "when": 1792845912268,
       "tag": "0046_generation_attempt_count",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1792850563515,
+      "tag": "0047_generation_cancelled_status",
+      "breakpoints": true
     }
   ]
 }

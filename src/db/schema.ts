@@ -50,6 +50,7 @@ export const generationQueueStatus = pgEnum("generation_queue_status", [
   "processing",
   "completed",
   "failed",
+  "cancelled",
 ]);
 
 export const categories = pgTable(

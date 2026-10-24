@@ -17,7 +17,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const cancelled = await db
       .update(jobs)
       .set({
-        generationStatus: "queued",
+        generationStatus: "cancelled",
         generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)`,
         generationError: null,
         generationLeaseExpiresAt: null,
