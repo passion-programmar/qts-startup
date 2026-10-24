@@ -1,7 +1,7 @@
 "use client";
 
 import html2canvas from "html2canvas";
-import { Download } from "lucide-react";
+import { Download, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PdfPackage } from "@/app/pdf/document-data";
@@ -115,7 +115,21 @@ export function PdfWorkspace({
 
   return (
     <main className="py-1">
-      <header className="mb-7"><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PDF</h1><p className="mt-1 text-sm text-slate-500">Create a matching resume and cover letter from one JSON object. Processing stays in this browser.</p></header>
+      <header className="mb-7 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PDF</h1>
+          <p className="mt-1 text-sm text-slate-500">Create a matching resume and cover letter from one JSON object. Processing stays in this browser.</p>
+        </div>
+        <a
+          className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
+          href="/resume-template"
+          rel="noreferrer"
+          target="_blank"
+        >
+          <ExternalLink className="size-4" />
+          Resume
+        </a>
+      </header>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,3.5fr)_minmax(0,6fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 px-5 py-4"><h2 className="font-semibold">Document package</h2><p className="text-xs text-slate-500">{prettySize} bytes · resume + cover letter</p><p className="mt-1 text-xs font-semibold text-blue-700">{pdfTemplateLabels[selectedTemplate]} template</p></div>
