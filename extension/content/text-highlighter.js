@@ -1,13 +1,22 @@
+// ChatGPT is driven by Generation and streams constantly, so highlighting there only costs CPU.
+const TEXT_HIGHLIGHT_SKIPPED_HOSTS = /(^|\.)(chatgpt\.com|chat\.openai\.com)$/i;
+// Page changes are batched so busy pages are rescanned at most twice a second.
+const TEXT_HIGHLIGHT_BATCH_MS = 500;
+
 async function startPageTextHighlighter() {
   if (globalThis.__qtsPageTextHighlighter) return;
+  if (TEXT_HIGHLIGHT_SKIPPED_HOSTS.test(location.hostname)) return;
 
   const highlighting = globalThis.__qtsTextHighlighting;
   if (!highlighting || !globalThis.chrome?.storage?.local) return;
 
   let currentStorageKey = '';
   let currentRules = [];
-  let observer = null;
-  let refreshQueued = false;
+  let ruleMatcher = null;
+  const observer = new MutationObserver(queueChangedNodes);
+  const pendingNodes = new Set();
+  let batchTimer = null;
+  const excluded = 'script,style,noscript,textarea,option,[contenteditable="true"],[data-qts-text-highlight]';
 
   function waitForDocumentBody() {
     if (document.body) return Promise.resolve();
@@ -35,57 +44,105 @@ async function startPageTextHighlighter() {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function applyRules(rules) {
-    if (!document.body) return;
-    unwrapHighlights();
-    if (!rules.length) return;
-
+  function buildRuleMatcher(rules) {
+    if (!rules.length) return null;
     const orderedRules = [...rules].sort((left, right) => right.text.length - left.text.length);
     const byText = new Map();
     for (const rule of orderedRules) {
       const key = rule.text.toLowerCase();
       if (!byText.has(key)) byText.set(key, rule);
     }
-    const matcher = new RegExp(orderedRules.map((rule) => escapeRegExp(rule.text)).join('|'), 'giu');
-    const excluded = 'script,style,noscript,textarea,option,[contenteditable="true"],[data-qts-text-highlight]';
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        const parent = node.parentElement;
-        if (!node.nodeValue || !parent || parent.closest(excluded)) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    });
+    const pattern = new RegExp(orderedRules.map((rule) => escapeRegExp(rule.text)).join('|'), 'giu');
+    return { pattern, byText };
+  }
+
+  function highlightTextNode(textNode) {
+    const source = textNode.nodeValue;
+    const parent = textNode.parentElement;
+    if (!source || !parent || parent.closest(excluded)) return;
+    const { pattern, byText } = ruleMatcher;
+    pattern.lastIndex = 0;
+    let match;
+    let cursor = 0;
+    let matched = false;
+    const fragment = document.createDocumentFragment();
+    while ((match = pattern.exec(source))) {
+      const rule = byText.get(match[0].toLowerCase());
+      if (!rule) continue;
+      if (match.index > cursor) {
+        fragment.append(document.createTextNode(source.slice(cursor, match.index)));
+      }
+      const mark = document.createElement('mark');
+      mark.dataset.qtsTextHighlight = rule.id;
+      mark.textContent = match[0];
+      mark.style.color = rule.textColor;
+      mark.style.backgroundColor = rule.backgroundColor;
+      mark.style.boxDecorationBreak = 'clone';
+      fragment.append(mark);
+      cursor = pattern.lastIndex;
+      matched = true;
+    }
+    if (matched) {
+      if (cursor < source.length) fragment.append(document.createTextNode(source.slice(cursor)));
+      textNode.replaceWith(fragment);
+    }
+  }
+
+  function highlightWithin(root) {
+    if (!ruleMatcher || !root?.isConnected) return;
+    if (root.nodeType === Node.TEXT_NODE) {
+      highlightTextNode(root);
+      return;
+    }
+    if (root.nodeType !== Node.ELEMENT_NODE || root.closest(excluded)) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
+    for (const textNode of textNodes) highlightTextNode(textNode);
+  }
 
-    for (const textNode of textNodes) {
-      const source = textNode.nodeValue;
-      matcher.lastIndex = 0;
-      let match;
-      let cursor = 0;
-      let matched = false;
-      const fragment = document.createDocumentFragment();
-      while ((match = matcher.exec(source))) {
-        const rule = byText.get(match[0].toLowerCase());
-        if (!rule) continue;
-        if (match.index > cursor) {
-          fragment.append(document.createTextNode(source.slice(cursor, match.index)));
-        }
-        const mark = document.createElement('mark');
-        mark.dataset.qtsTextHighlight = rule.id;
-        mark.textContent = match[0];
-        mark.style.color = rule.textColor;
-        mark.style.backgroundColor = rule.backgroundColor;
-        mark.style.boxDecorationBreak = 'clone';
-        fragment.append(mark);
-        cursor = matcher.lastIndex;
-        matched = true;
-      }
-      if (matched) {
-        if (cursor < source.length) fragment.append(document.createTextNode(source.slice(cursor)));
-        textNode.replaceWith(fragment);
-      }
+  function observePage() {
+    if (ruleMatcher && document.body) {
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     }
+  }
+
+  // Our own DOM edits must not be observed, or every highlight would trigger another pass.
+  function withoutObserving(change) {
+    observer.disconnect();
+    try {
+      change();
+    } finally {
+      observePage();
+    }
+  }
+
+  function applyRules(rules) {
+    if (!document.body) return;
+    observer.disconnect();
+    pendingNodes.clear();
+    unwrapHighlights();
+    ruleMatcher = buildRuleMatcher(rules);
+    withoutObserving(() => highlightWithin(document.body));
+  }
+
+  function queueChangedNodes(records) {
+    for (const record of records) {
+      if (record.type === 'characterData') pendingNodes.add(record.target);
+      else for (const node of record.addedNodes) pendingNodes.add(node);
+    }
+    if (pendingNodes.size && batchTimer == null) {
+      batchTimer = setTimeout(highlightChangedNodes, TEXT_HIGHLIGHT_BATCH_MS);
+    }
+  }
+
+  function highlightChangedNodes() {
+    batchTimer = null;
+    const nodes = [...pendingNodes];
+    pendingNodes.clear();
+    withoutObserving(() => {
+      for (const node of nodes) highlightWithin(node);
+    });
   }
 
   async function loadAndApply() {
@@ -97,13 +154,10 @@ async function startPageTextHighlighter() {
     ]);
     currentRules = highlighting.normalizeRules(stored[currentStorageKey] || []);
     if ((Number(stored.authExpiresAt) || 0) <= Date.now()) {
-      currentRules = [];
-      applyRules(currentRules);
-      observePage();
+      applyRules([]);
       return;
     }
     applyRules(currentRules);
-    observePage();
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_GLOBAL_TEXT_HIGHLIGHTS' });
       if (!response?.success) {
@@ -112,23 +166,6 @@ async function startPageTextHighlighter() {
     } catch (error) {
       console.warn('[QTS text highlights] Could not request shared rules:', error);
     }
-  }
-
-  function observePage() {
-    if (observer && document.body) {
-      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    }
-  }
-
-  function scheduleRefresh() {
-    if (refreshQueued) return;
-    refreshQueued = true;
-    setTimeout(() => {
-      refreshQueued = false;
-      if (observer) observer.disconnect();
-      applyRules(currentRules);
-      observePage();
-    }, 0);
   }
 
   globalThis.__qtsPageTextHighlighter = { refresh: loadAndApply };
@@ -157,11 +194,7 @@ async function startPageTextHighlighter() {
     loadAndApply().catch((error) => console.error('[QTS text highlights] Could not follow page navigation:', error));
   });
 
-  loadAndApply().then(() => {
-    if (!document.body) return;
-    observer = new MutationObserver(scheduleRefresh);
-    observePage();
-  }).catch((error) => console.error('[QTS text highlights] Could not load saved rules:', error));
+  loadAndApply().catch((error) => console.error('[QTS text highlights] Could not load saved rules:', error));
 }
 
 function startPageTextHighlighterAfterLoad() {

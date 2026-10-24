@@ -781,6 +781,20 @@ test('the Get JD panel is injected on demand instead of on every page', () => {
   assert.ok(launcher.includes("stored.qtsExtensionStatus !== 'get_jd'"));
 });
 
+test('the text highlighter only rescans changed nodes, in batches, and skips ChatGPT', () => {
+  const highlighter = fs.readFileSync(path.join(extensionRoot, 'content', 'text-highlighter.js'), 'utf8');
+  const changedNodesPass = highlighter.slice(
+    highlighter.indexOf('function highlightChangedNodes()'),
+    highlighter.indexOf('async function loadAndApply()'),
+  );
+
+  assert.ok(highlighter.includes('TEXT_HIGHLIGHT_SKIPPED_HOSTS.test(location.hostname)'));
+  assert.ok(highlighter.includes('setTimeout(highlightChangedNodes, TEXT_HIGHLIGHT_BATCH_MS)'));
+  assert.ok(changedNodesPass.includes('highlightWithin(node)'));
+  assert.equal(changedNodesPass.includes('unwrapHighlights'), false);
+  assert.equal(changedNodesPass.includes('document.body'), false);
+});
+
 test('content scripts never read the bearer token', () => {
   const contentScripts = ['page-launcher.js', 'get-jd-review.js', 'text-highlighter.js'];
   for (const file of contentScripts) {
