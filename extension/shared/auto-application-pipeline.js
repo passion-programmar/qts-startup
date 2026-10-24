@@ -75,9 +75,7 @@
 
   async function isAutoApplyEnabled() {
     const auth = global.__qtsAccountAuth;
-    const token = auth?.getWorkerAuthToken
-      ? await auth.getWorkerAuthToken()
-      : (await chrome.storage.local.get(['authToken'])).authToken || '';
+    const token = auth?.getWorkerAuthToken ? await auth.getWorkerAuthToken() : '';
     if (!token) return false;
     const stored = await chrome.storage.local.get([AUTO_APPLY_ENABLED_KEY, 'qtsCustomGptConfig']);
     return stored[AUTO_APPLY_ENABLED_KEY] === true

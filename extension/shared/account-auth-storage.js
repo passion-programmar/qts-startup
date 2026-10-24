@@ -1,5 +1,7 @@
-// Account login persists in chrome.storage.local for up to 24 hours (JWT exp).
-// Popup memory is a cache; reopening the popup hydrates from local storage.
+// Account login persists for up to 24 hours (JWT exp). The token lives in the
+// extension-only token store; chrome.storage.local keeps just the expiry and
+// session user so content scripts can show signed-in state without the token.
+// Popup memory is a cache; reopening the popup hydrates from storage.
 
 (function initAccountAuthStorage(global) {
   if (global.__qtsAccountAuth) return;
@@ -100,19 +102,38 @@
     hydrated = false;
   }
 
+  function tokenStore() {
+    const store = global.__qtsAuthTokenStore;
+    if (!store) throw new Error('Extension token storage is unavailable.');
+    return store;
+  }
+
   async function readPersistedAuth() {
-    return readLocalArea(AUTH_KEYS);
+    const stored = await readLocalArea(AUTH_KEYS);
+    let token = await tokenStore().read();
+    const legacyToken = stored[AUTH_TOKEN_KEY];
+    if (legacyToken) {
+      // Earlier versions kept the token in local storage, where content scripts can read it.
+      if (!token) {
+        token = String(legacyToken);
+        await tokenStore().write(token);
+      }
+      await removeLocalKeys([AUTH_TOKEN_KEY]);
+    }
+    return { ...stored, [AUTH_TOKEN_KEY]: token };
   }
 
   async function writePersistedAuth(token, user, expiresAt) {
+    // Store the token before publishing the expiry that content scripts treat as signed in.
+    await tokenStore().write(token || '');
     await writeLocalArea({
-      [AUTH_TOKEN_KEY]: token || '',
       [AUTH_EXPIRES_KEY]: expiresAt,
       ...(user ? { [SESSION_USER_KEY]: user } : {}),
     });
   }
 
   async function clearPersistedAuth() {
+    await tokenStore().clear();
     await removeLocalKeys(AUTH_KEYS);
     await writeLocalArea({ qtsExtensionStatus: null });
   }

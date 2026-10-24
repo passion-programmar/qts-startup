@@ -53,12 +53,9 @@ async function initializeQtsPageLauncher() {
     .toast { position: fixed; top: 16px; left: 16px; max-width: min(360px, calc(100vw - 32px)); padding: 11px 14px; border-radius: 9px; background: #172554; color: #fff; box-shadow: 0 9px 28px #0f172a38; font: 600 13px/1.4 system-ui, sans-serif; pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .16s ease, transform .16s ease; }
     .toast.visible { opacity: 1; transform: translateY(0); }
     .toast.error { background: #991b1b; }
-    .sign-in-form { position: fixed; top: 24px; right: 24px; z-index: 5; display: flex; flex-direction: column; gap: 13px; width: min(300px, calc(100vw - 48px)); pointer-events: auto; }
+    .sign-in-form { position: fixed; top: 18px; right: 18px; z-index: 5; width: min(312px, calc(100vw - 36px)); height: 220px; pointer-events: auto; }
     .sign-in-form[hidden] { display: none; }
-    .sign-in-field { display: flex; flex-direction: column; gap: 6px; }
-    .sign-in-field label { color: #172554; font: 800 12px/1.2 system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; text-shadow: 0 1px 0 #fff; }
-    .sign-in-field input { width: 100%; height: 48px; padding: 0 14px; border: 2px solid #4f46e5; border-radius: 12px; background: #fff; color: #0f172a; box-shadow: 0 10px 30px #312e8150, 0 0 0 4px #eef2ff; font: 700 15px/1 system-ui, sans-serif; outline: none; }
-    .sign-in-field input:focus { border-color: #f59e0b; box-shadow: 0 12px 34px #312e8150, 0 0 0 4px #fef3c7; }
+    .sign-in-form iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; color-scheme: normal; }
     .preview { position: fixed; top: 16px; right: 16px; width: min(390px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 17px; border: 1px solid #cbd5e1; border-radius: 13px; background: #fff; color: #0f172a; box-shadow: 0 14px 42px #0f172a38; font: 13px/1.45 system-ui, sans-serif; pointer-events: auto; }
     .preview[hidden] { display: none; }
     .preview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
@@ -139,33 +136,12 @@ async function initializeQtsPageLauncher() {
   toast.setAttribute('role', 'status');
   toast.setAttribute('aria-live', 'polite');
 
-  const signInForm = document.createElement('form');
+  // Credentials are typed in an extension-origin frame, never in this page's DOM,
+  // so page scripts and session-replay tools cannot observe the key presses.
+  const signInForm = document.createElement('div');
   signInForm.className = 'sign-in-form';
   signInForm.hidden = true;
-  signInForm.setAttribute('aria-label', 'Manager sign in');
-  const userField = document.createElement('div');
-  userField.className = 'sign-in-field';
-  const userLabel = document.createElement('label');
-  userLabel.htmlFor = 'qts-page-login-user';
-  userLabel.textContent = 'User Name';
-  const userInput = document.createElement('input');
-  userInput.id = 'qts-page-login-user';
-  userInput.type = 'text';
-  userInput.autocomplete = 'username';
-  userInput.required = true;
-  const passwordField = document.createElement('div');
-  passwordField.className = 'sign-in-field';
-  const passwordLabel = document.createElement('label');
-  passwordLabel.htmlFor = 'qts-page-login-password';
-  passwordLabel.textContent = 'Password';
-  const passwordInput = document.createElement('input');
-  passwordInput.id = 'qts-page-login-password';
-  passwordInput.type = 'password';
-  passwordInput.autocomplete = 'current-password';
-  passwordInput.required = true;
-  userField.append(userLabel, userInput);
-  passwordField.append(passwordLabel, passwordInput);
-  signInForm.append(userField, passwordField);
+  let signInFrame = null;
 
   const preview = document.createElement('section');
   preview.className = 'preview';
@@ -191,7 +167,6 @@ async function initializeQtsPageLauncher() {
   root.append(style, launcher, toast, signInForm, preview);
   (document.documentElement || document.body).appendChild(host);
 
-  let loginInFlight = false;
   function setOpen(open) {
     launcher.classList.toggle('open', open);
     main.setAttribute('aria-expanded', String(open));
@@ -230,8 +205,23 @@ async function initializeQtsPageLauncher() {
 
   function showSignInForm() {
     setOpen(false);
+    if (!signInFrame) {
+      signInFrame = document.createElement('iframe');
+      signInFrame.title = 'QTS Manager sign in';
+      signInFrame.src = chrome.runtime.getURL('signin/signin.html');
+      signInFrame.addEventListener('load', () => signInFrame?.focus(), { once: true });
+      signInForm.appendChild(signInFrame);
+    } else {
+      signInFrame.focus();
+    }
     signInForm.hidden = false;
-    userInput.focus();
+  }
+
+  function hideSignInForm() {
+    signInForm.hidden = true;
+    // Removing the frame discards anything typed into it.
+    signInFrame?.remove();
+    signInFrame = null;
   }
 
   async function syncTextHighlightAction() {
@@ -309,35 +299,6 @@ async function initializeQtsPageLauncher() {
     );
   }
 
-  async function submitSignIn() {
-    const loginName = userInput.value.trim();
-    const password = passwordInput.value;
-    if (!loginName || !password || loginInFlight) return;
-    loginInFlight = true;
-    userInput.disabled = true;
-    passwordInput.disabled = true;
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'QTS_PAGE_ACTION',
-        action: 'sign_in',
-        loginName,
-        password,
-      });
-      if (!response?.ok) throw new Error(response?.error || 'Could not sign in.');
-      passwordInput.value = '';
-      signInForm.hidden = true;
-      await syncSessionAction();
-      await syncTextHighlightAction();
-    } catch (error) {
-      showToast(error?.message || 'Could not sign in.', true);
-      passwordInput.select();
-    } finally {
-      loginInFlight = false;
-      userInput.disabled = false;
-      passwordInput.disabled = false;
-    }
-  }
-
   function appendDetail(label, value, className = '') {
     const wrapper = document.createElement('div');
     const term = document.createElement('dt');
@@ -361,19 +322,10 @@ async function initializeQtsPageLauncher() {
   async function syncSessionAction() {
     const button = launcher.querySelector('[data-action="session"], [data-session-action]');
     if (!button) return launcher.classList.contains('signed-in');
-    const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
-    let expiresAt = Number(stored.authExpiresAt) || 0;
-    if (stored.authToken) {
-      try {
-        const payloadSegment = String(stored.authToken).split('.')[1];
-        const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
-        const payload = JSON.parse(atob(normalized));
-        if (Number.isFinite(payload.exp)) expiresAt = payload.exp * 1000;
-      } catch {
-        // Use the separately stored expiry when the token is not a readable JWT.
-      }
-    }
-    const signedIn = Boolean(stored.authToken && expiresAt > Date.now());
+    // The service worker publishes only the session expiry; the token never reaches this page.
+    const stored = await chrome.storage.local.get(['authExpiresAt']);
+    const expiresAt = Number(stored.authExpiresAt) || 0;
+    const signedIn = expiresAt > Date.now();
     launcher.classList.toggle('signed-in', signedIn);
     button.dataset.sessionAction = signedIn ? 'sign_out' : 'sign_in';
     button.setAttribute('aria-label', signedIn ? 'Sign Out' : 'Sign In');
@@ -383,11 +335,9 @@ async function initializeQtsPageLauncher() {
     if (label) label.textContent = signedIn ? 'Sign Out' : 'Sign In';
     if (!signedIn) {
       setOpen(false);
-      signInForm.hidden = true;
-      userInput.value = '';
-      passwordInput.value = '';
+      hideSignInForm();
       preview.hidden = true;
-      if (stored.authToken && expiresAt > 0) {
+      if (expiresAt > 0) {
         chrome.storage.local.set({ qtsExtensionStatus: null }).catch((error) => {
           console.error('[QTS extension] Could not clear expired extension status:', error);
         });
@@ -447,9 +397,7 @@ async function initializeQtsPageLauncher() {
       if (!response?.ok) throw new Error(response?.error || 'Could not run this QTS action.');
       if (resolvedAction === 'sign_out') {
         preview.hidden = true;
-        signInForm.hidden = true;
-        userInput.value = '';
-        passwordInput.value = '';
+        hideSignInForm();
         toast.replaceChildren();
         await syncSessionAction();
       } else if (resolvedAction === 'get_jd' || resolvedAction === 'generation' || resolvedAction === 'cancel_status') {
@@ -469,22 +417,16 @@ async function initializeQtsPageLauncher() {
       showSignInForm();
       return;
     }
-    signInForm.hidden = true;
+    hideSignInForm();
     setOpen(!launcher.classList.contains('open'));
   });
   launcher.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
   });
   close.addEventListener('click', () => { preview.hidden = true; });
-  signInForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    submitSignIn();
-  });
-  userInput.addEventListener('change', submitSignIn);
-  passwordInput.addEventListener('change', submitSignIn);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.qtsManagerJobDetectionUrlRules || changes.authToken) {
+    if (changes.qtsManagerJobDetectionUrlRules || changes.authExpiresAt) {
       chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
         .then((response) => {
           if (!response?.ok) return;
@@ -499,19 +441,23 @@ async function initializeQtsPageLauncher() {
         })
         .catch((error) => console.error('[QTS extension] Could not apply URL exclusions:', error));
     }
-    if (changes.authToken || changes.authExpiresAt) {
+    if (changes.authExpiresAt) {
       syncSessionAction()
         .then(() => syncTextHighlightAction())
         .catch(() => {});
-      if (changes.authToken?.newValue) {
-        signInForm.hidden = true;
-        passwordInput.value = '';
+      // Sign-in always clears the previous session first, so a fresh expiry means a new sign-in.
+      if (changes.authExpiresAt.newValue && !changes.authExpiresAt.oldValue) {
+        hideSignInForm();
         showToast('Signed in successfully.');
       }
     }
     if (changes.qtsExtensionStatus) syncModeActions().catch(() => {});
   });
   chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === 'QTS_HIDE_SIGN_IN_FRAME') {
+      hideSignInForm();
+      return;
+    }
     if (message?.type !== 'QTS_GENERATION_PROGRESS') return;
     showToast(
       String(message.message || 'Generation updated.'),
@@ -522,7 +468,7 @@ async function initializeQtsPageLauncher() {
     if (event.key === 'Escape') {
       setOpen(false);
       preview.hidden = true;
-      signInForm.hidden = true;
+      hideSignInForm();
     }
   });
 
@@ -542,7 +488,7 @@ async function initializeQtsPageLauncher() {
     disable() {
       setOpen(false);
       preview.hidden = true;
-      signInForm.hidden = true;
+      hideSignInForm();
       getJdDockObserver.disconnect();
       host.remove();
       globalThis.__qtsPageLauncher = { excluded: true };

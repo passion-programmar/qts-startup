@@ -14,14 +14,7 @@ const tabContextPrefetchAt = new Map();
 
 async function prefetchReadAuthToken() {
   const auth = (typeof self !== 'undefined' ? self : globalThis).__qtsAccountAuth;
-  if (auth?.getWorkerAuthToken) {
-    return auth.getWorkerAuthToken();
-  }
-  const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
-  if (stored.authExpiresAt && Date.now() >= Number(stored.authExpiresAt)) {
-    return '';
-  }
-  return stored.authToken || '';
+  return auth?.getWorkerAuthToken ? auth.getWorkerAuthToken() : '';
 }
 
 async function prefetchApiRequest(path) {

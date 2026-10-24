@@ -544,7 +544,7 @@ async function initializeGetJdReviewOnce() {
     ) {
       throw new Error('Choose a valid Manager settings panel and page.');
     }
-    const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
+    const stored = await chrome.storage.local.get(['authExpiresAt']);
     if (!sessionIsValid(stored)) {
       throw new Error('Sign in as a Manager before opening settings.');
     }
@@ -1263,17 +1263,8 @@ async function initializeGetJdReviewOnce() {
   }
 
   function sessionIsValid(stored) {
-    if (!stored.authToken) return false;
-    let expiresAt = Number(stored.authExpiresAt) || 0;
-    try {
-      const payloadSegment = String(stored.authToken).split('.')[1];
-      const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
-      const payload = JSON.parse(atob(normalized));
-      if (Number.isFinite(payload.exp)) expiresAt = payload.exp * 1000;
-    } catch {
-      // The stored expiry remains authoritative for non-JWT tokens.
-    }
-    return expiresAt > Date.now();
+    // The service worker publishes only the session expiry; the token never reaches content scripts.
+    return (Number(stored.authExpiresAt) || 0) > Date.now();
   }
 
   function renderCurrentResult() {
@@ -1310,7 +1301,7 @@ async function initializeGetJdReviewOnce() {
   }
 
   async function loadManagerSession() {
-    const stored = await chrome.storage.local.get(['authToken', 'authExpiresAt']);
+    const stored = await chrome.storage.local.get(['authExpiresAt']);
     if (!sessionIsValid(stored)) {
       signedIn = false;
       managerSettingsOpen = false;
@@ -1414,7 +1405,7 @@ async function initializeGetJdReviewOnce() {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.qtsManagerJobDetectionUrlRules || changes.authToken) {
+    if (changes.qtsManagerJobDetectionUrlRules || changes.authExpiresAt) {
       chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
         .then((response) => {
           if (!response?.ok) return;
@@ -1429,7 +1420,7 @@ async function initializeGetJdReviewOnce() {
         })
         .catch((error) => console.error('[QTS Get JD] Could not apply URL exclusions:', error));
     }
-    if (changes.authToken || changes.authExpiresAt) {
+    if (changes.authExpiresAt) {
       loadManagerSession().catch((error) => {
         console.error('[QTS Get JD] Could not sync the manager session:', error);
       });

@@ -36,9 +36,7 @@ function workerSupportedApiPath(path) {
 
 async function workerReadAuth() {
   const auth = qtsRoot.__qtsAccountAuth;
-  const token = auth?.getWorkerAuthToken
-    ? await auth.getWorkerAuthToken()
-    : (await chrome.storage.local.get(['authToken', 'authExpiresAt'])).authToken || '';
+  const token = auth?.getWorkerAuthToken ? await auth.getWorkerAuthToken() : '';
   return {
     token,
     serverUrl: await qtsRoot.__qtsRuntimeConfig.getServerUrl(),

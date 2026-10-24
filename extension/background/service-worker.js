@@ -11,6 +11,7 @@ importScripts(
   '../shared/custom-gpt.js',
   '../shared/scanner-chatgpt.js',
   '../shared/generation-chatgpt.js',
+  '../shared/auth-token-store.js',
   '../shared/account-auth-storage.js',
   '../shared/text-highlighting.js',
   '../shared/apply-session-store.js',
@@ -4250,6 +4251,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
+  if (msg.type === 'QTS_CLOSE_SIGN_IN_FRAME') {
+    if (sender.url === chrome.runtime.getURL('signin/signin.html') && sender.tab?.id != null) {
+      chrome.tabs.sendMessage(sender.tab.id, { type: 'QTS_HIDE_SIGN_IN_FRAME' }, { frameId: 0 })
+        .catch(() => {});
+    }
+    return false;
+  }
+
   if (msg.type === 'QTS_PAGE_ACTION') {
     (async () => {
       const action = String(msg.action || '');
@@ -4257,6 +4266,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (action === 'sign_in') {
         if (tabId == null) {
           sendResponse({ ok: false, error: 'Sign in must be opened from a web page.' });
+          return;
+        }
+        // Credentials are accepted only from the extension-origin sign-in frame, not page content scripts.
+        if (sender.url !== chrome.runtime.getURL('signin/signin.html')) {
+          sendResponse({ ok: false, error: 'Use the QTS Sign In form to sign in.' });
           return;
         }
         const loginName = typeof msg.loginName === 'string' ? msg.loginName.trim() : '';
@@ -4267,11 +4281,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         await self.__qtsAccountAuth?.clearAuth?.();
         const serverUrl = await self.__qtsRuntimeConfig.getServerUrl();
-        const response = await fetch(`${serverUrl}/api/extension/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ loginName, password }),
-        });
+        let response;
+        try {
+          response = await fetch(`${serverUrl}/api/extension/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ loginName, password }),
+            signal: AbortSignal.timeout(20000),
+          });
+        } catch {
+          sendResponse({ ok: false, error: 'Cannot connect to QTS. Check your connection and try again.' });
+          return;
+        }
         let result;
         try {
           result = await response.json();
@@ -5443,8 +5464,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       console.warn('[QTS blocked URLs] Could not find open pages to refresh:', error);
     });
   }
-  if (area === 'local' && changes.authToken) {
-    if (!changes.authToken.newValue) {
+  if (area === 'local' && changes.authExpiresAt) {
+    if (!changes.authExpiresAt.newValue) {
       disarmJobPageActivity();
       chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null }).catch(() => {});
       // Reviews contain the previous Manager's candidates and must not survive a session change.

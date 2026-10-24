@@ -93,22 +93,10 @@ async function startPageTextHighlighter() {
     currentStorageKey = highlighting.getGlobalStorageKey();
     const stored = await chrome.storage.local.get([
       currentStorageKey,
-      'authToken',
       'authExpiresAt',
     ]);
     currentRules = highlighting.normalizeRules(stored[currentStorageKey] || []);
-    let expiresAt = Number(stored.authExpiresAt) || 0;
-    try {
-      const payload = JSON.parse(atob(
-        String(stored.authToken || '').split('.')[1]
-          .replace(/-/g, '+')
-          .replace(/_/g, '/'),
-      ));
-      if (Number.isFinite(payload.exp)) expiresAt = payload.exp * 1000;
-    } catch {
-      // The stored expiry remains authoritative when the token is not a JWT.
-    }
-    if (!stored.authToken || expiresAt <= Date.now()) {
+    if ((Number(stored.authExpiresAt) || 0) <= Date.now()) {
       currentRules = [];
       applyRules(currentRules);
       observePage();
@@ -150,7 +138,6 @@ async function startPageTextHighlighter() {
       currentStorageKey &&
       (
         changes[currentStorageKey]
-        || changes.authToken
         || changes.authExpiresAt
       )
     ) {

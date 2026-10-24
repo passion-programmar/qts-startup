@@ -28,7 +28,8 @@
     {
       "resources": [
         "assets/wys-launcher.png",
-        "assets/account-logo.png"
+        "assets/account-logo.png",
+        "signin/signin.html"
       ],
       "matches": ["<all_urls>"]
     }

@@ -21,7 +21,9 @@
     normalized = normalized.replace(/\/+$/, '');
     try {
       const url = new URL(normalized);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      // Credentials and tokens may travel unencrypted only to this machine during local development.
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
         return DEFAULT_SERVER_URL;
       }
       url.username = '';

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QTS Sign In</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: transparent; }
+    form { display: flex; flex-direction: column; gap: 13px; padding: 6px; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    label { color: #172554; font: 800 12px/1.2 system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; text-shadow: 0 1px 0 #fff; }
+    input { width: 100%; height: 48px; padding: 0 14px; border: 2px solid #4f46e5; border-radius: 12px; background: #fff; color: #0f172a; box-shadow: 0 10px 30px #312e8150, 0 0 0 4px #eef2ff; font: 700 15px/1 system-ui, sans-serif; outline: none; }
+    input:focus { border-color: #f59e0b; box-shadow: 0 12px 34px #312e8150, 0 0 0 4px #fef3c7; }
+    input:disabled { opacity: .7; }
+    .error { margin: 0; padding: 8px 10px; border-radius: 9px; background: #991b1b; color: #fff; font: 600 12px/1.4 system-ui, sans-serif; }
+    .error[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <form aria-label="Manager sign in" novalidate>
+    <div class="field">
+      <label for="login-user">User Name</label>
+      <input id="login-user" type="text" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="login-password">Password</label>
+      <input id="login-password" type="password" autocomplete="current-password" required>
+    </div>
+    <p class="error" role="alert" hidden></p>
+  </form>
+  <script src="signin.js"></script>
+</body>
+</html>

@@ -302,8 +302,8 @@ test('shared text highlights run independently of site and manager URL exclusion
   )));
   assert.equal(highlighter.includes('CHECK_EXTENSION_PAGE_ALLOWED'), false);
   assert.equal(highlighter.includes('__qtsPageExclusions'), false);
-  assert.ok(highlighter.includes("'authToken'"));
-  assert.ok(highlighter.includes("changes.authToken"));
+  assert.ok(highlighter.includes("'authExpiresAt'"));
+  assert.ok(highlighter.includes('changes.authExpiresAt'));
 });
 
 test('Generation launcher shows a document icon and can cancel an active run', () => {
@@ -709,7 +709,7 @@ test('shared text highlights are manager-gated and available from the page launc
   assert.ok(launcher.includes('managerPanel.openManagerSettings(panel, response.tabId, {'));
   assert.ok(launcher.includes('await globalThis.__qtsInitializeGetJdReview?.()'));
   assert.ok(launcher.includes("highlightButton.hidden = response?.ok !== true || response.canManageTextHighlights !== true"));
-  assert.ok(highlighter.includes('changes.authToken'));
+  assert.ok(highlighter.includes('changes.authExpiresAt'));
   assert.ok(highlighter.includes('changes.authExpiresAt'));
   assert.ok(featureRoute.includes('managerCanManageTextHighlights(manager.id)'));
   assert.ok(highlightsRoute.includes('managerCanManageTextHighlights(manager.id)'));
@@ -724,7 +724,7 @@ test('shared text highlights are manager-gated and available from the page launc
 test('signing out or switching Managers clears stored Get JD reviews', () => {
   const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
   const authRemovedBranch = worker.slice(
-    worker.indexOf("if (area === 'local' && changes.authToken) {"),
+    worker.indexOf("if (area === 'local' && changes.authExpiresAt) {"),
     worker.indexOf('chrome.runtime.onInstalled.addListener'),
   );
 
@@ -737,25 +737,42 @@ test('the page launcher disable path only touches elements it defines', () => {
   assert.equal(launcher.includes('highlightPanel'), false);
 });
 
-test('page Sign In uses the two-field top-right form instead of the embedded panel', () => {
-  const launcher = fs.readFileSync(
-    path.join(extensionRoot, 'content', 'page-launcher.js'),
-    'utf8',
-  );
-  const serviceWorker = fs.readFileSync(
-    path.join(extensionRoot, 'background', 'service-worker.js'),
-    'utf8',
-  );
+test('page Sign In collects credentials only inside the extension-origin frame', () => {
+  const read = (...parts) => fs.readFileSync(path.join(extensionRoot, ...parts), 'utf8');
+  const launcher = read('content', 'page-launcher.js');
+  const serviceWorker = read('background', 'service-worker.js');
+  const signInPage = read('signin', 'signin.html');
+  const signInScript = read('signin', 'signin.js');
+  const manifest = JSON.parse(read('manifest.json'));
   const signInBranch = serviceWorker.slice(
     serviceWorker.indexOf("if (action === 'sign_in')"),
     serviceWorker.indexOf("if (action === 'sign_out')"),
   );
 
   assert.ok(launcher.includes("signInForm.className = 'sign-in-form'"));
-  assert.ok(launcher.includes("userLabel.textContent = 'User Name'"));
-  assert.ok(launcher.includes("passwordLabel.textContent = 'Password'"));
-  assert.ok(launcher.includes("passwordInput.addEventListener('change', submitSignIn)"));
+  assert.ok(launcher.includes("chrome.runtime.getURL('signin/signin.html')"));
+  assert.equal(launcher.includes("type = 'password'"), false);
+  assert.equal(launcher.includes("action: 'sign_in'"), false);
+  assert.ok(signInPage.includes('<label for="login-user">User Name</label>'));
+  assert.ok(signInPage.includes('<label for="login-password">Password</label>'));
+  assert.ok(signInScript.includes("passwordInput.addEventListener('change', submitSignIn)"));
+  assert.ok(signInBranch.includes("sender.url !== chrome.runtime.getURL('signin/signin.html')"));
+  assert.ok(manifest.web_accessible_resources.some((entry) => (
+    entry.resources || []
+  ).includes('signin/signin.html')));
   assert.equal(signInBranch.includes('openCapturePanel'), false);
+});
+
+test('content scripts never read the bearer token', () => {
+  const contentScripts = ['page-launcher.js', 'get-jd-review.js', 'text-highlighter.js'];
+  for (const file of contentScripts) {
+    const source = fs.readFileSync(path.join(extensionRoot, 'content', file), 'utf8');
+    assert.equal(source.includes('authToken'), false, `${file} must not read authToken`);
+  }
+  const authStorage = fs.readFileSync(path.join(extensionRoot, 'shared', 'account-auth-storage.js'), 'utf8');
+  const serviceWorker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  assert.ok(authStorage.includes('await tokenStore().write(token || \'\')'));
+  assert.ok(serviceWorker.indexOf("'../shared/auth-token-store.js'") < serviceWorker.indexOf("'../shared/account-auth-storage.js'"));
 });
 
 test('resume PDF downloads remember a user-selected folder without requiring the extension', () => {

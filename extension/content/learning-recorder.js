@@ -137,14 +137,9 @@
   }
 
   async function readAuthToken() {
+    // Content scripts never receive the bearer token; only the service worker holds it.
     if (global.__qtsAccountAuth?.getWorkerAuthToken) {
       return global.__qtsAccountAuth.getWorkerAuthToken();
-    }
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      const result = await new Promise((resolve) => {
-        chrome.storage.local.get(['authToken'], (stored) => resolve(stored || {}));
-      });
-      return result.authToken || '';
     }
     return '';
   }

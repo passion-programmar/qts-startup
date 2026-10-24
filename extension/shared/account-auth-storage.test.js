@@ -27,7 +27,23 @@ function createStorageArea(initial = {}) {
   };
 }
 
-function loadAuthStorage(storage, now = Date.now()) {
+function createTokenStore(initialToken = '') {
+  const store = {
+    token: initialToken,
+    async read() {
+      return store.token;
+    },
+    async write(token) {
+      store.token = String(token || '');
+    },
+    async clear() {
+      store.token = '';
+    },
+  };
+  return store;
+}
+
+function loadAuthStorage(storage, now = Date.now(), tokenStore = createTokenStore()) {
   class TestDate extends Date {
     static now() {
       return now;
@@ -40,6 +56,7 @@ function loadAuthStorage(storage, now = Date.now()) {
       storage: { local: storage },
     },
     Date: TestDate,
+    __qtsAuthTokenStore: tokenStore,
     atob(value) {
       return Buffer.from(value, 'base64').toString('binary');
     },
@@ -60,18 +77,20 @@ test('extension login persists and restores the 24-hour session after popup relo
   const expiresAtSeconds = Math.floor(now / 1000) + 24 * 60 * 60;
   const token = createToken(expiresAtSeconds);
   const storage = createStorageArea();
+  const tokenStore = createTokenStore();
   const manager = { id: 'manager-id', username: 'manager', role: 'manager' };
 
-  await loadAuthStorage(storage, now).storePopupAuth(
+  await loadAuthStorage(storage, now, tokenStore).storePopupAuth(
     token,
     manager,
     expiresAtSeconds * 1000,
   );
 
-  assert.equal(storage.data.authToken, token);
+  assert.equal(tokenStore.token, token);
+  assert.equal(storage.data.authToken, undefined);
   assert.equal(storage.data.authExpiresAt, expiresAtSeconds * 1000);
 
-  const reloadedAuth = loadAuthStorage(storage, now);
+  const reloadedAuth = loadAuthStorage(storage, now, tokenStore);
   assert.equal(await reloadedAuth.hydratePopupAuth(), true);
   assert.equal(await reloadedAuth.getPopupAuthToken(), token);
   assert.equal(
@@ -80,7 +99,7 @@ test('extension login persists and restores the 24-hour session after popup relo
   );
 });
 
-test('valid token expiry is restored from JWT when local expiry metadata is missing', async () => {
+test('a token left in local storage by an older version moves to the extension-only store', async () => {
   const now = Date.now();
   const expiresAtSeconds = Math.floor(now / 1000) + 24 * 60 * 60;
   const token = createToken(expiresAtSeconds);
@@ -89,35 +108,41 @@ test('valid token expiry is restored from JWT when local expiry metadata is miss
     qtsSessionUser: { id: 'manager-id', username: 'manager', role: 'manager' },
   });
 
-  const auth = loadAuthStorage(storage, now);
+  const tokenStore = createTokenStore();
+
+  const auth = loadAuthStorage(storage, now, tokenStore);
   assert.equal(await auth.hydratePopupAuth(), true);
   assert.equal(storage.data.authExpiresAt, expiresAtSeconds * 1000);
+  assert.equal(storage.data.authToken, undefined);
+  assert.equal(tokenStore.token, token);
   assert.equal(await auth.getPopupAuthToken(), token);
 });
 
 test('expired token is removed from local extension storage', async () => {
   const now = Date.now();
   const storage = createStorageArea({
-    authToken: createToken(Math.floor(now / 1000) - 1),
     authExpiresAt: now - 1000,
     qtsSessionUser: { id: 'manager-id', username: 'manager', role: 'manager' },
   });
+  const tokenStore = createTokenStore(createToken(Math.floor(now / 1000) - 1));
 
-  assert.equal(await loadAuthStorage(storage, now).hydratePopupAuth(), false);
+  assert.equal(await loadAuthStorage(storage, now, tokenStore).hydratePopupAuth(), false);
   assert.deepEqual(storage.data, { qtsExtensionStatus: null });
+  assert.equal(tokenStore.token, '');
 });
 
 test('clearing an extension session resets the active extension status', async () => {
   const storage = createStorageArea({
-    authToken: createToken(Math.floor(Date.now() / 1000) + 60),
     authExpiresAt: Date.now() + 60_000,
     qtsSessionUser: { id: 'manager-id', username: 'manager', role: 'manager' },
     qtsExtensionStatus: 'generation',
   });
+  const tokenStore = createTokenStore(createToken(Math.floor(Date.now() / 1000) + 60));
 
-  await loadAuthStorage(storage).clearAuth();
+  await loadAuthStorage(storage, Date.now(), tokenStore).clearAuth();
 
-  assert.equal(storage.data.authToken, undefined);
+  assert.equal(tokenStore.token, '');
+  assert.equal(storage.data.authExpiresAt, undefined);
   assert.equal(storage.data.qtsSessionUser, undefined);
   assert.equal(storage.data.qtsExtensionStatus, null);
 });

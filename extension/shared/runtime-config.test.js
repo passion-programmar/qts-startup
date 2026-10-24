@@ -29,6 +29,13 @@ test('runtime config gives popup and worker callers one normalized server URL', 
   assert.equal(await config.getServerUrl(), 'http://localhost:3000');
 });
 
+test('runtime config rejects unencrypted server URLs outside this machine', async () => {
+  const defaultUrl = await loadRuntimeConfig().getServerUrl();
+  assert.equal(await loadRuntimeConfig('http://qts.example.com').getServerUrl(), defaultUrl);
+  assert.equal(await loadRuntimeConfig('http://127.0.0.1:3000').getServerUrl(), 'http://127.0.0.1:3000');
+  assert.equal(await loadRuntimeConfig('https://qts.example.com/').getServerUrl(), 'https://qts.example.com');
+});
+
 test('Get JD and shared text highlights are enabled while unfinished automation stays disabled', () => {
   const config = loadRuntimeConfig();
   assert.equal(config.isFeatureEnabled('getJd'), true);
