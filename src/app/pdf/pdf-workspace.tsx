@@ -794,6 +794,9 @@ async function renderTemplatePdf(
     backgroundColor: "#ffffff",
     height: article.scrollHeight,
     logging: false,
+    onclone: (clonedDocument, clonedArticle) => {
+      materializePdfBulletMarkers(clonedDocument, clonedArticle);
+    },
     scale: 2,
     useCORS: true,
     width: article.scrollWidth,
@@ -838,6 +841,37 @@ async function renderTemplatePdf(
     page.drawImage(image, { x: 0, y: 0, width: pageWidthPoints, height: pageHeightPoints });
   }
   return pdf.save();
+}
+
+function materializePdfBulletMarkers(clonedDocument: Document, article: HTMLElement): void {
+  const markerByStyle: Record<string, string> = {
+    chevron: "›",
+    dash: "–",
+    disc: "•",
+  };
+  const markerText = markerByStyle[article.dataset.bulletStyle ?? ""] ?? markerByStyle.disc;
+
+  article.querySelectorAll<HTMLElement>(".item-bullets li").forEach((item) => {
+    const markerStyle = clonedDocument.defaultView?.getComputedStyle(item, "::marker");
+    const marker = clonedDocument.createElement("span");
+    marker.setAttribute("aria-hidden", "true");
+    marker.dataset.pdfBulletMarker = "true";
+    marker.textContent = markerText;
+    marker.style.display = "inline-block";
+    marker.style.width = "0";
+    marker.style.marginInlineStart = "-15pt";
+    marker.style.marginInlineEnd = "15pt";
+    marker.style.whiteSpace = "nowrap";
+    if (markerStyle) {
+      marker.style.color = markerStyle.color;
+      marker.style.fontFamily = markerStyle.fontFamily;
+      marker.style.fontSize = markerStyle.fontSize;
+      marker.style.fontWeight = markerStyle.fontWeight;
+      marker.style.lineHeight = markerStyle.lineHeight;
+    }
+    item.style.listStyleType = "none";
+    item.prepend(marker);
+  });
 }
 
 function cssMillimeters(value: string): number {
