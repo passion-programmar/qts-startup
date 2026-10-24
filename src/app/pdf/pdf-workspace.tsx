@@ -364,10 +364,10 @@ function PdfTemplatePreviewFrame({
   hostRef: RefObject<HTMLDivElement | null>;
   onStatusChange: (documentType: PreviewDocumentType, status: PreviewStatus) => void;
 }) {
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [status, setStatus] = useState<PreviewStatus>("loading");
   const [message, setMessage] = useState("");
   const [warnings, setWarnings] = useState("");
-  const [hasRendered, setHasRendered] = useState(false);
+  const [initialPreview] = useState(() => ({ documentData, documentType }));
 
   useEffect(() => onStatusChange(documentType, status), [documentType, onStatusChange, status]);
 
@@ -384,13 +384,15 @@ function PdfTemplatePreviewFrame({
         ?? document.createElement("div");
       root.className = "qts-document-host";
       root.classList.add("is-embed");
+      // The extension highlighter skips marked subtrees, keeping its marks out of the preview and PDF.
+      root.setAttribute("data-qts-text-highlight", "");
       root.lang = documentData.theme.language ?? "en";
       root.dir = documentData.theme.direction ?? "ltr";
       const mount = root.querySelector<HTMLElement>("#resume-root")
         ?? document.createElement("main");
       mount.id = "resume-root";
       mount.className = "is-embed";
-      root.replaceChildren(mount);
+      if (mount.parentElement !== root) root.replaceChildren(mount);
       if (!root.isConnected) host.replaceChildren(root);
 
       const scopeStyle = (style: HTMLStyleElement) => scopeResumeStyles(style);
@@ -408,7 +410,6 @@ function PdfTemplatePreviewFrame({
       ) as { warnings?: string[] } | null;
       if (cancelled || !result) return;
       setWarnings(Array.isArray(result?.warnings) ? result.warnings.join(" ") : "");
-      setHasRendered(true);
       setStatus("ready");
     }
 
@@ -429,9 +430,192 @@ function PdfTemplatePreviewFrame({
     </div>
     {status === "error" && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{message}</p>}
     {warnings && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{warnings}</p>}
-    {status === "loading" && !hasRendered && <p className="mb-3 text-xs text-slate-500" role="status">Loading document…</p>}
-    <div ref={hostRef} className="min-h-[calc(100dvh-14rem)] overflow-auto rounded-sm bg-white shadow-xl shadow-slate-900/15 xl:min-h-[calc(100dvh-16rem)]" />
+    <div ref={hostRef} className="min-h-[calc(100dvh-14rem)] overflow-auto rounded-sm bg-white shadow-xl shadow-slate-900/15 xl:min-h-[calc(100dvh-16rem)]">
+      <div
+        className="qts-document-host is-embed"
+        data-qts-text-highlight=""
+        data-document={initialPreview.documentType}
+        data-render-state="loading"
+        dir={initialPreview.documentData.theme.direction ?? "ltr"}
+        lang={initialPreview.documentData.theme.language ?? "en"}
+      >
+        <main className="is-embed" id="resume-root">
+          <StaticDocumentPreview
+            documentData={initialPreview.documentData}
+            documentType={initialPreview.documentType}
+          />
+        </main>
+      </div>
+    </div>
   </section>;
+}
+
+function StaticDocumentPreview({
+  documentData,
+  documentType,
+}: {
+  documentData: ReturnType<typeof toResumeTemplateData>;
+  documentType: PreviewDocumentType;
+}) {
+  const { candidate, resume, coverLetter } = documentData;
+  const articleStyle = {
+    boxSizing: "border-box" as const,
+    color: "#1a1a1a",
+    fontFamily: "Arial, sans-serif",
+    fontSize: "10.5pt",
+    lineHeight: 1.4,
+    margin: 0,
+    maxWidth: "none",
+    minHeight: "297mm",
+    padding: "15mm 16mm 17mm",
+    width: "210mm",
+  };
+  const contactValues = [
+    candidate.email,
+    candidate.phone,
+    candidate.location,
+    candidate.linkedinUrl,
+    ...(candidate.links ?? []).map((link) => link.url),
+  ].filter((value): value is string => Boolean(value));
+  const header = (
+    <header className="resume-header" style={{ borderBottom: "1px solid #b4bec8", marginBottom: "12pt", paddingBottom: "9pt" }}>
+      <h1 className="candidate-name" style={{ color: "#1f3a5f", fontSize: "22pt", fontWeight: 700 }}>
+        {candidate.fullName}
+      </h1>
+      {(candidate.headline || resume.targetRole) && (
+        <p className="candidate-headline" style={{ color: "#4a4f55", marginTop: "3pt" }}>
+          {candidate.headline || resume.targetRole}
+        </p>
+      )}
+      {contactValues.length > 0 && (
+        <address className="contact" style={{ fontSize: "9.5pt", fontStyle: "normal", marginTop: "5pt" }}>
+          <ul className="contact-list" style={{ display: "flex", flexWrap: "wrap", gap: "3pt 10pt", listStyle: "none" }}>
+            {contactValues.map((value) => <li key={value}><bdi>{value}</bdi></li>)}
+          </ul>
+        </address>
+      )}
+    </header>
+  );
+
+  if (documentType === "cover-letter") {
+    const recipient = coverLetter.recipient;
+    const recipientLines = [
+      recipient?.name,
+      recipient?.title,
+      recipient?.company || coverLetter.targetCompany,
+      ...(recipient?.address ?? []),
+    ].filter((value): value is string => Boolean(value));
+    return (
+      <article className="doc letter sheet doc--uniform-content" style={articleStyle}>
+        {header}
+        <div className="doc-body letter-body" style={{ display: "grid", gap: "12pt" }}>
+          {coverLetter.date && <p className="letter-date">{coverLetter.date}</p>}
+          {recipientLines.length > 0 && (
+            <div className="letter-recipient">
+              {recipientLines.map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}
+            </div>
+          )}
+          <h2 className="letter-subject">{coverLetter.subject || `Re: ${resume.targetRole}`}</h2>
+          <p className="letter-greeting">{coverLetter.greeting || `Dear ${recipient?.name || "Hiring Manager"},`}</p>
+          {coverLetter.paragraphs.map((paragraph, index) => (
+            <p className="letter-paragraph" key={`${index}-${paragraph}`}>{fallbackRichText(paragraph)}</p>
+          ))}
+          <div className="letter-signoff">
+            <p className="letter-closing">{coverLetter.closing || "Sincerely,"}</p>
+            <p className="letter-signature">{coverLetter.signature || candidate.fullName}</p>
+          </div>
+        </div>
+      </article>
+    );
+  }
+
+  return (
+    <article className="doc resume sheet doc--uniform-content" style={articleStyle}>
+      {header}
+      <div className="doc-body resume-body">
+        {resume.summary && (
+          <section aria-labelledby="section-summary" className="section section--summary" style={{ marginBottom: "12pt" }}>
+            <h2 className="section-title" id="section-summary" style={{ borderBottom: "1px solid #b4bec8", color: "#1f3a5f", fontWeight: 700, marginBottom: "5pt" }}>
+              Summary
+            </h2>
+            <p className="summary">{fallbackRichText(resume.summary)}</p>
+          </section>
+        )}
+        {resume.sections.map((section, index) => {
+          const sectionKey = (section.id || fallbackSectionSlug(section.title)).toLowerCase();
+          const headingId = `section-${index + (resume.summary ? 1 : 0)}`;
+          return (
+            <section
+              aria-labelledby={headingId}
+              className={section.type === "skills" ? "section section--skills" : "section"}
+              data-section={sectionKey}
+              key={sectionKey}
+              style={{ marginBottom: "12pt" }}
+            >
+              <h2 className="section-title" id={headingId} style={{ borderBottom: "1px solid #b4bec8", color: "#1f3a5f", fontWeight: 700, marginBottom: "5pt" }}>
+                {section.title}
+              </h2>
+              {section.type === "skills"
+                ? <div className="skills">{section.items.map((item, itemIndex) => {
+                    const skills = item.bullets ?? [];
+                    return (
+                      <div className="skill-group" key={`${itemIndex}-${item.heading ?? ""}`}>
+                        {item.heading && <h3 className="skill-group-title">{item.heading}:</h3>}
+                        <ul className="skill-list" style={{ display: "flex", flexWrap: "wrap", gap: "3pt 10pt", listStyle: "none" }}>
+                          {skills.map((skill, skillIndex) => {
+                            const name = typeof skill === "string" ? skill : skill.name;
+                            const detail = typeof skill === "string" ? "" : skill.detail;
+                            return (
+                              <li className="skill" key={`${skillIndex}-${name}`}>
+                                <span className="skill-name">{fallbackRichText(name)}</span>
+                                {detail && <span className="skill-detail"> ({detail})</span>}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    );
+                  })}</div>
+                : section.items.map((item, itemIndex) => (
+                    <div className="item" key={`${itemIndex}-${item.heading ?? ""}`} style={{ marginBottom: "7pt" }}>
+                      {(item.heading || item.dateRange) && (
+                        <div className="item-header">
+                          {item.heading && <h3 className="item-heading" style={{ display: "inline", fontWeight: 700 }}>{item.heading}</h3>}
+                          {item.dateRange && <p className="item-date" style={{ display: "inline", marginLeft: "6pt" }}>{item.dateRange}</p>}
+                        </div>
+                      )}
+                      {item.subheading && <p className="item-subheading" style={{ color: "#4a4f55" }}>{item.subheading}</p>}
+                      {item.description && <p className="item-description">{fallbackRichText(item.description)}</p>}
+                      {item.bullets && item.bullets.length > 0 && (
+                        <ul className="item-bullets" style={{ paddingInlineStart: "10pt" }}>
+                          {item.bullets.map((bullet, bulletIndex) => (
+                            <li key={`${bulletIndex}-${typeof bullet === "string" ? bullet : bullet.name}`}>
+                              {typeof bullet === "string" ? fallbackRichText(bullet) : <>{fallbackRichText(bullet.name)}{bullet.detail && ` (${bullet.detail})`}</>}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+            </section>
+          );
+        })}
+      </div>
+    </article>
+  );
+}
+
+function fallbackRichText(value: string) {
+  return value.split(/(\*\*[^*]+?\*\*)/g).map((part, index) => {
+    const keyword = /^\*\*([^*]+?)\*\*$/.exec(part);
+    return keyword
+      ? <strong className="keyword" key={index}>{keyword[1]}</strong>
+      : part;
+  });
+}
+
+function fallbackSectionSlug(value: string): string {
+  return value.toLowerCase().normalize("NFKD").replace(/[^a-z\d]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 async function loadBaseStyles(): Promise<void> {
