@@ -15,7 +15,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
   if (!manager) {
     return jsonResponse(
-      { success: false, message: "Extension session is invalid or expired." },
+      { success: false, message: "Your QTS session has ended. Sign in again." },
       401,
     );
   }
@@ -111,10 +111,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       ...presence,
       toastKind,
       toastMessage: toastKind === "applied"
-        ? "Already applied."
+        ? "Already applied — this job is in your Bids."
         : toastKind === "added"
-          ? "Already added."
-          : "New job.",
+          ? "Already added — this job is in your Jobs list."
+          : "New job — not in your Jobs or Bids yet.",
       profiles: candidateProfiles,
       message: allCandidatesAssigned
         ? "This job already exists for every active candidate."

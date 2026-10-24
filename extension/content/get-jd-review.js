@@ -86,15 +86,6 @@ async function initializeGetJdReviewOnce() {
 
     const style = document.createElement('style');
     style.textContent = `
-      .toast {
-        position: fixed; top: 14px; left: 14px; z-index: 2; max-width: min(360px, calc(100vw - 28px));
-        padding: 11px 14px; border-radius: 9px; color: #fff; background: #172554;
-        box-shadow: 0 8px 28px #0f172a40; font: 600 13px/1.4 system-ui, sans-serif;
-        pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .16s ease, transform .16s ease;
-      }
-      .toast.visible { opacity: 1; transform: translateY(0); }
-      .toast.error { background: #991b1b; }
-      .toast.success { background: #166534; }
       .panel {
         position: fixed; inset: 0 0 0 auto; z-index: 1; display: flex; flex-direction: column;
         width: min(400px, 48vw); height: 100vh; height: 100dvh; box-sizing: border-box;
@@ -106,7 +97,7 @@ async function initializeGetJdReviewOnce() {
         transition: opacity .24s ease, transform .28s cubic-bezier(.2,.8,.2,1), visibility .28s;
       }
       .panel.is-visible { opacity: 1; transform: translateX(0); visibility: visible; pointer-events: auto; }
-      .panel[hidden], .toast[hidden] { display: none; }
+      .panel[hidden] { display: none; }
       .panel.is-manager-settings { padding: 0; overflow: hidden; }
       .manager-brand-header { display: grid; flex: 0 0 66px; grid-template-columns: 44px 1fr auto; align-items: center; gap: 10px; padding: 8px 12px; background: #0f172a; color: #fff; }
       .manager-brand-logo { width: 44px; height: 44px; border: 1px solid #273449; border-radius: 9px; object-fit: contain; background: #070b13; }
@@ -204,25 +195,8 @@ async function initializeGetJdReviewOnce() {
       @media (prefers-reduced-motion: reduce) {
         .panel, .profile, button, .status.is-loading::before, .profile-skeleton { transition: none; animation: none; }
       }
-
-      .toast-host { position: fixed; top: 16px; left: 16px; z-index: 2147483647; display: flex; flex-direction: column; gap: 10px; width: min(390px, calc(100vw - 32px)); pointer-events: none; }
-      .toast-host .toast { --accent: #2563eb; position: relative; inset: auto; box-sizing: border-box; width: 100%; max-width: none; display: flex; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent) 20%, white); border-left: 4px solid var(--accent); border-radius: 14px; color: #172033; background: color-mix(in srgb, var(--accent) 7%, white); box-shadow: 0 12px 32px #0f172a20; font: 500 13px/1.45 system-ui, sans-serif; opacity: 1; transform: none; animation: qts-toast-enter .25s ease both; overflow-wrap: anywhere; }
-      .toast-host .toast.error, .toast-host .toast[data-type="error"], .toast-host .toast[data-type="fail"] { --accent: #dc2626; }
-      .toast-host .toast.success, .toast-host .toast[data-type="success"], .toast-host .toast[data-type="new-job"] { --accent: #15803d; }
-      .toast-host .toast[data-type="warn"] { --accent: #d97706; }
-      .toast-host .toast[data-type="applied"] { --accent: #7c3aed; }
-      .toast-host .toast.is-leaving { animation: qts-toast-exit .25s ease both; }
-      @keyframes qts-toast-enter { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: translateX(0); } }
-      @keyframes qts-toast-exit { to { opacity: 0; transform: translateX(36px); } }
-      @media (prefers-reduced-motion: reduce) { .toast-host .toast, .toast-host .toast.is-leaving { animation: none; } }
 `;
     root.appendChild(style);
-
-    const toast = document.createElement('div');
-    toast.className = 'toast-host';
-    toast.setAttribute('role', 'status');
-    toast.setAttribute('aria-live', 'polite');
-    root.appendChild(toast);
 
     const panel = document.createElement('section');
     panel.className = 'panel';
@@ -289,7 +263,7 @@ async function initializeGetJdReviewOnce() {
     panel.append(brandHeader, panelContent, managerSettings.root);
     root.appendChild(panel);
     host.__qtsElements = {
-      toast, panel, panelContent, managerSettings,
+      panel, panelContent, managerSettings,
       heading, status, details, accountCount, profiles, message, save, cancel,
     };
     (document.documentElement || document.body).appendChild(host);
@@ -909,19 +883,30 @@ async function initializeGetJdReviewOnce() {
     status.classList.toggle('is-error', isError);
   }
 
+  // Matches the server's toastMessage wording for results that arrive without one.
+  function jobPresenceMessage(result) {
+    if (result.inBids) return 'Already applied — this job is in your Bids.';
+    if (result.inJobs) return 'Already added — this job is in your Jobs list.';
+    return 'New job — not in your Jobs or Bids yet.';
+  }
+
+  function saveResultToast(response) {
+    const saved = Number(response.savedCount) || 0;
+    const failed = Number(response.failedCount) || 0;
+    const candidates = (count) => `${count} candidate${count === 1 ? '' : 's'}`;
+    if (failed && saved) {
+      return { type: 'warn', message: `Saved for ${candidates(saved)}; ${candidates(failed)} could not be saved. Review and retry.` };
+    }
+    if (failed) return { type: 'error', message: 'No candidates could be saved. Review the list and retry.' };
+    if (saved) return { type: 'success', message: `Saved to Jobs for ${candidates(saved)}.` };
+    return { type: 'info', message: 'The selected candidates already have this job.' };
+  }
+
   function showToast(message, type, key) {
     if (key && key === lastToastKey) return;
     if (key) lastToastKey = key;
-    const elements = host?.__qtsElements;
-    if (!elements) return;
-    const card = document.createElement('div');
-    card.className = 'toast ' + (type === 'error' ? 'error' : type === 'success' ? 'success' : 'info');
-    card.textContent = message;
-    elements.toast.prepend(card);
-    setTimeout(() => {
-      card.classList.add('is-leaving');
-      setTimeout(() => card.remove(), 250);
-    }, 4000);
+    // All toasts on the page share one stack (content/page-toast.js).
+    globalThis.__qtsPageToast?.show(message, { type, key });
   }
 
   function appendDetail(container, label, value, extraClass = '') {
@@ -1352,18 +1337,14 @@ async function initializeGetJdReviewOnce() {
     setPanelVisible(true);
     const toastKey = `${result.runId || result.updatedAt || ''}:${result.status}`;
     if (result.status === 'duplicate') {
-      const message = result.toastMessage || (result.inBids
-        ? 'Already applied.'
-        : result.inJobs
-          ? 'Already added.'
-          : 'New job.');
+      const message = result.toastMessage || jobPresenceMessage(result);
       renderIdlePanel(result.message || message);
-      showToast(message, 'normal', toastKey);
+      showToast(message, result.inBids ? 'applied' : 'info', toastKey);
       return;
     }
     if (result.status === 'new') {
-      renderIdlePanel(result.message || 'This is a new job.');
-      showToast(result.message || 'This is a new job!', 'success', toastKey);
+      renderIdlePanel(result.message || jobPresenceMessage(result));
+      showToast(result.message || jobPresenceMessage(result), 'success', toastKey);
       return;
     }
     if (result.status === 'error') {
@@ -1377,13 +1358,9 @@ async function initializeGetJdReviewOnce() {
       return;
     }
     if (result.status === 'saved') {
-      const failures = result.saveResponse?.failedCount || 0;
       renderSaveResult(result);
-      showToast(
-        failures ? 'Some candidates could not be saved. Please review and retry.' : 'Successfully saved!',
-        failures ? 'error' : 'success',
-        toastKey,
-      );
+      const saveToast = saveResultToast(result.saveResponse || {});
+      showToast(saveToast.message, saveToast.type, toastKey);
       return;
     }
     if (result.status !== 'complete' || !result.classification) {
@@ -1396,8 +1373,8 @@ async function initializeGetJdReviewOnce() {
       return;
     }
     showToast(
-      result.toastMessage || 'New job.',
-      result.toastKind === 'new' ? 'success' : 'normal',
+      result.toastMessage || jobPresenceMessage(result),
+      result.toastKind === 'new' ? 'success' : result.toastKind === 'applied' ? 'applied' : 'info',
       `${result.runId || result.updatedAt}:candidate-review`,
     );
     renderReview(result);

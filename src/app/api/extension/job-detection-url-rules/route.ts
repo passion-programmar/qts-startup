@@ -13,7 +13,7 @@ const maxRules = 200;
 
 export async function GET(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
-  if (!manager) return jsonResponse({ success: false, message: "Extension session is invalid or expired." }, 401);
+  if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     return await listResponse(manager.id);
   } catch (error) {
@@ -24,7 +24,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
-  if (!manager) return jsonResponse({ success: false, message: "Extension session is invalid or expired." }, 401);
+  if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     if (!(await managerCanManageJobDetectionUrlRules(manager.id))) {
       return jsonResponse({ success: false, message: "Super must assign job-detection URL rule management to this Manager." }, 403);

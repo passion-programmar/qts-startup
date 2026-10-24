@@ -27,7 +27,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
   if (!manager) {
     return jsonResponse(
-      { success: false, message: "Extension session is invalid or expired." },
+      { success: false, message: "Your QTS session has ended. Sign in again." },
       401,
     );
   }
@@ -46,7 +46,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const profileIds = readProfileIds(body);
   if (!job || !profileIds) {
     return jsonResponse(
-      { success: false, message: "Valid job details and selected profile IDs are required." },
+      { success: false, message: "The job details or candidate selection are invalid. Run Get JD on the page again." },
       400,
     );
   }
@@ -58,7 +58,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return jsonResponse(
         {
           success: false,
-          message: "This job has not passed Gemini job validation and remote eligibility.",
+          message: "This page was not confirmed as a remote job, so it cannot be saved.",
         },
         409,
       );
@@ -87,7 +87,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     if (candidates.length !== profileIds.length) {
       return jsonResponse(
-        { success: false, message: "One or more selected profiles are unavailable." },
+        { success: false, message: "One or more selected candidates are no longer available. Run Get JD again to refresh the list." },
         403,
       );
     }
@@ -110,8 +110,8 @@ export async function POST(request: Request): Promise<NextResponse> {
           category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
           status: "already_exists",
           message: duplicate === "applied"
-            ? "Already applied."
-            : "Already present in the Job List.",
+            ? "Already applied (in Bids)."
+            : "Already in Jobs.",
         });
         continue;
       }
@@ -129,8 +129,8 @@ export async function POST(request: Request): Promise<NextResponse> {
             category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
             status: "already_exists",
             message: savedJob.status === "applied"
-              ? "Already applied."
-              : "Already present in the Job List.",
+              ? "Already applied (in Bids)."
+              : "Already in Jobs.",
           });
           continue;
         }
@@ -139,7 +139,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           name,
           category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
           status: "saved",
-          message: "Added to the Job List.",
+          message: "Saved to Jobs.",
           jobId: savedJob.jobId,
         });
       } catch (error) {
@@ -149,7 +149,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           name,
           category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
           status: "failed",
-          message: "Could not add this profile to the Job List.",
+          message: "Could not save this candidate to Jobs.",
         });
       }
     }

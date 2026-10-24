@@ -77,7 +77,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
   if (!manager) {
     return jsonResponse(
-      { success: false, message: "Extension session is invalid or expired." },
+      { success: false, message: "Your QTS session has ended. Sign in again." },
       401,
     );
   }
@@ -311,7 +311,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       exists: presence.inJobs || presence.inBids,
       ...presence,
       toastKind,
-      toastMessage: toastKind === "applied" ? "Already applied." : toastKind === "added" ? "Already added." : "New job.",
+      toastMessage: toastKind === "applied" ? "Already applied — this job is in your Bids." : toastKind === "added" ? "Already added — this job is in your Jobs list." : "New job — not in your Jobs or Bids yet.",
       message: autoSavedProfileIds.size > 0
         ? `Gemini matched and automatically saved this job for ${autoSavedProfileIds.size} account${autoSavedProfileIds.size === 1 ? "" : "s"}.${autoSaveFailedProfileIds.size > 0 ? ` Automatic saving failed for ${autoSaveFailedProfileIds.size} matching account${autoSaveFailedProfileIds.size === 1 ? "" : "s"}; they remain selected so you can retry.` : " Review checked and unchecked candidates and save any additional accounts."}`
         : autoSaveFailedProfileIds.size > 0

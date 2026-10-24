@@ -14,7 +14,7 @@ const maxPageExclusions = 200;
 export async function GET(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
   if (!manager) {
-    return jsonResponse({ success: false, message: "Extension session is invalid or expired." }, 401);
+    return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   }
   try {
     return await listResponse(manager.id);
@@ -27,7 +27,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
   if (!manager) {
-    return jsonResponse({ success: false, message: "Extension session is invalid or expired." }, 401);
+    return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   }
   try {
     if (!(await managerCanManagePageExclusions(manager.id))) {

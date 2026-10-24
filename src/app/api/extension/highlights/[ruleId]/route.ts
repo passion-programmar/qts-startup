@@ -13,7 +13,7 @@ type RouteContext = { params: Promise<{ ruleId: string }> };
 
 export async function PUT(request: Request, context: RouteContext): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
-  if (!manager) return jsonResponse({ success: false, message: "Extension session is invalid or expired." }, 401);
+  if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     if (!(await managerCanManageTextHighlights(manager.id))) {
       return jsonResponse({ success: false, message: "Super must assign text highlight management to this Manager." }, 403);
@@ -38,7 +38,7 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
 
 export async function DELETE(request: Request, context: RouteContext): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
-  if (!manager) return jsonResponse({ success: false, message: "Extension session is invalid or expired." }, 401);
+  if (!manager) return jsonResponse({ success: false, message: "Your QTS session has ended. Sign in again." }, 401);
   try {
     if (!(await managerCanManageTextHighlights(manager.id))) {
       return jsonResponse({ success: false, message: "Super must assign text highlight management to this Manager." }, 403);

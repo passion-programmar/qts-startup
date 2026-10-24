@@ -15,7 +15,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
   if (!manager) {
     return NextResponse.json(
-      { success: false, message: "Extension session is invalid or expired." },
+      { success: false, message: "Your QTS session has ended. Sign in again." },
       { status: 401 },
     );
   }

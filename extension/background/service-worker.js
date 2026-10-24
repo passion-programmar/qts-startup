@@ -946,8 +946,8 @@ async function cancelGetJdReview(tabId) {
     status: 'cancelled',
     reviewDismissed: true,
     message: (result.autoSavedProfileIds || []).length > 0
-      ? 'Review closed. Automatically saved matching jobs remain in the Job List.'
-      : 'Cancelled. No Job List rows were saved.',
+      ? 'Review closed. Jobs saved automatically for matching candidates stay in Jobs.'
+      : 'Review closed. Nothing was saved.',
     updatedAt: Date.now(),
   });
   return { ok: true };
@@ -1032,7 +1032,7 @@ async function saveGetJdSelection(tabId, profileIds) {
     ...result,
     status: 'saved',
     saveError: null,
-    message: 'Job List save finished.',
+    message: 'Save finished.',
     saveResponse: response,
     updatedAt: Date.now(),
   });
@@ -4423,6 +4423,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ok: true,
           status: 'cancel',
           cancelledStatus,
+          warning: Boolean(serverCancelError),
           message: serverCancelError
             ? `${cancelledLabel} stopped in this browser. QTS was not updated yet: ${serverCancelError}`
             : `${cancelledLabel} cancelled.`,
@@ -4487,7 +4488,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         ok: true,
         status: 'get_jd',
-        message: "Let's start finding Your Remote Job!",
+        message: 'Get JD is on. QTS checks each job page you open.',
       });
     })().catch((error) => sendResponse({
       ok: false,

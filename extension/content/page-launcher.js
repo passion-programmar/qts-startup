@@ -50,9 +50,6 @@ async function initializeQtsPageLauncher() {
     .logout { --x: 46px; --y: -143px; }
     .text-highlights { --x: 122px; --y: -88px; }
     .page-exclusions { --x: 150px; --y: 0px; }
-    .toast { position: fixed; top: 16px; left: 16px; max-width: min(360px, calc(100vw - 32px)); padding: 11px 14px; border-radius: 9px; background: #172554; color: #fff; box-shadow: 0 9px 28px #0f172a38; font: 600 13px/1.4 system-ui, sans-serif; pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .16s ease, transform .16s ease; }
-    .toast.visible { opacity: 1; transform: translateY(0); }
-    .toast.error { background: #991b1b; }
     .sign-in-form { position: fixed; top: 18px; right: 18px; z-index: 5; width: min(312px, calc(100vw - 36px)); height: 220px; pointer-events: auto; }
     .sign-in-form[hidden] { display: none; }
     .sign-in-form iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; color-scheme: normal; }
@@ -79,18 +76,7 @@ async function initializeQtsPageLauncher() {
       .page-exclusions { --x: 112px; --y: 0px; }
       .launcher.get-jd-active { right: calc(50vw - 29px); }
     }
-    @media (prefers-reduced-motion: reduce) { .main, .action, .toast, .launcher { transition: none; } .launcher::before { animation: none; } }
-
-      .toast-host { position: fixed; top: 16px; left: 16px; z-index: 2147483647; display: flex; flex-direction: column; gap: 10px; width: min(390px, calc(100vw - 32px)); pointer-events: none; }
-      .toast-host .toast { --accent: #2563eb; position: relative; inset: auto; box-sizing: border-box; width: 100%; max-width: none; display: flex; gap: 10px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--accent) 20%, white); border-left: 4px solid var(--accent); border-radius: 14px; color: #172033; background: color-mix(in srgb, var(--accent) 7%, white); box-shadow: 0 12px 32px #0f172a20; font: 500 13px/1.45 system-ui, sans-serif; opacity: 1; transform: none; animation: qts-toast-enter .25s ease both; overflow-wrap: anywhere; }
-      .toast-host .toast.error, .toast-host .toast[data-type="error"], .toast-host .toast[data-type="fail"] { --accent: #dc2626; }
-      .toast-host .toast.success, .toast-host .toast[data-type="success"], .toast-host .toast[data-type="new-job"] { --accent: #15803d; }
-      .toast-host .toast[data-type="warn"] { --accent: #d97706; }
-      .toast-host .toast[data-type="applied"] { --accent: #7c3aed; }
-      .toast-host .toast.is-leaving { animation: qts-toast-exit .25s ease both; }
-      @keyframes qts-toast-enter { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: translateX(0); } }
-      @keyframes qts-toast-exit { to { opacity: 0; transform: translateX(36px); } }
-      @media (prefers-reduced-motion: reduce) { .toast-host .toast, .toast-host .toast.is-leaving { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .main, .action, .launcher { transition: none; } .launcher::before { animation: none; } }
 `;
 
   const launcher = document.createElement('div');
@@ -131,11 +117,6 @@ async function initializeQtsPageLauncher() {
     launcher.appendChild(button);
   }
 
-  const toast = document.createElement('div');
-  toast.className = 'toast-host';
-  toast.setAttribute('role', 'status');
-  toast.setAttribute('aria-live', 'polite');
-
   // Credentials are typed in an extension-origin frame, never in this page's DOM,
   // so page scripts and session-replay tools cannot observe the key presses.
   const signInForm = document.createElement('div');
@@ -164,7 +145,7 @@ async function initializeQtsPageLauncher() {
   details.className = 'details';
   preview.append(previewHeader, localNote, details);
 
-  root.append(style, launcher, toast, signInForm, preview);
+  root.append(style, launcher, signInForm, preview);
   (document.documentElement || document.body).appendChild(host);
 
   function setOpen(open) {
@@ -192,15 +173,9 @@ async function initializeQtsPageLauncher() {
   });
   syncGetJdDocking();
 
-  function showToast(message, isError = false) {
-    const card = document.createElement('div');
-    card.className = 'toast ' + (isError ? 'error' : 'success');
-    card.textContent = message;
-    toast.prepend(card);
-    setTimeout(() => {
-      card.classList.add('is-leaving');
-      setTimeout(() => card.remove(), 250);
-    }, 4000);
+  // All toasts on the page share one stack (content/page-toast.js).
+  function showToast(message, type = 'info') {
+    globalThis.__qtsPageToast?.show(message, { type });
   }
 
   function showSignInForm() {
@@ -284,7 +259,7 @@ async function initializeQtsPageLauncher() {
         canManageJobDetectionUrlRules: response.canManageJobDetectionUrlRules === true,
       });
     } catch (error) {
-      showToast(error?.message || 'Could not open Manager settings.', true);
+      showToast(error?.message || 'Could not open Manager settings.', 'error');
     } finally {
       button.disabled = false;
     }
@@ -407,14 +382,17 @@ async function initializeQtsPageLauncher() {
       if (resolvedAction === 'sign_out') {
         preview.hidden = true;
         hideSignInForm();
-        toast.replaceChildren();
+        globalThis.__qtsPageToast?.clear();
         await syncSessionAction();
       } else if (resolvedAction === 'get_jd' || resolvedAction === 'generation' || resolvedAction === 'cancel_status') {
-        showToast(response.message || (resolvedAction === 'cancel_status' ? 'Get JD cancelled.' : "Let's start finding Your Remote Job!"));
+        showToast(
+          response.message || (resolvedAction === 'cancel_status' ? 'Cancelled.' : 'Started.'),
+          response.warning ? 'warn' : 'info',
+        );
         await syncModeActions();
       }
     } catch (error) {
-      showToast(error?.message || 'Could not run this QTS action.', true);
+      showToast(error?.message || 'Could not run this QTS action.', 'error');
     } finally {
       button.disabled = false;
     }
@@ -443,7 +421,7 @@ async function initializeQtsPageLauncher() {
       // Sign-in always clears the previous session first, so a fresh expiry means a new sign-in.
       if (changes.authExpiresAt.newValue && !changes.authExpiresAt.oldValue) {
         hideSignInForm();
-        showToast('Signed in successfully.');
+        showToast('Signed in. QTS actions are ready.', 'success');
       }
     }
     if (changes.qtsExtensionStatus) syncModeActions().catch(() => {});
@@ -456,7 +434,7 @@ async function initializeQtsPageLauncher() {
     if (message?.type !== 'QTS_GENERATION_PROGRESS') return;
     showToast(
       String(message.message || 'Generation updated.'),
-      message.statusType === 'error',
+      message.statusType || 'info',
     );
   };
   const onKeydown = (event) => {

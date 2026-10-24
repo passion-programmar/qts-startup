@@ -17,6 +17,7 @@
         "shared/page-exclusions.js",
         "shared/text-highlighting.js",
         "content/text-highlighter.js",
+        "content/page-toast.js",
         "content/page-launcher.js"
       ],
       "run_at": "document_start"

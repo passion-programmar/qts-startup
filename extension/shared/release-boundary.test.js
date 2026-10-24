@@ -77,7 +77,7 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(serviceWorker.includes("'/api/extension/get-jd/check'"));
   assert.equal(serviceWorker.includes('requestGeminiJson'), false);
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'get_jd'"));
-  assert.ok(launcher.includes("Let's start finding Your Remote Job!"));
+  assert.ok(serviceWorker.includes("message: 'Get JD is on. QTS checks each job page you open.'"));
   assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
   assert.ok(launcher.includes("document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true'"));
   assert.ok(launcher.includes("attributeFilter: ['data-qts-get-jd-docked']"));
@@ -517,9 +517,9 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes("'In Jobs · To do'"));
   assert.ok(review.includes("elements.heading.textContent = 'Save result'"));
   assert.ok(review.includes('Successfully saved ${savedCount}'));
-  assert.ok(review.includes("? 'Already applied.'"));
-  assert.ok(review.includes("? 'Already added.'"));
-  assert.ok(review.includes("result.toastMessage || 'New job.'"));
+  assert.ok(review.includes("if (result.inBids) return 'Already applied — this job is in your Bids.';"));
+  assert.ok(review.includes("if (result.inJobs) return 'Already added — this job is in your Jobs list.';"));
+  assert.ok(review.includes('result.toastMessage || jobPresenceMessage(result)'));
   assert.ok(evaluationRoute.includes('insertGetJdJob(jobToSave)'));
   assert.ok(evaluationRoute.includes('updateExistingGetJdJobDetails(jobToSave)'));
   const detailUpdater = duplicateHelper.slice(
@@ -824,19 +824,19 @@ test('resume PDF downloads remember a user-selected folder without requiring the
   assert.equal(pageScripts.includes('content/pdf-download-bridge.js'), false);
 });
 
-test('page toasts use a modern theme and keep the newest notice on top', () => {
-  const toast = fs.readFileSync(
-    path.join(extensionRoot, 'content', 'detect-toast.js'),
-    'utf8',
-  );
+test('every page toast goes through the one shared stack', () => {
+  const read = (...parts) => fs.readFileSync(path.join(extensionRoot, ...parts), 'utf8');
+  const manifest = JSON.parse(read('manifest.json'));
+  const pageScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
+  const launcher = read('content', 'page-launcher.js');
+  const panel = read('content', 'get-jd-review.js');
+  const detectToast = read('content', 'detect-toast.js');
 
-  assert.ok(toast.includes('host.insertBefore(toast, host.firstChild)'));
-  assert.ok(toast.includes('const AUTO_HIDE_MS = 4000;'));
-  assert.ok(toast.includes('transform: translateX(-36px)'));
-  assert.ok(toast.includes('transform: translateX(36px)'));
-  assert.ok(toast.includes('backdrop-filter: blur(12px)'));
-  assert.ok(toast.includes('border-left: 4px solid var(--qts-toast-accent'));
-  assert.ok(toast.includes('@media (prefers-reduced-motion: reduce)'));
+  assert.ok(pageScripts.indexOf('content/page-toast.js') < pageScripts.indexOf('content/page-launcher.js'));
+  for (const source of [launcher, panel, detectToast]) {
+    assert.ok(source.includes('globalThis.__qtsPageToast?.show('));
+    assert.equal(source.includes('toast-host'), false);
+  }
 });
 
 test('disabled page UI removes its listeners and the queue alarm only runs during Generation', () => {
