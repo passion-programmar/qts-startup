@@ -788,6 +788,12 @@ async function renderTemplatePdf(
   await document.fonts.ready;
   const pageWidthMm = cssMillimeters(window.getComputedStyle(root).getPropertyValue("--page-width"));
   const pageHeightMm = cssMillimeters(window.getComputedStyle(root).getPropertyValue("--page-height"));
+  const pageMarginTopMm = cssMillimeters(window.getComputedStyle(root).getPropertyValue("--page-margin-top"));
+  const pageMarginBottomMm = cssMillimeters(window.getComputedStyle(root).getPropertyValue("--page-margin-bottom"));
+  const pageContentHeightMm = pageHeightMm - pageMarginTopMm - pageMarginBottomMm;
+  if (pageContentHeightMm <= 0) {
+    throw new Error("The preview has invalid page margins.");
+  }
   const pageWidthPoints = pageWidthMm * 72 / 25.4;
   const pageHeightPoints = pageHeightMm * 72 / 25.4;
   const canvas = await html2canvas(article, {
@@ -806,24 +812,42 @@ async function renderTemplatePdf(
     scrollY: 0,
   });
 
-  const pixelsPerPage = canvas.width * pageHeightMm / pageWidthMm;
-  const pageCount = Math.max(1, Math.ceil(canvas.height / pixelsPerPage - 0.01));
+  const pixelsPerMm = canvas.width / pageWidthMm;
+  // The preview's page guides repeat over the usable content height, not full paper height.
+  const firstPageContentEndMm = pageHeightMm - pageMarginBottomMm;
+  const estimatedPageCount = Math.max(
+    1,
+    Math.ceil(((canvas.height / pixelsPerMm - pageMarginTopMm - pageMarginBottomMm) / pageContentHeightMm) - 0.01),
+  );
+  const renderedPageCount = Number.parseInt(root.dataset.pages ?? "", 10);
+  const pageCount = Math.max(
+    estimatedPageCount,
+    Number.isFinite(renderedPageCount) && renderedPageCount > 0 ? renderedPageCount : 1,
+  );
   const { PDFDocument } = await import("pdf-lib");
   const pdf = await PDFDocument.create();
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
     const pageCanvas = document.createElement("canvas");
     pageCanvas.width = canvas.width;
-    pageCanvas.height = Math.ceil(pixelsPerPage);
+    pageCanvas.height = Math.ceil(pixelsPerMm * pageHeightMm);
     const context = pageCanvas.getContext("2d");
     if (!context) throw new Error("The browser could not prepare a PDF page.");
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-    const sourceY = Math.round(pageIndex * pixelsPerPage);
+    const sourceStartMm = pageIndex === 0
+      ? 0
+      : firstPageContentEndMm + (pageIndex - 1) * pageContentHeightMm;
+    const sourceEndMm = firstPageContentEndMm + pageIndex * pageContentHeightMm;
+    const sourceY = Math.round(sourceStartMm * pixelsPerMm);
     const sourceHeight = Math.max(
       0,
-      Math.min(Math.ceil(pixelsPerPage), canvas.height - sourceY),
+      Math.min(
+        Math.round(sourceEndMm * pixelsPerMm) - sourceY,
+        canvas.height - sourceY,
+      ),
     );
     if (sourceHeight) {
+      const destinationY = pageIndex === 0 ? 0 : Math.round(pageMarginTopMm * pixelsPerMm);
       context.drawImage(
         canvas,
         0,
@@ -831,7 +855,7 @@ async function renderTemplatePdf(
         canvas.width,
         sourceHeight,
         0,
-        0,
+        destinationY,
         pageCanvas.width,
         sourceHeight,
       );
