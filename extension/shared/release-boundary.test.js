@@ -675,9 +675,25 @@ test('shared text highlights are manager-gated and available from the page launc
   assert.ok(settingsPage.includes('<ManagerTextHighlightAccessForm'));
   assert.ok(settingsActions.includes('actor.role !== "super_admin"'));
   assert.ok(settingsActions.includes('canManageTextHighlights: enabledValue === "true"'));
-  assert.ok(manifest.web_accessible_resources.some((entry) => (
-    entry.resources || []
-  ).includes('popup/*')));
+  const exposedResources = manifest.web_accessible_resources.flatMap((entry) => entry.resources || []);
+  assert.equal(exposedResources.includes('popup/*'), false);
+  assert.equal(exposedResources.includes('shared/*'), false);
+});
+
+test('signing out or switching Managers clears stored Get JD reviews', () => {
+  const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  const authRemovedBranch = worker.slice(
+    worker.indexOf("if (area === 'local' && changes.authToken) {"),
+    worker.indexOf('chrome.runtime.onInstalled.addListener'),
+  );
+
+  assert.ok(authRemovedBranch.includes('chrome.storage.local.remove(GET_JD_RESULTS_KEY)'));
+});
+
+test('the page launcher disable path only touches elements it defines', () => {
+  const launcher = fs.readFileSync(path.join(extensionRoot, 'content', 'page-launcher.js'), 'utf8');
+
+  assert.equal(launcher.includes('highlightPanel'), false);
 });
 
 test('page Sign In uses the two-field top-right form instead of the embedded panel', () => {

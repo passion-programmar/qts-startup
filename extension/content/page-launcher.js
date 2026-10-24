@@ -541,7 +541,6 @@ async function initializeQtsPageLauncher() {
     openPageExclusionPanel,
     disable() {
       setOpen(false);
-      highlightPanel.hidden = true;
       preview.hidden = true;
       signInForm.hidden = true;
       getJdDockObserver.disconnect();

@@ -235,10 +235,14 @@ function isUsableJobTitle(value) {
 
 function stripHtml(html) {
   if (!html) return '';
-  const entityDecoder = document.createElement('textarea');
+  // Parse page-supplied markup in an inert document so it cannot load resources or run handlers.
+  const parsingDocument = typeof DOMParser === 'function'
+    ? new DOMParser().parseFromString('', 'text/html')
+    : document;
+  const entityDecoder = parsingDocument.createElement('textarea');
   entityDecoder.innerHTML = String(html);
   const decodedHtml = entityDecoder.value || String(html);
-  const d = document.createElement('div');
+  const d = parsingDocument.createElement('div');
   d.innerHTML = decodedHtml;
   d.querySelectorAll('script,style,nav,footer').forEach(e => e.remove());
   return (d.innerText || d.textContent || '')

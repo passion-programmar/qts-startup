@@ -27,12 +27,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "popup/*",
-        "shared/*",
         "assets/wys-launcher.png",
-        "assets/account-logo.png",
-        "assets/theme.css",
-        "assets/popup.css"
+        "assets/account-logo.png"
       ],
       "matches": ["<all_urls>"]
     }

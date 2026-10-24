@@ -5336,6 +5336,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (!changes.authToken.newValue) {
       disarmJobPageActivity();
       chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null }).catch(() => {});
+      // Reviews contain the previous Manager's candidates and must not survive a session change.
+      chrome.storage.local.remove(GET_JD_RESULTS_KEY).catch(() => {});
       getJdInFlightTabs.clear();
       getJdLastPageByTab.clear();
     }

@@ -9,6 +9,47 @@ const genericSource = fs.readFileSync(
   'utf8',
 );
 
+test('generic extractor parses description markup outside the live page document', () => {
+  const jobPosting = {
+    '@type': 'JobPosting',
+    title: 'Platform Engineer',
+    hiringOrganization: { name: 'Example Company' },
+    description: '&lt;img src=x onerror=alert(1)&gt;Build reliable software.',
+    url: 'https://careers.example/jobs/platform-engineer',
+  };
+  const fakeElement = () => ({
+    set innerHTML(value) {
+      this.value = value.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+      this.innerText = value.replace(/<[^>]*>/g, '');
+    },
+    innerText: '',
+    querySelectorAll() {
+      return [];
+    },
+  });
+  let liveElementsCreated = 0;
+  const document = {
+    querySelectorAll() {
+      return [{ textContent: JSON.stringify(jobPosting) }];
+    },
+    createElement() {
+      liveElementsCreated += 1;
+      return fakeElement();
+    },
+  };
+  class DOMParser {
+    parseFromString() {
+      return { createElement: fakeElement };
+    }
+  }
+  const window = {};
+  vm.runInNewContext(genericSource, { document, window, URL, DOMParser });
+
+  const result = window.__extractJsonLd();
+  assert.equal(result.description, 'Build reliable software.');
+  assert.equal(liveElementsCreated, 0);
+});
+
 test('generic extractor finds JobPosting in nested JSON-LD graphs', () => {
   const jobPosting = {
     '@type': 'https://schema.org/JobPosting',
