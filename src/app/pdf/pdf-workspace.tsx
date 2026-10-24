@@ -802,6 +802,7 @@ async function renderTemplatePdf(
     height: article.scrollHeight,
     logging: false,
     onclone: (clonedDocument, clonedArticle) => {
+      movePdfTitleRulesBelowText(clonedDocument, clonedArticle);
       materializePdfBulletMarkers(clonedDocument, clonedArticle);
     },
     scale: 2,
@@ -840,7 +841,7 @@ async function renderTemplatePdf(
   );
   const { PDFDocument } = await import("pdf-lib");
   const pdf = await PDFDocument.create();
-  for (const [pageIndex, pageSlice] of pageSlices.entries()) {
+  for (const pageSlice of pageSlices) {
     const pageCanvas = document.createElement("canvas");
     pageCanvas.width = canvas.width;
     pageCanvas.height = Math.ceil(pixelsPerMm * pageHeightMm);
@@ -875,6 +876,25 @@ async function renderTemplatePdf(
     page.drawImage(image, { x: 0, y: 0, width: pageWidthPoints, height: pageHeightPoints });
   }
   return pdf.save();
+}
+
+function movePdfTitleRulesBelowText(clonedDocument: Document, article: HTMLElement): void {
+  article.querySelectorAll<HTMLElement>(".section-title, .letter-subject").forEach((title) => {
+    const style = clonedDocument.defaultView?.getComputedStyle(title);
+    if (!style || style.borderBottomStyle === "none" || Number.parseFloat(style.borderBottomWidth) <= 0) {
+      return;
+    }
+
+    const rule = clonedDocument.createElement("span");
+    rule.setAttribute("aria-hidden", "true");
+    rule.style.position = "absolute";
+    rule.style.insetInline = "0";
+    rule.style.bottom = "-4px";
+    rule.style.borderTop = `${style.borderBottomWidth} ${style.borderBottomStyle} ${style.borderBottomColor}`;
+    title.style.position = style.position === "static" ? "relative" : style.position;
+    title.style.borderBottomColor = "transparent";
+    title.append(rule);
+  });
 }
 
 function materializePdfBulletMarkers(clonedDocument: Document, article: HTMLElement): void {
