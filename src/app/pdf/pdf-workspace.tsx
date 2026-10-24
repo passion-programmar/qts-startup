@@ -1,7 +1,7 @@
 "use client";
 
 import html2canvas from "html2canvas";
-import { Download, ExternalLink } from "lucide-react";
+import { ArrowLeftRight, Download, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PdfPackage } from "@/app/pdf/document-data";
@@ -26,6 +26,7 @@ export function PdfWorkspace({
   managerName: string;
 }) {
   const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>("qts-standard");
+  const [resumeOnLeft, setResumeOnLeft] = useState(true);
   const [source, setSource] = useState(example);
   const [parsed, setParsed] = useState<PdfPackage | null>(
     () => tryParsePdfPackage(example),
@@ -42,6 +43,9 @@ export function PdfWorkspace({
   const coverLetterFrameRef = useRef<HTMLIFrameElement>(null);
   const sampleSourceSelected = source === example;
   const previewData = parsed ?? samplePreviewData;
+  const previewOrder: PreviewDocumentType[] = resumeOnLeft
+    ? ["resume", "cover-letter"]
+    : ["cover-letter", "resume"];
   const templateData = useMemo(
     () => toResumeTemplateData(previewData, selectedTemplate),
     [previewData, selectedTemplate],
@@ -90,8 +94,8 @@ export function PdfWorkspace({
   }
 
   return (
-    <main className="py-1">
-      <header className="mb-7 flex flex-wrap items-start justify-between gap-3">
+    <main className="py-1 xl:flex xl:h-[calc(100dvh-8.5rem)] xl:min-h-[28rem] xl:flex-col">
+      <header className="mb-4 flex shrink-0 flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Resume</h1>
           <p className="mt-1 text-sm text-slate-500">Choose a resume template and create a matching cover letter from one JSON object. Processing stays in this browser.</p>
@@ -106,8 +110,8 @@ export function PdfWorkspace({
           Resume
         </a>
       </header>
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,3.5fr)_minmax(0,6fr)]">
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="grid items-start gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(17rem,0.34fr)_minmax(0,0.66fr)]">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-24 xl:max-h-[calc(100dvh-8rem)] xl:overflow-y-auto">
           <div className="space-y-4 p-5">
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Resume and cover-letter template
               <select className={inputClass} id="pdf-template" onChange={(event) => {
@@ -116,7 +120,7 @@ export function PdfWorkspace({
                 {pdfTemplateValues.map((template) => <option key={template} value={template}>{pdfTemplateLabels[template]}</option>)}
               </select>
             </label>
-            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="min-h-[440px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
+            <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="h-[min(36vh,28rem)] min-h-[180px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
             {sampleSourceSelected && <p className="text-xs text-amber-800">Sample template JSON is prefilled for preview. Replace it with your generated resume data before saving files.</p>}
             <p className="text-xs text-slate-500">Download both PDFs using the selected template. Files save under Downloads / QTS_Resume / {managerName} / candidate.</p>
@@ -133,24 +137,32 @@ export function PdfWorkspace({
             </div>
           </div>
         </section>
-        <section className="space-y-5">
+        <section className="min-w-0 space-y-4 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-2">
+          <div className="flex justify-end">
+            <button
+              aria-label="Switch resume and cover letter sides"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={() => setResumeOnLeft((current) => !current)}
+              type="button"
+            >
+              <ArrowLeftRight aria-hidden="true" className="size-4" />
+              Switch sides
+            </button>
+          </div>
           {!parsed && <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
-          <PdfTemplatePreviewFrame
-            documentData={templateData}
-            documentType="resume"
-            template={selectedTemplate}
-            title={`Resume preview · ${pdfTemplateLabels[selectedTemplate]}`}
-            iframeRef={resumeFrameRef}
-            onStatusChange={updatePreviewStatus}
-          />
-          <PdfTemplatePreviewFrame
-            documentData={templateData}
-            documentType="cover-letter"
-            template={selectedTemplate}
-            title={`Cover letter preview · ${pdfTemplateLabels[selectedTemplate]}`}
-            iframeRef={coverLetterFrameRef}
-            onStatusChange={updatePreviewStatus}
-          />
+          <div className="grid items-start gap-4 md:grid-cols-2">
+            {previewOrder.map((documentType) => (
+              <PdfTemplatePreviewFrame
+                key={documentType}
+                documentData={templateData}
+                documentType={documentType}
+                template={selectedTemplate}
+                title={`${documentType === "resume" ? "Resume" : "Cover letter"} preview · ${pdfTemplateLabels[selectedTemplate]}`}
+                iframeRef={documentType === "resume" ? resumeFrameRef : coverLetterFrameRef}
+                onStatusChange={updatePreviewStatus}
+              />
+            ))}
+          </div>
         </section>
       </div>
     </main>
@@ -173,12 +185,27 @@ function PdfTemplatePreviewFrame({
   onStatusChange: (documentType: PreviewDocumentType, status: "loading" | "ready" | "error") => void;
 }) {
   const requestId = useRef("");
+  const previewRef = useRef<HTMLDivElement>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [previewWidth, setPreviewWidth] = useState(0);
+  const [frameSize, setFrameSize] = useState({ width: 794, height: 1122 });
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState("");
   const [warnings, setWarnings] = useState("");
+  const scale = previewWidth ? Math.min(1, previewWidth / frameSize.width) : 1;
 
   useEffect(() => onStatusChange(documentType, status), [documentType, onStatusChange, status]);
+
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setPreviewWidth(entry.contentRect.width);
+    });
+    observer.observe(preview);
+    setPreviewWidth(preview.clientWidth);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     function sendDocument() {
@@ -205,6 +232,21 @@ function PdfTemplatePreviewFrame({
         || event.data.requestId !== requestId.current
       ) return;
       if (event.data.ok) {
+        const frameDocument = iframeRef.current?.contentDocument;
+        const root = frameDocument?.documentElement;
+        const article = frameDocument?.querySelector<HTMLElement>(".doc");
+        if (root && article && frameDocument) {
+          const styles = frameDocument.defaultView?.getComputedStyle(root);
+          if (styles) {
+            const width = cssMillimeters(styles.getPropertyValue("--page-width")) * 96 / 25.4;
+            const pageHeight = cssMillimeters(styles.getPropertyValue("--page-height")) * 96 / 25.4;
+            const pages = Number(root.dataset.pages) || 1;
+            setFrameSize({
+              width,
+              height: Math.max(article.scrollHeight, pageHeight * pages),
+            });
+          }
+        }
         setWarnings(typeof event.data.warnings === "string" ? event.data.warnings : "");
         setStatus("ready");
       } else {
@@ -218,21 +260,30 @@ function PdfTemplatePreviewFrame({
     return () => window.removeEventListener("message", handleRender);
   }, [documentData, iframeLoaded, iframeRef, template]);
 
-  return <section aria-label={title} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-5">
+  return <section aria-label={title} className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-4">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
     </div>
     {status === "error" && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{message}</p>}
     {warnings && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{warnings}</p>}
     {status === "loading" && <p className="mb-3 text-xs text-slate-500" role="status">Rendering {documentType} template…</p>}
-    <div className="mx-auto max-w-[820px] overflow-hidden rounded-sm bg-white shadow-xl shadow-slate-900/15">
+    <div ref={previewRef} className="overflow-hidden rounded-sm bg-white shadow-xl shadow-slate-900/15">
+      <div style={{ height: frameSize.height * scale, position: "relative" }}>
       <iframe
-        className="block h-[1100px] w-full border-0 bg-white"
+        className="absolute top-0 block max-w-none border-0 bg-white"
         onLoad={() => setIframeLoaded(true)}
         ref={iframeRef}
         src={`/resume-templates/${documentType === "resume" ? "resume" : "cover-letter"}.html?embed=1`}
+        style={{
+          height: frameSize.height,
+          left: "50%",
+          transform: `translateX(-50%) scale(${scale})`,
+          transformOrigin: "top center",
+          width: frameSize.width,
+        }}
         title={title}
       />
+      </div>
     </div>
   </section>;
 }
@@ -299,7 +350,7 @@ async function renderTemplatePdf(
 
   const pixelsPerPage = canvas.width * pageHeightMm / pageWidthMm;
   const previewPages = Number(root.dataset.pages) || 1;
-  const pageCount = Math.max(previewPages, Math.ceil(canvas.height / pixelsPerPage - 0.01));
+  const pageCount = Math.max(1, previewPages, Math.ceil(canvas.height / pixelsPerPage - 0.01));
   const { PDFDocument } = await import("pdf-lib");
   const pdf = await PDFDocument.create();
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
@@ -325,7 +376,7 @@ async function renderTemplatePdf(
         0,
         0,
         pageCanvas.width,
-        Math.ceil(pixelsPerPage),
+        sourceHeight,
       );
     }
     const image = await pdf.embedPng(pageCanvas.toDataURL("image/png"));
