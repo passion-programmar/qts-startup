@@ -33,8 +33,8 @@
   const FONT_SCALE_MIN = 0.95;
   const FONT_SCALE_MAX = 1.15;
 
-  const DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
-  const MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
+  let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
+  let MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
 
   const FALLBACK_SETTINGS = {
     headerAlign: "start",
@@ -67,9 +67,12 @@
     closing: "Kind regards,",
   };
 
-  const root = document.documentElement;
+  let root = document.documentElement;
   const params = new URLSearchParams(location.search);
-  const mount = document.getElementById("resume-root");
+  let mount = document.getElementById("resume-root");
+  let styleRoot = document.head;
+  let directRenderMode = window.QTS_RESUME_DIRECT_RENDER === true;
+  let scopeDirectStyle = null;
   let currentData = null;
   let renderCount = 0;
 
@@ -317,21 +320,35 @@
       );
     }
     runtimeStyle().textContent = rules.join("\n");
+    if (directRenderMode && scopeDirectStyle) scopeDirectStyle(runtimeStyle());
   }
 
   function runtimeStyle() {
-    let style = document.getElementById("resume-runtime-style");
+    let style = styleRoot.querySelector("#resume-runtime-style");
     if (!style) {
       style = el("style");
       style.id = "resume-runtime-style";
-      document.head.append(style);
+      styleRoot.append(style);
     }
     return style;
   }
 
-  function loadTemplate(id) {
+  async function loadTemplate(id) {
+    if (directRenderMode) {
+      const response = await fetch(`/resume-templates/templates/${id}.css`);
+      if (!response.ok) throw new Error(`The ${id} resume template stylesheet could not be loaded.`);
+      let style = styleRoot.querySelector("#template-css");
+      if (!style) {
+        style = el("style");
+        style.id = "template-css";
+      }
+      style.textContent = await response.text();
+      if (scopeDirectStyle) scopeDirectStyle(style);
+      styleRoot.insertBefore(style, runtimeStyle());
+      return;
+    }
     const href = `templates/${id}.css`;
-    const current = document.getElementById("template-css");
+    const current = styleRoot.querySelector("#template-css");
     if (current && current.getAttribute("href") === href) return Promise.resolve();
     return new Promise((resolve) => {
       const link = el("link");
@@ -343,11 +360,12 @@
         resolve();
       };
       // Before the runtime style, so runtime @page rules keep the last word.
-      document.head.insertBefore(link, runtimeStyle());
+      styleRoot.insertBefore(link, runtimeStyle());
     });
   }
 
   function setMetadata(candidate, resume) {
+    if (directRenderMode) return;
     const kind = DOCUMENT === "resume" ? "Resume" : "Cover Letter";
     document.title = [candidate.fullName, resume.targetRole, kind].filter(Boolean).join(" – ");
     const description = document.querySelector('meta[name="description"]');
@@ -574,7 +592,7 @@
     const probe = el("div");
     probe.style.cssText =
       "position:absolute;visibility:hidden;height:calc(var(--page-height) - var(--page-margin-top) - var(--page-margin-bottom))";
-    document.body.append(probe);
+    (directRenderMode ? mount : document.body).append(probe);
     const pageHeight = probe.getBoundingClientRect().height;
     probe.remove();
 
@@ -604,7 +622,16 @@
 
   /* ---------- Render ---------- */
 
-  async function renderResume(rawData, overrides = {}) {
+  async function renderResume(rawData, overrides = {}, context = null) {
+    if (context?.mount && context?.root && context?.styleRoot) {
+      directRenderMode = true;
+      DOCUMENT = context.documentType === "cover-letter" ? "cover-letter" : "resume";
+      MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
+      root = context.root;
+      mount = context.mount;
+      styleRoot = context.styleRoot;
+      scopeDirectStyle = context.scopeStyle;
+    }
     const run = ++renderCount;
     root.dataset.renderState = "rendering";
     currentData = rawData;
@@ -645,7 +672,7 @@
     warnings.forEach((warning) => console.warn(`[resume] ${warning}`));
     root.dataset.renderState = "ready";
 
-    updateToolbar(template.id, pages, article.classList.contains("doc--compact"), warnings);
+    if (!directRenderMode) updateToolbar(template.id, pages, article.classList.contains("doc--compact"), warnings);
     return { document: DOCUMENT, template: template.id, settings, pages, warnings };
   }
 
@@ -792,9 +819,9 @@
   /* ---------- Start ---------- */
 
   window.renderResume = renderResume;
-  if (params.get("embed") === "1") root.classList.add("is-embed");
-  setupToolbar();
-  if (params.get("embed") === "1") {
+  if (params.get("embed") === "1" && !directRenderMode) root.classList.add("is-embed");
+  if (!directRenderMode) setupToolbar();
+  if (params.get("embed") === "1" && !directRenderMode) {
     window.addEventListener("message", async (event) => {
       const message = event.data;
       if (
@@ -826,7 +853,7 @@
         }, location.origin);
       }
     });
-  } else {
+  } else if (!directRenderMode) {
     loadInitialData()
       .then((data) => renderResume(data, urlOverrides()))
       .catch(showLoadError);

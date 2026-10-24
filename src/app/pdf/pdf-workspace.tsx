@@ -24,9 +24,33 @@ type PendingPreview = {
   timeoutId: number;
 };
 
+type DirectRenderContext = {
+  documentType: PreviewDocumentType;
+  mount: HTMLElement;
+  root: HTMLElement;
+  styleRoot: Document["head"];
+  scopeStyle: (style: HTMLStyleElement) => void;
+};
+
+declare global {
+  interface Window {
+    QTS_RESUME_DIRECT_RENDER?: boolean;
+    RESUME_OPTIONS?: Record<string, unknown>;
+    RESUME_TEMPLATES?: unknown[];
+    renderResume?: (
+      data: ReturnType<typeof toResumeTemplateData>,
+      overrides: { template: PdfTemplate },
+      context: DirectRenderContext,
+    ) => Promise<unknown>;
+  }
+}
+
 const example = JSON.stringify(sampleFull, null, 2);
 
 const samplePreviewData = parsePdfPackage(example);
+let rendererPromise: Promise<void> | null = null;
+let baseStylesPromise: Promise<void> | null = null;
+const scriptPromises = new Map<string, Promise<void>>();
 
 export function PdfWorkspace({
   managerName,
@@ -45,7 +69,7 @@ export function PdfWorkspace({
     () => initialDocumentError(),
   );
   const [busy, setBusy] = useState(false);
-  const previewFrameRef = useRef<HTMLIFrameElement>(null);
+  const previewHostRef = useRef<HTMLDivElement>(null);
   const pendingPreviewRef = useRef<PendingPreview | null>(null);
   const activeDocumentRef = useRef<PreviewDocumentType>("resume");
   const sampleSourceSelected = source === example;
@@ -91,7 +115,7 @@ export function PdfWorkspace({
 
   function captureDocument(documentType: PreviewDocumentType): Promise<Uint8Array> {
     return prepareDocument(documentType).then(() =>
-      renderTemplatePdf(previewFrameRef.current, documentType),
+      renderTemplatePdf(previewHostRef.current, documentType),
     );
   }
 
@@ -149,6 +173,29 @@ export function PdfWorkspace({
           <ExternalLink className="size-4" />
           Resume
         </a>
+        <nav aria-label="Document preview selection" className="flex items-center gap-3">
+          <button
+            aria-label="Show resume"
+            className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={busy || activeDocument === "resume"}
+            onClick={() => showDocument("resume")}
+            type="button"
+          >
+            <ChevronLeft aria-hidden="true" className="size-5" />
+          </button>
+          <span className="min-w-24 text-center text-sm font-semibold text-slate-700" aria-live="polite">
+            {activeDocument === "resume" ? "Resume" : "Cover letter"}
+          </span>
+          <button
+            aria-label="Show cover letter"
+            className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={busy || activeDocument === "cover-letter"}
+            onClick={() => showDocument("cover-letter")}
+            type="button"
+          >
+            <ChevronRight aria-hidden="true" className="size-5" />
+          </button>
+        </nav>
       </header>
       <div className="grid items-start gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(17rem,0.34fr)_minmax(0,0.66fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-24 xl:max-h-[calc(100dvh-8rem)] xl:overflow-y-auto">
@@ -177,38 +224,15 @@ export function PdfWorkspace({
             </div>
           </div>
         </section>
-        <section className="min-w-0 space-y-4 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-2">
-          <nav aria-label="Document preview selection" className="flex items-center justify-between gap-3">
-            <button
-              aria-label="Show resume"
-              className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={busy || activeDocument === "resume"}
-              onClick={() => showDocument("resume")}
-              type="button"
-            >
-              <ChevronLeft aria-hidden="true" className="size-5" />
-            </button>
-            <span className="text-sm font-semibold text-slate-700" aria-live="polite">
-              {activeDocument === "resume" ? "Resume" : "Cover letter"}
-            </span>
-            <button
-              aria-label="Show cover letter"
-              className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={busy || activeDocument === "cover-letter"}
-              onClick={() => showDocument("cover-letter")}
-              type="button"
-            >
-              <ChevronRight aria-hidden="true" className="size-5" />
-            </button>
-          </nav>
-          {!parsed && <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
+        <section className="min-w-0 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-2">
+          {!parsed && <p className="mb-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
           <PdfTemplatePreviewFrame
             key={`${activeDocument}-${previewGeneration}`}
             documentData={templateData}
             documentType={activeDocument}
             template={selectedTemplate}
             title={`${activeDocument === "resume" ? "Resume" : "Cover letter"} · ${pdfTemplateLabels[selectedTemplate]}`}
-            iframeRef={previewFrameRef}
+            hostRef={previewHostRef}
             onStatusChange={updatePreviewStatus}
           />
         </section>
@@ -222,118 +246,203 @@ function PdfTemplatePreviewFrame({
   documentType,
   template,
   title,
-  iframeRef,
+  hostRef,
   onStatusChange,
 }: {
   documentData: ReturnType<typeof toResumeTemplateData>;
   documentType: PreviewDocumentType;
   template: PdfTemplate;
   title: string;
-  iframeRef: RefObject<HTMLIFrameElement | null>;
+  hostRef: RefObject<HTMLDivElement | null>;
   onStatusChange: (documentType: PreviewDocumentType, status: PreviewStatus) => void;
 }) {
-  const requestId = useRef("");
-  const previewRef = useRef<HTMLDivElement>(null);
-  const [iframeLoaded, setIframeLoaded] = useState(false);
-  const [previewWidth, setPreviewWidth] = useState(0);
-  const [frameSize, setFrameSize] = useState({ width: 794, height: 1122 });
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState("");
   const [warnings, setWarnings] = useState("");
-  const scale = previewWidth ? Math.min(1, previewWidth / frameSize.width) : 1;
 
   useEffect(() => onStatusChange(documentType, status), [documentType, onStatusChange, status]);
 
   useEffect(() => {
-    const preview = previewRef.current;
-    if (!preview) return;
-    const observer = new ResizeObserver(([entry]) => {
-      setPreviewWidth(entry.contentRect.width);
+    const previewHost = hostRef.current;
+    if (!previewHost) return;
+    let cancelled = false;
+    setStatus("loading");
+    setMessage("");
+    setWarnings("");
+
+    async function render(host: HTMLDivElement) {
+      const root = host.querySelector<HTMLElement>(".qts-document-host")
+        ?? document.createElement("div");
+      root.className = "qts-document-host";
+      root.classList.add("is-embed");
+      root.lang = documentData.theme.language ?? "en";
+      root.dir = documentData.theme.direction ?? "ltr";
+      const mount = root.querySelector<HTMLElement>("#resume-root")
+        ?? document.createElement("main");
+      mount.id = "resume-root";
+      mount.className = "is-embed";
+      root.replaceChildren(mount);
+      if (!root.isConnected) host.replaceChildren(root);
+
+      const scopeStyle = (style: HTMLStyleElement) => scopeResumeStyles(style);
+      await loadBaseStyles();
+      if (cancelled) return;
+
+      await loadResumeRenderer();
+      if (cancelled) return;
+      const renderer = window.renderResume;
+      if (!renderer) throw new Error("The resume document renderer did not initialize.");
+      const result = await renderer(
+        documentData,
+        { template },
+        { documentType, mount, root, styleRoot: document.head, scopeStyle },
+      ) as { warnings?: string[] } | null;
+      if (cancelled) return;
+      setWarnings(Array.isArray(result?.warnings) ? result.warnings.join(" ") : "");
+      setStatus("ready");
+    }
+
+    render(previewHost).catch((reason: unknown) => {
+      if (cancelled) return;
+      setMessage(reason instanceof Error ? reason.message : "The document could not be displayed.");
+      setStatus("error");
     });
-    observer.observe(preview);
-    setPreviewWidth(preview.clientWidth);
-    return () => observer.disconnect();
-  }, []);
 
-  useEffect(() => {
-    function sendDocument() {
-      const frame = iframeRef.current;
-      if (!iframeLoaded || !frame?.contentWindow) return;
-      const id = crypto.randomUUID();
-      requestId.current = id;
-      setStatus("loading");
-      setMessage("");
-      setWarnings("");
-      frame.contentWindow.postMessage({
-        type: "QTS_RESUME_TEMPLATE_RENDER",
-        requestId: id,
-        document: documentData,
-        template,
-      }, window.location.origin);
-    }
+    return () => {
+      cancelled = true;
+    };
+  }, [documentData, documentType, hostRef, template]);
 
-    function handleRender(event: MessageEvent) {
-      if (
-        event.origin !== window.location.origin
-        || event.source !== iframeRef.current?.contentWindow
-        || event.data?.type !== "QTS_RESUME_TEMPLATE_RENDERED"
-        || event.data.requestId !== requestId.current
-      ) return;
-      if (event.data.ok) {
-        const frameDocument = iframeRef.current?.contentDocument;
-        const root = frameDocument?.documentElement;
-        const article = frameDocument?.querySelector<HTMLElement>(".doc");
-        if (root && article && frameDocument) {
-          const styles = frameDocument.defaultView?.getComputedStyle(root);
-          if (styles) {
-            const width = cssMillimeters(styles.getPropertyValue("--page-width")) * 96 / 25.4;
-            const pageHeight = cssMillimeters(styles.getPropertyValue("--page-height")) * 96 / 25.4;
-            const pages = Number(root.dataset.pages) || 1;
-            setFrameSize({
-              width,
-              height: Math.max(article.scrollHeight, pageHeight * pages),
-            });
-          }
-        }
-        setWarnings(typeof event.data.warnings === "string" ? event.data.warnings : "");
-        setStatus("ready");
-      } else {
-        setMessage(typeof event.data.error === "string" ? event.data.error : "The preview could not be rendered.");
-        setStatus("error");
-      }
-    }
-
-    window.addEventListener("message", handleRender);
-    sendDocument();
-    return () => window.removeEventListener("message", handleRender);
-  }, [documentData, iframeLoaded, iframeRef, template]);
-
-  return <section aria-label={title} className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-4">
+  return <section aria-label={title} className="min-h-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-4">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
     </div>
     {status === "error" && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{message}</p>}
     {warnings && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{warnings}</p>}
     {status === "loading" && <p className="mb-3 text-xs text-slate-500" role="status">Loading document…</p>}
-    <div ref={previewRef} className="overflow-hidden rounded-sm bg-white shadow-xl shadow-slate-900/15">
-      <div style={{ height: frameSize.height * scale, position: "relative" }}>
-      <iframe
-        className="absolute top-0 block max-w-none border-0 bg-white"
-        onLoad={() => setIframeLoaded(true)}
-        ref={iframeRef}
-        src={`/resume-templates/${documentType === "resume" ? "resume" : "cover-letter"}.html?embed=1`}
-        style={{
-          height: frameSize.height,
-          left: "50%",
-          transform: `translateX(-50%) scale(${scale})`,
-          transformOrigin: "top center",
-          width: frameSize.width,
-        }}
-        title={title}
-      />
-      </div>
-    </div>
+    <div ref={hostRef} className="min-h-[calc(100dvh-14rem)] overflow-auto rounded-sm bg-white shadow-xl shadow-slate-900/15 xl:min-h-[calc(100dvh-16rem)]" />
   </section>;
+}
+
+async function loadBaseStyles(): Promise<void> {
+  if (!baseStylesPromise) {
+    baseStylesPromise = fetch("/resume-templates/css/base.css")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("The resume template styles could not be loaded.");
+        const style = document.createElement("style");
+        style.dataset.qtsResumeBase = "true";
+        style.textContent = (await response.text()).replace(/^\s*@charset[^;]+;\s*/i, "");
+        document.head.append(style);
+        scopeResumeStyles(style);
+      })
+      .catch((reason: unknown) => {
+        baseStylesPromise = null;
+        throw reason;
+      });
+  }
+  await baseStylesPromise;
+}
+
+async function loadResumeRenderer(): Promise<void> {
+  window.QTS_RESUME_DIRECT_RENDER = true;
+  if (typeof window.renderResume === "function") return;
+  if (!rendererPromise) {
+    rendererPromise = (async () => {
+      if (!window.RESUME_TEMPLATES || !window.RESUME_OPTIONS) {
+        await loadPublicScript("/resume-templates/js/templates.js");
+      }
+      if (typeof window.renderResume !== "function") {
+        await loadPublicScript("/resume-templates/js/render.js");
+      }
+      if (typeof window.renderResume !== "function") {
+        throw new Error("The resume document renderer did not initialize.");
+      }
+    })().catch((reason: unknown) => {
+      rendererPromise = null;
+      throw reason;
+    });
+  }
+  await rendererPromise;
+}
+
+function loadPublicScript(src: string): Promise<void> {
+  const existing = scriptPromises.get(src);
+  if (existing) return existing;
+  const loading = new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Could not load resume renderer script: ${src}`));
+    document.head.append(script);
+  });
+  scriptPromises.set(src, loading);
+  loading.catch(() => scriptPromises.delete(src));
+  return loading;
+}
+
+function scopeResumeStyles(style: HTMLStyleElement): void {
+  const sheet = style.sheet;
+  if (!sheet) throw new Error("The resume styles could not be parsed.");
+  scopeCssRules(sheet.cssRules, sheet);
+}
+
+function scopeCssRules(
+  rules: CSSRuleList,
+  parent: CSSGroupingRule | CSSStyleSheet,
+): void {
+  for (let index = rules.length - 1; index >= 0; index -= 1) {
+    const rule = rules[index];
+    if (!rule) continue;
+    if (rule.type === CSSRule.PAGE_RULE) {
+      parent.deleteRule(index);
+      continue;
+    }
+    if (rule.type === CSSRule.STYLE_RULE) {
+      const styleRule = rule as CSSStyleRule;
+      styleRule.selectorText = splitCssSelectorList(styleRule.selectorText)
+        .map(scopeResumeSelector)
+        .join(", ");
+      continue;
+    }
+    if ("cssRules" in rule) {
+      scopeCssRules((rule as CSSGroupingRule).cssRules, rule as CSSGroupingRule);
+    }
+  }
+}
+
+function scopeResumeSelector(selector: string): string {
+  let scoped = selector.replace(/:root\b|html\b|body\b/g, ".qts-document-host");
+  scoped = scoped
+    .replace(/^\.is-embed\s+\.qts-document-host\b/, ".qts-document-host.is-embed")
+    .replace(/^\[dir=(["']?)(ltr|rtl)\1\]\s+\.qts-document-host$/, '.qts-document-host[dir="$2"]');
+  return scoped === selector ? `.qts-document-host ${selector}` : scoped;
+}
+
+function splitCssSelectorList(selectors: string): string[] {
+  const result: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote = "";
+  for (let index = 0; index < selectors.length; index += 1) {
+    const char = selectors[index];
+    if (quote) {
+      if (char === quote && selectors[index - 1] !== "\\") quote = "";
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+    } else if (char === "(" || char === "[") {
+      depth += 1;
+    } else if (char === ")" || char === "]") {
+      depth -= 1;
+    } else if (char === "," && depth === 0) {
+      result.push(selectors.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  result.push(selectors.slice(start).trim());
+  return result.filter(Boolean);
 }
 
 function tryParsePdfPackage(source: string): PdfPackage | null {
@@ -357,26 +466,24 @@ function initialDocumentError(): string | null {
 const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
 async function renderTemplatePdf(
-  frame: HTMLIFrameElement | null,
+  host: HTMLDivElement | null,
   documentType: PreviewDocumentType,
 ): Promise<Uint8Array> {
-  const frameDocument = frame?.contentDocument;
-  const root = frameDocument?.documentElement;
-  const article = frameDocument?.querySelector<HTMLElement>(".doc");
-  if (!frameDocument || !root || !article || root.dataset.renderState !== "ready") {
+  const root = host?.querySelector<HTMLElement>(".qts-document-host");
+  const article = host?.querySelector<HTMLElement>(".doc");
+  if (!host || !root || !article || root.dataset.renderState !== "ready") {
     throw new Error(`The ${documentType} preview is not ready to download.`);
   }
 
-  await frameDocument.fonts.ready;
-  const frameWindow = frame?.contentWindow;
-  if (!frameWindow) throw new Error(`The ${documentType} preview window is unavailable.`);
-  const pageWidthMm = cssMillimeters(frameWindow.getComputedStyle(root).getPropertyValue("--page-width"));
-  const pageHeightMm = cssMillimeters(frameWindow.getComputedStyle(root).getPropertyValue("--page-height"));
+  await document.fonts.ready;
+  const pageWidthMm = cssMillimeters(window.getComputedStyle(root).getPropertyValue("--page-width"));
+  const pageHeightMm = cssMillimeters(window.getComputedStyle(root).getPropertyValue("--page-height"));
   const pageWidthPoints = pageWidthMm * 72 / 25.4;
   const pageHeightPoints = pageHeightMm * 72 / 25.4;
-  const captureStyle = frameDocument.createElement("style");
+  const captureStyle = document.createElement("style");
   captureStyle.textContent = ".sheet { background: #fff !important; box-shadow: none !important; }";
-  frameDocument.head.append(captureStyle);
+  document.head.append(captureStyle);
+  scopeResumeStyles(captureStyle);
 
   let canvas: HTMLCanvasElement;
   try {
@@ -387,8 +494,8 @@ async function renderTemplatePdf(
       scale: 2,
       useCORS: true,
       width: article.scrollWidth,
-      windowHeight: Math.max(frameDocument.documentElement.clientHeight, article.scrollHeight),
-      windowWidth: Math.max(frameDocument.documentElement.clientWidth, article.scrollWidth),
+      windowHeight: Math.max(document.documentElement.clientHeight, article.scrollHeight),
+      windowWidth: Math.max(document.documentElement.clientWidth, article.scrollWidth),
       scrollX: 0,
       scrollY: 0,
     });
@@ -402,7 +509,7 @@ async function renderTemplatePdf(
   const { PDFDocument } = await import("pdf-lib");
   const pdf = await PDFDocument.create();
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
-    const pageCanvas = frameDocument.createElement("canvas");
+    const pageCanvas = document.createElement("canvas");
     pageCanvas.width = canvas.width;
     pageCanvas.height = Math.ceil(pixelsPerPage);
     const context = pageCanvas.getContext("2d");
