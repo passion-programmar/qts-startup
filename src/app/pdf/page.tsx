@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
@@ -8,6 +9,10 @@ import { db } from "@/lib/db";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
 export const instant = false;
+
+export const metadata: Metadata = {
+  title: "Resume",
+};
 
 export default async function PdfPage() {
   const currentUser = await requireUser();

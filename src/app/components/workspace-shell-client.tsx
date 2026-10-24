@@ -70,7 +70,7 @@ export function WorkspaceShellClient({
       ? [
           { label: "Jobs", href: "/jobs", icon: BriefcaseBusiness },
           { label: "Bids", href: "/bids", icon: FileCheck2 },
-          { label: "PDF", href: "/pdf", icon: FileText },
+          { label: "Resume", href: "/pdf", icon: FileText },
           baseNavigation[1],
         ]
       : baseNavigation.slice(0, 2)),

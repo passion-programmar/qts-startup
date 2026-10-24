@@ -117,8 +117,8 @@ export function PdfWorkspace({
     <main className="py-1">
       <header className="mb-7 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">PDF</h1>
-          <p className="mt-1 text-sm text-slate-500">Create a matching resume and cover letter from one JSON object. Processing stays in this browser.</p>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Resume</h1>
+          <p className="mt-1 text-sm text-slate-500">Choose a resume template and create a matching cover letter from one JSON object. Processing stays in this browser.</p>
         </div>
         <a
           className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
