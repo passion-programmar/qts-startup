@@ -54,7 +54,6 @@ export default async function PdfPage() {
         .where(
           and(
             eq(generationRuns.managerId, currentUser.id),
-            eq(generationRuns.status, "delivered"),
             isNotNull(generationRuns.responseJson),
             inArray(generationRuns.jobId, jobRows.map((job) => job.id)),
           ),
