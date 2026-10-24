@@ -78,7 +78,11 @@ async function initializeGetJdReviewOnce() {
       }
       html body { transition: padding-right .28s cubic-bezier(.2,.8,.2,1); }
     `;
-    (document.head || document.documentElement).appendChild(dockStyle);
+    // A restored panel reuses the page-level dock style instead of appending another copy.
+    dockStyle.setAttribute('data-qts-get-jd-dock-style', '');
+    if (!document.querySelector('style[data-qts-get-jd-dock-style]')) {
+      (document.head || document.documentElement).appendChild(dockStyle);
+    }
 
     const style = document.createElement('style');
     style.textContent = `
@@ -1399,27 +1403,13 @@ async function initializeGetJdReviewOnce() {
     renderReview(result);
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
+  // Page-wide listeners belong to this panel instance and are removed by disable().
+  const onRuntimeMessage = (message) => {
     if (message?.type === RESULT_MESSAGE) applyResult(message.result);
-  });
+  };
 
-  chrome.storage.onChanged.addListener((changes, area) => {
+  const onStorageChanged = (changes, area) => {
     if (area !== 'local') return;
-    if (changes.qtsManagerJobDetectionUrlRules || changes.authExpiresAt) {
-      chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
-        .then((response) => {
-          if (!response?.ok) return;
-          if (response.excluded) {
-            globalThis.__qtsGetJdReview?.disable?.();
-          } else if (globalThis.__qtsGetJdReview?.excluded) {
-            globalThis.__qtsGetJdReview = null;
-            initializeGetJdReview().catch((error) => {
-              console.error('[QTS Get JD] Could not restore page review:', error);
-            });
-          }
-        })
-        .catch((error) => console.error('[QTS Get JD] Could not apply URL exclusions:', error));
-    }
     if (changes.authExpiresAt) {
       loadManagerSession().catch((error) => {
         console.error('[QTS Get JD] Could not sync the manager session:', error);
@@ -1430,7 +1420,9 @@ async function initializeGetJdReviewOnce() {
         console.error('[QTS Get JD] Could not sync Get JD status:', error);
       });
     }
-  });
+  };
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+  chrome.storage.onChanged.addListener(onStorageChanged);
 
   chrome.runtime.sendMessage({ type: 'GET_JD_PAGE_RESULT' })
     .then((response) => {
@@ -1451,6 +1443,8 @@ async function initializeGetJdReviewOnce() {
     openManagerSettings,
     disable() {
       setPanelVisible(false);
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+      chrome.storage.onChanged.removeListener(onStorageChanged);
       host?.remove();
       document.documentElement?.removeAttribute('data-qts-get-jd-docked');
       globalThis.__qtsGetJdReview = { excluded: true };
@@ -1458,7 +1452,16 @@ async function initializeGetJdReviewOnce() {
   };
 }
 
+function restoreGetJdReview() {
+  if (!globalThis.__qtsGetJdReview?.excluded) return;
+  globalThis.__qtsGetJdReview = null;
+  initializeGetJdReview().catch((error) => {
+    console.error('[QTS Get JD] Could not restore page review:', error);
+  });
+}
+
 globalThis.__qtsInitializeGetJdReview = initializeGetJdReview;
+// These listeners outlive any one panel so a disabled panel can come back.
 if (!globalThis.__qtsGetJdNavigationListener) {
   globalThis.__qtsGetJdNavigationListener = true;
   chrome.runtime.onMessage.addListener((message) => {
@@ -1467,12 +1470,17 @@ if (!globalThis.__qtsGetJdNavigationListener) {
       globalThis.__qtsGetJdReview?.disable?.();
       return;
     }
-    if (globalThis.__qtsGetJdReview?.excluded) {
-      globalThis.__qtsGetJdReview = null;
-      initializeGetJdReview().catch((error) => {
-        console.error('[QTS Get JD] Could not restore page review:', error);
-      });
-    }
+    restoreGetJdReview();
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !(changes.qtsManagerJobDetectionUrlRules || changes.authExpiresAt)) return;
+    chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
+      .then((response) => {
+        if (!response?.ok) return;
+        if (response.excluded) globalThis.__qtsGetJdReview?.disable?.();
+        else restoreGetJdReview();
+      })
+      .catch((error) => console.error('[QTS Get JD] Could not apply URL exclusions:', error));
   });
 }
 

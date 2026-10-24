@@ -5522,18 +5522,39 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+// The queue alarm restarts or recovers a run, so it only ticks while Generation is running or cancelling.
+async function syncGenerationQueueAlarm() {
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
+  const status = stored[EXTENSION_STATUS_KEY];
+  if (status === 'generation' || status === 'cancel' || stored[ACTIVE_GENERATION_JOB_KEY]) {
+    if (!(await chrome.alarms.get(GENERATION_QUEUE_ALARM))) {
+      await chrome.alarms.create(GENERATION_QUEUE_ALARM, {
+        delayInMinutes: 0.5,
+        periodInMinutes: 0.5,
+      });
+    }
+  } else {
+    await chrome.alarms.clear(GENERATION_QUEUE_ALARM);
+  }
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !(changes[EXTENSION_STATUS_KEY] || changes[ACTIVE_GENERATION_JOB_KEY])) return;
+  syncGenerationQueueAlarm().catch((error) => {
+    console.error('[QTS Generation] Could not update the queue alarm:', error);
+  });
+});
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(GENERATION_QUEUE_ALARM, {
-    delayInMinutes: 0.5,
-    periodInMinutes: 0.5,
+  syncGenerationQueueAlarm().catch((error) => {
+    console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
   self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
 });
 
 self.chrome?.runtime?.onStartup?.addListener(() => {
-  chrome.alarms.create(GENERATION_QUEUE_ALARM, {
-    delayInMinutes: 0.5,
-    periodInMinutes: 0.5,
+  syncGenerationQueueAlarm().catch((error) => {
+    console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
   processQueuedGenerationJobs().catch((error) => {
     console.error('[QTS Generation] Queue worker failed:', error);

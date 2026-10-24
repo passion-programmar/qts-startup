@@ -48,7 +48,7 @@ test('the page launcher is the only user entry point', () => {
     path.join(extensionRoot, 'content', 'text-highlighter.js'),
     'utf8',
   );
-  assert.ok(launcher.includes('initializeQtsPageLauncher().catch'));
+  assert.ok(launcher.includes('initializeQtsPageLauncherOnce().catch'));
   assert.ok(launcher.includes('hasValidExtensionContext'));
   assert.ok(launcher.includes("window.addEventListener('load', initializePageLauncherAfterLoad, { once: true })"));
   assert.ok(review.includes("window.addEventListener('load', initializeGetJdReviewAfterLoad, { once: true })"));
@@ -283,7 +283,7 @@ test('Manager blocked URL rules update UI and workflows across SPA navigation', 
   assert.ok(launcher.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
   assert.ok(review.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
   assert.ok(highlighter.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
-  assert.ok(launcher.includes('initializeQtsPageLauncher().catch'));
+  assert.ok(launcher.includes('initializeQtsPageLauncherOnce().catch'));
   assert.ok(review.includes('initializeGetJdReview().catch'));
 });
 
@@ -836,4 +836,21 @@ test('page toasts use a modern theme and keep the newest notice on top', () => {
   assert.ok(toast.includes('backdrop-filter: blur(12px)'));
   assert.ok(toast.includes('border-left: 4px solid var(--qts-toast-accent'));
   assert.ok(toast.includes('@media (prefers-reduced-motion: reduce)'));
+});
+
+test('disabled page UI removes its listeners and the queue alarm only runs during Generation', () => {
+  const read = (...parts) => fs.readFileSync(path.join(extensionRoot, ...parts), 'utf8');
+  const launcher = read('content', 'page-launcher.js');
+  const panel = read('content', 'get-jd-review.js');
+  const worker = read('background', 'service-worker.js');
+  const disableBody = (source) => source.slice(source.indexOf('disable() {'), source.indexOf('disable() {') + 600);
+
+  assert.ok(disableBody(launcher).includes('chrome.storage.onChanged.removeListener(onStorageChanged)'));
+  assert.ok(disableBody(launcher).includes("document.removeEventListener('keydown', onKeydown)"));
+  assert.ok(disableBody(panel).includes('chrome.storage.onChanged.removeListener(onStorageChanged)'));
+  assert.ok(launcher.includes('pageLauncherInitialization = initializeQtsPageLauncher().finally('));
+  assert.ok(panel.includes("document.querySelector('style[data-qts-get-jd-dock-style]')"));
+  assert.ok(worker.includes('await chrome.alarms.clear(GENERATION_QUEUE_ALARM)'));
+  const installHandler = worker.slice(worker.indexOf('chrome.runtime.onInstalled.addListener'));
+  assert.equal(installHandler.slice(0, 300).includes('chrome.alarms.create'), false);
 });

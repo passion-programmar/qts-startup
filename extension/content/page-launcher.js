@@ -433,23 +433,9 @@ async function initializeQtsPageLauncher() {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
   });
   close.addEventListener('click', () => { preview.hidden = true; });
-  chrome.storage.onChanged.addListener((changes, area) => {
+  // Page-wide listeners belong to this launcher instance and are removed by disable().
+  const onStorageChanged = (changes, area) => {
     if (area !== 'local') return;
-    if (changes.qtsManagerJobDetectionUrlRules || changes.authExpiresAt) {
-      chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
-        .then((response) => {
-          if (!response?.ok) return;
-          if (response.excluded) {
-            globalThis.__qtsPageLauncher?.disable?.();
-          } else if (globalThis.__qtsPageLauncher?.excluded) {
-            globalThis.__qtsPageLauncher = null;
-            initializeQtsPageLauncher().catch((error) => {
-              console.error('[QTS extension] Could not restore page actions:', error);
-            });
-          }
-        })
-        .catch((error) => console.error('[QTS extension] Could not apply URL exclusions:', error));
-    }
     if (changes.authExpiresAt) {
       syncSessionAction()
         .then(() => syncTextHighlightAction())
@@ -461,8 +447,8 @@ async function initializeQtsPageLauncher() {
       }
     }
     if (changes.qtsExtensionStatus) syncModeActions().catch(() => {});
-  });
-  chrome.runtime.onMessage.addListener((message) => {
+  };
+  const onRuntimeMessage = (message) => {
     if (message?.type === 'QTS_HIDE_SIGN_IN_FRAME') {
       hideSignInForm();
       return;
@@ -472,14 +458,17 @@ async function initializeQtsPageLauncher() {
       String(message.message || 'Generation updated.'),
       message.statusType === 'error',
     );
-  });
-  document.addEventListener('keydown', (event) => {
+  };
+  const onKeydown = (event) => {
     if (event.key === 'Escape') {
       setOpen(false);
       preview.hidden = true;
       hideSignInForm();
     }
-  });
+  };
+  chrome.storage.onChanged.addListener(onStorageChanged);
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+  document.addEventListener('keydown', onKeydown);
 
   syncSessionAction().catch(() => {});
   syncModeActions().catch(() => {});
@@ -506,13 +495,38 @@ async function initializeQtsPageLauncher() {
       preview.hidden = true;
       hideSignInForm();
       getJdDockObserver.disconnect();
+      chrome.storage.onChanged.removeListener(onStorageChanged);
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+      document.removeEventListener('keydown', onKeydown);
       host.remove();
       globalThis.__qtsPageLauncher = { excluded: true };
     },
   };
 }
 
-globalThis.__qtsInitializePageLauncher = initializeQtsPageLauncher;
+let pageLauncherInitialization = null;
+
+// Overlapping restores (navigation plus a rule change) share one initialization instead of adding two launchers.
+function initializeQtsPageLauncherOnce() {
+  if (globalThis.__qtsPageLauncher) return Promise.resolve();
+  if (!pageLauncherInitialization) {
+    pageLauncherInitialization = initializeQtsPageLauncher().finally(() => {
+      pageLauncherInitialization = null;
+    });
+  }
+  return pageLauncherInitialization;
+}
+
+function restorePageLauncher() {
+  if (!globalThis.__qtsPageLauncher?.excluded) return;
+  globalThis.__qtsPageLauncher = null;
+  initializeQtsPageLauncherOnce().catch((error) => {
+    console.error('[QTS extension] Could not restore page actions:', error);
+  });
+}
+
+globalThis.__qtsInitializePageLauncher = initializeQtsPageLauncherOnce;
+// These listeners outlive any one launcher so a disabled launcher can come back.
 if (!globalThis.__qtsPageLauncherNavigationListener) {
   globalThis.__qtsPageLauncherNavigationListener = true;
   chrome.runtime.onMessage.addListener((message) => {
@@ -521,17 +535,22 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
       globalThis.__qtsPageLauncher?.disable?.();
       return;
     }
-    if (globalThis.__qtsPageLauncher?.excluded) {
-      globalThis.__qtsPageLauncher = null;
-      initializeQtsPageLauncher().catch((error) => {
-        console.error('[QTS extension] Could not restore page actions:', error);
-      });
-    }
+    restorePageLauncher();
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !(changes.qtsManagerJobDetectionUrlRules || changes.authExpiresAt)) return;
+    chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
+      .then((response) => {
+        if (!response?.ok) return;
+        if (response.excluded) globalThis.__qtsPageLauncher?.disable?.();
+        else restorePageLauncher();
+      })
+      .catch((error) => console.error('[QTS extension] Could not apply URL exclusions:', error));
   });
 }
 
 function initializePageLauncherAfterLoad() {
-  initializeQtsPageLauncher().catch((error) => {
+  initializeQtsPageLauncherOnce().catch((error) => {
     console.error('[QTS extension] Could not verify page access:', error);
   });
 }
