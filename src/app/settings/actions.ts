@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { parseGeminiApiLimits } from "@/server/gemini/gemini-api-limits";
@@ -9,16 +8,13 @@ import {
   jobRecordTimeZoneOptions,
   jobRecordTimeZoneSettingKey,
 } from "@/server/jobs/job-record-time-zones";
-import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 import {
-  categories,
-  managerPromptAssignments,
-  managerPromptOverrides,
-  prompts,
-  settings,
-  users,
-} from "@/db/schema";
-import { db, neonSql } from "@/lib/db";
+  activatePromptVersion,
+  PromptVersionError,
+  savePromptVersion,
+} from "@/server/prompts/prompt-versions";
+import { settings, users } from "@/db/schema";
+import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
 export type PromptActionState = {
@@ -37,6 +33,8 @@ const promptPurposes = [
 type PromptPurpose = (typeof promptPurposes)[number];
 type PromptProvider = "openai" | "gemini";
 
+// Super Admin's library prompts: the default ChatGPT prompt Managers without their own prompts
+// use, and the Gemini prompts. Each save adds a version; earlier versions are kept.
 export async function saveGlobalPromptAction(
   _previousState: PromptActionState,
   formData: FormData,
@@ -50,177 +48,68 @@ export async function saveGlobalPromptAction(
   const purpose = readText(formData, "purpose", 40);
   const name = readText(formData, "name", 120);
   const promptTemplate = readText(formData, "promptTemplate", 50000);
-  const requestedGroupId = readText(formData, "promptGroupId", 36);
-  const makeDefault = formData.get("makeDefault") === "on";
-  const categoryId = readText(formData, "categoryId", 36);
+  const promptGroupId = readText(formData, "promptGroupId", 36);
   if (
     !isPromptProvider(provider) ||
     !isPromptPurpose(purpose) ||
     !isValidProviderPurpose(provider, purpose) ||
     !name ||
     !promptTemplate ||
-    (requestedGroupId && !isUuid(requestedGroupId))
+    (promptGroupId && !isUuid(promptGroupId))
   ) {
     return { ...emptyState, error: "Enter a valid provider, purpose, name, and prompt." };
   }
-  // Document prompts are written per category; Gemini prompts have none.
-  const isDocumentPrompt = purpose === "document_generation";
-  if (isDocumentPrompt && !isUuid(categoryId)) {
-    return { ...emptyState, error: "Choose the category this prompt is written for." };
-  }
 
   try {
-    if (isDocumentPrompt) {
-      const [category] = await db
-        .select({ id: categories.id })
-        .from(categories)
-        .where(eq(categories.id, categoryId))
-        .limit(1);
-      if (!category) {
-        return { ...emptyState, error: "That category no longer exists. Refresh and try again." };
-      }
-    }
-    const existingGroup = requestedGroupId
-      ? await db
-          .select({
-            promptGroupId: prompts.promptGroupId,
-            isDefault: prompts.isDefault,
-          })
-          .from(prompts)
-          .where(
-            and(
-              eq(prompts.promptGroupId, requestedGroupId),
-              eq(prompts.provider, provider),
-              eq(prompts.purpose, purpose),
-              eq(prompts.isActive, true),
-            ),
-          )
-          .limit(1)
-      : [];
-    if (requestedGroupId && existingGroup.length === 0) {
-      return {
-        ...emptyState,
-        error: "That active prompt was not found. Refresh and try again.",
-      };
-    }
-    const promptGroupId = requestedGroupId || randomUUID();
-    const isDefault = makeDefault || existingGroup[0]?.isDefault === true;
-
-    const transactionResults = await neonSql.transaction((tx) => [
-      tx`select pg_advisory_xact_lock(hashtext(${provider}), hashtext(${purpose}))`,
-      ...(makeDefault
-        ? [
-            tx`
-              update prompts set is_default = false, updated_at = now()
-              where provider = ${provider}::prompt_provider
-                and purpose = ${purpose}::prompt_purpose
-                and is_default
-            `,
-          ]
-        : []),
-      tx`
-        update prompts
-        set is_active = false, is_default = false, updated_at = now()
-        where prompt_group_id = ${promptGroupId}::uuid
-          and is_active
-      `,
-      tx`
-        insert into prompts (
-          prompt_group_id, provider, purpose, category_id, name, prompt_template, version,
-          is_active, is_default, created_by_user_id
-        )
-        select
-          ${promptGroupId}::uuid,
-          ${provider}::prompt_provider,
-          ${purpose}::prompt_purpose,
-          ${isDocumentPrompt ? categoryId : null}::uuid,
-          ${name},
-          ${promptTemplate},
-          coalesce(max(version), 0) + 1,
-          true,
-          ${isDefault},
-          ${actor.id}::uuid
-        from prompts
-        where prompt_group_id = ${promptGroupId}::uuid
-        returning id, version
-      `,
-      tx`
-        update manager_prompt_assignments
-        set prompt_id = (
-          select id
-          from prompts
-          where prompt_group_id = ${promptGroupId}::uuid
-            and is_active = true
-        )
-        where prompt_id in (
-          select id from prompts where prompt_group_id = ${promptGroupId}::uuid
-        )
-      `,
-    ]);
-    const inserted = transactionResults[transactionResults.length - 2];
-    if (!inserted || inserted.length !== 1) {
-      return { ...emptyState, error: "The prompt revision could not be saved." };
-    }
+    await savePromptVersion({
+      promptGroupId: promptGroupId || null,
+      ownerManagerId: null,
+      provider,
+      purpose,
+      name,
+      promptTemplate,
+      makeDefault: formData.get("makeDefault") === "on",
+      actorId: actor.id,
+    });
   } catch (error) {
+    if (error instanceof PromptVersionError) return { ...emptyState, error: error.message };
     logPromptActionFailure("saving a global prompt", error);
-    return {
-      ...emptyState,
-      error: "The prompt could not be saved. Please try again.",
-    };
+    return { ...emptyState, error: "The prompt could not be saved. Please try again." };
   }
 
   revalidatePath("/settings");
   revalidatePath("/prompts");
-  return { error: null, success: "A new active prompt version was saved." };
+  return { error: null, success: "A new version was saved and is now in use. Earlier versions are kept." };
 }
 
-export async function updatePromptModeAction(
+// Puts an earlier version of a ChatGPT document prompt back in use; nothing is deleted.
+export async function activatePromptVersionAction(
   _previousState: PromptActionState,
   formData: FormData,
 ): Promise<PromptActionState> {
   const actor = await requireUser();
-  if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can change prompt mode." };
+  if (actor.role !== "super_admin" && actor.role !== "manager") {
+    return { ...emptyState, error: "You cannot change prompt versions." };
   }
+  const promptId = readText(formData, "promptId", 36);
+  if (!isUuid(promptId)) return { ...emptyState, error: "Select a valid version." };
 
-  const mode = readText(formData, "promptMode", 16);
-  if (mode !== "global" && mode !== "private") {
-    return { ...emptyState, error: "Choose a valid prompt mode." };
-  }
-
+  let version: number;
   try {
-    await db
-      .insert(settings)
-      .values({
-        key: "prompt_mode",
-        value: mode,
-        updatedByUserId: actor.id,
-      })
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: {
-          value: mode,
-          updatedByUserId: actor.id,
-          updatedAt: new Date(),
-        },
-      });
+    // Super Admin switches library prompts; a Manager switches only their own.
+    ({ version } = await activatePromptVersion({
+      promptId,
+      ownerManagerId: actor.role === "manager" ? actor.id : null,
+    }));
   } catch (error) {
-    logPromptActionFailure("updating prompt mode", error);
-    return {
-      ...emptyState,
-      error: "Prompt mode could not be updated. Please try again.",
-    };
+    if (error instanceof PromptVersionError) return { ...emptyState, error: error.message };
+    logPromptActionFailure("activating a prompt version", error);
+    return { ...emptyState, error: "The version could not be put in use. Please try again." };
   }
 
-  revalidatePath("/");
   revalidatePath("/settings");
   revalidatePath("/prompts");
-  return {
-    error: null,
-    success: mode === "private"
-      ? "Saved. Managers can now read the prompts assigned to them."
-      : "Saved. Managers now see only the names of their assigned prompts.",
-  };
+  return { error: null, success: `Version ${version} is now in use from the next Generation.` };
 }
 
 export async function updateManagerGeminiMatchingAction(
@@ -356,243 +245,6 @@ export async function saveGeminiApiLimitsAction(
 
   revalidatePath("/settings/gemini-usage");
   return { error: null, success: "Gemini API limits were updated." };
-}
-
-export async function assignPromptAction(
-  _previousState: PromptActionState,
-  formData: FormData,
-): Promise<PromptActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can assign prompts." };
-  }
-
-  const managerId = readText(formData, "managerId", 36);
-  const promptChoice = readText(formData, "promptChoice", 40);
-  if (!isUuid(managerId)) {
-    return { ...emptyState, error: "Select a valid Manager." };
-  }
-
-  try {
-    const [manager] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(
-        and(
-          eq(users.id, managerId),
-          eq(users.role, "manager"),
-          isNull(users.blockedAt),
-        ),
-      )
-      .limit(1);
-    if (!manager) return { ...emptyState, error: "That active Manager was not found." };
-
-    let promptId: string | undefined;
-    if (isUuid(promptChoice)) {
-      const [selectedPrompt] = await db
-        .select({ id: prompts.id, categoryId: prompts.categoryId })
-        .from(prompts)
-        .where(
-          and(
-            eq(prompts.id, promptChoice),
-            eq(prompts.provider, "openai"),
-            eq(prompts.purpose, "document_generation"),
-            eq(prompts.isActive, true),
-          ),
-        )
-        .limit(1);
-      if (selectedPrompt && !selectedPrompt.categoryId) {
-        return {
-          ...emptyState,
-          error: "Choose a category for this prompt in the prompt library before assigning it.",
-        };
-      }
-      promptId = selectedPrompt?.id;
-    }
-
-    if (!promptId) {
-      return {
-        ...emptyState,
-        error: "Select an active ChatGPT prompt to assign.",
-      };
-    }
-
-    const added = await db
-      .insert(managerPromptAssignments)
-      .values({
-        managerId,
-        promptId,
-        assignedByUserId: actor.id,
-      })
-      .onConflictDoNothing()
-      .returning({ promptId: managerPromptAssignments.promptId });
-    if (added.length === 0) {
-      return { ...emptyState, error: "This prompt is already assigned to the Manager." };
-    }
-  } catch (error) {
-    logPromptActionFailure("assigning a prompt", error);
-    return {
-      ...emptyState,
-      error: "The prompt could not be assigned. Please try again.",
-    };
-  }
-
-  revalidatePath("/settings");
-  revalidatePath("/prompts");
-  return { error: null, success: "The prompt was added to the Manager's rotation." };
-}
-
-export async function unassignPromptAction(
-  _previousState: PromptActionState,
-  formData: FormData,
-): Promise<PromptActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can unassign prompts." };
-  }
-
-  const managerId = readText(formData, "managerId", 36);
-  const promptId = readText(formData, "promptId", 36);
-  if (!isUuid(managerId) || !isUuid(promptId)) {
-    return { ...emptyState, error: "Select a valid Manager and prompt." };
-  }
-
-  let remaining = 0;
-  try {
-    const removed = await db
-      .delete(managerPromptAssignments)
-      .where(and(
-        eq(managerPromptAssignments.managerId, managerId),
-        eq(managerPromptAssignments.promptId, promptId),
-      ))
-      .returning({ managerId: managerPromptAssignments.managerId });
-    if (removed.length === 0) {
-      return { ...emptyState, error: "That prompt is no longer assigned to this Manager." };
-    }
-    remaining = await db.$count(
-      managerPromptAssignments,
-      eq(managerPromptAssignments.managerId, managerId),
-    );
-  } catch (error) {
-    logPromptActionFailure("unassigning a prompt", error);
-    return {
-      ...emptyState,
-      error: "The prompt assignment could not be removed. Please try again.",
-    };
-  }
-
-  revalidatePath("/settings");
-  revalidatePath("/prompts");
-  return {
-    error: null,
-    success: remaining > 0
-      ? "The prompt was removed from the Manager's rotation."
-      : "The last assigned prompt was removed. The Manager's own prompt will be used.",
-  };
-}
-
-// Replaces the templates a Manager rotates through. Kept templates keep their place in the rotation.
-export async function saveManagerTemplatesAction(
-  _previousState: PromptActionState,
-  formData: FormData,
-): Promise<PromptActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can choose Manager templates." };
-  }
-
-  const managerId = readText(formData, "managerId", 36);
-  const templates = [...new Set(formData.getAll("templates").map(String))];
-  if (!isUuid(managerId) || !templates.every(isPdfTemplate)) {
-    return { ...emptyState, error: "Select a valid Manager and templates." };
-  }
-
-  try {
-    const [manager] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(and(
-        eq(users.id, managerId),
-        eq(users.role, "manager"),
-        isNull(users.blockedAt),
-      ))
-      .limit(1);
-    if (!manager) return { ...emptyState, error: "That active Manager was not found." };
-
-    await neonSql.transaction((tx) => [
-      tx`
-        delete from manager_template_assignments
-        where manager_id = ${managerId}::uuid
-          and not (template = any(${templates}::text[]))
-      `,
-      tx`
-        insert into manager_template_assignments (manager_id, template)
-        select ${managerId}::uuid, unnest(${templates}::text[])
-        on conflict do nothing
-      `,
-    ]);
-  } catch (error) {
-    logPromptActionFailure("saving Manager templates", error);
-    return { ...emptyState, error: "The templates could not be saved. Please try again." };
-  }
-
-  revalidatePath("/settings");
-  return {
-    error: null,
-    success: templates.length === 0
-      ? "No templates selected. Each candidate's own template will be used."
-      : `${templates.length} template${templates.length === 1 ? "" : "s"} saved for rotation.`,
-  };
-}
-
-// A Manager saves their own prompt; Super Admin can save any active Manager's.
-export async function saveManagerOwnPromptAction(
-  _previousState: PromptActionState,
-  formData: FormData,
-): Promise<PromptActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "manager" && actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Managers and Super Admin can edit Manager prompts." };
-  }
-
-  const managerId = actor.role === "manager"
-    ? actor.id
-    : readText(formData, "managerId", 36);
-  const promptTemplate = readText(formData, "promptTemplate", 50000);
-  if (!isUuid(managerId)) {
-    return { ...emptyState, error: "Select a valid Manager." };
-  }
-  if (!promptTemplate) {
-    return { ...emptyState, error: "Enter the prompt text (50,000 characters or fewer)." };
-  }
-
-  try {
-    const [manager] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(and(
-        eq(users.id, managerId),
-        eq(users.role, "manager"),
-        isNull(users.blockedAt),
-      ))
-      .limit(1);
-    if (!manager) return { ...emptyState, error: "That active Manager was not found." };
-
-    await db
-      .insert(managerPromptOverrides)
-      .values({ managerId, promptTemplate })
-      .onConflictDoUpdate({
-        target: managerPromptOverrides.managerId,
-        set: { promptTemplate, updatedAt: new Date() },
-      });
-  } catch (error) {
-    logPromptActionFailure("saving a Manager's own prompt", error);
-    return { ...emptyState, error: "The prompt could not be saved. Please try again." };
-  }
-
-  revalidatePath("/settings");
-  revalidatePath("/prompts");
-  return { error: null, success: "The prompt was saved." };
 }
 
 export async function updateManagerTextHighlightAccessAction(

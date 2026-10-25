@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { categories } from "@/db/schema";
-import { db } from "@/lib/db";
+import { db, neonSql } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
 export type CategoryActionState = {
@@ -70,20 +70,26 @@ export async function deleteCategoryAction(
   const id = readId(formData, "categoryId");
   if (!id) return failure("Select a valid category.");
 
-  try {
-    const [deleted] = await db.delete(categories)
-      .where(eq(categories.id, id))
-      .returning({ id: categories.id });
-    if (!deleted) return failure("That category no longer exists. Refresh and try again.");
-  } catch (error) {
-    if (isForeignKeyViolation(error)) {
-      return failure("Move this category's ChatGPT prompts to another category before deleting it.");
-    }
-    throw error;
-  }
+  const [category] = await db.select({ isDefault: categories.isDefault })
+    .from(categories)
+    .where(eq(categories.id, id))
+    .limit(1);
+  if (!category) return failure("That category no longer exists. Refresh and try again.");
+  if (category.isDefault) return failure("The default category cannot be deleted; candidates fall back to it.");
+
+  // Candidates move to the default category first, so every account keeps a category.
+  const results = await neonSql.transaction((tx) => [
+    tx`
+      update profiles
+      set category_id = (select id from categories where is_default), updated_at = now()
+      where category_id = ${id}::uuid
+    `,
+    tx`delete from categories where id = ${id}::uuid and not is_default returning id`,
+  ]);
+  if (!results[1]?.length) return failure("That category no longer exists. Refresh and try again.");
 
   revalidateCategoryPages();
-  return success("Category deleted. Its candidates are now uncategorized.");
+  return success("Category deleted. Its candidates moved to the default category.");
 }
 
 function readName(formData: FormData): string {
@@ -102,10 +108,6 @@ function isUuid(value: string): boolean {
 
 function isUniqueViolation(error: unknown): boolean {
   return hasErrorCode(error, "23505");
-}
-
-function isForeignKeyViolation(error: unknown): boolean {
-  return hasErrorCode(error, "23503");
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {

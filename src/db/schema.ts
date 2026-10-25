@@ -6,7 +6,6 @@ import {
   index,
   pgEnum,
   pgTable,
-  primaryKey,
   integer,
   jsonb,
   text,
@@ -61,6 +60,8 @@ export const categories = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     name: text("name").notNull(),
+    // The one category ("Global") new accounts start in and deleted categories' accounts move to.
+    isDefault: boolean("is_default").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -72,6 +73,9 @@ export const categories = pgTable(
     uniqueIndex("categories_name_normalized_unique").on(
       sql`lower(btrim(${table.name}))`,
     ),
+    uniqueIndex("categories_one_default_unique")
+      .on(table.isDefault)
+      .where(sql`${table.isDefault}`),
   ],
 );
 
@@ -141,9 +145,10 @@ export const profiles = pgTable(
     userId: uuid("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "restrict" }),
-    categoryId: uuid("category_id").references(() => categories.id, {
-      onDelete: "set null",
-    }),
+    // Every account has a category; new accounts start in the default one.
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "restrict" }),
     resumePdfId: uuid("resume_pdf_id"),
     firstName: text("first_name"),
     lastName: text("last_name"),
@@ -268,10 +273,12 @@ export const prompts = pgTable(
     promptGroupId: uuid("prompt_group_id").defaultRandom().notNull(),
     provider: promptProvider("provider").notNull(),
     purpose: promptPurpose("purpose").notNull(),
-    // ChatGPT document prompts are written per category and only used for that category's accounts.
-    categoryId: uuid("category_id").references(() => categories.id, {
-      onDelete: "restrict",
+    // Set on a Manager's own ChatGPT document prompts; null for Super Admin's library prompts.
+    ownerManagerId: uuid("owner_manager_id").references(() => users.id, {
+      onDelete: "cascade",
     }),
+    // Deleting a prompt archives every version, so jobs and bids keep showing what they used.
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
     name: text("name").notNull(),
     promptTemplate: text("prompt_template").notNull(),
     version: integer("version").notNull(),
@@ -303,71 +310,12 @@ export const prompts = pgTable(
       "prompts_provider_matches_purpose_check",
       sql`(${table.provider} = 'openai' and ${table.purpose} = 'document_generation') or (${table.provider} = 'gemini' and ${table.purpose} in ('job_description_evaluation', 'application_answer'))`,
     ),
+    // Managers own only document prompts, and only a library prompt can be the default.
     check(
-      "prompts_category_only_for_documents_check",
-      sql`${table.purpose} = 'document_generation' or ${table.categoryId} is null`,
+      "prompts_manager_owned_document_check",
+      sql`${table.ownerManagerId} is null or (${table.purpose} = 'document_generation' and not ${table.isDefault})`,
     ),
-    index("prompts_category_id_index").on(table.categoryId),
-  ],
-);
-
-// A Manager's own ChatGPT document prompt, used when no prompts are assigned to them.
-export const managerPromptOverrides = pgTable("manager_prompt_overrides", {
-  managerId: uuid("manager_id")
-    .primaryKey()
-    .references(() => users.id, { onDelete: "cascade" }),
-  promptTemplate: text("prompt_template").notNull(),
-  basedOnPromptId: uuid("based_on_prompt_id").references(() => prompts.id, {
-    onDelete: "restrict",
-  }),
-  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-    .defaultNow()
-    .notNull(),
-});
-
-// Global prompts assigned to a Manager. Generation rotates through them, least recently used first.
-export const managerPromptAssignments = pgTable(
-  "manager_prompt_assignments",
-  {
-    managerId: uuid("manager_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    promptId: uuid("prompt_id")
-      .notNull()
-      .references(() => prompts.id, { onDelete: "restrict" }),
-    assignedByUserId: uuid("assigned_by_user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
-    assignedAt: timestamp("assigned_at", { withTimezone: true, mode: "date" })
-      .defaultNow()
-      .notNull(),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
-  },
-  (table) => [primaryKey({ columns: [table.managerId, table.promptId] })],
-);
-
-// PDF templates Super Admin picks for a Manager with assigned prompts, rotated least recently used first.
-export const managerTemplateAssignments = pgTable(
-  "manager_template_assignments",
-  {
-    managerId: uuid("manager_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    template: text("template").notNull(),
-    assignedAt: timestamp("assigned_at", { withTimezone: true, mode: "date" })
-      .defaultNow()
-      .notNull(),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
-  },
-  (table) => [
-    primaryKey({ columns: [table.managerId, table.template] }),
-    check(
-      "manager_template_assignments_template_check",
-      sql`${table.template} in ('qts-standard', 'classic', 'harvard', 'executive', 'minimal', 'swiss', 'corporate', 'technical', 'timeline', 'banded', 'elegant', 'bold', 'creative', 'compact', 'academic', 'nordic', 'slate', 'ledger', 'startup', 'professional', 'centered', 'high-contrast', 'modern-serif', 'graphite')`,
-    ),
+    index("prompts_owner_manager_id_index").on(table.ownerManagerId),
   ],
 );
 
@@ -388,6 +336,8 @@ export const generationRuns = pgTable(
     composedPrompt: text("composed_prompt").notNull(),
     // Chosen when the run starts, so every download of this run uses the same template.
     pdfTemplate: text("pdf_template"),
+    // The prompt version this run used: one of the Manager's own, or Super Admin's default.
+    promptId: uuid("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     responseText: text("response_text"),
     responseJson: jsonb("response_json"),
     status: generationRunStatus("status").default("pending").notNull(),
@@ -444,6 +394,9 @@ export const jobs = pgTable(
     resumeLocalPath: text("resume_local_path"),
     // Where the generated PDFs are saved on Google Drive, when they are uploaded.
     googleDrivePath: text("google_drive_path"),
+    // The prompt version and template of the delivered Generation, shown on Jobs and Bids.
+    promptId: uuid("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
+    pdfTemplate: text("pdf_template"),
     generationStatus: generationQueueStatus("generation_status")
       .default("not_queued")
       .notNull(),
@@ -524,6 +477,9 @@ export const bids = pgTable(
       onDelete: "set null",
     }),
     googleDrivePath: text("google_drive_path"),
+    // Copied from the jobs row when the bid is made: the prompt version and template used.
+    promptId: uuid("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
+    pdfTemplate: text("pdf_template"),
     appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -763,13 +719,6 @@ export type Setting = typeof settings.$inferSelect;
 export type NewSetting = typeof settings.$inferInsert;
 export type Prompt = typeof prompts.$inferSelect;
 export type NewPrompt = typeof prompts.$inferInsert;
-export type ManagerPromptOverride = typeof managerPromptOverrides.$inferSelect;
-export type NewManagerPromptOverride =
-  typeof managerPromptOverrides.$inferInsert;
-export type ManagerPromptAssignment =
-  typeof managerPromptAssignments.$inferSelect;
-export type NewManagerPromptAssignment =
-  typeof managerPromptAssignments.$inferInsert;
 export type GenerationRun = typeof generationRuns.$inferSelect;
 export type NewGenerationRun = typeof generationRuns.$inferInsert;
 export type Job = typeof jobs.$inferSelect;

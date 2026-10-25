@@ -1,25 +1,16 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import {
   GlobalPromptForm,
   ManagerGeminiMatchingForm,
-  ManagerOwnPromptForm,
-  ManagerTemplatesForm,
+  PromptVersionPicker,
+  type PromptVersion,
   ManagerTextHighlightAccessForm,
   ManagerPageExclusionAccessForm,
   ManagerJobDetectionUrlAccessForm,
-  PromptAssignmentForm,
-  PromptModeForm,
 } from "@/app/settings/prompt-forms";
-import {
-  categories,
-  managerPromptAssignments,
-  managerPromptOverrides,
-  managerTemplateAssignments,
-  prompts,
-  settings,
-  users,
-} from "@/db/schema";
+import { groupVersions } from "@/app/prompts/prompt-groups";
+import { prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { PageHeader } from "@/app/components/page-header";
@@ -53,42 +44,40 @@ export default async function SettingsPage() {
   if (currentUser.role !== "super_admin") redirect("/");
 
   const [
-    modeRows,
     activePrompts,
+    libraryVersionRows,
     managerRows,
-    assignmentRows,
-    ownPromptRows,
-    templateRows,
-    categoryRows,
+    managerPromptRows,
     jobRecordTimeZone,
   ] = await Promise.all([
-    db
-      .select({ value: settings.value })
-      .from(settings)
-      .where(eq(settings.key, "prompt_mode"))
-      .limit(1),
+    // Super Admin's library: the active version of each prompt.
     db
       .select({
         id: prompts.id,
         promptGroupId: prompts.promptGroupId,
         provider: prompts.provider,
         purpose: prompts.purpose,
-        categoryId: prompts.categoryId,
-        categoryName: categories.name,
         name: prompts.name,
         promptTemplate: prompts.promptTemplate,
         version: prompts.version,
         isDefault: prompts.isDefault,
       })
       .from(prompts)
-      .leftJoin(categories, eq(categories.id, prompts.categoryId))
-      .where(eq(prompts.isActive, true))
-      .orderBy(
-        asc(prompts.provider),
-        asc(prompts.purpose),
-        asc(categories.name),
-        asc(prompts.name),
-      ),
+      .where(and(eq(prompts.isActive, true), isNull(prompts.ownerManagerId)))
+      .orderBy(asc(prompts.provider), asc(prompts.purpose), asc(prompts.name)),
+    // Every version of the library ChatGPT prompts, newest first, for the version picker.
+    db
+      .select({
+        id: prompts.id,
+        promptGroupId: prompts.promptGroupId,
+        version: prompts.version,
+        isActive: prompts.isActive,
+        promptTemplate: prompts.promptTemplate,
+        createdAt: prompts.createdAt,
+      })
+      .from(prompts)
+      .where(and(eq(prompts.purpose, "document_generation"), isNull(prompts.ownerManagerId)))
+      .orderBy(desc(prompts.version)),
     db
       .select({
         id: users.id,
@@ -104,46 +93,36 @@ export default async function SettingsPage() {
         and(eq(users.role, "manager"), isNull(users.blockedAt)),
       )
       .orderBy(asc(users.displayName), asc(users.loginName)),
+    // Every version of every Manager's own prompts, shown to Super Admin read-only.
     db
       .select({
-        managerId: managerPromptAssignments.managerId,
+        ownerManagerId: prompts.ownerManagerId,
         id: prompts.id,
+        promptGroupId: prompts.promptGroupId,
         name: prompts.name,
+        promptTemplate: prompts.promptTemplate,
         version: prompts.version,
-        categoryName: categories.name,
+        isActive: prompts.isActive,
+        createdAt: prompts.createdAt,
       })
-      .from(managerPromptAssignments)
-      .innerJoin(prompts, eq(prompts.id, managerPromptAssignments.promptId))
-      .leftJoin(categories, eq(categories.id, prompts.categoryId))
-      .orderBy(asc(categories.name), asc(prompts.name)),
-    db
-      .select({
-        managerId: managerPromptOverrides.managerId,
-        promptTemplate: managerPromptOverrides.promptTemplate,
-      })
-      .from(managerPromptOverrides),
-    db
-      .select({
-        managerId: managerTemplateAssignments.managerId,
-        template: managerTemplateAssignments.template,
-      })
-      .from(managerTemplateAssignments),
-    db
-      .select({ id: categories.id, name: categories.name })
-      .from(categories)
-      .orderBy(asc(categories.name)),
+      .from(prompts)
+      .where(and(isNotNull(prompts.ownerManagerId), isNull(prompts.archivedAt)))
+      .orderBy(desc(prompts.version)),
     getJobRecordTimeZone(),
   ]);
-  const ownPrompts = new Map(
-    ownPromptRows.map((row) => [row.managerId, row.promptTemplate]),
-  );
+  const versionsByGroup = new Map<string, PromptVersion[]>();
+  for (const row of libraryVersionRows) {
+    const versions = versionsByGroup.get(row.promptGroupId) ?? [];
+    versions.push({
+      id: row.id,
+      version: row.version,
+      isActive: row.isActive,
+      promptTemplate: row.promptTemplate,
+      savedOn: row.createdAt.toISOString().slice(0, 10),
+    });
+    versionsByGroup.set(row.promptGroupId, versions);
+  }
 
-  const mode = modeRows[0]?.value === "private" ? "private" : "global";
-  const chatGptPrompts = activePrompts.filter(
-    (prompt) =>
-      prompt.provider === "openai" &&
-      prompt.purpose === "document_generation",
-  );
   const promptsByPurpose = (provider: string, purpose: string) =>
     activePrompts.filter(
       (prompt) => prompt.provider === provider && prompt.purpose === purpose,
@@ -154,17 +133,10 @@ export default async function SettingsPage() {
     <main className="py-1 text-slate-900">
       <div className="mx-auto max-w-6xl">
         <PageHeader
-          description="Maintain the global prompt library, assign prompts to Managers for rotation, edit Managers' own prompts, and set Get JD access."
+          description="Maintain the global prompt library and its default prompt, see each Manager's own prompts, and set Get JD access."
           eyebrow="Administration"
           title="AI prompt settings"
         />
-
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-sm font-semibold text-slate-800">
-            Prompt mode
-          </h2>
-          <PromptModeForm mode={mode} />
-        </section>
 
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <h2 className="text-sm font-semibold text-slate-800">
@@ -181,6 +153,9 @@ export default async function SettingsPage() {
             <h2 className="text-sm font-semibold text-slate-800">
               Global prompt library
             </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Managers write their own ChatGPT prompts. One without any uses the ChatGPT prompt marked Global default.
+            </p>
           </div>
           <div className="space-y-7">
             {promptGroups.map((group) => {
@@ -196,18 +171,22 @@ export default async function SettingsPage() {
                   {groupPrompts.length > 0 ? (
                     <div className="space-y-5">
                       {groupPrompts.map((prompt) => (
-                        <GlobalPromptForm
-                          categories={categoryRows}
-                          categoryId={prompt.categoryId}
-                          isDefault={prompt.isDefault}
-                          key={prompt.id}
-                          name={prompt.name}
-                          promptGroupId={prompt.promptGroupId}
-                          promptTemplate={prompt.promptTemplate}
-                          provider={prompt.provider}
-                          purpose={prompt.purpose}
-                          version={prompt.version}
-                        />
+                        <div className="space-y-3" key={prompt.id}>
+                          <GlobalPromptForm
+                            isDefault={prompt.isDefault}
+                            name={prompt.name}
+                            promptGroupId={prompt.promptGroupId}
+                            promptTemplate={prompt.promptTemplate}
+                            provider={prompt.provider}
+                            purpose={prompt.purpose}
+                            version={prompt.version}
+                          />
+                          {prompt.purpose === "document_generation" && (
+                            <PromptVersionPicker
+                              versions={versionsByGroup.get(prompt.promptGroupId) ?? []}
+                            />
+                          )}
+                        </div>
                       ))}
                     </div>
                   ) : (
@@ -221,7 +200,6 @@ export default async function SettingsPage() {
                     </summary>
                     <div className="mt-4">
                       <GlobalPromptForm
-                        categories={categoryRows}
                         name=""
                         promptTemplate=""
                         provider={group.provider}
@@ -238,89 +216,69 @@ export default async function SettingsPage() {
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="mb-5">
             <h2 className="text-sm font-semibold text-slate-800">
-              Manager prompt assignments
+              Managers
             </h2>
           </div>
           <PaginatedTable
             columns={[
-              { label: "Manager", className: "w-[12%]" },
-              { label: "Assigned prompts", className: "w-[22%]" },
-              { label: "Rotation templates", className: "w-[14%]" },
-              { label: "Own prompt", className: "w-[12%]" },
-              { label: "Get JD matching", className: "w-[10%]" },
-              { label: "Text highlight access", className: "w-[10%]" },
-              { label: "Excluded rules · job match", className: "w-[10%]" },
-              { label: "Job-detection rules · block", className: "w-[10%]" },
+              { label: "Manager", className: "w-[14%]" },
+              { label: "Own prompts (read-only)", className: "w-[30%]" },
+              { label: "Get JD matching", className: "w-[14%]" },
+              { label: "Text highlight access", className: "w-[14%]" },
+              { label: "Excluded rules · job match", className: "w-[14%]" },
+              { label: "Job-detection rules · block", className: "w-[14%]" },
             ]}
             emptyMessage="No active Managers"
-            rows={managerRows.map((manager) => ({
-              id: manager.id,
-              cells: [
-                <div key="manager">
-                  <div className="font-semibold">
-                    {manager.displayName ?? "Manager"}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    @{manager.loginName ?? "unknown"}
-                  </div>
-                </div>,
-                <PromptAssignmentForm
-                  assignedPrompts={assignmentRows.filter(
-                    (assignment) => assignment.managerId === manager.id,
-                  )}
-                  key="assignment"
-                  managerId={manager.id}
-                  prompts={chatGptPrompts.map((prompt) => ({
-                    id: prompt.id,
-                    name: prompt.name,
-                    version: prompt.version,
-                    categoryName: prompt.categoryName,
-                  }))}
-                />,
-                <ManagerTemplatesForm
-                  key="templates"
-                  managerId={manager.id}
-                  selected={templateRows
-                    .filter((row) => row.managerId === manager.id)
-                    .map((row) => row.template)}
-                />,
-                <details className="min-w-0" key="own-prompt">
-                  <summary
-                    className={`cursor-pointer text-xs font-medium ${
-                      ownPrompts.has(manager.id) ? "text-slate-700" : "text-amber-700"
-                    }`}
-                  >
-                    {ownPrompts.has(manager.id) ? "Written · edit" : "Not written yet · write"}
-                  </summary>
-                  <div className="mt-3">
-                    <ManagerOwnPromptForm
-                      managerId={manager.id}
-                      promptTemplate={ownPrompts.get(manager.id) ?? null}
-                    />
-                  </div>
-                </details>,
-                <ManagerGeminiMatchingForm
-                  key="gemini-matching"
-                  managerId={manager.id}
-                  useGemini={manager.useGeminiMatching}
-                />,
-                <ManagerTextHighlightAccessForm
-                  canManage={manager.canManageTextHighlights}
-                  key="text-highlight-access"
-                  managerId={manager.id}
-                />,
-                <ManagerPageExclusionAccessForm
-                  canManage={manager.canManagePageExclusions}
-                  key="page-exclusion-access"
-                  managerId={manager.id}
-                />,
-                <ManagerJobDetectionUrlAccessForm
-                  canManage={manager.canManageJobDetectionUrlRules}
-                  key="job-detection-url-access"
-                  managerId={manager.id}
-                />,
-              ],
-            }))}
+            rows={managerRows.map((manager) => {
+              const ownPrompts = groupVersions(
+                managerPromptRows.filter((row) => row.ownerManagerId === manager.id),
+              );
+              return {
+                id: manager.id,
+                cells: [
+                  <div key="manager">
+                    <div className="font-semibold">
+                      {manager.displayName ?? "Manager"}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      @{manager.loginName ?? "unknown"}
+                    </div>
+                  </div>,
+                  <div className="min-w-0 space-y-2" key="own-prompts">
+                    {ownPrompts.length === 0 ? (
+                      <span className="text-xs text-slate-500">None · uses the default prompt</span>
+                    ) : ownPrompts.map((prompt) => (
+                      <div className="space-y-1" key={prompt.promptGroupId}>
+                        <p className="text-xs font-medium text-slate-700">
+                          {prompt.name} · v{prompt.version}
+                        </p>
+                        <PromptVersionPicker readOnly versions={prompt.versions} />
+                      </div>
+                    ))}
+                  </div>,
+                  <ManagerGeminiMatchingForm
+                    key="gemini-matching"
+                    managerId={manager.id}
+                    useGemini={manager.useGeminiMatching}
+                  />,
+                  <ManagerTextHighlightAccessForm
+                    canManage={manager.canManageTextHighlights}
+                    key="text-highlight-access"
+                    managerId={manager.id}
+                  />,
+                  <ManagerPageExclusionAccessForm
+                    canManage={manager.canManagePageExclusions}
+                    key="page-exclusion-access"
+                    managerId={manager.id}
+                  />,
+                  <ManagerJobDetectionUrlAccessForm
+                    canManage={manager.canManageJobDetectionUrlRules}
+                    key="job-detection-url-access"
+                    managerId={manager.id}
+                  />,
+                ],
+              };
+            })}
           />
         </section>
       </div>

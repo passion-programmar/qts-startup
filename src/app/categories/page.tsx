@@ -28,6 +28,7 @@ export default async function CategoriesPage() {
     .select({
       id: categories.id,
       name: categories.name,
+      isDefault: categories.isDefault,
       assignedProfiles: count(profiles.userId),
     })
     .from(categories)
@@ -39,7 +40,7 @@ export default async function CategoriesPage() {
     <WorkspaceShell activeHref="/categories" user={actor}>
       <main className="py-1 text-slate-900">
         <PageHeader
-          description="Group candidates by category. ChatGPT prompts are written per category."
+          description="Group candidates by category. Every candidate has one; the default category catches the rest."
           eyebrow="Administration"
           title="Candidate categories"
         />
@@ -64,9 +65,16 @@ export default async function CategoriesPage() {
             rows={categoryRows.map((category) => ({
               id: category.id,
               cells: [
-                <EditCategoryForm id={category.id} key="category" name={category.name} />,
+                <div className="space-y-1" key="category">
+                  <EditCategoryForm id={category.id} name={category.name} />
+                  {category.isDefault && (
+                    <span className="text-[11px] text-slate-500">Default · new candidates start here</span>
+                  )}
+                </div>,
                 category.assignedProfiles,
-                <DeleteCategoryForm id={category.id} key="delete" name={category.name} />,
+                category.isDefault
+                  ? <span className="text-xs text-slate-400" key="delete">Cannot be deleted</span>
+                  : <DeleteCategoryForm id={category.id} key="delete" name={category.name} />,
               ],
             }))}
           />

@@ -188,7 +188,9 @@ export async function createUserAction(
             headline, linkedin_url, country, city, province, address_line_1,
             postal_code
           )
-          select id, ${categoryId || null}::uuid, ${firstName}, ${lastName},
+          select id,
+            coalesce(${categoryId || null}::uuid, (select id from categories where is_default)),
+            ${firstName}, ${lastName},
             ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
             ${phone || null}, ${headline || null}, ${normalizedLinkedInUrl || null},
@@ -425,7 +427,7 @@ export async function updateCandidateProfileAction(
     const results = await neonSql.transaction((tx) => [
       tx`
         update profiles
-        set category_id = ${values.categoryId || null}::uuid,
+        set category_id = coalesce(${values.categoryId || null}::uuid, (select id from categories where is_default)),
           first_name = ${values.firstName}, last_name = ${values.lastName},
           birthday = ${values.birthday || null}::date,
           pdf_template = ${values.pdfTemplate},

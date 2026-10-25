@@ -151,7 +151,7 @@ export default async function UsersPage() {
         : "account";
 
   const categoryOptions: CandidateCategoryOption[] = await db
-    .select({ id: categories.id, name: categories.name })
+    .select({ id: categories.id, name: categories.name, isDefault: categories.isDefault })
     .from(categories)
     .orderBy(categories.name);
 

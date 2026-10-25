@@ -8,7 +8,8 @@ import {
   JobEditAction,
   JobGenerationQueueAction,
 } from "@/app/components/record-forms";
-import { jobs, profiles, users } from "@/db/schema";
+import { GenerationSetup } from "@/app/components/generation-setup";
+import { jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
@@ -41,9 +42,13 @@ export default async function JobsPage() {
       candidateId: jobs.candidateId,
       firstName: profiles.firstName,
       lastName: profiles.lastName,
+      promptName: prompts.name,
+      promptVersion: prompts.version,
+      pdfTemplate: jobs.pdfTemplate,
     })
     .from(jobs)
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
+    .leftJoin(prompts, eq(prompts.id, jobs.promptId))
     .where(eq(jobs.managerId, currentUser.id))
     .orderBy(desc(jobs.date), desc(jobs.createdAt));
   const candidateRows = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
@@ -62,11 +67,12 @@ export default async function JobsPage() {
         <PaginatedTable
           columns={[
             { label: "No", className: "w-[5%]" },
-            { label: "Candidate Name", className: "w-[13%]" },
-            { label: "Job Title", className: "w-[28%]" },
+            { label: "Candidate Name", className: "w-[11%]" },
+            { label: "Job Title", className: "w-[22%]" },
             { label: "Status", className: "w-[9%]" },
-            { label: "Resume Path", className: "w-[16%]" },
-            { label: "Date", className: "w-[9%]" },
+            { label: "Resume Path", className: "w-[14%]" },
+            { label: "Prompt · Template", className: "w-[12%]" },
+            { label: "Date", className: "w-[7%]" },
             { label: "Edit", className: "w-[5%]" },
             { label: "Delete", className: "w-[5%]" },
             { label: "Queue", className: "w-[10%]" },
@@ -125,6 +131,12 @@ export default async function JobsPage() {
                 row.resumeLocalPath
                   ? <code className="block max-w-full whitespace-normal break-all text-xs" key="resume-path" title={row.resumeLocalPath}>{row.resumeLocalPath}</code>
                   : "—",
+                <GenerationSetup
+                  key="generation-setup"
+                  pdfTemplate={row.pdfTemplate}
+                  promptName={row.promptName}
+                  promptVersion={row.promptVersion}
+                />,
                 row.date,
                 <JobEditAction candidates={candidateOptions} key="edit" record={editableJob} />,
                 <JobDeleteAction key="delete" record={editableJob} />,

@@ -106,12 +106,6 @@ async function seedPrompts(): Promise<void> {
     if (inserted.length > 0) insertedPrompts.push(prompt.purpose);
   }
 
-  await sql`
-    insert into settings (key, value, updated_by_user_id)
-    values ('prompt_mode', '"global"'::jsonb, ${superAdminId}::uuid)
-    on conflict (key) do nothing
-  `;
-
   console.log(
     `Prompt seed complete. Added ${insertedPrompts.length} starter prompt(s); existing active prompts were preserved.`,
   );

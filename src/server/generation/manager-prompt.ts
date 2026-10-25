@@ -1,9 +1,7 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
-import { managerPromptAssignments, managerPromptOverrides } from "@/db/schema";
-import { db, neonSql } from "@/lib/db";
-import { isPdfTemplate, type PdfTemplate } from "@/server/pdf/pdf-templates";
+import { neonSql } from "@/lib/db";
+import { isPdfTemplate, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
 
 export class MissingDocumentPromptError extends Error {
   constructor(message: string) {
@@ -15,93 +13,73 @@ export class MissingDocumentPromptError extends Error {
 export type GenerationSetup = {
   promptTemplate: string;
   pdfTemplate: PdfTemplate;
+  // The prompt version used: one of the Manager's own, or Super Admin's default.
+  promptId: string;
 };
 
 /**
- * Picks the prompt and PDF template for one Generation.
+ * Picks the prompt and PDF template for one Generation, one by one in rotation.
  *
- * A Manager with assigned prompts rotates through those written for the account's category,
- * and through the templates Super Admin picked for them (the account's own template when none
- * are picked). Each pick is recorded so the next Generation moves on. Prompts for another
- * category are never used, so an account without a matching prompt cannot be generated.
- *
- * A Manager without assignments uses their own prompt and the account's own template.
+ * The prompt is the Manager's own prompt they used longest ago (a new one first), or Super
+ * Admin's default prompt when they have none. The template rotates the same way through all
+ * templates. Both are read from the Manager's past Generation runs, which record what each used.
  */
-export async function getManagerGenerationSetup(
-  managerId: string,
-  account: { categoryId: string | null; pdfTemplate: string },
-): Promise<GenerationSetup> {
-  const accountTemplate = isPdfTemplate(account.pdfTemplate) ? account.pdfTemplate : "qts-standard";
-  const [anyAssignment] = await db
-    .select({ promptId: managerPromptAssignments.promptId })
-    .from(managerPromptAssignments)
-    .where(eq(managerPromptAssignments.managerId, managerId))
-    .limit(1);
-
-  if (!anyAssignment) {
-    const [own] = await db
-      .select({ promptTemplate: managerPromptOverrides.promptTemplate })
-      .from(managerPromptOverrides)
-      .where(eq(managerPromptOverrides.managerId, managerId))
-      .limit(1);
-    const promptTemplate = own?.promptTemplate.trim();
-    if (!promptTemplate) {
-      throw new MissingDocumentPromptError(
-        "Write your resume and cover-letter prompt on the My AI prompt page before starting Generation.",
-      );
-    }
-    return { promptTemplate, pdfTemplate: accountTemplate };
-  }
-
-  if (!account.categoryId) {
-    throw new MissingDocumentPromptError(
-      "This candidate has no category, so none of your assigned prompts can be used. Ask your Super Admin to set the candidate's category.",
-    );
-  }
-  const promptRows = await neonSql`
-    update manager_prompt_assignments
-    set last_used_at = now()
-    from prompts
-    where prompts.id = manager_prompt_assignments.prompt_id
-      and manager_prompt_assignments.manager_id = ${managerId}::uuid
-      and manager_prompt_assignments.prompt_id = (
-        select assignment.prompt_id
-        from manager_prompt_assignments assignment
-        join prompts candidate on candidate.id = assignment.prompt_id
-        where assignment.manager_id = ${managerId}::uuid
-          and candidate.provider = 'openai'
-          and candidate.purpose = 'document_generation'
-          and candidate.is_active
-          and candidate.category_id = ${account.categoryId}::uuid
-        order by assignment.last_used_at asc nulls first, assignment.assigned_at asc
-        limit 1
-        for update of assignment
-      )
-    returning prompts.prompt_template
+export async function getManagerGenerationSetup(managerId: string): Promise<GenerationSetup> {
+  const ownRows = await neonSql`
+    select prompt.id, prompt.prompt_template
+    from prompts prompt
+    where prompt.owner_manager_id = ${managerId}::uuid
+      and prompt.provider = 'openai'
+      and prompt.purpose = 'document_generation'
+      and prompt.is_active
+      and prompt.archived_at is null
+    order by (
+        select max(run.created_at)
+        from generation_runs run
+        join prompts used on used.id = run.prompt_id
+        where run.manager_id = ${managerId}::uuid
+          and used.prompt_group_id = prompt.prompt_group_id
+      ) asc nulls first,
+      (select min(first.created_at) from prompts first where first.prompt_group_id = prompt.prompt_group_id) asc
+    limit 1
   `;
+  const promptRows = ownRows.length > 0 ? ownRows : await neonSql`
+    select id, prompt_template
+    from prompts
+    where owner_manager_id is null
+      and provider = 'openai'
+      and purpose = 'document_generation'
+      and is_active
+      and is_default
+      and archived_at is null
+    limit 1
+  `;
+  const promptId = String(promptRows[0]?.id ?? "");
   const promptTemplate = String(promptRows[0]?.prompt_template ?? "").trim();
-  if (!promptTemplate) {
+  if (!promptId || !promptTemplate) {
     throw new MissingDocumentPromptError(
-      "None of your assigned prompts is written for this candidate's category. Ask your Super Admin to assign one.",
+      "You have no prompts and there is no default prompt. Add a prompt on the My AI prompt page, or ask your Super Admin to set a default.",
     );
   }
 
   const templateRows = await neonSql`
-    update manager_template_assignments
-    set last_used_at = now()
-    where manager_id = ${managerId}::uuid
-      and template = (
-        select assignment.template
-        from manager_template_assignments assignment
-        where assignment.manager_id = ${managerId}::uuid
-        order by assignment.last_used_at asc nulls first, assignment.template asc
-        limit 1
-        for update
-      )
-    returning template
+    select template
+    from unnest(${[...pdfTemplateValues]}::text[]) with ordinality as rotation(template, position)
+    order by (
+        select max(run.created_at)
+        from generation_runs run
+        where run.manager_id = ${managerId}::uuid
+          and run.pdf_template = rotation.template
+      ) asc nulls first,
+      rotation.position asc
+    limit 1
   `;
   const rotated = String(templateRows[0]?.template ?? "");
-  return { promptTemplate, pdfTemplate: isPdfTemplate(rotated) ? rotated : accountTemplate };
+  return {
+    promptTemplate,
+    pdfTemplate: isPdfTemplate(rotated) ? rotated : "qts-standard",
+    promptId,
+  };
 }
 
 export type GenerationJob = {

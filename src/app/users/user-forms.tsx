@@ -39,7 +39,7 @@ type CreateUserFormProps = {
   categories: CandidateCategoryOption[];
 };
 
-export type CandidateCategoryOption = { id: string; name: string };
+export type CandidateCategoryOption = { id: string; name: string; isDefault: boolean };
 
 export function CreateUserForm({ role, categories }: CreateUserFormProps) {
   const [educationRows, setEducationRows] = useState([0]);
@@ -1196,9 +1196,10 @@ function SelectField({
         className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
         id={id}
         name={name}
-        defaultValue={defaultValue}
+        // Every candidate has a category; new ones start in the default.
+        defaultValue={defaultValue || options.find((option) => option.isDefault)?.id || ""}
+        required
       >
-        <option value="">No category</option>
         {options.map((option) => (
           <option key={option.id} value={option.id}>{option.name}</option>
         ))}

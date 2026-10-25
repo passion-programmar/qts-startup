@@ -407,6 +407,27 @@
       "when": 1792940618549,
       "tag": "0057_category_prompts_template_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1792942598621,
+      "tag": "0058_generation_prompt_and_template",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1792951677348,
+      "tag": "0059_remove_prompt_assignments",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1792951721739,
+      "tag": "0060_manager_prompts_default_category",
+      "breakpoints": true
     }
   ]
 }

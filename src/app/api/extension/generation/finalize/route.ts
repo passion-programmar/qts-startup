@@ -43,6 +43,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         jobTitle: generationRuns.jobTitle,
         company: generationRuns.company,
         createdAt: generationRuns.createdAt,
+        promptId: generationRuns.promptId,
+        pdfTemplate: generationRuns.pdfTemplate,
       })
       .from(generationRuns)
       .innerJoin(jobs, eq(jobs.id, generationRuns.jobId))
@@ -76,6 +78,9 @@ export async function POST(request: Request): Promise<NextResponse> {
           generationError: null,
           generationLeaseExpiresAt: null,
           resumeLocalPath: downloadPaths.resume,
+          // The prompt version and template this Generation used, shown on Jobs and Bids.
+          promptId: run.promptId,
+          pdfTemplate: run.pdfTemplate,
           updatedAt: new Date(),
         })
         .where(and(

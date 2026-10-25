@@ -618,84 +618,83 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(forms.includes('size-9 shrink-0 items-center justify-center'));
 });
 
-test('document generation uses saved manager prompt assignments and gates prompt access', () => {
+test('each Manager rotates through their own prompts and every template, with a default fallback', () => {
   const repositoryRoot = path.join(extensionRoot, '..');
-  const promptActions = fs.readFileSync(
-    path.join(repositoryRoot, 'src', 'app', 'settings', 'actions.ts'),
-    'utf8',
-  );
-  const promptResolver = fs.readFileSync(
-    path.join(repositoryRoot, 'src', 'server', 'generation', 'manager-prompt.ts'),
-    'utf8',
-  );
-  const promptPage = fs.readFileSync(
-    path.join(repositoryRoot, 'src', 'app', 'prompts', 'page.tsx'),
-    'utf8',
-  );
-  const workspaceShell = fs.readFileSync(
-    path.join(repositoryRoot, 'src', 'app', 'components', 'workspace-shell.tsx'),
-    'utf8',
-  );
-  const workspaceClient = fs.readFileSync(
-    path.join(repositoryRoot, 'src', 'app', 'components', 'workspace-shell-client.tsx'),
-    'utf8',
-  );
-  const promptForms = fs.readFileSync(
-    path.join(repositoryRoot, 'src', 'app', 'settings', 'prompt-forms.tsx'),
-    'utf8',
-  );
+  const read = (...parts) => fs.readFileSync(path.join(repositoryRoot, ...parts), 'utf8');
+  const resolver = read('src', 'server', 'generation', 'manager-prompt.ts');
+  const managerActions = read('src', 'app', 'prompts', 'actions.ts');
+  const workspaceShell = read('src', 'app', 'components', 'workspace-shell.tsx');
+  const workspaceClient = read('src', 'app', 'components', 'workspace-shell-client.tsx');
 
-  // Assigned prompts rotate least recently used first; unassigned Managers use their own prompt only.
-  assert.ok(promptResolver.includes('update manager_prompt_assignments'));
-  assert.ok(promptResolver.includes('order by assignment.last_used_at asc nulls first'));
-  assert.ok(promptResolver.includes('candidate.is_active'));
-  // A prompt is only used for accounts in its own category.
-  assert.ok(promptResolver.includes('and candidate.category_id = ${account.categoryId}::uuid'));
-  assert.ok(promptResolver.includes('update manager_template_assignments'));
-  assert.ok(promptResolver.includes('managerPromptOverrides'));
-  assert.ok(!promptResolver.includes('prompts.isDefault'));
-  assert.ok(promptResolver.includes('MissingDocumentPromptError'));
-  assert.ok(promptActions.includes('update manager_prompt_assignments'));
-  assert.ok(promptActions.includes('saveManagerOwnPromptAction'));
-  assert.ok(!promptActions.includes('promptChoice === "random"'));
-  assert.ok(!promptForms.includes('Random active prompt'));
-  assert.ok(promptPage.includes('showAssignedText = modeRows[0]?.value === "private"'));
-  assert.ok(promptPage.includes('<ManagerOwnPromptForm'));
+  // The Manager's own prompts, the one used longest ago first, then Super Admin's default.
+  assert.ok(resolver.includes('where prompt.owner_manager_id = ${managerId}::uuid'));
+  assert.ok(resolver.includes('and prompt.archived_at is null'));
+  assert.ok(resolver.includes('where owner_manager_id is null'));
+  assert.ok(resolver.includes('and is_default'));
+  // Every template rotates, read from the Manager's past runs.
+  assert.ok(resolver.includes('from unnest(${[...pdfTemplateValues]}::text[]) with ordinality'));
+  assert.ok(!resolver.includes('category_id'));
+  // Managers create, edit and delete only their own prompts.
+  assert.ok(managerActions.includes('ownerManagerId: actor.id'));
+  assert.ok(managerActions.includes('archiveManagerPrompt({ promptGroupId, ownerManagerId: actor.id })'));
   assert.ok(!workspaceShell.includes('prompt_mode'));
-  assert.ok(workspaceClient.includes('{ label: "My AI prompt", href: "/prompts"'));
-  assert.ok(!workspaceClient.includes('managerPromptEnabled'));
+  assert.ok(workspaceClient.includes('{ label: "My AI prompts", href: "/prompts"'));
   assert.ok(workspaceClient.includes('const [sidebarCollapsed, setSidebarCollapsed] = useState(false)'));
 });
 
-test('candidate profiles belong to a category directly and subcategory assignments move to their parent', () => {
-  const schema = fs.readFileSync(
-    path.join(extensionRoot, '..', 'src', 'db', 'schema.ts'),
-    'utf8',
-  );
-  const migration = fs.readFileSync(
-    path.join(extensionRoot, '..', 'drizzle', '0056_remove_sub_categories.sql'),
-    'utf8',
-  );
-  const userActions = fs.readFileSync(
-    path.join(extensionRoot, '..', 'src', 'app', 'users', 'actions.ts'),
-    'utf8',
-  );
-  const userForms = fs.readFileSync(
-    path.join(extensionRoot, '..', 'src', 'app', 'users', 'user-forms.tsx'),
-    'utf8',
-  );
+test('prompt versions are kept, deleting archives, and an earlier version can be put back in use', () => {
+  const repositoryRoot = path.join(extensionRoot, '..');
+  const read = (...parts) => fs.readFileSync(path.join(repositoryRoot, ...parts), 'utf8');
+  const versions = read('src', 'server', 'prompts', 'prompt-versions.ts');
+  const settingsActions = read('src', 'app', 'settings', 'actions.ts');
+
+  assert.ok(!/delete from prompts/i.test(versions + settingsActions));
+  assert.ok(versions.includes('update prompts set archived_at = now()'));
+  assert.ok(versions.includes('update prompts set is_active = true'));
+  // Every lookup is scoped to the owner, so a Manager never reaches another's prompts.
+  assert.ok(versions.includes('owner_manager_id is not distinct from ${input.ownerManagerId}::uuid'));
+  assert.ok(settingsActions.includes('ownerManagerId: actor.role === "manager" ? actor.id : null'));
+});
+
+test('the prompt and template flow from the Generation run to the job and its bid', () => {
+  const repositoryRoot = path.join(extensionRoot, '..');
+  const read = (...parts) => fs.readFileSync(path.join(repositoryRoot, ...parts), 'utf8');
+  const start = read('src', 'app', 'api', 'extension', 'generation', 'start', 'route.ts');
+  const finalize = read('src', 'app', 'api', 'extension', 'generation', 'finalize', 'route.ts');
+  const jobActions = read('src', 'app', 'jobs', 'actions.ts');
+
+  assert.ok(start.includes('const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);'));
+  assert.ok(finalize.includes('promptId: run.promptId,'));
+  assert.ok(finalize.includes('pdfTemplate: run.pdfTemplate,'));
+  assert.ok(jobActions.includes('promptId: existingJob.promptId,'));
+  assert.ok(jobActions.includes('pdfTemplate: existingJob.pdfTemplate,'));
+});
+
+test('every candidate has a category, falling back to the default Global category', () => {
+  const repositoryRoot = path.join(extensionRoot, '..');
+  const read = (...parts) => fs.readFileSync(path.join(repositoryRoot, ...parts), 'utf8');
+  const schema = read('src', 'db', 'schema.ts');
+  const subcategoryMigration = read('drizzle', '0056_remove_sub_categories.sql');
+  const defaultMigration = read('drizzle', '0060_manager_prompts_default_category.sql');
+  const categoryActions = read('src', 'app', 'categories', 'actions.ts');
+  const userActions = read('src', 'app', 'users', 'actions.ts');
+  const userForms = read('src', 'app', 'users', 'user-forms.tsx');
 
   assert.ok(!schema.includes('subCategories'));
-  assert.ok(schema.includes('categoryId: uuid("category_id").references(() => categories.id'));
-  // Accounts move to the parent category before the subcategory table is dropped.
   assert.ok(
-    migration.indexOf('SET "category_id" = "sub_categories"."category_id"')
-      < migration.indexOf('DROP TABLE "sub_categories"'),
+    subcategoryMigration.indexOf('SET "category_id" = "sub_categories"."category_id"')
+      < subcategoryMigration.indexOf('DROP TABLE "sub_categories"'),
   );
-  assert.ok(migration.includes('profiles_category_id_categories_id_fk'));
-  assert.ok(userActions.includes('.from(categories)'));
+  // Uncategorized accounts move to Global before the column becomes required.
+  assert.ok(
+    defaultMigration.indexOf('WHERE "category_id" IS NULL')
+      < defaultMigration.indexOf('ALTER COLUMN "category_id" SET NOT NULL'),
+  );
+  assert.ok(categoryActions.includes('The default category cannot be deleted'));
+  assert.ok(categoryActions.includes('set category_id = (select id from categories where is_default)'));
+  assert.ok(userActions.includes('(select id from categories where is_default)'));
   assert.ok(userForms.includes('label="Category"'));
-  assert.ok(!userForms.includes('<optgroup'));
+  assert.ok(!userForms.includes('No category'));
 });
 
 test('the login panel submits completed credentials without a timer or button', () => {

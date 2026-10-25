@@ -50,6 +50,8 @@ export async function updateJobAction(
     candidateId: jobs.candidateId,
     resumeLocalPath: jobs.resumeLocalPath,
     googleDrivePath: jobs.googleDrivePath,
+    promptId: jobs.promptId,
+    pdfTemplate: jobs.pdfTemplate,
     hasBid: jobHasBid(),
   }).from(jobs)
     .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
@@ -131,6 +133,8 @@ export async function updateJobAction(
           resumeLocalPath: existingJob.resumeLocalPath,
           googleDrivePath: existingJob.googleDrivePath,
           generationRunId: deliveredGenerationRunId(id),
+          promptId: existingJob.promptId,
+          pdfTemplate: existingJob.pdfTemplate,
         }).onConflictDoNothing({ target: bids.sourceJobId })]
         : []),
     ]);

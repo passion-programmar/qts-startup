@@ -5,7 +5,8 @@ import { PaginatedTable } from "@/app/components/paginated-table";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { BidActions } from "@/app/components/record-forms";
-import { bids, categories, profiles, users } from "@/db/schema";
+import { GenerationSetup } from "@/app/components/generation-setup";
+import { bids, categories, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -39,10 +40,14 @@ export default async function BidsPage() {
       firstName: profiles.firstName,
       lastName: profiles.lastName,
       category: categories.name,
+      promptName: prompts.name,
+      promptVersion: prompts.version,
+      pdfTemplate: bids.pdfTemplate,
     })
     .from(bids)
     .innerJoin(profiles, eq(profiles.userId, bids.candidateId))
     .leftJoin(categories, eq(categories.id, profiles.categoryId))
+    .leftJoin(prompts, eq(prompts.id, bids.promptId))
     .where(eq(bids.managerId, currentUser.id))
     .orderBy(desc(bids.appliedAt));
   const candidateRows = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
@@ -68,13 +73,14 @@ export default async function BidsPage() {
             { label: "Type", className: "w-[5%]" },
             { label: "Salary", className: "w-[6%]" },
             { label: "Applied", className: "w-[5%]" },
-            { label: "Resume path", className: "w-[7%]" },
-            { label: "Drive path", className: "w-[7%]" },
-            { label: "Source job", className: "w-[8%]" },
+            { label: "Resume path", className: "w-[5%]" },
+            { label: "Drive path", className: "w-[5%]" },
+            { label: "Prompt · Template", className: "w-[8%]" },
+            { label: "Source job", className: "w-[6%]" },
             { label: "Link", className: "w-[4%]" },
             { label: "Created", className: "w-[6%]" },
             { label: "Updated", className: "w-[6%]" },
-            { label: "Actions", className: "w-[14%]" },
+            { label: "Actions", className: "w-[12%]" },
           ]}
           emptyMessage="No bids submitted yet"
           rows={rows.map((row, index) => ({
@@ -90,6 +96,12 @@ export default async function BidsPage() {
               formatDate(row.appliedAt),
               row.resumeLocalPath,
               row.googleDrivePath ?? "—",
+              <GenerationSetup
+                key="generation-setup"
+                pdfTemplate={row.pdfTemplate}
+                promptName={row.promptName}
+                promptVersion={row.promptVersion}
+              />,
               row.sourceJobId,
               <a aria-label={`Open ${row.title}`} className="inline-flex size-8 items-center justify-center rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50" href={row.url} key="link" rel="noreferrer" target="_blank"><ExternalLink className="size-4" /></a>,
               row.createdAt.toLocaleString(),

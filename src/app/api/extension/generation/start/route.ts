@@ -67,8 +67,6 @@ export async function POST(request: Request): Promise<NextResponse> {
           addressLine1: profiles.addressLine1,
           postalCode: profiles.postalCode,
           jdMatching: profiles.jdMatching,
-          categoryId: profiles.categoryId,
-          pdfTemplate: profiles.pdfTemplate,
         })
         .from(jobs)
         .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -166,11 +164,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       salary: savedJob.salary || "",
       jobDescription: savedJob.description,
     };
-    // Picked after every other check, so a refused start does not move the rotation on.
-    const { promptTemplate, pdfTemplate } = await getManagerGenerationSetup(manager.id, {
-      categoryId: savedJob.categoryId,
-      pdfTemplate: savedJob.pdfTemplate,
-    });
+    // The rotation is read from past runs, so it moves on only when the run below is saved.
+    const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);
     const composedPrompt = composeGenerationPrompt(promptTemplate, normalizedJob, candidateProfile);
     await db
       .update(generationRuns)
@@ -197,6 +192,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         promptTemplate,
         composedPrompt,
         pdfTemplate,
+        promptId,
       })
       .returning({ id: generationRuns.id });
     return NextResponse.json({

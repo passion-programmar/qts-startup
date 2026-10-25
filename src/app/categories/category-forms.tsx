@@ -52,7 +52,7 @@ export function DeleteCategoryForm({ id, name }: { id: string; name: string }) {
       action={formAction}
       className="flex flex-wrap items-center gap-2"
       onSubmit={(event) => {
-        if (!window.confirm(`Delete category "${name}"? Its candidates will become uncategorized.`)) event.preventDefault();
+        if (!window.confirm(`Delete category "${name}"? Its candidates move to the default category.`)) event.preventDefault();
       }}
     >
       <input name="categoryId" type="hidden" value={id} />

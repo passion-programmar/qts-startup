@@ -241,28 +241,26 @@ Jobs and Bids to support partial text search. The `pg_trgm` extension is enabled
 by the database migration. The application workflow that transitions a Job to
 `applied` and inserts its Bid atomically still needs to be implemented.
 After applying migrations, seed editable global starter prompts with
-`npm run db:seed:prompts`. Super Admin manages prompt versions and Manager
-assignments from `/settings`. The resume and cover-letter prompt for a
-Generation is chosen per Manager:
+`npm run db:seed:prompts`. Super Admin manages the prompt library from
+`/settings`; the ChatGPT prompt marked Global default is the fallback for
+document generation.
 
-- ChatGPT document prompts are written per candidate category
-  (`prompts.category_id`) and are only ever used for accounts in that category.
-- A Manager with assigned global prompts rotates through the ones for the
-  account's category, least recently used first
-  (`manager_prompt_assignments.last_used_at`). If none match, or the account has
-  no category, Generation refuses to start. The PDF template rotates the same
-  way through the templates Super Admin picked for that Manager
-  (`manager_template_assignments`), or uses the account's own template when none
-  are picked. The chosen template is saved on the run
-  (`generation_runs.pdf_template`) so every download of it matches.
-- A Manager without assignments uses their own single prompt
-  (`manager_prompt_overrides`). There is no global fallback: Generation refuses
-  to start until that prompt is written. Managers edit it at `/prompts`; Super
-  Admin can edit it from `/settings`.
-
-The `prompt_mode` setting only decides whether Managers can read the text of
-their assigned prompts (`private`) or see just their names (`global`, the
-default). `/prompts` never reads Gemini prompts.
+- Each Manager writes their own ChatGPT document prompts at `/prompts`
+  (`prompts.owner_manager_id`): add, edit and delete. Saving adds a version and
+  earlier versions can be put back in use; deleting archives every version
+  (`prompts.archived_at`), so nothing is erased. Super Admin sees them
+  read-only in `/settings`.
+- Each Generation takes the Manager's own prompt they used longest ago (a new
+  one first), or the default prompt when they have none, and rotates through
+  all PDF templates the same way. Both are read from the Manager's past
+  `generation_runs`, which record the prompt version (`prompt_id`) and template
+  (`pdf_template`) each run used; delivery copies them onto the job, and
+  marking it Applied copies them onto the bid, so Jobs and Bids show what was
+  used.
+- Categories only group candidates. Every candidate has one; the default
+  category (`categories.is_default`, seeded as Global) is where new candidates
+  start and where a deleted category's candidates move. `/prompts` never reads
+  Gemini prompts.
 
 `resume_pdf_id` is nullable and intentionally has no foreign key yet. The
 resume-template table and its ownership/storage model are deferred, so no

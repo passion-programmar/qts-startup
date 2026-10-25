@@ -82,7 +82,7 @@ export function WorkspaceShellClient({
           { label: "Gemini usage", href: "/settings/gemini-usage", icon: Activity },
         ]
       : user.role === "manager"
-        ? [{ label: "My AI prompt", href: "/prompts", icon: Sparkles }]
+        ? [{ label: "My AI prompts", href: "/prompts", icon: Sparkles }]
         : [];
   const navigationGroups = [
     { label: "Workspace", items: workspaceItems },
