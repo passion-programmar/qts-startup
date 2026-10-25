@@ -24,6 +24,7 @@ import { useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { logoutAction } from "@/app/login/actions";
 import { LoadingIcon } from "@/app/components/loading-icon";
+import { ThemeSwitch } from "@/app/components/theme-switch";
 import type { StaffSession } from "@/lib/session";
 
 const roleLabels: Record<StaffSession["role"], string> = {
@@ -167,6 +168,7 @@ export function WorkspaceShellClient({
             </div>
           ))}
         </nav>
+        <ThemeSwitch />
         <Link className="workspace-sidebar__footer" href="/profile" onClick={() => setMobileNavigationOpen(false)} title={sidebarCollapsed ? user.displayName : undefined}>
           <span className="workspace-avatar" aria-hidden="true">{initials}</span>
           <div><strong>{user.displayName}</strong><span>{roleLabels[user.role]}</span></div>

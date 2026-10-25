@@ -22,7 +22,7 @@ export default async function LoginPage() {
 
   return (
     <main className="grid min-h-dvh grid-cols-1 bg-surface lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-      <aside className="relative hidden overflow-hidden bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-700 p-12 text-white lg:flex lg:flex-col lg:justify-between">
+      <aside className="theme-light relative hidden overflow-hidden bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-700 p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <div aria-hidden="true" className="absolute -right-24 -top-24 size-96 rounded-full bg-white/10 blur-3xl" />
         <div aria-hidden="true" className="absolute -bottom-32 -left-16 size-96 rounded-full bg-violet-400/20 blur-3xl" />
         <div className="relative flex items-center gap-3">
