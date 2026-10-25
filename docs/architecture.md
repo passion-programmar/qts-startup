@@ -25,7 +25,10 @@ The supported browser-extension workflow is deliberately narrow:
    the launcher flashes red once. Super Admin assigns Gemini matching to
    individual Managers in Settings; every other Manager uses general matching.
    General mode extracts locally and checks Jobs and Bids. Gemini mode sends the
-   page's plain innerText to the server with the default evaluation
+   job's plain text to the server (shown and collapsed text alike, without the
+   site's header, footer, menus, cookie banners, other listed jobs, or
+   application form; a JobPosting description from the page's structured data
+   is added when the page lacks it) with the default evaluation
    prompt and candidate ID/JD-note pairs, then prechecks returned candidate IDs.
    A Manager with the corresponding Super-assigned permission can add, edit,
    and delete only their own blocked URL fragments and job-page detection keywords.

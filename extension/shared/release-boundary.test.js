@@ -101,7 +101,8 @@ test('Get JD supports Super-selected manual and Gemini matching flows', () => {
   assert.ok(apiWorker.includes("path === '/api/extension/get-jd'"));
   assert.ok(serviceWorker.includes("modeResult.mode === 'gemini'"));
   assert.ok(serviceWorker.includes('pageText,'));
-  assert.ok(serviceWorker.includes('document.body?.innerText'));
+  assert.ok(serviceWorker.includes("JOB_PAGE_TEXT_FILE = 'shared/job-page-text.js'"));
+  assert.ok(serviceWorker.includes('globalThis.__qtsReadJobPageText?.()'));
   assert.ok(!serviceWorker.includes('bodyHtml'));
   assert.ok(serviceWorker.includes("geminiResult.classification?.isJobPage !== true"));
   assert.ok(serviceWorker.includes("result.classification?.isRemote !== true"));

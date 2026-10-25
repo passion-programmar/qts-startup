@@ -320,10 +320,15 @@ async function isPageBlockedForManager(url) {
   return isManagerBlockedUrl(url, await getCachedManagerJobDetectionUrlRules());
 }
 
+const JOB_PAGE_TEXT_FILE = 'shared/job-page-text.js';
+
+// The job's text, shown or collapsed, without the site's header, footer, menus, or cookie banners.
 async function readVisiblePageText(tabId) {
+  const target = { tabId, frameIds: [0] };
+  await chrome.scripting.executeScript({ target, files: [JOB_PAGE_TEXT_FILE] });
   const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => String(document.body?.innerText || document.documentElement?.innerText || '').slice(0, 2_000_000),
+    target,
+    func: () => String(globalThis.__qtsReadJobPageText?.() || document.body?.innerText || ''),
   });
   return String(results?.[0]?.result || '');
 }
@@ -352,9 +357,11 @@ function waitForPageToSettleInPage(quietMs, maxMs) {
   });
 }
 
-// Runs in the page. Collects the visible text and the structural job signals.
+// Runs in the page, after JOB_PAGE_TEXT_FILE. Collects the job text, the visible text (closed-posting
+// notices count only when shown), and the structural job signals.
 function collectJobPageSnapshotInPage() {
-  const text = String(document.body?.innerText || document.documentElement?.innerText || '').slice(0, 2_000_000);
+  const visibleText = String(document.body?.innerText || document.documentElement?.innerText || '').slice(0, 2_000_000);
+  const text = String(globalThis.__qtsReadJobPageText?.() || visibleText);
   const readText = (element) => String(element?.innerText || element?.textContent || '').trim();
   const hasJobPostingData = [...document.querySelectorAll('script[type="application/ld+json"]')]
     .some((script) => /"@type"\s*:\s*(?:\[[^\]]*)?"(?:https?:\/\/schema\.org\/)?JobPosting"/i.test(script.textContent || ''))
@@ -393,7 +400,7 @@ function collectJobPageSnapshotInPage() {
     /^https:\/\/(?:[^/]+\.)?(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com|icims\.com|jobvite\.com|smartrecruiters\.com|workable\.com|recruitee\.com|teamtailor\.com|bamboohr\.com|breezy\.hr|applytojob\.com|personio\.(?:de|com)|rippling\.com)\//i
       .test(frame.src)
   ));
-  return { url: location.href, text, hasJobPostingData, headingMatches, hasApplyControl, hasCvUpload, jobLinkCount, hasJobDetailPane, hasJobBoardFrame };
+  return { url: location.href, text, visibleText, hasJobPostingData, headingMatches, hasApplyControl, hasCvUpload, jobLinkCount, hasJobDetailPane, hasJobBoardFrame };
 }
 
 async function readJobPageSnapshot(tabId, settle = null) {
@@ -401,6 +408,7 @@ async function readJobPageSnapshot(tabId, settle = null) {
   if (settle) {
     await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [settle.quietMs, settle.maxMs] });
   }
+  await chrome.scripting.executeScript({ target, files: [JOB_PAGE_TEXT_FILE] });
   const [result] = await chrome.scripting.executeScript({ target, func: collectJobPageSnapshotInPage });
   return result?.result || null;
 }
@@ -1253,7 +1261,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
     }
     if (modeResult.mode === 'gemini') {
       const pageText = (await readVisiblePageText(tabId)).slice(0, 100_000);
-      if (!pageText.trim()) throw new Error('Could not read visible text from the loaded page.');
+      if (!pageText.trim()) throw new Error('Could not read the job text from the loaded page.');
       const geminiResult = await workerApiRequest('POST', '/api/extension/get-jd', {
         pageUrl: url,
         pageTitle: tab.title || documentId || url,

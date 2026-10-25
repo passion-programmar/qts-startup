@@ -44,7 +44,9 @@
 
   function evaluateJobPage(snapshot, keywordRules, countKeywordMatches) {
     const text = String(snapshot?.text || '');
-    if (CLOSED_PATTERNS.some((pattern) => pattern.test(text))) {
+    // A closed notice counts only when shown; pages can carry hidden ones for every state.
+    const shownText = String(snapshot?.visibleText ?? text);
+    if (CLOSED_PATTERNS.some((pattern) => pattern.test(shownText))) {
       return { isJobPage: false, reason: 'closed', score: 0, keywordMatches: 0 };
     }
     const keywordMatches = countKeywordMatches(text, keywordRules);

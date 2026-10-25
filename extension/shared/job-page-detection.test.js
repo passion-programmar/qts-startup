@@ -47,6 +47,15 @@ test('closed or expired postings are rejected even with keywords', () => {
   assert.equal(result.reason, 'closed');
 });
 
+test('a closed notice that the page does not show does not reject it', () => {
+  const result = evaluate({
+    text: 'Responsibilities, qualifications. No longer accepting applications.',
+    visibleText: 'Responsibilities, qualifications.',
+    hasJobPostingData: true,
+  });
+  assert.equal(result.isJobPage, true);
+});
+
 test('job lists are penalized, but a list with a selected job is judged on that job', () => {
   const list = { url: 'https://www.linkedin.com/jobs/search/?keywords=engineer', hasApplyControl: true, headingMatches: 2, jobLinkCount: 25 };
   assert.equal(evaluate(list, []).isJobPage, true);
