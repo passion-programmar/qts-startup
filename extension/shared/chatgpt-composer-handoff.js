@@ -1,7 +1,13 @@
 // Shared ChatGPT unified-composer handoff (ProseMirror #prompt-textarea).
 // Loaded in content scripts and service worker (importScripts).
 (function initQtsChatGptComposerHandoff(global) {
-  const HANDOFF_VERSION = 7;
+  const HANDOFF_VERSION = 8;
+  // How long each send attempt waits for ChatGPT to show the sent message.
+  const SEND_CONFIRM_MS = 8000;
+  const FALLBACK_CONFIRM_MS = 4000;
+  // ChatGPT collapses a long sent message ("Show more"), so a send is recognised by
+  // its beginning, which starts with the task marker for Generation.
+  const MATCH_PREFIX_LENGTH = 120;
   if (global.__qtsChatGptComposerHandoff?.version === HANDOFF_VERSION) return;
 
   function cleanText(value) {
@@ -408,8 +414,31 @@
 
   function messageContainsExpectedText(message, expectedText) {
     const actual = cleanText(message?.innerText || message?.textContent || '');
-    const expected = cleanText(expectedText);
+    const expected = cleanText(expectedText).slice(0, MATCH_PREFIX_LENGTH);
     return Boolean(actual && expected && actual.includes(expected));
+  }
+
+  // The prompt is still in the message box, unsent: safe to try another way of sending it.
+  function stillUnsent(editor, initialUserMessageCount, expectedText) {
+    return editor.isConnected
+      && readEditorText(editor).includes(cleanText(expectedText).slice(0, MATCH_PREFIX_LENGTH))
+      && countUserMessages() === initialUserMessageCount
+      && !isGenerating();
+  }
+
+  function pressEnter(editor) {
+    editor.focus();
+    for (const eventType of ['keydown', 'keypress', 'keyup']) {
+      editor.dispatchEvent(new KeyboardEvent(eventType, {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      }));
+    }
   }
 
   function findAssistantResponseForTask(generationId) {
@@ -442,25 +471,31 @@
     return null;
   }
 
-  async function trySubmitAsync(editor, initialUserMessageCount, expectedText) {
+  async function trySubmitAsync(editor, initialUserMessageCount, expectedText, timing = {}) {
+    const confirmMs = timing.confirmMs ?? SEND_CONFIRM_MS;
+    const fallbackMs = timing.fallbackMs ?? FALLBACK_CONFIRM_MS;
     const sendBtn = findSendButton(editor);
     if (sendBtn) {
       sendBtn.click();
       const clickSubmission = await waitForSubmission(
         editor,
         initialUserMessageCount,
-        2500,
+        confirmMs,
         expectedText,
       );
       if (clickSubmission) return clickSubmission;
 
+      // The click did not take: the prompt is still waiting in the box, so Enter sends it.
+      if (stillUnsent(editor, initialUserMessageCount, expectedText)) {
+        pressEnter(editor);
+        const enterSubmission = await waitForSubmission(editor, initialUserMessageCount, fallbackMs, expectedText);
+        if (enterSubmission) return { ...enterSubmission, method: `enter_${enterSubmission.method}` };
+      }
+
       const form = editor.closest('form[data-chatgpt-composer], form[data-type="unified-composer"]')
         || editor.closest('form');
       if (
-        editor.isConnected
-        && readEditorText(editor)
-        && countUserMessages() === initialUserMessageCount
-        && !isGenerating()
+        stillUnsent(editor, initialUserMessageCount, expectedText)
         && form instanceof HTMLFormElement
         && typeof form.requestSubmit === 'function'
       ) {
@@ -477,12 +512,17 @@
         const formSubmission = await waitForSubmission(
           editor,
           initialUserMessageCount,
-          3000,
+          fallbackMs,
           expectedText,
         );
         if (formSubmission) {
           return { ...formSubmission, method: `form_${formSubmission.method}` };
         }
+      }
+
+      // The box emptied and ChatGPT is answering: the message went, even if it is not shown yet.
+      if (!readEditorText(editor) && isGenerating()) {
+        return { sent: true, method: 'composer_cleared_while_generating' };
       }
 
       return {
@@ -495,19 +535,8 @@
       };
     }
 
-    editor.focus();
-    for (const eventType of ['keydown', 'keypress', 'keyup']) {
-      editor.dispatchEvent(new KeyboardEvent(eventType, {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-      }));
-    }
-    return await waitForSubmission(editor, initialUserMessageCount, 3000, expectedText)
+    pressEnter(editor);
+    return await waitForSubmission(editor, initialUserMessageCount, confirmMs, expectedText)
       || {
         sent: false,
         method: 'manual_send_required',
@@ -576,7 +605,7 @@
         console.warn('[QTS Scanner] Could not show the sending progress update:', error);
       }
     }
-    const submit = await trySubmitAsync(editor, initialUserMessageCount, message);
+    const submit = await trySubmitAsync(editor, initialUserMessageCount, message, options.timing);
     if (!submit.sent) {
       return {
         ok: true,

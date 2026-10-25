@@ -47,7 +47,15 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
     click() {}
 
     dispatchEvent(event) {
-      if (event?.type?.startsWith('key')) keyboardEventCount += 1;
+      if (!event?.type?.startsWith('key')) return;
+      keyboardEventCount += 1;
+      if (event.type !== 'keydown' || !acceptEnter) return;
+      const submittedText = editor.textContent;
+      setTimeout(() => {
+        editor.textContent = '';
+        editor.innerText = '';
+        userMessages.push({ innerText: submittedText });
+      }, 20);
     }
 
     scrollIntoView() {}
@@ -69,7 +77,8 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
       setTimeout(() => {
         editor.textContent = '';
         editor.innerText = '';
-        if (addUserMessage) userMessages.push({ innerText: submittedText });
+        // ChatGPT shows a long sent message collapsed, only its beginning.
+        if (addUserMessage) userMessages.push({ innerText: collapseSent ? `${submittedText.slice(0, 150)}... Show more` : submittedText });
       }, 20);
     }
   }
@@ -100,7 +109,10 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
   let acceptSend = true;
   let ignoreSendClick = false;
   let acceptFormSubmit = false;
+  let acceptEnter = false;
+  let collapseSent = false;
   let addUserMessage = true;
+  const fast = { timing: { confirmMs: 300, fallbackMs: 200 } };
   const userMessages = [];
   const sentMessages = [];
   const assistantMessages = [{ innerText: 'Captured ChatGPT response' }];
@@ -128,6 +140,12 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
     constructor(type) {
       this.type = type;
       this.defaultPrevented = false;
+    }
+  };
+  const previousKeyboardEvent = global.KeyboardEvent;
+  global.KeyboardEvent = class FakeKeyboardEvent {
+    constructor(type) {
+      this.type = type;
     }
   };
   global.document = {
@@ -168,7 +186,7 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
 
   try {
     const composer = require('./chatgpt-composer-handoff');
-    assert.equal(composer.version, 7);
+    assert.equal(composer.version, 8);
     assert.equal(composer.findUnifiedComposerEditor(), editor);
     assert.deepEqual(composer.findAssistantMessages(), assistantMessages);
     let sendingStatusShown = false;
@@ -196,8 +214,9 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
 
     editor.textContent = 'Scanner prompt text';
     editor.innerText = editor.textContent;
+    // Nothing sends it: the click, then Enter (the prompt is still in the box), then form submit all fail.
     acceptSend = false;
-    const ambiguous = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text');
+    const ambiguous = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text', fast);
     assert.equal(ambiguous.sent, false);
     assert.equal(ambiguous.needsManualSend, true);
     assert.equal(ambiguous.phase, 'typed_needs_send');
@@ -205,31 +224,58 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
     assert.equal(ambiguous.sendButtonLabel, 'Send');
     assert.equal(ambiguous.sendButtonType, 'submit');
     assert.equal(sendClickCount, 3);
-    assert.equal(keyboardEventCount, 0);
+    assert.equal(keyboardEventCount, 3);
     assert.equal(editor.textContent, 'Scanner prompt text');
 
+    // The box emptied but no message appeared: never press Enter on an empty box.
     editor.textContent = 'Scanner prompt text';
     editor.innerText = editor.textContent;
     acceptSend = true;
     addUserMessage = false;
-    const composerCleared = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text');
+    const composerCleared = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text', fast);
     assert.equal(composerCleared.sent, false);
     assert.equal(composerCleared.needsManualSend, true);
     assert.equal(composerCleared.method, 'send_uncertain');
     assert.equal(sendClickCount, 4);
-    assert.equal(keyboardEventCount, 0);
+    assert.equal(keyboardEventCount, 3);
 
+    // The click is ignored and Enter sends the prompt.
     editor.textContent = 'Scanner prompt text';
     editor.innerText = editor.textContent;
-    acceptSend = true;
     ignoreSendClick = true;
-    acceptFormSubmit = true;
+    acceptEnter = true;
     addUserMessage = true;
-    const formFallback = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text');
+    const enterFallback = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text', fast);
+    assert.equal(enterFallback.sent, true);
+    assert.equal(enterFallback.method, 'enter_matching_user_message_added');
+    assert.equal(sendClickCount, 5);
+    assert.equal(keyboardEventCount, 6);
+    assert.equal(userMessages.length, 3);
+
+    // Neither the click nor Enter work; form submit does.
+    editor.textContent = 'Scanner prompt text';
+    editor.innerText = editor.textContent;
+    acceptEnter = false;
+    acceptFormSubmit = true;
+    const formFallback = await composer.runUnifiedComposerHandoffAsync('Scanner prompt text', fast);
     assert.equal(formFallback.sent, true);
     assert.equal(formFallback.method, 'form_matching_user_message_added');
-    assert.equal(sendClickCount, 5);
-    assert.equal(userMessages.length, 3);
+    assert.equal(sendClickCount, 6);
+    assert.equal(keyboardEventCount, 9);
+    assert.equal(userMessages.length, 4);
+
+    // A long prompt that ChatGPT shows collapsed ("Show more") is still confirmed as sent.
+    const longPrompt = `QTS_GENERATION_ID: 6f2c9a1e-1b2c-4d3e-8f90-123456789abc\n${'Candidate profile and job description. '.repeat(200)}`;
+    editor.textContent = longPrompt;
+    editor.innerText = longPrompt;
+    ignoreSendClick = false;
+    acceptFormSubmit = false;
+    collapseSent = true;
+    const collapsed = await composer.runUnifiedComposerHandoffAsync(longPrompt, fast);
+    assert.equal(collapsed.sent, true);
+    assert.equal(collapsed.method, 'matching_user_message_added');
+    assert.equal(sendClickCount, 7);
+    assert.equal(keyboardEventCount, 9);
   } finally {
     if (previous.document === undefined) delete global.document;
     else global.document = previous.document;
@@ -251,6 +297,8 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
     else global.MouseEvent = previous.MouseEvent;
     if (previous.InputEvent === undefined) delete global.InputEvent;
     else global.InputEvent = previous.InputEvent;
+    if (previousKeyboardEvent === undefined) delete global.KeyboardEvent;
+    else global.KeyboardEvent = previousKeyboardEvent;
     if (previous.helper === undefined) delete global.__qtsChatGptComposerHandoff;
     else global.__qtsChatGptComposerHandoff = previous.helper;
     delete require.cache[require.resolve('./chatgpt-composer-handoff')];
