@@ -351,6 +351,14 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(serviceWorker.includes("if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;"));
   assert.ok(serviceWorker.includes('if (!unusable || followUps > 0)'));
   assert.ok(serviceWorker.includes('const retrying = failed.success === true && failed.canRetry === true && failures < 2;'));
+  // One pinned ChatGPT tab is opened and ready before the job page, serves up to ten jobs (a new chat
+  // each), and a slow or blocked ChatGPT page gets up to two reloads.
+  assert.ok(serviceWorker.includes('const GENERATION_JOBS_PER_CHATGPT_TAB = 10;'));
+  assert.ok(serviceWorker.includes('const CHATGPT_LOAD_TIMEOUT_MS = 30 * 1000;'));
+  assert.ok(serviceWorker.includes('const CHATGPT_RELOADS = 2;'));
+  const queueSource = serviceWorker.slice(serviceWorker.indexOf('async function processQueuedGenerationJobs'));
+  assert.ok(queueSource.indexOf('await ensureChatGptReady(chatTab.id);') < queueSource.indexOf('url: queuedJob.jobUrl, active: false'));
+  assert.equal(queueSource.includes('await waitForTabSettled(jobTabId);'), false);
   assert.ok(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'));
   assert.ok(serviceWorker.includes('persistGenerationQueueRun(runId, excludedJobIds)'));
   assert.ok(serviceWorker.includes('notifyGenerationManager'));

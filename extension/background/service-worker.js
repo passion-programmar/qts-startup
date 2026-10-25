@@ -68,6 +68,8 @@ const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
 const GENERATION_ANSWER_MAX_WAIT_MS = 60 * 1000;
 // Without ChatGPT's copy button, an answer that stopped changing this long counts as finished.
 const GENERATION_ANSWER_QUIET_MS = 3000;
+// One pinned ChatGPT tab serves this many jobs (a new chat each), then a fresh tab takes over.
+const GENERATION_JOBS_PER_CHATGPT_TAB = 10;
 const GENERATION_QUEUE_ALARM = 'qts-generation-queue';
 let lastSourceTabId = null;
 const lastAutoDetectKeyByTab = new Map();
@@ -2966,32 +2968,61 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   }
 
   // ChatGPT sometimes stops at a browser check ("cloudflare_challenge", "We couldn't load your
-  // account"); reloading the page clears it. Up to two reloads, then the Manager has to look.
+  // account"); reloading the page clears it.
   const CHATGPT_BROWSER_CHECK_PATTERN = /cloudflare_challenge|couldn[’']t load your account|browser check couldn[’']t finish|verify you are human|checking your browser/i;
+  // ChatGPT gets this long to load, and again this long to show its message box, before a reload.
+  const CHATGPT_LOAD_TIMEOUT_MS = 30 * 1000;
+  const CHATGPT_RELOADS = 2;
 
-  async function clearChatGptBrowserCheck(chatTabId) {
+  // ChatGPT is ready when its page has loaded and its message box shows. A slow page or a browser
+  // check gets a reload, up to two, then the job fails with the reason.
+  async function ensureChatGptReady(chatTabId) {
     for (let reloads = 0; ; reloads += 1) {
-      await waitForScannerChatGptTab(chatTabId, 60000);
-      await showGenerationChatGptStep(chatTabId, '1/6 · Opening ChatGPT', 'Waiting for the page to be ready...');
-      await sleep(2000);
-      const [check] = await chrome.scripting.executeScript({
-        target: { tabId: chatTabId },
-        func: (source) => new RegExp(source, 'i').test(document.body?.innerText || ''),
-        args: [CHATGPT_BROWSER_CHECK_PATTERN.source],
-      });
-      if (!check?.result) return;
-      if (reloads >= 2) {
-        throw new Error("ChatGPT's browser check did not finish after reloading. Open ChatGPT, complete the check, then retry Generation.");
+      let state = 'slow';
+      try {
+        await waitForScannerChatGptTab(chatTabId, CHATGPT_LOAD_TIMEOUT_MS);
+        await showGenerationChatGptStep(chatTabId, '1/6 · Opening ChatGPT', 'Waiting for the page to be ready...');
+        await chrome.scripting.executeScript({ target: { tabId: chatTabId }, files: ['shared/chatgpt-composer-handoff.js'] });
+        const [check] = await chrome.scripting.executeScript({
+          target: { tabId: chatTabId },
+          func: async (source, timeoutMs) => {
+            const startedAt = Date.now();
+            while (Date.now() - startedAt < timeoutMs) {
+              if (new RegExp(source, 'i').test(document.body?.innerText || '')) return 'browser_check';
+              if (globalThis.__qtsChatGptComposerHandoff?.findUnifiedComposerEditor?.()) return 'ready';
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            return 'slow';
+          },
+          args: [CHATGPT_BROWSER_CHECK_PATTERN.source, CHATGPT_LOAD_TIMEOUT_MS],
+        });
+        state = check?.result || 'slow';
+      } catch {
+        // The page did not finish loading in time, or was replaced while being checked.
+      }
+      if (state === 'ready') return;
+      if (reloads >= CHATGPT_RELOADS) {
+        throw new Error(state === 'browser_check'
+          ? "ChatGPT's browser check did not finish after reloading. Open ChatGPT, complete the check, then retry Generation."
+          : 'ChatGPT did not load after two reloads. Check the pinned ChatGPT tab (sign-in, network), then retry Generation.');
       }
       await showGenerationChatGptStep(
         chatTabId,
-        '1/6 · ChatGPT browser check',
-        `Reloading ChatGPT to clear its browser check (${reloads + 1} of 2)...`,
+        state === 'browser_check' ? '1/6 · ChatGPT browser check' : '1/6 · ChatGPT is slow to load',
+        `${state === 'browser_check' ? 'Reloading ChatGPT to clear its browser check' : 'Reloading ChatGPT'} (${reloads + 1} of ${CHATGPT_RELOADS})...`,
         'warn',
       );
       await sleep(1000);
       await chrome.tabs.reload(chatTabId);
     }
+  }
+
+  // A new chat in the pinned ChatGPT tab for the next job.
+  async function startNewChatGptChat(chatTabId) {
+    await chrome.tabs.update(chatTabId, { url: 'https://chatgpt.com/' });
+    // Let the navigation begin, so the readiness check does not see the previous page.
+    await sleep(1500);
+    await ensureChatGptReady(chatTabId);
   }
 
   async function sendGenerationPromptWithRecovery(chatTabId, prompt) {
@@ -3001,8 +3032,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         await chrome.tabs.reload(chatTabId);
       }
       try {
-        await waitForScannerChatGptTab(chatTabId, attempt === 0 ? 60000 : 45000);
-        await clearChatGptBrowserCheck(chatTabId);
+        await ensureChatGptReady(chatTabId);
         await chrome.scripting.executeScript({
           target: { tabId: chatTabId },
           files: ['shared/chatgpt-composer-handoff.js'],
@@ -3189,10 +3219,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
   }
 
-  async function runGenerationForTab(jobTabId, queuedJob = null) {
+  async function runGenerationForTab(jobTabId, queuedJob = null, pinnedChatTabId = null) {
     if (!queuedJob?.id) {
       throw new Error('Generation requires a saved candidate Job. Run Get JD and save candidates first.');
     }
+    if (!Number.isInteger(pinnedChatTabId)) throw new Error('Generation needs the pinned ChatGPT tab.');
     const cancellationKey = jobTabId ?? queuedJob.id;
     if (generationInFlightTabs.has(cancellationKey)) {
       throw new Error('Generation is already running for this job.');
@@ -3251,10 +3282,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       await updateGenerationBrowserState({
         phase: 'opening_chatgpt',
         generationId,
+        chatTabId: pinnedChatTabId,
       });
-      const chatTab = await acquireGenerationChatGptTab();
-      chatTabId = chatTab.id;
-      await updateGenerationBrowserState({ chatTabId });
+      // The queue opened the pinned ChatGPT tab (and a new chat in it) before the job page.
+      chatTabId = pinnedChatTabId;
+      const chatTab = { id: chatTabId };
       ensureGenerationIsActive(cancellationKey, cancellationToken);
       const active = {
         local: () => ensureGenerationIsActive(cancellationKey, cancellationToken),
@@ -3335,14 +3367,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       );
       throw error;
     } finally {
+      // The pinned ChatGPT tab stays open for the next job; the queue closes or replaces it.
       generationInFlightTabs.delete(cancellationKey);
-      if (Number.isInteger(chatTabId)) {
-        try {
-          await chrome.tabs.remove(chatTabId);
-        } catch (error) {
-          console.error('[QTS Generation] Could not close the temporary ChatGPT tab:', error);
-        }
-      }
       try {
         const stored = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (
@@ -3578,6 +3604,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     let runId = '';
     const excludedJobIds = new Set();
     const failuresThisRun = new Map();
+    let chatTab = null;
     let completedCount = 0;
     let failedCount = 0;
     let shouldStop = false;
@@ -3662,22 +3689,30 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (statusBeforePageOpen[EXTENSION_STATUS_KEY] !== 'generation') {
             throw generationCancelledError();
           }
-          try {
-            const jobTab = await chrome.tabs.create({
-              url: queuedJob.jobUrl,
-              active: false,
-            });
-            if (jobTab?.id == null) throw new Error('The browser did not return a job tab.');
-            jobTabId = jobTab.id;
-            await updateGenerationBrowserState({ jobId: queuedJob.id, jobTabId, jobUrl: queuedJob.jobUrl });
-            await waitForTabSettled(jobTabId);
-          } catch (error) {
-            console.warn(
-              '[QTS Generation] Could not load the temporary job page; continuing with saved job data:',
-              error,
-            );
+          // ChatGPT first: one pinned tab serves up to ten jobs, each in a new chat, then a fresh tab.
+          const tabStillOpen = chatTab && await chrome.tabs.get(chatTab.id).then(() => true, () => false);
+          if (!tabStillOpen || chatTab.jobs >= GENERATION_JOBS_PER_CHATGPT_TAB) {
+            if (tabStillOpen) await chrome.tabs.remove(chatTab.id).catch(() => {});
+            const created = await acquireGenerationChatGptTab();
+            chatTab = { id: created.id, jobs: 0 };
+            await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
+            await ensureChatGptReady(chatTab.id);
+          } else {
+            await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
+            await startNewChatGptChat(chatTab.id);
           }
-          const result = await runGenerationForTab(jobTabId, queuedJob);
+          chatTab.jobs += 1;
+          // Then the job page, in the background. The prompt uses the saved job, so it is not waited for.
+          try {
+            const jobTab = await chrome.tabs.create({ url: queuedJob.jobUrl, active: false });
+            if (jobTab?.id != null) {
+              jobTabId = jobTab.id;
+              await updateGenerationBrowserState({ jobTabId, jobUrl: queuedJob.jobUrl });
+            }
+          } catch (error) {
+            console.warn('[QTS Generation] Could not open the job page; continuing with saved job data:', error);
+          }
+          const result = await runGenerationForTab(jobTabId, queuedJob, chatTab.id);
           generationId = result.generationId;
           await updateGenerationBrowserState({ phase: 'downloading' });
           await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds);
@@ -3705,6 +3740,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             handledError = generationCancelledError();
           }
           const reason = handledError instanceof Error ? handledError.message : 'Generation failed.';
+          // A failed job may have left ChatGPT stuck: the next job gets a fresh pinned tab.
+          if (chatTab) {
+            await chrome.tabs.remove(chatTab.id).catch(() => {});
+            chatTab = null;
+          }
           // Without a status answer, a sent finalize may have committed, so the files might be the delivery.
           const deliveryUnknown = finalizeAttempted && !serverStatus;
           if (downloadIds.length > 0 && !deliveryUnknown) {
@@ -3811,6 +3851,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       }
     } finally {
       generationQueueInFlight = false;
+      if (chatTab) await chrome.tabs.remove(chatTab.id).catch(() => {});
       try {
         const current = await chrome.storage.local.get([
           EXTENSION_STATUS_KEY,
