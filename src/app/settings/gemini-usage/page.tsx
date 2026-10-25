@@ -151,7 +151,8 @@ export default async function GeminiUsagePage({
           </div>
         </header>
 
-        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-stretch">
+        {/* Stays under the fixed workspace header (68px below 640px, 76px above) while the page scrolls. */}
+        <div className="sticky top-[68px] z-30 -mx-1 mb-4 flex flex-col gap-3 bg-[#f6f8fc]/95 px-1 py-2 backdrop-blur sm:top-[76px] sm:flex-row sm:items-stretch">
         <PacificClock />
         <nav aria-label="Gemini usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
           {GEMINI_USAGE_TABS.map((tab) => {
