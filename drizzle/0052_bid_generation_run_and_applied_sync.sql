@@ -15,6 +15,6 @@ UPDATE "jobs" SET "status" = 'applied', "updated_at" = now()
 -- Link existing bids to the delivered Generation run of the row they were made from.
 UPDATE "bids" SET "generation_run_id" = (
   SELECT r."id" FROM "generation_runs" r
-   WHERE r."job_id" = "bids"."source_job_id" AND r."status" = 'delivered'
+   WHERE r."job_id" = "bids"."source_job_id" AND r."status"::text = 'delivered'
    ORDER BY r."created_at" DESC LIMIT 1)
  WHERE "generation_run_id" IS NULL;
