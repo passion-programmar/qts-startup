@@ -41,6 +41,7 @@ import {
 } from "@/server/jobs/get-jd-jobs";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 import { getGetJdFailureMessage } from "@/server/gemini/get-jd-failure-message";
+import { withGeminiRetry } from "@/server/gemini/gemini-retry";
 
 const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
@@ -509,23 +510,29 @@ async function requestGeminiJson(
   apiKey: string,
   prompt: string,
 ): Promise<unknown> {
-  const response = await requestGeminiApi(
-    apiKey,
-    "generate_content",
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
+  // One 45-second budget covers the first attempt and a possible retry.
+  const signal = AbortSignal.timeout(45_000);
+  const response = await withGeminiRetry(
+    () => requestGeminiApi(
+      apiKey,
+      "generate_content",
+      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig,
+        }),
+        signal,
+        cache: "no-store",
       },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig,
-      }),
-      signal: AbortSignal.timeout(45_000),
-      cache: "no-store",
-    },
+    ),
+    // The retry is another request against the key's per-minute limit; its tokens were reserved with the first.
+    { beforeRetry: () => recordGeminiApiCall(apiKey, "generate_content") },
   );
 
   if (!response.ok) {
