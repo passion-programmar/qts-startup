@@ -18,11 +18,11 @@
   --space-item: 9pt;
   --page-margin-top: 18mm;
   --page-margin-inline: 20mm;
-  --page-margin-bottom: 18mm;
+  --page-margin-bottom: 12mm;
 }
 
 @page {
-  margin: 18mm 20mm 18mm;
+  margin: 18mm 20mm 12mm;
 }
 
 .candidate-headline {

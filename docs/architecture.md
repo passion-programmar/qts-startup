@@ -70,8 +70,11 @@ PDFs instead. The Resume page previews in the browser, with no server round
 trip: the same template page (`?embed=1&view=pages`) lays the document out
 in columns one page area tall, which Chromium splits with the same
 fragmentation it prints pages with, and shows each column as a sheet scaled to
-the panel width, so pages break where the PDF's do. Its download button
-prints through `/api/pdf/print` (signed-in Managers only, no page limit). Local
+the panel width, so pages break where the PDF's do. The page's download
+button prints through `/api/pdf/print` (signed-in Managers only, no page
+limit). For previews and PDFs alike, `render.js` widens the gaps on every
+page but the last so that page ends at the bottom margin, which is smaller
+than the top margin. Local
 development sets `PDF_CHROME_EXECUTABLE_PATH` to an installed Chrome or Edge.
 Generation run data remains in the database. A
 feature must not be enabled until its API,

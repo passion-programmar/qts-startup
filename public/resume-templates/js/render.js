@@ -685,6 +685,107 @@
   }
 
 
+  /* ---------- Filling pages ----------
+     A page ends early when the next block (a heading with its first entry, a
+     bullet) does not fit, which would leave white space above the bottom
+     margin. That space is shared out over the gaps between the sections,
+     entries, bullets and paragraphs on the page, each growing by the same
+     share of its size and at most tripling, so every page but the last ends at
+     the bottom margin. Pages are found with the columns of the page view,
+     which break exactly like print; a fill that would move anything to
+     another page is retried smaller, then undone. */
+
+  const FILL_GAPS = [
+    ".section + .section",
+    ".item + .item",
+    ".item-bullets li + li",
+    ".skill-group + .skill-group",
+    ".letter-paragraph + .letter-paragraph",
+  ].join(", ");
+  const FILL_MAX_GROWTH = 2;
+  const FILL_SHARES = [1, 0.9, 0.75, 0.5, 0.25];
+  const FILL_SPARE_PX = 1;
+
+  function fillPages(article) {
+    const home = article.parentNode;
+    const next = article.nextSibling;
+    const flow = el("div", "page-flow");
+    flow.style.visibility = "hidden";
+    flow.append(article);
+    document.body.append(flow);
+    try {
+      let layout = pageLayout(article);
+      for (let page = 0; page < layout.columns.length - 1; page += 1) {
+        const room = layout.columns[page].bottom - layout.bottoms[page] - FILL_SPARE_PX;
+        const gaps = pageGaps(article, layout, page);
+        const total = gaps.reduce((sum, gap) => sum + gap.size, 0);
+        if (room <= 0 || total <= 0) continue;
+        const extra = Math.min(room / total, FILL_MAX_GROWTH);
+        for (const share of FILL_SHARES) {
+          gaps.forEach((gap) => gap.node.style.setProperty(gap.property, `${gap.size * (1 + extra * share)}px`));
+          const filled = pageLayout(article);
+          if (filled.pages === layout.pages) {
+            layout = filled;
+            break;
+          }
+          gaps.forEach((gap) => gap.node.style.removeProperty(gap.property));
+        }
+      }
+    } finally {
+      home.insertBefore(article, next);
+      flow.remove();
+    }
+  }
+
+  // The document's pages (one column each), how far down each page's content
+  // reaches, and which page every line of text is on, to compare by. (A box
+  // without text, such as the empty start of a section whose title moved on,
+  // may change page.)
+  function pageLayout(article) {
+    const columns = [...article.getClientRects()];
+    const centre = (rect) => (rect.left + rect.right) / 2;
+    const columnOf = (rect) =>
+      columns.reduce((best, column, index) => (Math.abs(centre(column) - centre(rect)) < Math.abs(centre(columns[best]) - centre(rect)) ? index : best), 0);
+    const bottoms = columns.map((column) => column.top);
+    for (const node of article.querySelectorAll("*")) {
+      const rects = node.getClientRects();
+      if (!rects.length) continue;
+      // Only a box's last piece shows where it ends; earlier pieces run to the end of their page.
+      const last = rects[rects.length - 1];
+      bottoms[columnOf(last)] = Math.max(bottoms[columnOf(last)], last.bottom);
+    }
+    const lines = [];
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    while (walker.nextNode()) {
+      range.selectNodeContents(walker.currentNode);
+      for (const rect of range.getClientRects()) {
+        const index = columnOf(rect);
+        lines.push(index);
+        bottoms[index] = Math.max(bottoms[index], rect.bottom);
+      }
+    }
+    return { columns, columnOf, bottoms, pages: lines.join() };
+  }
+
+  // The gaps that may grow on a page: the space above each matching element
+  // that starts on the page below its top (at a page top that space is dropped).
+  // Under a rule (divided entries, topline titles) the padding grows with it,
+  // and between timeline entries the padding that carries the line.
+  function pageGaps(article, layout, page) {
+    const top = layout.columns[page].top;
+    const space = (node, property) => ({ node, property, size: parseFloat(getComputedStyle(node).getPropertyValue(property)) || 0 });
+    return [...article.querySelectorAll(FILL_GAPS)].flatMap((node) => {
+      const first = node.getClientRects()[0];
+      if (!first || layout.columnOf(first) !== page || first.top <= top + 1) return [];
+      const gaps = [space(node, "margin-top")];
+      if (parseFloat(getComputedStyle(node).borderTopWidth) > 0) gaps.push(space(node, "padding-top"));
+      if (node.classList.contains("item")) gaps.push(space(node.previousElementSibling, "padding-bottom"));
+      return gaps.filter((gap) => gap.size > 0);
+    });
+  }
+
+
   /* ---------- Render ---------- */
 
   async function renderResume(rawData, overrides = {}, context = null) {
@@ -747,6 +848,7 @@
     if (run !== renderCount) return null;
 
     const pages = fitToPages(article, settings.density, warnings);
+    if (!directRenderMode) fillPages(article);
     root.dataset.document = DOCUMENT;
     root.dataset.template = template.id;
     root.dataset.pages = String(pages);

@@ -24,11 +24,11 @@
   --space-bullet: 0.5pt;
   --page-margin-top: 12mm;
   --page-margin-inline: 14mm;
-  --page-margin-bottom: 14mm;
+  --page-margin-bottom: 8mm;
 }
 
 @page {
-  margin: 12mm 14mm 14mm;
+  margin: 12mm 14mm 8mm;
 }
 
 .resume-header {

@@ -92,7 +92,10 @@ async function printDocument(
 
 const fileCache = new Map<string, Promise<Buffer>>();
 
+// Template files never change in a deployment; in development they are read fresh, so edits print
+// at once instead of after a server restart.
 function readCachedFile(filePath: string): Promise<Buffer> {
+  if (process.env.NODE_ENV !== "production") return readFile(filePath);
   let file = fileCache.get(filePath);
   if (!file) {
     file = readFile(filePath);

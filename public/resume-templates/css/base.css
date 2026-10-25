@@ -43,7 +43,8 @@
   --page-height: 297mm;
   --page-margin-top: 15mm;
   --page-margin-inline: 16mm;
-  --page-margin-bottom: 17mm;
+  /* Below the top margin: render.js fills each page but the last down to it. */
+  --page-margin-bottom: 10mm;
   /* The content area Chromium lays printed pages out on: the exact size rounded
      up to a whole pixel, plus 1/64px (A4: 673.016 x 1002.016px). The screen
      sheet and the page view use it too, so lines and pages break as printed. */
@@ -141,7 +142,7 @@
 
 @page {
   size: A4;
-  margin: 15mm 16mm 17mm;
+  margin: 15mm 16mm 10mm;
 
   /* Page numbers from page 2 on (Chromium 131+, WeasyPrint, Prince). */
   @bottom-right {
@@ -681,6 +682,11 @@ a {
 
 .doc[data-item-style="timeline"] .item + .item {
   margin-top: 0;
+}
+
+/* The line ends with a section's last entry, so a page can end right there. */
+.doc[data-item-style="timeline"] .item:last-child {
+  padding-bottom: 0;
 }
 
 .doc[data-item-style="timeline"] .item::before {
