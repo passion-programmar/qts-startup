@@ -25,6 +25,7 @@ import { useFormStatus } from "react-dom";
 import { logoutAction } from "@/app/login/actions";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { ThemeSwitch } from "@/app/components/theme-switch";
+import { WorkspaceClocksContext } from "@/app/components/workspace-clocks";
 import type { StaffSession } from "@/lib/session";
 
 const roleLabels: Record<StaffSession["role"], string> = {
@@ -174,7 +175,9 @@ export function WorkspaceShellClient({
           <div><strong>{user.displayName}</strong><span>{roleLabels[user.role]}</span></div>
         </Link>
       </aside>
-      <div className="workspace-body"><div id="workspace-content" tabIndex={-1} className="workspace-content">{children}</div></div>
+      <div className="workspace-body"><div id="workspace-content" tabIndex={-1} className="workspace-content">
+        <WorkspaceClocksContext value={user.role !== "super_admin"}>{children}</WorkspaceClocksContext>
+      </div></div>
     </div>
   );
 }

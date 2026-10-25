@@ -20,7 +20,7 @@ import { PaginatedTable } from "@/app/components/paginated-table";
 import { GeminiApiLimitsForm } from "./limits-form";
 import { TokenComparisonForm } from "./token-comparison-form";
 import { TokenCountModeForm } from "./token-count-mode-form";
-import { PacificClock } from "./pacific-clock";
+import { ZoneClock } from "@/app/components/zone-clock";
 import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
 
 export const instant = false;
@@ -154,7 +154,7 @@ export default async function GeminiUsagePage({
 
         {/* Stays under the fixed workspace header (60px below 640px, 64px above) while the page scrolls. */}
         <div className="sticky top-[60px] z-30 -mx-1 mb-4 flex flex-col gap-3 bg-surface/95 px-1 py-2 backdrop-blur sm:top-16 sm:flex-row sm:items-stretch">
-        <PacificClock />
+        <ZoneClock className="sm:w-52" label="Pacific time" timeZone="America/Los_Angeles" />
         <nav aria-label="Gemini usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
           {GEMINI_USAGE_TABS.map((tab) => {
             const active = tab.id === activeTab;

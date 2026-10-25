@@ -3,6 +3,7 @@
 import { ChevronLeft, ChevronRight, Download, ExternalLink } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { LoadingIcon } from "@/app/components/loading-icon";
+import { WorkspaceClocks } from "@/app/components/workspace-clocks";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { parsePdfPackage } from "@/app/pdf/document-data";
 import sampleFull from "@/app/pdf/sample-full.json";
@@ -187,29 +188,32 @@ export function PdfWorkspace({
           <ExternalLink className="size-4" />
           Resume
         </a>
-        <nav aria-label="Document preview selection" className="flex items-center gap-3">
-          <button
-            aria-label="Show resume"
-            className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={activeDocument === "resume"}
-            onClick={() => setActiveDocument("resume")}
-            type="button"
-          >
-            <ChevronLeft aria-hidden="true" className="size-5" />
-          </button>
-          <span className="min-w-24 text-center text-sm font-semibold text-slate-700" aria-live="polite">
-            {documentLabel}
-          </span>
-          <button
-            aria-label="Show cover letter"
-            className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={activeDocument === "cover-letter"}
-            onClick={() => setActiveDocument("cover-letter")}
-            type="button"
-          >
-            <ChevronRight aria-hidden="true" className="size-5" />
-          </button>
-        </nav>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <nav aria-label="Document preview selection" className="flex items-center gap-3">
+            <button
+              aria-label="Show resume"
+              className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={activeDocument === "resume"}
+              onClick={() => setActiveDocument("resume")}
+              type="button"
+            >
+              <ChevronLeft aria-hidden="true" className="size-5" />
+            </button>
+            <span className="min-w-24 text-center text-sm font-semibold text-slate-700" aria-live="polite">
+              {documentLabel}
+            </span>
+            <button
+              aria-label="Show cover letter"
+              className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={activeDocument === "cover-letter"}
+              onClick={() => setActiveDocument("cover-letter")}
+              type="button"
+            >
+              <ChevronRight aria-hidden="true" className="size-5" />
+            </button>
+          </nav>
+          <WorkspaceClocks />
+        </div>
       </header>
       {/* The JSON and PDF panels keep a 34:66 split from tablet-landscape width up and stack below it.
           Whole-number fr values let the PDF panel take all remaining space when the JSON panel is at
