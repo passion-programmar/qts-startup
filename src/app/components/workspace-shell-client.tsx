@@ -25,7 +25,7 @@ import { useFormStatus } from "react-dom";
 import { logoutAction } from "@/app/login/actions";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { ThemeSwitch } from "@/app/components/theme-switch";
-import { WorkspaceClocksContext } from "@/app/components/workspace-clocks";
+import { WorkspaceClocks } from "@/app/components/workspace-clocks";
 import type { StaffSession } from "@/lib/session";
 
 const roleLabels: Record<StaffSession["role"], string> = {
@@ -176,7 +176,14 @@ export function WorkspaceShellClient({
         </Link>
       </aside>
       <div className="workspace-body"><div id="workspace-content" tabIndex={-1} className="workspace-content">
-        <WorkspaceClocksContext value={user.role !== "super_admin"}>{children}</WorkspaceClocksContext>
+        {/* Stays under the fixed header while the page scrolls. The Resume page keeps the clocks in its
+            own header instead, since its panels fill the window and never scroll. */}
+        {user.role !== "super_admin" && activeHref !== "/pdf" ? (
+          <div className="sticky top-(--header-height) z-30 -mx-1 mb-4 flex justify-center bg-surface/95 px-1 py-2 backdrop-blur">
+            <WorkspaceClocks />
+          </div>
+        ) : null}
+        {children}
       </div></div>
     </div>
   );
