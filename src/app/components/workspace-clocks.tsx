@@ -12,6 +12,7 @@ const zoneGroups: { label: string; zones: ClockZone[] }[] = [
   {
     label: "Asia & Pacific",
     zones: [
+      { timeZone: "Asia/Tokyo", place: "Japan", name: "Japan (Tokyo)", codes: ["JST"] },
       { timeZone: "Asia/Shanghai", place: "China", name: "China (Beijing, Shanghai)", codes: ["CST"] },
       { timeZone: "Asia/Singapore", place: "Singapore", name: "Singapore", codes: ["SGT"] },
       { timeZone: "Asia/Kolkata", place: "India", name: "India (New Delhi, Mumbai)", codes: ["IST"] },
