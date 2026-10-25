@@ -962,6 +962,19 @@ async function readGetJdResultForTab(tabId) {
   return result?.pageUrl === tab.url ? result : null;
 }
 
+// Mirrors the server's per-account states; older stored results fall back to duplicateKind.
+function getJdProfileState(profile) {
+  if (profile?.state) return profile.state;
+  if (profile?.autoSaved) return 'has_job';
+  if (profile?.duplicateKind === 'applied') return 'applied';
+  if (profile?.duplicateKind === 'job_list') return 'has_job';
+  return 'available';
+}
+
+// Applied accounts and running Generation stay checked and cannot be unchecked.
+const GET_JD_LOCKED_STATES = new Set(['applied', 'generation_running']);
+
+// Stores the checked accounts only; Save applies the difference.
 async function updateGetJdSelection(tabId, profileIds) {
   if (
     !Array.isArray(profileIds) ||
@@ -983,63 +996,13 @@ async function updateGetJdSelection(tabId, profileIds) {
   if (profileIds.some((id) => !allowedIds.has(id))) {
     return { ok: false, error: 'One or more selected candidates are unavailable.' };
   }
-  const autoSavedJobs = Array.isArray(result.autoSavedJobs)
-    ? result.autoSavedJobs.filter((job) =>
-      job && typeof job.profileId === 'string' && typeof job.jobId === 'string',
-    )
-    : [];
-  const uncheckedAutoSavedJobs = autoSavedJobs.filter((job) => !profileIds.includes(job.profileId));
-  const removedAutoSavedProfileIds = new Set();
-  const failedAutoSavedProfileIds = new Set();
-  for (const job of uncheckedAutoSavedJobs) {
-    const response = await workerApiRequest(
-      'DELETE',
-      `/api/extension/get-jd/auto-saved-jobs/${encodeURIComponent(job.jobId)}`,
-    );
-    if (response.success === true) removedAutoSavedProfileIds.add(job.profileId);
-    else failedAutoSavedProfileIds.add(job.profileId);
-  }
-  const remainingAutoSavedJobs = autoSavedJobs.filter(
-    (job) => !removedAutoSavedProfileIds.has(job.profileId),
-  );
-  const selectedProfileIds = [...new Set([
-    ...profileIds,
-    ...failedAutoSavedProfileIds,
-  ])];
-  const updated = {
-    ...result,
-    selectedProfileIds,
-    autoSavedJobs: remainingAutoSavedJobs,
-    autoSavedProfileIds: remainingAutoSavedJobs.map((job) => job.profileId),
-    profiles: (result.profiles || []).map((profile) => {
-      if (!removedAutoSavedProfileIds.has(profile.id)) return profile;
-      return {
-        ...profile,
-        autoSaved: false,
-        autoSaveJobId: null,
-        available: true,
-        duplicateKind: null,
-        jobStatus: null,
-      };
-    }),
-    selectionModified: true,
-    updatedAt: Date.now(),
-  };
+  const lockedIds = (result.profiles || [])
+    .filter((profile) => GET_JD_LOCKED_STATES.has(getJdProfileState(profile)))
+    .map((profile) => profile.id);
+  const selectedProfileIds = [...new Set([...profileIds, ...lockedIds])];
+  const updated = { ...result, selectedProfileIds, selectionModified: true, updatedAt: Date.now() };
   await saveGetJdResult(tabId, updated, false);
-  if (failedAutoSavedProfileIds.size > 0) {
-    return {
-      ok: false,
-      error: 'Could not remove an automatically saved job. The affected candidate remains selected.',
-      selectedProfileIds,
-      result: updated,
-    };
-  }
-  return {
-    ok: true,
-    selectedProfileIds,
-    autoSavedChanged: removedAutoSavedProfileIds.size > 0,
-    result: updated,
-  };
+  return { ok: true, selectedProfileIds, result: updated };
 }
 
 async function cancelGetJdReview(tabId) {
@@ -1059,77 +1022,115 @@ async function cancelGetJdReview(tabId) {
   return { ok: true };
 }
 
+// Applies the checkbox difference: newly checked accounts are added to the job, and
+// saved accounts the Manager unchecked are removed (the server keeps applied ones).
 async function saveGetJdSelection(tabId, profileIds) {
   const selection = await updateGetJdSelection(tabId, profileIds);
   if (!selection.ok) return selection;
-  if (!profileIds.length) {
-    return { ok: false, error: 'Select at least one candidate before saving.' };
-  }
   const result = await readGetJdResultForTab(tabId);
+  const checked = new Set(selection.selectedProfileIds);
+  const profiles = result.profiles || [];
+  const additions = profiles.filter((profile) => getJdProfileState(profile) === 'available' && checked.has(profile.id));
+  const removals = profiles.filter((profile) => getJdProfileState(profile) === 'has_job' && !checked.has(profile.id));
+  if (!additions.length && !removals.length) {
+    return { ok: false, error: 'No changes to save. Check new candidates or uncheck saved ones.' };
+  }
   const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
   if (!token) {
     return { ok: false, error: 'Your extension session has expired. Sign in again.' };
   }
-  const job = self.__qtsGetJdSavePayload?.createGetJdSaveJob(
-    result.classification,
-    result.jobDescription,
-  );
-  if (
-    result.evaluationMode === 'gemini' &&
-    (result.classification?.isJobPage !== true ||
-      result.classification?.isRemote !== true)
-  ) {
-    return { ok: false, error: 'This job did not pass validation or remote eligibility.' };
+
+  const results = [];
+  for (const profile of removals) {
+    const rowId = profile.rowId || profile.autoSaveJobId;
+    const response = rowId
+      ? await workerApiRequest('DELETE', `/api/extension/get-jd/job-accounts/${encodeURIComponent(rowId)}`)
+      : { success: true };
+    results.push({
+      profileId: profile.id,
+      name: profile.name,
+      status: response.success === true ? 'removed' : response.locked === true ? 'locked' : 'failed',
+      message: response.success === true
+        ? 'Removed from this job.'
+        : response.message || 'Could not remove this candidate from the job.',
+    });
   }
-  if (!job) {
-    return { ok: false, error: 'The job description is missing. Run Get JD on the job page again.' };
-  }
-  const response = await workerApiRequest(
-    'POST',
-    '/api/extension/get-jd/save',
-    {
+
+  if (additions.length) {
+    if (
+      result.evaluationMode === 'gemini' &&
+      (result.classification?.isJobPage !== true || result.classification?.isRemote !== true)
+    ) {
+      return { ok: false, error: 'This job did not pass validation or remote eligibility.' };
+    }
+    const job = self.__qtsGetJdSavePayload?.createGetJdSaveJob(result.classification, result.jobDescription);
+    // Plain page text is read again right before saving, and only when there is no description.
+    let pageText = '';
+    if (job && !job.description) {
+      pageText = (await readVisiblePageText(tabId).catch(() => '')).slice(0, 100_000).trim();
+    }
+    if (!job || (!job.description && !pageText)) {
+      return { ok: false, error: 'The job description is missing. Run Get JD on the job page again.' };
+    }
+    const response = await workerApiRequest('POST', '/api/extension/get-jd/save', {
       job,
-      profileIds,
+      ...(pageText ? { pageText } : {}),
+      profileIds: additions.map((profile) => profile.id),
       ...(result.evaluationMode === 'gemini'
-        ? {
-          evaluation: {
-            isJobPage: result.classification.isJobPage,
-            isRemote: result.classification.isRemote,
-          },
-        }
+        ? { evaluation: { isJobPage: result.classification.isJobPage, isRemote: result.classification.isRemote } }
         : {}),
-    },
-  );
-  if (response.success !== true) {
-    return {
-      ok: false,
-      error: response.message || 'Could not save selected candidates.',
-    };
+    });
+    if (response.success !== true) {
+      return { ok: false, error: response.message || 'Could not save selected candidates.' };
+    }
+    results.push(...(response.results || []));
   }
-  const savedCount = Number(response.savedCount || 0);
-  const failedCount = Number(response.failedCount || 0);
-  const duplicateCount = Number(response.duplicateCount || 0);
-  if (failedCount > 0 || duplicateCount > 0 || savedCount !== profileIds.length) {
-    const message = failedCount > 0
-      ? 'Some candidates could not be saved. Please review and retry.'
-      : 'Some selected candidates already have this job. Only new records were saved.';
-    const responseByProfile = new Map(
-      (response.results || []).map((profileResult) => [profileResult.profileId, profileResult]),
-    );
+
+  const count = (status) => results.filter((entry) => entry.status === status).length;
+  const saveResponse = {
+    results,
+    savedCount: count('saved'),
+    duplicateCount: count('already_exists'),
+    removedCount: count('removed'),
+    lockedCount: count('locked'),
+    failedCount: count('failed'),
+  };
+  const resultByProfile = new Map(results.map((entry) => [entry.profileId, entry]));
+  const updatedProfiles = profiles.map((profile) => {
+    const entry = resultByProfile.get(profile.id);
+    if (entry?.status === 'saved') {
+      return { ...profile, state: 'has_job', rowId: entry.jobId || null, available: false, saveResult: entry };
+    }
+    if (entry?.status === 'already_exists') return { ...profile, state: 'has_job', available: false, saveResult: entry };
+    if (entry?.status === 'removed') {
+      return {
+        ...profile,
+        state: 'available',
+        rowId: null,
+        autoSaved: false,
+        autoSaveJobId: null,
+        available: true,
+        duplicateKind: null,
+        saveResult: entry,
+      };
+    }
+    return entry ? { ...profile, saveResult: entry } : profile;
+  });
+
+  if (saveResponse.failedCount > 0 || saveResponse.lockedCount > 0) {
+    const message = saveResponse.failedCount > 0
+      ? 'Some candidates could not be saved or removed. Review and retry.'
+      : 'Some candidates were kept because they applied or Generation is running.';
     await saveGetJdResult(tabId, {
       ...result,
       status: 'complete',
       saveError: message,
-      saveResponse: response,
-      profiles: (result.profiles || []).map((profile) => {
-        const profileResult = responseByProfile.get(profile.id);
-        return profileResult && profileResult.status !== 'failed'
-          ? { ...profile, available: false, saveResult: profileResult }
-          : { ...profile, saveResult: profileResult || null };
-      }),
-      selectedProfileIds: (response.results || [])
-        .filter((profileResult) => profileResult.status === 'failed')
-        .map((profileResult) => profileResult.profileId),
+      saveResponse,
+      profiles: updatedProfiles,
+      selectedProfileIds: updatedProfiles
+        .filter((profile) => getJdProfileState(profile) !== 'available')
+        .map((profile) => profile.id),
+      selectionModified: true,
       updatedAt: Date.now(),
     });
     return { ok: false, error: message };
@@ -1139,7 +1140,8 @@ async function saveGetJdSelection(tabId, profileIds) {
     status: 'saved',
     saveError: null,
     message: 'Save finished.',
-    saveResponse: response,
+    saveResponse,
+    profiles: updatedProfiles,
     updatedAt: Date.now(),
   });
   return { ok: true };
@@ -1244,10 +1246,8 @@ async function processGetJdPage(tabId, url, documentId = '') {
       const autoSavedProfileIds = Array.isArray(geminiResult.autoSavedProfileIds)
         ? geminiResult.autoSavedProfileIds.filter((id) => typeof id === 'string')
         : [];
-      if (
-        (geminiResult.allCandidatesAssigned === true || profiles.every((profile) => profile.available === false)) &&
-        autoSavedProfileIds.length === 0
-      ) {
+      // Only when no account can be added or unchecked is there nothing to review.
+      if (profiles.every((profile) => GET_JD_LOCKED_STATES.has(getJdProfileState(profile)))) {
         await saveGetJdResult(tabId, {
           ...initialResult,
           pageTitle: tab.title || '',
@@ -1269,7 +1269,7 @@ async function processGetJdPage(tabId, url, documentId = '') {
         ...initialResult,
         pageTitle: tab.title || '',
         status: 'complete',
-        message: autoSavedProfileIds.length
+        message: autoSavedProfileIds.length || geminiResult.skippedEvaluation
           ? geminiResult.message
           : geminiResult.autoSaveFailureCount > 0
             ? geminiResult.message
@@ -1279,16 +1279,30 @@ async function processGetJdPage(tabId, url, documentId = '') {
         hasDuplicates: geminiResult.exists === true,
         toastKind: geminiResult.toastKind,
         toastMessage: geminiResult.toastMessage,
+        summaryText: geminiResult.summary?.text || '',
         updatedAt: Date.now(),
-        classification: geminiResult.classification,
+        // Gemini is skipped when every account already has the job; the page details stand in.
+        classification: {
+          ...geminiResult.classification,
+          job: geminiResult.classification.job || {
+            title: tab.title || '',
+            company: '',
+            jobUrl: url,
+            reason: geminiResult.message || '',
+          },
+        },
         evaluationMode: 'gemini',
         jobDescription: geminiResult.jobDescription || geminiResult.classification.job?.description || '',
         profiles,
         autoSavedProfileIds,
-        selectedProfileIds: [
+        // Accounts that have the job (saved earlier or auto-saved now) start checked.
+        selectedProfileIds: [...new Set([
+          ...profiles
+            .filter((profile) => getJdProfileState(profile) !== 'available')
+            .map((profile) => profile.id),
           ...autoSavedProfileIds,
           ...matchingAvailableProfiles.map((profile) => profile.id),
-        ],
+        ])],
       });
       return;
     }
@@ -1352,8 +1366,9 @@ async function processGetJdPage(tabId, url, documentId = '') {
     const recommendedProfileIds = profiles
       .filter((profile) => profile.recommended === true || matchingProfileIds.has(profile.id))
       .map((profile) => profile.id);
-    const availableProfiles = profiles.filter((profile) => profile.available !== false);
-    if (result.allCandidatesAssigned === true || availableProfiles.length === 0) {
+    // The review stays open while any account can still be added or unchecked.
+    const actionableProfiles = profiles.filter((profile) => !GET_JD_LOCKED_STATES.has(getJdProfileState(profile)));
+    if (actionableProfiles.length === 0) {
       await saveGetJdResult(tabId, {
         ...initialResult,
         pageTitle: extraction.title || tab.title || '',
@@ -1401,10 +1416,12 @@ async function processGetJdPage(tabId, url, documentId = '') {
         ...profile,
         recommended: profile.recommended === true || matchingProfileIds.has(profile.id),
       })),
+      summaryText: result.summary?.text || '',
+      // Accounts that already have the job start checked; unchecking one removes it on Save.
       selectedProfileIds: [
         ...new Set([
           ...profiles
-            .filter((profile) => profile.duplicateKind)
+            .filter((profile) => getJdProfileState(profile) !== 'available')
             .map((profile) => profile.id),
           ...recommendedProfileIds,
         ]),

@@ -513,15 +513,14 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes('if (!sessionIsValid(stored))'));
   assert.ok(review.includes('result.classification.matchingProfileIds'));
   assert.ok(serviceWorker.includes('selectionModified: true'));
-  assert.ok(serviceWorker.includes('profiles.filter((profile) => profile.available !== false)'));
+  assert.ok(serviceWorker.includes('const actionableProfiles = profiles.filter((profile) => !GET_JD_LOCKED_STATES.has(getJdProfileState(profile)))'));
   assert.ok(serviceWorker.includes("status: 'complete'"));
-  assert.ok(review.includes("profile.available === false && profile.autoSaved !== true"));
-  assert.ok(review.includes('checkbox.checked = selectedIds.has(profile.id)'));
-  assert.ok(review.includes('readSelectedIds().filter((id) => availableIds.has(id))'));
-  assert.ok(review.includes("profile.jobStatus === 'todo'"));
-  assert.ok(review.includes("'In Jobs · To do'"));
+  assert.ok(review.includes('checkbox.checked = locked || selectedIds.has(profile.id)'));
+  assert.ok(review.includes('checkbox.disabled = !selectionEnabled || locked'));
+  assert.ok(review.includes("has_job: 'Has this job · uncheck to remove'"));
+  assert.ok(review.includes("applied: 'Applied (in Bids)'"));
   assert.ok(review.includes("elements.heading.textContent = 'Save result'"));
-  assert.ok(review.includes('Successfully saved ${savedCount}'));
+  assert.ok(review.includes('savedCount ? `Added ${candidates(savedCount)}` :'));
   assert.ok(review.includes("if (result.inBids) return 'Already applied — this job is in your Bids.';"));
   assert.ok(review.includes("if (result.inJobs) return 'Already added — this job is in your Jobs list.';"));
   assert.ok(review.includes('result.toastMessage || jobPresenceMessage(result)'));
@@ -535,29 +534,25 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(detailUpdater.includes('sameJobCondition(jobs, keys)'));
   assert.equal(detailUpdater.includes('eq(jobs.candidateId, job.candidateId)'), false);
   assert.ok(evaluationRoute.includes('autoSavedProfileIds: [...autoSavedProfileIds]'));
-  assert.ok(serviceWorker.includes('autoSavedProfileIds.length === 0'));
   assert.ok(serviceWorker.includes('autoSavedProfileIds,'));
-  assert.ok(serviceWorker.includes("'DELETE'"));
-  assert.ok(serviceWorker.includes('/api/extension/get-jd/auto-saved-jobs/${encodeURIComponent(job.jobId)}'));
-  assert.ok(serviceWorker.includes('uncheckedAutoSavedJobs = autoSavedJobs.filter'));
+  // Unchecking a saved account removes it on Save, by row id, through the guarded route.
+  assert.ok(serviceWorker.includes("getJdProfileState(profile) === 'has_job' && !checked.has(profile.id)"));
+  assert.ok(serviceWorker.includes("'/api/extension/get-jd/job-accounts/${encodeURIComponent(rowId)}'".replace(/'/g, '`')));
+  assert.equal(serviceWorker.includes('uncheckedAutoSavedJobs'), false);
   assert.ok(autoSavedJobRoute.includes('removeGetJdJobAccount(manager.id, jobId, { autoSavedOnly: true })'));
   const remover = duplicateHelper.slice(duplicateHelper.indexOf('export async function removeGetJdJobAccount'));
   assert.ok(remover.includes('eq(jobs.autoSavedByGetJd, true)'));
   assert.ok(remover.includes('eq(jobs.managerId, managerId)'));
   assert.ok(remover.includes("sql`${jobs.generationStatus} <> 'processing'`"));
-  assert.ok(apiWorker.includes("get-jd\\/auto-saved-jobs\\/"));
-  assert.ok(review.includes('profile.available === false && profile.autoSaved !== true'));
+  assert.ok(apiWorker.includes(String.raw`get-jd\/job-accounts\/`));
   assert.ok(review.includes("profile.autoSaved === true ? 'Saved automatically' : ''"));
-  assert.ok(review.includes("result.autoSavedProfileIds.length > 0"));
   assert.equal(serviceWorker.includes('result.exists === true || result.allCandidatesAssigned === true'), false);
-  assert.ok(serviceWorker.includes('.filter((profile) => profile.duplicateKind)'));
+  assert.ok(serviceWorker.includes(".filter((profile) => getJdProfileState(profile) !== 'available')"));
   assert.ok(duplicateCheckRoute.includes('findGetJdDuplicateDetails('));
   assert.ok(duplicateHelper.includes('.from(jobs)'));
   assert.ok(duplicateHelper.includes('.from(bids)'));
   assert.ok(duplicateHelper.includes('jobStatus: row.status'));
   assert.ok(duplicateHelper.includes('kind: row.status === "applied" ? "applied" : "job_list"'));
-  assert.ok(serviceWorker.includes('savedCount !== profileIds.length'));
-  assert.ok(serviceWorker.includes('duplicateCount > 0'));
 });
 
 test('manager job rows support safe manual edits and deletion', () => {

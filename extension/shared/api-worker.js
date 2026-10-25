@@ -23,6 +23,7 @@ function workerSupportedApiPath(path) {
     || path === '/api/extension/get-jd/profiles'
     || path === '/api/extension/get-jd/save'
     || /^\/api\/extension\/get-jd\/auto-saved-jobs\/[0-9a-f-]+$/i.test(path)
+    || /^\/api\/extension\/get-jd\/job-accounts\/[0-9a-f-]+$/i.test(path)
     || path === '/api/extension/features/me'
     || path === '/api/extension/highlights'
     || path === '/api/extension/page-exclusions'

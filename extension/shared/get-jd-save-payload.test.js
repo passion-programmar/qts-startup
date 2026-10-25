@@ -22,6 +22,7 @@ test('Get JD save payload restores the description returned beside the classific
   assert.equal(savedJob.reason, 'The posting allows remote work.');
 });
 
-test('Get JD save payload rejects a missing description', () => {
-  assert.equal(createGetJdSaveJob({ job: { title: 'Senior Engineer' } }, ''), null);
+test('Get JD save payload keeps a job without a description so page text can be sent', () => {
+  assert.equal(createGetJdSaveJob({ job: { title: 'Senior Engineer' } }, '').description, '');
+  assert.equal(createGetJdSaveJob({}, 'Build services.'), null);
 });

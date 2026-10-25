@@ -935,13 +935,18 @@ async function initializeGetJdReviewOnce() {
 
   function saveResultToast(response) {
     const saved = Number(response.savedCount) || 0;
+    const removed = Number(response.removedCount) || 0;
     const failed = Number(response.failedCount) || 0;
     const candidates = (count) => `${count} candidate${count === 1 ? '' : 's'}`;
-    if (failed && saved) {
-      return { type: 'warn', message: `Saved for ${candidates(saved)}; ${candidates(failed)} could not be saved. Review and retry.` };
+    const changes = [
+      saved ? `added ${candidates(saved)}` : '',
+      removed ? `removed ${candidates(removed)}` : '',
+    ].filter(Boolean).join(' and ');
+    if (failed && changes) {
+      return { type: 'warn', message: `Jobs updated: ${changes}; ${candidates(failed)} could not be changed. Review and retry.` };
     }
-    if (failed) return { type: 'error', message: 'No candidates could be saved. Review the list and retry.' };
-    if (saved) return { type: 'success', message: `Saved to Jobs for ${candidates(saved)}.` };
+    if (failed) return { type: 'error', message: 'No candidates could be changed. Review the list and retry.' };
+    if (changes) return { type: 'success', message: `Jobs updated: ${changes}.` };
     return { type: 'info', message: 'The selected candidates already have this job.' };
   }
 
@@ -962,6 +967,29 @@ async function initializeGetJdReviewOnce() {
     wrapper.append(term, description);
     container.appendChild(wrapper);
   }
+
+  // A checkbox means "this account has this job". Mirrors the server's account states;
+  // older stored results fall back to duplicateKind.
+  function profileState(profile) {
+    if (profile?.state) return profile.state;
+    if (profile?.autoSaved) return 'has_job';
+    if (profile?.duplicateKind === 'applied') return 'applied';
+    if (profile?.duplicateKind === 'job_list') return 'has_job';
+    return 'available';
+  }
+
+  // Applied accounts and running Generation stay checked and cannot be unchecked.
+  function isLockedProfile(profile) {
+    const state = profileState(profile);
+    return state === 'applied' || state === 'generation_running';
+  }
+
+  const PROFILE_STATE_LABELS = {
+    applied: 'Applied (in Bids)',
+    generation_running: 'Generation running',
+    has_job: 'Has this job · uncheck to remove',
+    available: '',
+  };
 
   function readSelectedIds() {
     return Array.from(
@@ -1005,7 +1033,7 @@ async function initializeGetJdReviewOnce() {
           ...currentResult,
           selectedProfileIds: response.selectedProfileIds || currentResult.selectedProfileIds,
         };
-        refreshReview = response.autoSavedChanged === true;
+        refreshReview = false;
       }
     } catch (error) {
       currentResult = {
@@ -1026,12 +1054,9 @@ async function initializeGetJdReviewOnce() {
         (currentResult.profiles || []).map((profile) => [profile.id, profile]),
       );
       root.querySelectorAll('input[data-profile-id]').forEach((input) => {
-        const profile = profileById.get(input.dataset.profileId);
-        input.disabled = profile?.available === false && profile?.autoSaved !== true;
+        input.disabled = isLockedProfile(profileById.get(input.dataset.profileId));
       });
-      elements.save.disabled = !(currentResult.profiles || []).some(
-        (profile) => profile.available !== false,
-      );
+      elements.save.disabled = !(currentResult.profiles || []).some((profile) => !isLockedProfile(profile));
       elements.cancel.disabled = false;
     }
   }
@@ -1076,19 +1101,13 @@ async function initializeGetJdReviewOnce() {
       details.textContent = profile.name || 'Candidate';
       const category = document.createElement('small');
       const saveResult = saveResults.get(profile.id) || profile.saveResult;
-      const availability = profile.duplicateKind === 'applied'
-        ? 'Already applied'
-        : profile.duplicateKind === 'job_list'
-          ? profile.jobStatus === 'todo'
-            ? 'In Jobs · To do'
-            : `In Jobs · ${profile.jobStatus || 'not editable'}`
-          : '';
+      const locked = isLockedProfile(profile);
       category.textContent = [
         profile.recommended === true ? 'Recommended' : '',
         profile.category || 'Uncategorized',
         profile.autoSaved === true ? 'Saved automatically' : '',
         profile.autoSaveFailed === true ? 'Auto-save failed · select Save to retry' : '',
-        saveResult?.message || availability,
+        saveResult?.message || PROFILE_STATE_LABELS[profileState(profile)] || '',
       ].filter(Boolean).join(' · ');
       if (saveResult?.status === 'saved') category.classList.add('saved');
       if (saveResult?.status === 'failed') category.classList.add('failed');
@@ -1098,11 +1117,9 @@ async function initializeGetJdReviewOnce() {
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.dataset.profileId = profile.id;
-        checkbox.disabled = !selectionEnabled || (
-          profile.available === false && profile.autoSaved !== true
-        );
-        checkbox.checked = selectedIds.has(profile.id);
-        if (profile.available === false) label.classList.add('unavailable');
+        checkbox.disabled = !selectionEnabled || locked;
+        checkbox.checked = locked || selectedIds.has(profile.id);
+        if (locked) label.classList.add('unavailable');
         else if (checkbox.disabled) label.classList.add('inactive');
         checkbox.addEventListener('change', () => {
           sendSelection().catch((error) => {
@@ -1148,7 +1165,7 @@ async function initializeGetJdReviewOnce() {
     const elements = host.__qtsElements;
     setPanelVisible(true);
     elements.heading.textContent = 'QTS Candidate Accounts';
-    elements.status.textContent = result.message || 'Select candidates to save this job.';
+    elements.status.textContent = result.summaryText || result.message || 'Select candidates to save this job.';
     elements.status.classList.remove('is-loading');
     elements.details.hidden = false;
     elements.details.replaceChildren();
@@ -1164,12 +1181,15 @@ async function initializeGetJdReviewOnce() {
     appendDetail(elements.details, 'Job description', result.jobDescription, 'description');
     elements.message.textContent = result.saveError || '';
 
+    // Accounts that have the job start checked; after a change, the stored selection wins
+    // (so an unchecked saved account stays unchecked), with locked accounts always checked.
     const selectedIds = new Set([
       ...(Array.isArray(result.selectedProfileIds) ? result.selectedProfileIds : []),
-      ...(Array.isArray(result.autoSavedProfileIds) ? result.autoSavedProfileIds : []),
       ...(Array.isArray(result.profiles)
         ? result.profiles
-          .filter((profile) => profile.available === false && profile.autoSaved !== true)
+          .filter((profile) => (result.selectionModified === true
+            ? isLockedProfile(profile)
+            : profileState(profile) !== 'available'))
           .map((profile) => profile.id)
         : []),
       ...(result.selectionModified === true
@@ -1203,28 +1223,19 @@ async function initializeGetJdReviewOnce() {
     });
 
     elements.save.hidden = false;
-    elements.save.disabled = !candidates.some((profile) => profile.available !== false);
+    elements.save.disabled = !candidates.some((profile) => !isLockedProfile(profile));
     elements.cancel.hidden = false;
     elements.save.textContent = 'Save';
     elements.cancel.disabled = false;
-    elements.cancel.textContent = Array.isArray(result.autoSavedProfileIds) &&
-      result.autoSavedProfileIds.length > 0 &&
-      !candidates.some((profile) => profile.available !== false)
-      ? 'Done'
-      : 'Cancel';
+    elements.cancel.textContent = 'Close';
     elements.save.onclick = async () => {
-      const availableIds = new Set(
-        candidates
-          .filter((profile) => profile.available !== false)
-          .map((profile) => profile.id),
-      );
-      const ids = readSelectedIds().filter((id) => availableIds.has(id));
-      if (!ids.length) {
-        elements.message.textContent = 'Select at least one new candidate account to add this job.';
-        return;
-      }
+      // The full checked set goes to the worker, which adds new ones and removes unchecked saved ones.
+      const ids = readSelectedIds();
       elements.save.disabled = true;
       elements.cancel.disabled = true;
+      // Freeze the checkboxes so a click during the save cannot start a second save.
+      selectionUpdateInProgress = true;
+      root.querySelectorAll('input[data-profile-id]').forEach((input) => { input.disabled = true; });
       elements.save.textContent = 'Saving...';
       elements.message.textContent = 'Saving selected candidates...';
       elements.status.textContent = 'Saving the selected candidates...';
@@ -1240,8 +1251,14 @@ async function initializeGetJdReviewOnce() {
         elements.save.disabled = false;
         elements.cancel.disabled = false;
         elements.save.textContent = 'Save';
-        elements.status.textContent = 'Select candidates to save this job.';
+        elements.status.textContent = result.summaryText || 'Select candidates to save this job.';
         elements.status.classList.remove('is-loading');
+        const profileById = new Map(candidates.map((profile) => [profile.id, profile]));
+        root.querySelectorAll('input[data-profile-id]').forEach((input) => {
+          input.disabled = isLockedProfile(profileById.get(input.dataset.profileId));
+        });
+      } finally {
+        selectionUpdateInProgress = false;
       }
     };
     elements.cancel.onclick = async () => {
@@ -1260,13 +1277,16 @@ async function initializeGetJdReviewOnce() {
     const elements = host.__qtsElements;
     const response = result.saveResponse || {};
     const savedCount = Number(response.savedCount || 0);
+    const removedCount = Number(response.removedCount || 0);
     const duplicateCount = Number(response.duplicateCount || 0);
     const failedCount = Number(response.failedCount || 0);
+    const candidates = (count) => `${count} candidate${count === 1 ? '' : 's'}`;
     setPanelVisible(true);
     elements.heading.textContent = 'Save result';
-    elements.status.textContent = savedCount > 0
-      ? `Successfully saved ${savedCount} job${savedCount === 1 ? '' : 's'}.`
-      : 'No new jobs were saved.';
+    elements.status.textContent = [
+      savedCount ? `Added ${candidates(savedCount)}` : '',
+      removedCount ? `Removed ${candidates(removedCount)}` : '',
+    ].filter(Boolean).join(' · ') || 'Nothing changed.';
     elements.status.classList.remove('is-loading');
     elements.details.hidden = false;
     elements.details.replaceChildren();

@@ -36,6 +36,7 @@ import {
   findManagerJobPresence,
   getJdAccountState,
   insertGetJdJob,
+  summarizeAccountStates,
   updateExistingGetJdJobDetails,
 } from "@/server/jobs/get-jd-jobs";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
@@ -161,6 +162,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         allCandidatesAssigned: true,
         exists: true,
         ...presence,
+        summary: summarizeAccountStates(candidateProfiles.map((candidate) => getJdAccountState(urlDuplicates.get(candidate.id)))),
         toastKind: presence.inBids ? "applied" : "added",
         toastMessage: "All candidates already have this job.",
         message: "All candidates already have this job.",
@@ -342,6 +344,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       };
     });
     const allCandidatesAssigned = profilesWithStatus.every((profile) => !profile.available);
+    const summary = summarizeAccountStates(profilesWithStatus.map((profile) => profile.state));
     const toastKind = presence.inBids ? "applied" : presence.inJobs ? "added" : "new";
     return jsonResponse({
       success: true,
@@ -355,7 +358,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       exists: presence.inJobs || presence.inBids,
       ...presence,
       toastKind,
-      toastMessage: toastKind === "applied" ? "Already applied — this job is in your Bids." : toastKind === "added" ? "Already added — this job is in your Jobs list." : "New job — not in your Jobs or Bids yet.",
+      summary,
+      toastMessage: toastKind === "new" && autoSavedProfileIds.size === 0 ? "New job — not in your Jobs or Bids yet." : summary.text,
       message: autoSavedProfileIds.size > 0
         ? `Gemini matched and automatically saved this job for ${autoSavedProfileIds.size} account${autoSavedProfileIds.size === 1 ? "" : "s"}.${autoSaveFailedProfileIds.size > 0 ? ` Automatic saving failed for ${autoSaveFailedProfileIds.size} matching account${autoSaveFailedProfileIds.size === 1 ? "" : "s"}; they remain selected so you can retry.` : " Review checked and unchecked candidates and save any additional accounts."}`
         : autoSaveFailedProfileIds.size > 0
