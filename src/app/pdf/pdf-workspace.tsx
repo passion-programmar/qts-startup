@@ -1,10 +1,11 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Download, ExternalLink } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink, RotateCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { LoadingIcon } from "@/app/components/loading-icon";
 import type { PdfPackage } from "@/app/pdf/document-data";
-import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
+import { parsePdfPackage } from "@/app/pdf/document-data";
+import { PdfPagesPreview } from "@/app/pdf/pdf-pages-preview";
 import sampleFull from "@/app/pdf/sample-full.json";
 import {
   isPdfTemplate,
@@ -14,14 +15,13 @@ import {
 } from "@/server/pdf/pdf-templates";
 
 type PreviewDocumentType = "resume" | "cover-letter";
-type PreviewStatus = "loading" | "ready" | "error";
 
-type DirectRenderContext = {
-  documentType: PreviewDocumentType;
-  mount: HTMLElement;
-  root: HTMLElement;
-  styleRoot: Document["head"];
-  scopeStyle: (style: HTMLStyleElement) => void;
+// Both PDFs exactly as the server printed them for one JSON and template combination.
+type PrintedPdfs = {
+  resume: Uint8Array;
+  coverLetter: Uint8Array;
+  renderer: "template" | "fallback";
+  warnings: { resume: string; coverLetter: string };
 };
 
 type ResumeDownloadDirectory = FileSystemDirectoryHandle & {
@@ -31,14 +31,6 @@ type ResumeDownloadDirectory = FileSystemDirectoryHandle & {
 
 declare global {
   interface Window {
-    QTS_RESUME_DIRECT_RENDER?: boolean;
-    RESUME_OPTIONS?: Record<string, unknown>;
-    RESUME_TEMPLATES?: unknown[];
-    renderResume?: (
-      data: ReturnType<typeof toResumeTemplateData>,
-      overrides: { template: PdfTemplate },
-      context: DirectRenderContext,
-    ) => Promise<unknown>;
     showDirectoryPicker?: (options?: {
       mode?: "read" | "readwrite";
       startIn?: "downloads";
@@ -49,9 +41,10 @@ declare global {
 const example = JSON.stringify(sampleFull, null, 2);
 
 const samplePreviewData = parsePdfPackage(example);
-let rendererPromise: Promise<void> | null = null;
-let baseStylesPromise: Promise<void> | null = null;
-const scriptPromises = new Map<string, Promise<void>>();
+// Printing starts this long after the last edit, and recent results are kept so switching back
+// to a template shows it at once.
+const printDelayMs = 500;
+const maxRememberedPrints = 10;
 
 export function PdfWorkspace({
   managerName,
@@ -60,8 +53,6 @@ export function PdfWorkspace({
 }) {
   const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>("qts-standard");
   const [activeDocument, setActiveDocument] = useState<PreviewDocumentType>("resume");
-  const [previewGeneration, setPreviewGeneration] = useState(0);
-  const [previewStatus, setPreviewStatus] = useState<PreviewStatus>("loading");
   const [source, setSource] = useState(example);
   const [parsed, setParsed] = useState<PdfPackage | null>(
     () => tryParsePdfPackage(example),
@@ -74,14 +65,24 @@ export function PdfWorkspace({
   const [busy, setBusy] = useState(false);
   const [downloadDirectoryName, setDownloadDirectoryName] = useState<string | null>(null);
   const [downloadDirectoryReady, setDownloadDirectoryReady] = useState(false);
-  const previewHostRef = useRef<HTMLDivElement>(null);
-  const activeDocumentRef = useRef<PreviewDocumentType>("resume");
+  const [prints, setPrints] = useState<ReadonlyMap<string, PrintedPdfs>>(() => new Map());
+  const [lastPrint, setLastPrint] = useState<PrintedPdfs | null>(null);
+  const [printFailure, setPrintFailure] = useState<{ key: string; message: string } | null>(null);
+  const [printAttempt, setPrintAttempt] = useState(0);
   const downloadDirectoryRef = useRef<ResumeDownloadDirectory | null>(null);
-  const templateData = useMemo(
-    () => toResumeTemplateData(previewPackage, selectedTemplate),
+  const printKey = useMemo(
+    () => `${selectedTemplate}\n${JSON.stringify(previewPackage)}`,
     [previewPackage, selectedTemplate],
   );
+  const currentPrint = prints.get(printKey) ?? null;
+  const printError = printFailure?.key === printKey ? printFailure.message : null;
+  const printing = !currentPrint && !printError;
+  // Until the new pages arrive, the previous ones stay on screen, dimmed.
+  const shownPrint = currentPrint ?? lastPrint;
   const previewOutOfDate = source !== previewSource;
+  const documentLabel = activeDocument === "resume" ? "Resume" : "Cover letter";
+  const shownWarning = shownPrint?.warnings[activeDocument === "resume" ? "resume" : "coverLetter"] ?? "";
+
   useEffect(() => {
     let cancelled = false;
     readSavedDownloadDirectory()
@@ -102,19 +103,33 @@ export function PdfWorkspace({
       cancelled = true;
     };
   }, []);
-  const updatePreviewStatus = useCallback(
-    (documentType: PreviewDocumentType, status: PreviewStatus) => {
-      if (documentType === activeDocumentRef.current) setPreviewStatus(status);
-    },
-    [],
-  );
 
-  function showDocument(documentType: PreviewDocumentType) {
-    activeDocumentRef.current = documentType;
-    setActiveDocument(documentType);
-    setPreviewStatus("loading");
-    setPreviewGeneration((generation) => generation + 1);
-  }
+  // The preview is the printed PDF itself: the server prints the previewed JSON with the selected
+  // template shortly after edits stop, and the download button saves those same bytes.
+  useEffect(() => {
+    if (prints.has(printKey)) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      printPdfPair(previewPackage, selectedTemplate, controller.signal).then(
+        (printed) => {
+          setPrints((current) => rememberPrint(current, printKey, printed));
+          setLastPrint(printed);
+          setPrintFailure(null);
+        },
+        (reason: unknown) => {
+          if (controller.signal.aborted) return;
+          setPrintFailure({
+            key: printKey,
+            message: reason instanceof Error ? reason.message : "The preview could not be printed.",
+          });
+        },
+      );
+    }, printDelayMs);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [printAttempt, printKey, prints, previewPackage, selectedTemplate]);
 
   function updateSource(nextSource: string) {
     setSource(nextSource);
@@ -133,6 +148,11 @@ export function PdfWorkspace({
       setParsed(null);
       setError(reason instanceof Error ? reason.message : "JSON is invalid.");
     }
+  }
+
+  function retryPrint() {
+    setPrintFailure(null);
+    setPrintAttempt((attempt) => attempt + 1);
   }
 
   async function changeDownloadDirectory() {
@@ -157,7 +177,9 @@ export function PdfWorkspace({
 
   async function downloadPair() {
     try {
-      if (!parsed) throw new Error("Enter valid resume and cover-letter JSON before downloading.");
+      if (!parsed || previewOutOfDate || !currentPrint) {
+        throw new Error("Wait for the preview to finish before downloading.");
+      }
       setBusy(true);
       setError(null);
       const directory = await getDownloadDirectoryForSave(
@@ -167,14 +189,14 @@ export function PdfWorkspace({
           setDownloadDirectoryName(selected.name);
         },
       );
-      const { resume, coverLetter } = await printPdfPair(parsed, selectedTemplate);
       const candidateName = safePathPart(parsed.resume.candidate.fullName);
       const jobTitle = safePathPart(parsed.resume.targetRole);
       const company = safePathPart(parsed.resume.targetCompany ?? parsed.coverLetter.targetCompany);
       const folder = `QTS_Resume/${safePathPart(managerName)}/${candidateName}/${packageTimestamp()}_${jobTitle}_${company}`;
+      // The same bytes the preview shows.
       const files = [
-        { name: `${candidateName}.pdf`, bytes: resume },
-        { name: `${candidateName}_Cover_Letter.pdf`, bytes: coverLetter },
+        { name: `${candidateName}.pdf`, bytes: currentPrint.resume },
+        { name: `${candidateName}_Cover_Letter.pdf`, bytes: currentPrint.coverLetter },
       ];
       if (directory) {
         await savePdfPairToDirectory(directory, folder, files);
@@ -193,7 +215,7 @@ export function PdfWorkspace({
   }
 
   return (
-    <main className="py-1 xl:flex xl:h-[calc(100dvh-8.5rem)] xl:min-h-[28rem] xl:flex-col">
+    <main className="py-1 lg:flex lg:h-[calc(100dvh-8.5rem)] lg:min-h-[28rem] lg:flex-col">
       <header className="mb-4 flex shrink-0 flex-wrap items-start justify-between gap-3">
         <a
           className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
@@ -208,28 +230,31 @@ export function PdfWorkspace({
           <button
             aria-label="Show resume"
             className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={busy || activeDocument === "resume"}
-            onClick={() => showDocument("resume")}
+            disabled={activeDocument === "resume"}
+            onClick={() => setActiveDocument("resume")}
             type="button"
           >
             <ChevronLeft aria-hidden="true" className="size-5" />
           </button>
           <span className="min-w-24 text-center text-sm font-semibold text-slate-700" aria-live="polite">
-            {activeDocument === "resume" ? "Resume" : "Cover letter"}
+            {documentLabel}
           </span>
           <button
             aria-label="Show cover letter"
             className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={busy || activeDocument === "cover-letter"}
-            onClick={() => showDocument("cover-letter")}
+            disabled={activeDocument === "cover-letter"}
+            onClick={() => setActiveDocument("cover-letter")}
             type="button"
           >
             <ChevronRight aria-hidden="true" className="size-5" />
           </button>
         </nav>
       </header>
-      <div className="grid items-start gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(17rem,0.34fr)_minmax(0,0.66fr)]">
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-24 xl:max-h-[calc(100dvh-8rem)] xl:overflow-y-auto">
+      {/* The JSON and PDF panels keep a 34:66 split from tablet-landscape width up and stack below it.
+          Whole-number fr values let the PDF panel take all remaining space when the JSON panel is at
+          its minimum width (fractions below 1 would leave part of the row empty). */}
+      <div className="grid items-start gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(17rem,34fr)_minmax(0,66fr)]">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:max-h-full lg:overflow-y-auto">
           <div className="space-y-4 p-5">
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Resume and cover-letter template
               <select className={inputClass} id="pdf-template" onChange={(event) => {
@@ -261,453 +286,63 @@ export function PdfWorkspace({
             <div className="mt-4">
               <button
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={busy || !parsed || previewOutOfDate || previewStatus !== "ready" || !downloadDirectoryReady}
+                disabled={busy || !parsed || previewOutOfDate || !currentPrint || !downloadDirectoryReady}
                 onClick={() => void downloadPair()}
                 type="button"
               >
-                <Download className="size-4" />
-                {busy ? "Preparing PDFs..." : "Download resume and cover letter"}
+                {busy || (printing && !previewOutOfDate) ? <LoadingIcon className="size-4" /> : <Download className="size-4" />}
+                {busy ? "Saving PDFs..." : printing && !previewOutOfDate ? "Preparing PDFs..." : "Download resume and cover letter"}
               </button>
             </div>
           </div>
         </section>
-        <section className="min-w-0 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pr-2">
+        <section
+          aria-busy={printing}
+          aria-label="PDF preview"
+          className="min-w-0 rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden"
+        >
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-800">{documentLabel} · {pdfTemplateLabels[selectedTemplate]}</h2>
+            {printing && (
+              <span className="inline-flex items-center gap-2 text-xs font-medium text-slate-500" role="status">
+                <LoadingIcon className="size-3.5" />
+                {shownPrint ? "Updating preview..." : "Printing preview..."}
+              </span>
+            )}
+          </div>
           {!parsed && <p className="mb-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
-          <PdfTemplatePreviewFrame
-            key={`${activeDocument}-${previewGeneration}`}
-            documentData={templateData}
-            documentType={activeDocument}
-            template={selectedTemplate}
-            title={`${activeDocument === "resume" ? "Resume" : "Cover letter"} · ${pdfTemplateLabels[selectedTemplate]}`}
-            hostRef={previewHostRef}
-            onStatusChange={updatePreviewStatus}
-          />
+          {printError && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">
+              <span>{printError}</span>
+              <button
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                onClick={retryPrint}
+                type="button"
+              >
+                <RotateCw aria-hidden="true" className="size-3.5" />
+                Try again
+              </button>
+            </div>
+          )}
+          {shownPrint?.renderer === "fallback" && (
+            <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">
+              The template printer is unavailable right now, so these PDFs use the simplified built-in layout.
+            </p>
+          )}
+          {shownWarning && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{shownWarning}</p>}
+          {shownPrint ? (
+            <PdfPagesPreview
+              dimmed={printing}
+              label={documentLabel}
+              pdf={activeDocument === "resume" ? shownPrint.resume : shownPrint.coverLetter}
+            />
+          ) : (
+            <div aria-hidden="true" className="aspect-[210/297] w-full animate-pulse bg-white shadow-md ring-1 ring-slate-900/10" />
+          )}
         </section>
       </div>
     </main>
   );
-}
-
-function PdfTemplatePreviewFrame({
-  documentData,
-  documentType,
-  template,
-  title,
-  hostRef,
-  onStatusChange,
-}: {
-  documentData: ReturnType<typeof toResumeTemplateData>;
-  documentType: PreviewDocumentType;
-  template: PdfTemplate;
-  title: string;
-  hostRef: RefObject<HTMLDivElement | null>;
-  onStatusChange: (documentType: PreviewDocumentType, status: PreviewStatus) => void;
-}) {
-  const [status, setStatus] = useState<PreviewStatus>("loading");
-  const [message, setMessage] = useState("");
-  const [warnings, setWarnings] = useState("");
-  const [initialPreview] = useState(() => ({ documentData, documentType }));
-
-  useEffect(() => onStatusChange(documentType, status), [documentType, onStatusChange, status]);
-
-  useEffect(() => {
-    const previewHost = hostRef.current;
-    if (!previewHost) return;
-    let cancelled = false;
-    setStatus("loading");
-    setMessage("");
-    setWarnings("");
-
-    async function render(host: HTMLDivElement) {
-      const root = host.querySelector<HTMLElement>(".qts-document-host")
-        ?? document.createElement("div");
-      root.className = "qts-document-host";
-      root.classList.add("is-embed");
-      // The extension highlighter skips marked subtrees, keeping its marks out of the preview and PDF.
-      root.setAttribute("data-qts-text-highlight", "");
-      root.lang = documentData.theme.language ?? "en";
-      root.dir = documentData.theme.direction ?? "ltr";
-      const mount = root.querySelector<HTMLElement>("#resume-root")
-        ?? document.createElement("main");
-      mount.id = "resume-root";
-      mount.className = "is-embed";
-      if (mount.parentElement !== root) root.replaceChildren(mount);
-      if (!root.isConnected) host.replaceChildren(root);
-
-      const scopeStyle = (style: HTMLStyleElement) => scopeResumeStyles(style);
-      await loadBaseStyles();
-      if (cancelled) return;
-
-      await loadResumeRenderer();
-      if (cancelled) return;
-      const renderer = window.renderResume;
-      if (!renderer) throw new Error("The resume document renderer did not initialize.");
-      const result = await renderer(
-        documentData,
-        { template },
-        { documentType, mount, root, styleRoot: document.head, scopeStyle },
-      ) as { warnings?: string[] } | null;
-      if (cancelled || !result) return;
-      setWarnings(Array.isArray(result?.warnings) ? result.warnings.join(" ") : "");
-      setStatus("ready");
-    }
-
-    render(previewHost).catch((reason: unknown) => {
-      if (cancelled) return;
-      setMessage(reason instanceof Error ? reason.message : "The document could not be displayed.");
-      setStatus("error");
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [documentData, documentType, hostRef, template]);
-
-  return <section aria-label={title} className="min-h-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-4">
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
-    </div>
-    {status === "error" && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{message}</p>}
-    {warnings && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{warnings}</p>}
-    <div ref={hostRef} className="theme-light min-h-[calc(100dvh-14rem)] overflow-auto rounded-sm bg-white shadow-xl shadow-slate-900/15 xl:min-h-[calc(100dvh-16rem)]">
-      <div
-        className="qts-document-host is-embed"
-        data-qts-text-highlight=""
-        data-document={initialPreview.documentType}
-        data-render-state="loading"
-        dir={initialPreview.documentData.theme.direction ?? "ltr"}
-        lang={initialPreview.documentData.theme.language ?? "en"}
-      >
-        <main className="is-embed" id="resume-root">
-          <StaticDocumentPreview
-            documentData={initialPreview.documentData}
-            documentType={initialPreview.documentType}
-          />
-        </main>
-      </div>
-    </div>
-  </section>;
-}
-
-function StaticDocumentPreview({
-  documentData,
-  documentType,
-}: {
-  documentData: ReturnType<typeof toResumeTemplateData>;
-  documentType: PreviewDocumentType;
-}) {
-  const { candidate, resume, coverLetter } = documentData;
-  const articleStyle = {
-    boxSizing: "border-box" as const,
-    color: "#1a1a1a",
-    fontFamily: "Arial, sans-serif",
-    fontSize: "10.5pt",
-    lineHeight: 1.4,
-    margin: 0,
-    maxWidth: "none",
-    minHeight: "297mm",
-    padding: "15mm 16mm 17mm",
-    width: "210mm",
-  };
-  const contactValues = [
-    candidate.email,
-    candidate.phone,
-    candidate.location,
-    candidate.linkedinUrl,
-    ...(candidate.links ?? []).map((link) => link.url),
-  ].filter((value): value is string => Boolean(value));
-  const header = (
-    <header className="resume-header" style={{ borderBottom: "1px solid #b4bec8", marginBottom: "12pt", paddingBottom: "9pt" }}>
-      <h1 className="candidate-name" style={{ color: "#1f3a5f", fontSize: "22pt", fontWeight: 700 }}>
-        {candidate.fullName}
-      </h1>
-      {(candidate.headline || resume.targetRole) && (
-        <p className="candidate-headline" style={{ color: "#4a4f55", marginTop: "3pt" }}>
-          {candidate.headline || resume.targetRole}
-        </p>
-      )}
-      {contactValues.length > 0 && (
-        <address className="contact" style={{ fontSize: "9.5pt", fontStyle: "normal", marginTop: "5pt" }}>
-          <ul className="contact-list" style={{ display: "flex", flexWrap: "wrap", gap: "3pt 10pt", listStyle: "none" }}>
-            {contactValues.map((value) => <li key={value}><bdi>{value}</bdi></li>)}
-          </ul>
-        </address>
-      )}
-    </header>
-  );
-
-  if (documentType === "cover-letter") {
-    const recipient = coverLetter.recipient;
-    const recipientLines = [
-      recipient?.name,
-      recipient?.title,
-      recipient?.company || coverLetter.targetCompany,
-      ...(recipient?.address ?? []),
-    ].filter((value): value is string => Boolean(value));
-    return (
-      <article className="doc letter sheet doc--uniform-content" style={articleStyle}>
-        {header}
-        <div className="doc-body letter-body" style={{ display: "grid", gap: "12pt" }}>
-          {coverLetter.date && <p className="letter-date">{coverLetter.date}</p>}
-          {recipientLines.length > 0 && (
-            <div className="letter-recipient">
-              {recipientLines.map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}
-            </div>
-          )}
-          <h2 className="letter-subject">{coverLetter.subject || `Re: ${resume.targetRole}`}</h2>
-          <p className="letter-greeting">{coverLetter.greeting || `Dear ${recipient?.name || "Hiring Manager"},`}</p>
-          {coverLetter.paragraphs.map((paragraph, index) => (
-            <p className="letter-paragraph" key={`${index}-${paragraph}`}>{fallbackRichText(paragraph)}</p>
-          ))}
-          <div className="letter-signoff">
-            <p className="letter-closing">{coverLetter.closing || "Sincerely,"}</p>
-            <p className="letter-signature">{coverLetter.signature || candidate.fullName}</p>
-          </div>
-        </div>
-      </article>
-    );
-  }
-
-  return (
-    <article className="doc resume sheet doc--uniform-content" style={articleStyle}>
-      {header}
-      <div className="doc-body resume-body">
-        {resume.summary && (
-          <section aria-labelledby="section-summary" className="section section--summary" style={{ marginBottom: "12pt" }}>
-            <h2 className="section-title" id="section-summary" style={{ borderBottom: "1px solid #b4bec8", color: "#1f3a5f", fontWeight: 700, marginBottom: "5pt" }}>
-              Summary
-            </h2>
-            <p className="summary">{fallbackRichText(resume.summary)}</p>
-          </section>
-        )}
-        {resume.sections.map((section, index) => {
-          const sectionKey = (section.id || fallbackSectionSlug(section.title)).toLowerCase();
-          const headingId = `section-${index + (resume.summary ? 1 : 0)}`;
-          return (
-            <section
-              aria-labelledby={headingId}
-              className={section.type === "skills" ? "section section--skills" : "section"}
-              data-section={sectionKey}
-              key={sectionKey}
-              style={{ marginBottom: "12pt" }}
-            >
-              <h2 className="section-title" id={headingId} style={{ borderBottom: "1px solid #b4bec8", color: "#1f3a5f", fontWeight: 700, marginBottom: "5pt" }}>
-                {section.title}
-              </h2>
-              {section.type === "skills"
-                ? <div className="skills">{section.items.map((item, itemIndex) => {
-                    const skills = item.bullets ?? [];
-                    return (
-                      <div className="skill-group" key={`${itemIndex}-${item.heading ?? ""}`}>
-                        {item.heading && <h3 className="skill-group-title">{item.heading}:</h3>}
-                        <ul className="skill-list" style={{ display: "flex", flexWrap: "wrap", gap: "3pt 10pt", listStyle: "none" }}>
-                          {skills.map((skill, skillIndex) => {
-                            const name = typeof skill === "string" ? skill : skill.name;
-                            const detail = typeof skill === "string" ? "" : skill.detail;
-                            return (
-                              <li className="skill" key={`${skillIndex}-${name}`}>
-                                <span className="skill-name">{fallbackRichText(name)}</span>
-                                {detail && <span className="skill-detail"> ({detail})</span>}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </div>
-                    );
-                  })}</div>
-                : section.items.map((item, itemIndex) => (
-                    <div className="item" key={`${itemIndex}-${item.heading ?? ""}`} style={{ marginBottom: "7pt" }}>
-                      {(item.heading || item.dateRange) && (
-                        <div className="item-header">
-                          {item.heading && <h3 className="item-heading" style={{ display: "inline", fontWeight: 700 }}>{item.heading}</h3>}
-                          {item.dateRange && <p className="item-date" style={{ display: "inline", marginLeft: "6pt" }}>{item.dateRange}</p>}
-                        </div>
-                      )}
-                      {item.subheading && <p className="item-subheading" style={{ color: "#4a4f55" }}>{item.subheading}</p>}
-                      {item.description && <p className="item-description">{fallbackRichText(item.description)}</p>}
-                      {item.bullets && item.bullets.length > 0 && (
-                        <ul className="item-bullets" style={{ paddingInlineStart: "10pt" }}>
-                          {item.bullets.map((bullet, bulletIndex) => (
-                            <li key={`${bulletIndex}-${typeof bullet === "string" ? bullet : bullet.name}`}>
-                              {typeof bullet === "string" ? fallbackRichText(bullet) : <>{fallbackRichText(bullet.name)}{bullet.detail && ` (${bullet.detail})`}</>}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
-            </section>
-          );
-        })}
-      </div>
-    </article>
-  );
-}
-
-function fallbackRichText(value: string) {
-  return value.split(/(\*\*[^*]+?\*\*)/g).map((part, index) => {
-    const keyword = /^\*\*([^*]+?)\*\*$/.exec(part);
-    return keyword
-      ? <strong className="keyword" key={index}>{keyword[1]}</strong>
-      : part;
-  });
-}
-
-function fallbackSectionSlug(value: string): string {
-  return value.toLowerCase().normalize("NFKD").replace(/[^a-z\d]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-// The bundled template fonts, also loaded by the server's PDF printer, so the preview and the
-// downloaded PDF use the same font files. @font-face rules are global and need no scoping.
-function loadTemplateFonts(): Promise<void> {
-  const existing = document.head.querySelector<HTMLLinkElement>("link[data-qts-resume-fonts]");
-  if (existing?.sheet) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const link = existing ?? document.createElement("link");
-    link.addEventListener("load", () => resolve(), { once: true });
-    link.addEventListener("error", () => {
-      link.remove();
-      reject(new Error("The resume template fonts could not be loaded."));
-    }, { once: true });
-    if (!existing) {
-      link.rel = "stylesheet";
-      link.href = "/resume-templates/css/fonts.css";
-      link.dataset.qtsResumeFonts = "true";
-      document.head.append(link);
-    }
-  });
-}
-
-async function loadBaseStyles(): Promise<void> {
-  if (!baseStylesPromise) {
-    baseStylesPromise = loadTemplateFonts()
-      .then(() => fetch("/resume-templates/css/base.css"))
-      .then(async (response) => {
-        if (!response.ok) throw new Error("The resume template styles could not be loaded.");
-        const style = document.createElement("style");
-        style.dataset.qtsResumeBase = "true";
-        style.textContent = (await response.text()).replace(/^\s*@charset[^;]+;\s*/i, "");
-        document.head.append(style);
-        try {
-          scopeResumeStyles(style);
-        } catch (reason) {
-          style.remove();
-          throw reason;
-        }
-      })
-      .catch((reason: unknown) => {
-        baseStylesPromise = null;
-        throw reason;
-      });
-  }
-  await baseStylesPromise;
-}
-
-async function loadResumeRenderer(): Promise<void> {
-  window.QTS_RESUME_DIRECT_RENDER = true;
-  if (typeof window.renderResume === "function") return;
-  if (!rendererPromise) {
-    rendererPromise = (async () => {
-      if (!window.RESUME_TEMPLATES || !window.RESUME_OPTIONS) {
-        await loadPublicScript("/resume-templates/js/templates.js");
-      }
-      if (typeof window.renderResume !== "function") {
-        await loadPublicScript("/resume-templates/js/render.js");
-      }
-      if (typeof window.renderResume !== "function") {
-        throw new Error("The resume document renderer did not initialize.");
-      }
-    })().catch((reason: unknown) => {
-      rendererPromise = null;
-      throw reason;
-    });
-  }
-  await rendererPromise;
-}
-
-function loadPublicScript(src: string): Promise<void> {
-  const existing = scriptPromises.get(src);
-  if (existing) return existing;
-  const loading = new Promise<void>((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Could not load resume renderer script: ${src}`));
-    document.head.append(script);
-  });
-  scriptPromises.set(src, loading);
-  loading.catch(() => scriptPromises.delete(src));
-  return loading;
-}
-
-function scopeResumeStyles(style: HTMLStyleElement): void {
-  const sheet = style.sheet;
-  if (!sheet) throw new Error("The resume styles could not be parsed.");
-  scopeCssRules(sheet.cssRules, sheet);
-}
-
-function scopeCssRules(
-  rules: CSSRuleList,
-  parent: CSSGroupingRule | CSSStyleSheet,
-): void {
-  for (let index = rules.length - 1; index >= 0; index -= 1) {
-    const rule = rules[index];
-    if (!rule) continue;
-    if (rule.type === CSSRule.PAGE_RULE) {
-      parent.deleteRule(index);
-      continue;
-    }
-    if (rule.type === CSSRule.STYLE_RULE) {
-      const styleRule = rule as CSSStyleRule;
-      styleRule.selectorText = splitCssSelectorList(styleRule.selectorText)
-        .map(scopeResumeSelector)
-        .join(", ");
-      continue;
-    }
-    if ("cssRules" in rule) {
-      scopeCssRules((rule as CSSGroupingRule).cssRules, rule as CSSGroupingRule);
-    }
-  }
-}
-
-function scopeResumeSelector(selector: string): string {
-  const host = ".qts-document-host";
-  let scoped = selector
-    .replace(/:root\b/g, host)
-    .replace(/(^|[\s>+~])html(?=$|[\s.#:[>+~])/g, `$1${host}`)
-    .replace(/(^|[\s>+~])body(?=$|[\s.#:[>+~])/g, `$1${host}`);
-  scoped = scoped
-    .replace(/^\.is-embed(?=$|[\s>+~.#:[\]])/, `${host}.is-embed`)
-    .replace(new RegExp(`^${host}\\.is-embed\\s+${host}(?=$|[\\s>+~.#:[\\]])`), `${host}.is-embed`)
-    .replace(/^\[dir=(["']?)(ltr|rtl)\1\]\s+\.qts-document-host$/, `${host}[dir="$2"]`);
-  return scoped === selector ? `${host} ${selector}` : scoped;
-}
-
-function splitCssSelectorList(selectors: string): string[] {
-  const result: string[] = [];
-  let start = 0;
-  let depth = 0;
-  let quote = "";
-  for (let index = 0; index < selectors.length; index += 1) {
-    const char = selectors[index];
-    if (quote) {
-      if (char === quote && selectors[index - 1] !== "\\") quote = "";
-      continue;
-    }
-    if (char === "'" || char === "\"") {
-      quote = char;
-    } else if (char === "(" || char === "[") {
-      depth += 1;
-    } else if (char === ")" || char === "]") {
-      depth -= 1;
-    } else if (char === "," && depth === 0) {
-      result.push(selectors.slice(start, index).trim());
-      start = index + 1;
-    }
-  }
-  result.push(selectors.slice(start).trim());
-  return result.filter(Boolean);
 }
 
 function tryParsePdfPackage(source: string): PdfPackage | null {
@@ -740,16 +375,18 @@ function initialDocumentError(): string | null {
 
 const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
-// The server prints both PDFs with the same Chromium printing Generation uses, so the files match
-// the preview line for line, never cut a line across pages, and keep real, selectable text.
+// The server prints both PDFs with the same Chromium printing Generation uses: real pages with
+// real, selectable text, never a line cut across pages.
 async function printPdfPair(
   data: PdfPackage,
   template: PdfTemplate,
-): Promise<{ resume: Uint8Array; coverLetter: Uint8Array }> {
-  const response = await fetch("/api/pdf/download", {
+  signal: AbortSignal,
+): Promise<PrintedPdfs> {
+  const response = await fetch("/api/pdf/print", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ document: data, template }),
+    signal,
   });
   let result: unknown = null;
   try {
@@ -757,11 +394,39 @@ async function printPdfPair(
   } catch {
     // A non-JSON response (for example a gateway timeout) is reported below.
   }
-  const body = typeof result === "object" && result !== null ? result as Record<string, unknown> : {};
+  const body = isRecord(result) ? result : {};
   if (!response.ok || body.success !== true || typeof body.resume !== "string" || typeof body.coverLetter !== "string") {
     throw new Error(typeof body.message === "string" ? body.message : `QTS could not prepare the PDFs (HTTP ${response.status}).`);
   }
-  return { resume: base64Bytes(body.resume), coverLetter: base64Bytes(body.coverLetter) };
+  const warnings = isRecord(body.warnings) ? body.warnings : {};
+  return {
+    resume: base64Bytes(body.resume),
+    coverLetter: base64Bytes(body.coverLetter),
+    renderer: body.renderer === "fallback" ? "fallback" : "template",
+    warnings: {
+      resume: typeof warnings.resume === "string" ? warnings.resume : "",
+      coverLetter: typeof warnings.coverLetter === "string" ? warnings.coverLetter : "",
+    },
+  };
+}
+
+function rememberPrint(
+  prints: ReadonlyMap<string, PrintedPdfs>,
+  key: string,
+  printed: PrintedPdfs,
+): ReadonlyMap<string, PrintedPdfs> {
+  const next = new Map(prints);
+  next.delete(key);
+  next.set(key, printed);
+  for (const oldest of next.keys()) {
+    if (next.size <= maxRememberedPrints) break;
+    next.delete(oldest);
+  }
+  return next;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function base64Bytes(value: string): Uint8Array {

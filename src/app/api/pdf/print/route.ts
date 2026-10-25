@@ -9,8 +9,9 @@ export const maxDuration = 60;
 
 const maxBodyCharacters = 1_000_000;
 
-// The Resume page's download button: prints the previewed résumé and cover letter with the same
-// server-side Chromium printing as Generation, so the files match the preview and keep real text.
+// The Resume page's preview and download button: prints the résumé and cover letter with the same
+// server-side Chromium printing as Generation. The page shows these exact PDFs as its preview and
+// saves the same bytes, so what a Manager sees is what is downloaded.
 export async function POST(request: Request): Promise<NextResponse> {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
@@ -56,6 +57,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         success: true,
         resume: Buffer.from(pdfs.resume).toString("base64"),
         coverLetter: Buffer.from(pdfs.coverLetter).toString("base64"),
+        renderer: pdfs.renderer,
+        warnings: pdfs.warnings,
       },
       { headers: { "Cache-Control": "no-store" } },
     );

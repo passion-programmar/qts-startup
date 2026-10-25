@@ -22,22 +22,33 @@ export class DocumentPageLimitError extends Error {
   }
 }
 
+export type TemplatePdfPackage = {
+  resume: Uint8Array;
+  coverLetter: Uint8Array;
+  // The template's own notes, such as "needs about 3 pages"; empty when there are none.
+  warnings: { resume: string; coverLetter: string };
+};
+
 /**
- * Prints the résumé and cover letter with the same HTML templates the Resume page previews,
- * so downloaded PDFs match the preview. Callers fall back to the built-in renderer on error.
+ * Prints the résumé and cover letter with the HTML templates in public/resume-templates.
+ * Callers fall back to the built-in renderer on error.
  */
 export async function renderTemplatePdfPackage(
   data: PdfPackage,
   template: PdfTemplate,
   { enforcePageLimits = true }: { enforcePageLimits?: boolean } = {},
-): Promise<{ resume: Uint8Array; coverLetter: Uint8Array }> {
+): Promise<TemplatePdfPackage> {
   const browser = await getBrowser();
   const templateData = toResumeTemplateData(data, template);
   const [resume, coverLetter] = await Promise.all([
     printDocument(browser, "resume", template, templateData, enforcePageLimits),
     printDocument(browser, "cover-letter", template, templateData, enforcePageLimits),
   ]);
-  return { resume, coverLetter };
+  return {
+    resume: resume.pdf,
+    coverLetter: coverLetter.pdf,
+    warnings: { resume: resume.warnings, coverLetter: coverLetter.warnings },
+  };
 }
 
 async function printDocument(
@@ -46,7 +57,7 @@ async function printDocument(
   template: PdfTemplate,
   templateData: ReturnType<typeof toResumeTemplateData>,
   enforcePageLimits: boolean,
-): Promise<Uint8Array> {
+): Promise<{ pdf: Uint8Array; warnings: string }> {
   const page = await browser.newPage();
   try {
     await page.setRequestInterception(true);
@@ -62,7 +73,10 @@ async function printDocument(
       { waitUntil: "load", timeout: renderTimeoutMs },
     );
     await page.waitForSelector('html[data-render-state="ready"], html[data-render-state="error"]', { timeout: renderTimeoutMs });
-    const state = await page.evaluate(() => window.document.documentElement.dataset.renderState);
+    const { state, warnings } = await page.evaluate(() => ({
+      state: window.document.documentElement.dataset.renderState,
+      warnings: window.document.documentElement.dataset.warnings ?? "",
+    }));
     if (state !== "ready") throw new Error(`The ${template} ${document} template did not render.`);
     const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true, timeout: renderTimeoutMs });
     if (enforcePageLimits) {
@@ -70,7 +84,7 @@ async function printDocument(
       const limit = pageLimits[document];
       if ((await PDFDocument.load(pdf)).getPageCount() > limit.pages) throw new DocumentPageLimitError(limit.message);
     }
-    return pdf;
+    return { pdf, warnings };
   } finally {
     await page.close().catch(() => undefined);
   }
