@@ -9,9 +9,8 @@ export const maxDuration = 60;
 
 const maxBodyCharacters = 1_000_000;
 
-// The Resume page's preview and download button: prints the résumé and cover letter with the same
-// server-side Chromium printing as Generation. The page shows these exact PDFs as its preview and
-// saves the same bytes, so what a Manager sees is what is downloaded.
+// The Resume page's download button: prints the résumé and cover letter with the same server-side
+// Chromium printing as Generation, from the template the page's preview draws in the browser.
 export async function POST(request: Request): Promise<NextResponse> {
   const currentUser = await getCurrentUser();
   if (!currentUser) {

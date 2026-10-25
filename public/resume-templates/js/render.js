@@ -20,6 +20,9 @@
    When the page is ready to print, <html> gets data-render-state="ready",
    data-pages (estimated page count) and, if needed, data-warnings.
    Programmatic use: await window.renderResume(data, { template: "classic" })
+
+   ?embed=1&view=pages is the Resume page preview: the document is shown as
+   its printed pages, one sheet each (see "Page view" below).
    ========================================================================== */
 (() => {
   "use strict";
@@ -75,6 +78,8 @@
   let scopeDirectStyle = null;
   let currentData = null;
   let renderCount = 0;
+  const PAGES_VIEW = params.get("embed") === "1" && params.get("view") === "pages";
+  const PAGE_NUMBER_FONT = '8pt "QTS Arial"';
 
 
   /* ---------- Value helpers ---------- */
@@ -651,8 +656,7 @@
 
   function estimatePages(article) {
     const probe = el("div");
-    probe.style.cssText =
-      "position:absolute;visibility:hidden;height:calc(var(--page-height) - var(--page-margin-top) - var(--page-margin-bottom))";
+    probe.style.cssText = "position:absolute;visibility:hidden;height:var(--page-area-height)";
     (directRenderMode ? mount : document.body).append(probe);
     const pageHeight = probe.getBoundingClientRect().height;
     probe.remove();
@@ -734,7 +738,12 @@
     // Web fonts only start loading once the text is laid out, so lay it out first; otherwise
     // fonts.ready resolves at once and the pages are measured with a fallback font.
     article.getBoundingClientRect();
-    if (document.fonts) await document.fonts.ready;
+    if (document.fonts) {
+      // The page numbers (base.css section 2) are in a font the document may not use anywhere
+      // else; unloaded, it would print nothing.
+      document.fonts.load(PAGE_NUMBER_FONT).catch(() => {});
+      await document.fonts.ready;
+    }
     if (run !== renderCount) return null;
 
     const pages = fitToPages(article, settings.density, warnings);
@@ -744,10 +753,67 @@
     if (warnings.length) root.dataset.warnings = warnings.join(" ");
     else delete root.dataset.warnings;
     warnings.forEach((warning) => console.warn(`[resume] ${warning}`));
+    const layout = PAGES_VIEW && !directRenderMode ? showPages(article, (page, total) => pageNumberText(theme, labels, page, total)) : null;
     root.dataset.renderState = "ready";
 
     if (!directRenderMode) updateToolbar(template.id, pages, article.classList.contains("doc--compact"), warnings);
-    return { document: DOCUMENT, template: template.id, settings, pages, warnings };
+    return { document: DOCUMENT, template: template.id, settings, pages, warnings, layout };
+  }
+
+
+  /* ---------- Page view (?embed=1&view=pages) ----------
+     The Resume page preview shows the document as its printed pages. The
+     document flows through CSS columns exactly one page area tall; Chromium
+     splits columns with the same fragmentation it splits printed pages with
+     (break-inside, break-after, orphans and widows), so each column holds
+     what the PDF prints on that page. Each sheet shows one column of its own
+     copy, plus the page number @page prints in the margin. */
+
+  function showPages(article, pageNumber) {
+    const stack = el("div", "pages");
+    // A picture of the pages: nothing in it takes focus, opens a link or is read out twice.
+    stack.inert = true;
+    const flows = [];
+    const addSheet = (content) => {
+      const sheet = el("div", "page");
+      const flow = el("div", "page-flow");
+      flow.append(content);
+      sheet.append(flow);
+      stack.append(sheet);
+      flows.push(flow);
+    };
+    addSheet(article);
+    const current = document.querySelector("body > .pages");
+    if (current) current.replaceWith(stack);
+    else document.body.append(stack);
+
+    // A box split across columns has one client rect per column, in page order.
+    const columns = [...article.getClientRects()];
+    for (let index = 1; index < columns.length; index += 1) {
+      addSheet(article.cloneNode(true));
+      flows[index].style.transform = `translateX(${columns[0].left - columns[index].left}px)`;
+    }
+    flows.forEach((flow, index) => {
+      const text = pageNumber(index + 1, flows.length);
+      if (text) flow.parentElement.append(el("div", "page-number", text));
+    });
+
+    const first = flows[0].parentElement.getBoundingClientRect();
+    const second = flows[1]?.parentElement.getBoundingClientRect();
+    return {
+      pageCount: flows.length,
+      pageWidth: first.width,
+      pageHeight: first.height,
+      gap: second ? second.top - first.bottom : 0,
+      height: stack.getBoundingClientRect().height,
+    };
+  }
+
+  // What @page prints in the bottom-right margin (base.css section 2 and
+  // applyDocumentSettings): nothing on page 1 or when page numbers are off.
+  function pageNumberText(theme, labels, page, total) {
+    if (page === 1 || theme.showPageNumbers === false) return "";
+    return `${labels.page} ${page} ${labels.of} ${total}`;
   }
 
 
@@ -894,6 +960,7 @@
 
   window.renderResume = renderResume;
   if (params.get("embed") === "1" && !directRenderMode) root.classList.add("is-embed");
+  if (PAGES_VIEW && !directRenderMode) root.classList.add("is-pages");
   if (!directRenderMode) setupToolbar();
   if (params.get("embed") === "1" && !directRenderMode) {
     window.addEventListener("message", async (event) => {
@@ -909,12 +976,15 @@
       ) return;
 
       try {
-        await renderResume(message.document, { template: message.template });
+        const rendered = await renderResume(message.document, { template: message.template });
+        // A newer request replaced this one; its answer follows.
+        if (!rendered) return;
         window.parent.postMessage({
           type: "QTS_RESUME_TEMPLATE_RENDERED",
           requestId: message.requestId,
           ok: true,
           warnings: root.dataset.warnings || "",
+          layout: rendered.layout,
         }, location.origin);
       } catch (reason) {
         const error = reason instanceof Error ? reason : new Error("The document could not be rendered.");

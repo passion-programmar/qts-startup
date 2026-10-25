@@ -1,12 +1,12 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Download, ExternalLink, RotateCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { parsePdfPackage } from "@/app/pdf/document-data";
-import { PdfPagesPreview } from "@/app/pdf/pdf-pages-preview";
 import sampleFull from "@/app/pdf/sample-full.json";
+import { TemplatePagesPreview } from "@/app/pdf/template-pages-preview";
 import {
   isPdfTemplate,
   pdfTemplateLabels,
@@ -16,12 +16,16 @@ import {
 
 type PreviewDocumentType = "resume" | "cover-letter";
 
-// Both PDFs exactly as the server printed them for one JSON and template combination.
+const previewDocuments = [
+  { type: "resume", label: "Resume" },
+  { type: "cover-letter", label: "Cover letter" },
+] as const;
+
+// Both PDFs as the server printed them for one JSON and template combination.
 type PrintedPdfs = {
   resume: Uint8Array;
   coverLetter: Uint8Array;
   renderer: "template" | "fallback";
-  warnings: { resume: string; coverLetter: string };
 };
 
 type ResumeDownloadDirectory = FileSystemDirectoryHandle & {
@@ -41,10 +45,6 @@ declare global {
 const example = JSON.stringify(sampleFull, null, 2);
 
 const samplePreviewData = parsePdfPackage(example);
-// Printing starts this long after the last edit, and recent results are kept so switching back
-// to a template shows it at once.
-const printDelayMs = 500;
-const maxRememberedPrints = 10;
 
 export function PdfWorkspace({
   managerName,
@@ -62,26 +62,14 @@ export function PdfWorkspace({
   const [error, setError] = useState<string | null>(
     () => initialDocumentError(),
   );
-  const [busy, setBusy] = useState(false);
+  const [downloadStep, setDownloadStep] = useState<"printing" | "saving" | null>(null);
+  const [fallbackUsed, setFallbackUsed] = useState(false);
   const [downloadDirectoryName, setDownloadDirectoryName] = useState<string | null>(null);
   const [downloadDirectoryReady, setDownloadDirectoryReady] = useState(false);
-  const [prints, setPrints] = useState<ReadonlyMap<string, PrintedPdfs>>(() => new Map());
-  const [lastPrint, setLastPrint] = useState<PrintedPdfs | null>(null);
-  const [printFailure, setPrintFailure] = useState<{ key: string; message: string } | null>(null);
-  const [printAttempt, setPrintAttempt] = useState(0);
   const downloadDirectoryRef = useRef<ResumeDownloadDirectory | null>(null);
-  const printKey = useMemo(
-    () => `${selectedTemplate}\n${JSON.stringify(previewPackage)}`,
-    [previewPackage, selectedTemplate],
-  );
-  const currentPrint = prints.get(printKey) ?? null;
-  const printError = printFailure?.key === printKey ? printFailure.message : null;
-  const printing = !currentPrint && !printError;
-  // Until the new pages arrive, the previous ones stay on screen, dimmed.
-  const shownPrint = currentPrint ?? lastPrint;
+  const busy = downloadStep !== null;
   const previewOutOfDate = source !== previewSource;
   const documentLabel = activeDocument === "resume" ? "Resume" : "Cover letter";
-  const shownWarning = shownPrint?.warnings[activeDocument === "resume" ? "resume" : "coverLetter"] ?? "";
 
   useEffect(() => {
     let cancelled = false;
@@ -104,33 +92,6 @@ export function PdfWorkspace({
     };
   }, []);
 
-  // The preview is the printed PDF itself: the server prints the previewed JSON with the selected
-  // template shortly after edits stop, and the download button saves those same bytes.
-  useEffect(() => {
-    if (prints.has(printKey)) return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      printPdfPair(previewPackage, selectedTemplate, controller.signal).then(
-        (printed) => {
-          setPrints((current) => rememberPrint(current, printKey, printed));
-          setLastPrint(printed);
-          setPrintFailure(null);
-        },
-        (reason: unknown) => {
-          if (controller.signal.aborted) return;
-          setPrintFailure({
-            key: printKey,
-            message: reason instanceof Error ? reason.message : "The preview could not be printed.",
-          });
-        },
-      );
-    }, printDelayMs);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [printAttempt, printKey, prints, previewPackage, selectedTemplate]);
-
   function updateSource(nextSource: string) {
     setSource(nextSource);
     if (!nextSource.trim()) {
@@ -148,11 +109,6 @@ export function PdfWorkspace({
       setParsed(null);
       setError(reason instanceof Error ? reason.message : "JSON is invalid.");
     }
-  }
-
-  function retryPrint() {
-    setPrintFailure(null);
-    setPrintAttempt((attempt) => attempt + 1);
   }
 
   async function changeDownloadDirectory() {
@@ -177,11 +133,14 @@ export function PdfWorkspace({
 
   async function downloadPair() {
     try {
-      if (!parsed || previewOutOfDate || !currentPrint) {
-        throw new Error("Wait for the preview to finish before downloading.");
+      if (!parsed || previewOutOfDate) {
+        throw new Error("Fix the JSON before downloading; the preview shows the last valid version.");
       }
-      setBusy(true);
+      setDownloadStep("printing");
+      setFallbackUsed(false);
       setError(null);
+      // The folder comes first, while the click still allows the browser to ask for it; printing
+      // can take a few seconds.
       const directory = await getDownloadDirectoryForSave(
         downloadDirectoryRef.current,
         (selected) => {
@@ -189,20 +148,22 @@ export function PdfWorkspace({
           setDownloadDirectoryName(selected.name);
         },
       );
+      const printed = await printPdfPair(parsed, selectedTemplate);
+      setDownloadStep("saving");
       const candidateName = safePathPart(parsed.resume.candidate.fullName);
       const jobTitle = safePathPart(parsed.resume.targetRole);
       const company = safePathPart(parsed.resume.targetCompany ?? parsed.coverLetter.targetCompany);
       const folder = `QTS_Resume/${safePathPart(managerName)}/${candidateName}/${packageTimestamp()}_${jobTitle}_${company}`;
-      // The same bytes the preview shows.
       const files = [
-        { name: `${candidateName}.pdf`, bytes: currentPrint.resume },
-        { name: `${candidateName}_Cover_Letter.pdf`, bytes: currentPrint.coverLetter },
+        { name: `${candidateName}.pdf`, bytes: printed.resume },
+        { name: `${candidateName}_Cover_Letter.pdf`, bytes: printed.coverLetter },
       ];
       if (directory) {
         await savePdfPairToDirectory(directory, folder, files);
       } else {
         downloadPdfPairInBrowser(files);
       }
+      setFallbackUsed(printed.renderer === "fallback");
     } catch (reason) {
       setError(
         reason instanceof DOMException && reason.name === "AbortError"
@@ -210,7 +171,7 @@ export function PdfWorkspace({
           : describeBrowserError(reason, "The resume and cover letter could not be downloaded."),
       );
     } finally {
-      setBusy(false);
+      setDownloadStep(null);
     }
   }
 
@@ -283,62 +244,43 @@ export function PdfWorkspace({
               </button>
             </div>
             <p className="text-xs text-slate-500">Both PDFs are saved under QTS_Resume / {managerName} / candidate within your chosen folder. Browsers without folder access use their normal download location.</p>
-            <div className="mt-4">
+            <div className="mt-4 space-y-3">
               <button
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={busy || !parsed || previewOutOfDate || !currentPrint || !downloadDirectoryReady}
+                disabled={busy || !parsed || previewOutOfDate || !downloadDirectoryReady}
                 onClick={() => void downloadPair()}
                 type="button"
               >
-                {busy || (printing && !previewOutOfDate) ? <LoadingIcon className="size-4" /> : <Download className="size-4" />}
-                {busy ? "Saving PDFs..." : printing && !previewOutOfDate ? "Preparing PDFs..." : "Download resume and cover letter"}
+                {busy ? <LoadingIcon className="size-4" /> : <Download className="size-4" />}
+                {downloadStep === "printing" ? "Preparing PDFs..." : downloadStep === "saving" ? "Saving PDFs..." : "Download resume and cover letter"}
               </button>
+              {fallbackUsed && (
+                <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">
+                  The template printer was unavailable, so these PDFs use the simplified built-in layout and differ from the preview.
+                </p>
+              )}
             </div>
           </div>
         </section>
         <section
-          aria-busy={printing}
           aria-label="PDF preview"
           className="min-w-0 rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden"
         >
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-800">{documentLabel} · {pdfTemplateLabels[selectedTemplate]}</h2>
-            {printing && (
-              <span className="inline-flex items-center gap-2 text-xs font-medium text-slate-500" role="status">
-                <LoadingIcon className="size-3.5" />
-                {shownPrint ? "Updating preview..." : "Printing preview..."}
-              </span>
-            )}
-          </div>
+          <h2 className="mb-3 text-sm font-semibold text-slate-800">{documentLabel} · {pdfTemplateLabels[selectedTemplate]}</h2>
           {!parsed && <p className="mb-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
-          {printError && (
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">
-              <span>{printError}</span>
-              <button
-                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-                onClick={retryPrint}
-                type="button"
-              >
-                <RotateCw aria-hidden="true" className="size-3.5" />
-                Try again
-              </button>
-            </div>
-          )}
-          {shownPrint?.renderer === "fallback" && (
-            <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">
-              The template printer is unavailable right now, so these PDFs use the simplified built-in layout.
-            </p>
-          )}
-          {shownWarning && <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">{shownWarning}</p>}
-          {shownPrint ? (
-            <PdfPagesPreview
-              dimmed={printing}
-              label={documentLabel}
-              pdf={activeDocument === "resume" ? shownPrint.resume : shownPrint.coverLetter}
-            />
-          ) : (
-            <div aria-hidden="true" className="aspect-[210/297] w-full animate-pulse bg-white shadow-md ring-1 ring-slate-900/10" />
-          )}
+          {/* Both documents stay drawn, so switching between them is instant. */}
+          <div className="relative">
+            {previewDocuments.map((preview) => (
+              <TemplatePagesPreview
+                data={previewPackage}
+                documentType={preview.type}
+                hidden={preview.type !== activeDocument}
+                key={preview.type}
+                label={preview.label}
+                template={selectedTemplate}
+              />
+            ))}
+          </div>
         </section>
       </div>
     </main>
@@ -375,18 +317,13 @@ function initialDocumentError(): string | null {
 
 const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
-// The server prints both PDFs with the same Chromium printing Generation uses: real pages with
-// real, selectable text, never a line cut across pages.
-async function printPdfPair(
-  data: PdfPackage,
-  template: PdfTemplate,
-  signal: AbortSignal,
-): Promise<PrintedPdfs> {
+// The server prints both PDFs with the same Chromium printing Generation uses, from the template
+// the preview draws: real pages with real, selectable text, never a line cut across pages.
+async function printPdfPair(data: PdfPackage, template: PdfTemplate): Promise<PrintedPdfs> {
   const response = await fetch("/api/pdf/print", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ document: data, template }),
-    signal,
   });
   let result: unknown = null;
   try {
@@ -398,31 +335,11 @@ async function printPdfPair(
   if (!response.ok || body.success !== true || typeof body.resume !== "string" || typeof body.coverLetter !== "string") {
     throw new Error(typeof body.message === "string" ? body.message : `QTS could not prepare the PDFs (HTTP ${response.status}).`);
   }
-  const warnings = isRecord(body.warnings) ? body.warnings : {};
   return {
     resume: base64Bytes(body.resume),
     coverLetter: base64Bytes(body.coverLetter),
     renderer: body.renderer === "fallback" ? "fallback" : "template",
-    warnings: {
-      resume: typeof warnings.resume === "string" ? warnings.resume : "",
-      coverLetter: typeof warnings.coverLetter === "string" ? warnings.coverLetter : "",
-    },
   };
-}
-
-function rememberPrint(
-  prints: ReadonlyMap<string, PrintedPdfs>,
-  key: string,
-  printed: PrintedPdfs,
-): ReadonlyMap<string, PrintedPdfs> {
-  const next = new Map(prints);
-  next.delete(key);
-  next.set(key, printed);
-  for (const oldest of next.keys()) {
-    if (next.size <= maxRememberedPrints) break;
-    next.delete(oldest);
-  }
-  return next;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

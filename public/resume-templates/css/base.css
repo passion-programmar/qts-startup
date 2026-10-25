@@ -31,6 +31,7 @@
      3. Base               8. Cover letter           13. Screen preview
      4. Header & contact   9. Section title styles   14. Embedded preview
      5. Sections & items  10. Entry & summary styles 15. Print
+                                                     16. Page view
    ========================================================================== */
 
 
@@ -43,6 +44,11 @@
   --page-margin-top: 15mm;
   --page-margin-inline: 16mm;
   --page-margin-bottom: 17mm;
+  /* The content area Chromium lays printed pages out on: the exact size rounded
+     up to a whole pixel, plus 1/64px (A4: 673.016 x 1002.016px). The screen
+     sheet and the page view use it too, so lines and pages break as printed. */
+  --page-area-width: calc(round(up, var(--page-width) - 2 * var(--page-margin-inline), 1px) + 1px / 64);
+  --page-area-height: calc(round(up, var(--page-height) - var(--page-margin-top) - var(--page-margin-bottom), 1px) + 1px / 64);
 
   /* Font stacks. Each starts with a bundled open font from css/fonts.css, which
      the Resume page preview and the PDF printer both load, so every computer
@@ -689,6 +695,13 @@ a {
   background: #ffffff;
 }
 
+/* Right to left, the marker would overhang the page area on the right, which
+   Chromium prints by shrinking the whole page; inset the entries by the
+   marker's offset instead. */
+.doc[data-item-style="timeline"] .item:dir(rtl) {
+  margin-inline-start: 4.6pt;
+}
+
 .doc[data-summary-style="boxed"] .summary {
   padding: 7pt 10pt;
   border-radius: 2pt;
@@ -764,14 +777,14 @@ li {
   }
 
   .sheet {
-    width: var(--page-width);
+    width: calc(var(--page-area-width) + 2 * var(--page-margin-inline));
     max-width: 100%;
     min-height: var(--page-height);
     margin: 0 auto;
     padding: var(--page-margin-top) var(--page-margin-inline) var(--page-margin-bottom);
     background:
       linear-gradient(to bottom, transparent calc(100% - 1px), rgba(200, 30, 30, 0.45) calc(100% - 1px))
-        0 0 / 100% calc(var(--page-height) - var(--page-margin-top) - var(--page-margin-bottom)) repeat-y content-box,
+        0 0 / 100% var(--page-area-height) repeat-y content-box,
       #ffffff;
     box-shadow:
       0 1px 2px rgba(16, 24, 40, 0.08),
@@ -830,5 +843,82 @@ li {
 
   .no-print {
     display: none !important;
+  }
+}
+
+
+/* 16. Page view (?embed=1&view=pages) ----------------------------------------------
+   The Resume page preview shows the printed pages. render.js renders out of
+   sight, flows the document through columns one page area tall (the same
+   fragmentation Chromium prints pages with) and shows each column on its own
+   sheet, with the page number from section 2. */
+
+@media screen {
+  .is-pages,
+  .is-pages body {
+    overflow: hidden;
+    background: transparent;
+  }
+
+  .is-pages .resume-root {
+    position: absolute;
+    top: 0;
+    left: 0;
+    visibility: hidden;
+  }
+
+  .pages {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    width: var(--page-width);
+  }
+
+  .page {
+    position: relative;
+    flex: none;
+    height: var(--page-height);
+    overflow: hidden;
+    background: #ffffff;
+  }
+
+  /* One column per page. The gap is a page wide, so neighbouring columns
+     stay off the sheet while content may still overhang into the margins,
+     as it does on paper. */
+  .page-flow {
+    position: absolute;
+    top: var(--page-margin-top);
+    left: var(--page-margin-inline);
+    width: var(--page-area-width);
+    height: var(--page-area-height);
+    column-count: 1;
+    column-gap: var(--page-width);
+    column-fill: auto;
+  }
+
+  /* The document exactly as printed (section 15). */
+  .page-flow > .sheet {
+    width: auto;
+    max-width: none;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  /* The @page bottom-right margin box (section 2). */
+  .page-number {
+    position: absolute;
+    right: var(--page-margin-inline);
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    height: var(--page-margin-bottom);
+    font-family: "QTS Arial", Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
+    font-size: 8pt;
+    line-height: normal;
+    color: #5f666d;
+    white-space: nowrap;
   }
 }

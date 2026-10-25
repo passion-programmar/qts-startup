@@ -17,8 +17,8 @@ export type DocumentPdfs = TemplatePdfPackage & {
 };
 
 /**
- * Prints the résumé and cover letter from the HTML templates for Generation downloads and for the
- * Resume page's preview and download button alike. If Chromium cannot print them, the built-in
+ * Prints the résumé and cover letter from the HTML templates for Generation downloads and the
+ * Resume page's download button alike. If Chromium cannot print them, the built-in
  * renderer still produces both PDFs. Content over the page limits is not retried there, because
  * the built-in renderer refuses it too.
  */
