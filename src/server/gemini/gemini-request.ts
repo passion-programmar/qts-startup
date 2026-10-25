@@ -1,8 +1,10 @@
 export const geminiModel = "gemini-3.5-flash-lite";
 
-// Calibrated against production Gemini 3.5 Flash-Lite CountTokens samples.
-// Prose averaged substantially more than Google's broad four-character rule.
-const asciiCharactersPerToken = 6.5;
+// Calibrated against production Gemini 3.5 Flash-Lite CountTokens samples
+// (Gemini Count mode, Oct 2026: about 5.15 page-text characters per token).
+// With the 15% safety multiplier the local estimate lands about 15% above
+// Google's count, so local capacity limits never undercount.
+const asciiCharactersPerToken = 5.15;
 const wordsPerToken = 0.75;
 const nonAsciiTokensPerCharacter = 1;
 const estimationSafetyMultiplier = 1.15;
@@ -14,7 +16,7 @@ const requestOverheadTokens = 16;
  * We take the larger calibrated character or word estimate, count non-ASCII
  * code points conservatively, add the response configuration because schemas
  * also consume input context, and reserve enough headroom to target roughly
- * twenty percent above observed Google counts. This is intentionally an
+ * fifteen percent above observed Google counts. This is intentionally an
  * estimate; the provider tokenizer remains the only source of an exact count.
  */
 export function estimateGeminiInputTokens(

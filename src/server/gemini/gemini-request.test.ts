@@ -40,3 +40,12 @@ test("counts non-ASCII code points conservatively", () => {
 
   assert.ok(nonAsciiEstimate > asciiEstimate);
 });
+
+test("page-text estimates land about 15% above Google's CountTokens result", () => {
+  // Production samples (Gemini Count mode): ~5.15 ASCII characters per Google token.
+  for (const googleTokens of [3808, 3830]) {
+    const pageText = "Senior engineer role. ".repeat(Math.round((googleTokens * 5.15) / 22));
+    const ratio = estimateGeminiInputTokens(pageText, {}) / googleTokens;
+    assert.ok(ratio >= 1.13 && ratio <= 1.2, `estimate is ${Math.round((ratio - 1) * 100)}% above Google`);
+  }
+});

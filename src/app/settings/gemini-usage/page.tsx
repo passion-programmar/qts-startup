@@ -311,11 +311,18 @@ export default async function GeminiUsagePage({
                 id: call.id,
                 cells: [
                   <span className="text-xs text-slate-500" key="number">{index + 1}</span>,
-                  new Intl.DateTimeFormat("en-US", {
-                    dateStyle: "medium",
-                    timeStyle: "medium",
-                    timeZone: "America/Los_Angeles",
-                  }).format(call.startedAt),
+                  <span key="time">
+                    {new Intl.DateTimeFormat("en-US", {
+                      dateStyle: "medium",
+                      timeZone: "America/Los_Angeles",
+                    }).format(call.startedAt)},{" "}
+                    <strong className="font-semibold text-slate-900">
+                      {new Intl.DateTimeFormat("en-US", {
+                        timeStyle: "medium",
+                        timeZone: "America/Los_Angeles",
+                      }).format(call.startedAt)}
+                    </strong>
+                  </span>,
                   <span className="font-mono text-xs" key="key">
                     Key {keyNumberByHash.get(call.keyHash) ?? "?"} · {call.keyHash.slice(0, 10)}
                   </span>,
