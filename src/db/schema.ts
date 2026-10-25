@@ -703,6 +703,8 @@ export const geminiApiCallLogs = pgTable(
       table.keyHash,
       table.startedAt,
     ),
+    // Supports the automatic removal of records older than the last three Pacific days.
+    index("gemini_api_call_logs_started_at_index").on(table.startedAt),
   ],
 );
 

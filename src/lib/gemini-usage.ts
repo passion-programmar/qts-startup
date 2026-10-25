@@ -18,6 +18,19 @@ export type GeminiApiOperation = "generate_content" | "count_tokens";
 
 const maxStoredGeminiResponseBytes = 1_000_000;
 
+// Google response records are kept for today and the two previous Pacific days;
+// anything from three or more days ago is removed as new requests are logged.
+async function removeOldGeminiApiCallLogs(): Promise<void> {
+  try {
+    await db.delete(geminiApiCallLogs).where(sql`${geminiApiCallLogs.startedAt} < (
+      date_trunc('day', now() at time zone 'America/Los_Angeles') - interval '2 days'
+    ) at time zone 'America/Los_Angeles'`);
+  } catch (error) {
+    // Cleanup must never block a Gemini request.
+    console.warn("Could not remove old Gemini API response records.", error instanceof Error ? error.name : error);
+  }
+}
+
 export async function requestGeminiApi(
   apiKey: string,
   operation: GeminiApiOperation,
@@ -25,6 +38,7 @@ export async function requestGeminiApi(
   init: RequestInit,
   tokenCounts: { local?: number | null; gemini?: number | null } = {},
 ): Promise<{ ok: boolean; status: number; body: string }> {
+  await removeOldGeminiApiCallLogs();
   const [log] = await db
     .insert(geminiApiCallLogs)
     .values({

@@ -18,6 +18,7 @@ import { PaginatedTable } from "@/app/components/paginated-table";
 import { GeminiApiLimitsForm } from "./limits-form";
 import { TokenComparisonForm } from "./token-comparison-form";
 import { TokenCountModeForm } from "./token-count-mode-form";
+import { PacificClock } from "./pacific-clock";
 import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
 
 export const instant = false;
@@ -147,7 +148,9 @@ export default async function GeminiUsagePage({
           </div>
         </header>
 
-        <nav aria-label="Gemini usage sections" className="mb-6 flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-stretch">
+        <PacificClock />
+        <nav aria-label="Gemini usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
           {GEMINI_USAGE_TABS.map((tab) => {
             const active = tab.id === activeTab;
             return (
@@ -169,6 +172,7 @@ export default async function GeminiUsagePage({
             );
           })}
         </nav>
+        </div>
 
         {activeTab === "limits" ? (
         <>
@@ -273,7 +277,7 @@ export default async function GeminiUsagePage({
               Google API responses today
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              Latest 100 requests in Pacific time. Response bodies are capped at 1 MB per request; prompts and API keys are not stored.
+              Latest 100 requests today, in Pacific time. Records are kept for today and the two previous days, then removed automatically. Response bodies are capped at 1 MB; prompts and API keys are not stored.
             </p>
           </div>
           <PaginatedTable

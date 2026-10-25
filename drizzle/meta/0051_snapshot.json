@@ -1,5 +1,5 @@
 {
-  "id": "5ea8e668-00c5-4cfb-9b6b-8a4001fd36e4",
+  "id": "cfda6531-4907-40e7-bd29-567616e9e44e",
   "prevId": "f8a5ddbd-511f-4eb3-9399-f64dd6db3819",
   "version": "7",
   "dialect": "postgresql",
@@ -921,6 +921,21 @@
               "asc": true,
               "nulls": "last"
             },
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gemini_api_call_logs_started_at_index": {
+          "name": "gemini_api_call_logs_started_at_index",
+          "columns": [
             {
               "expression": "started_at",
               "isExpression": false,
