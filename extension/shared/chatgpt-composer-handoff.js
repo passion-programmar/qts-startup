@@ -1,7 +1,7 @@
 // Shared ChatGPT unified-composer handoff (ProseMirror #prompt-textarea).
 // Loaded in content scripts and service worker (importScripts).
 (function initQtsChatGptComposerHandoff(global) {
-  const HANDOFF_VERSION = 10;
+  const HANDOFF_VERSION = 12;
   // How long each send attempt waits for ChatGPT to show the sent message.
   const SEND_CONFIRM_MS = 8000;
   const FALLBACK_CONFIRM_MS = 4000;
@@ -58,6 +58,16 @@
       }
     }
 
+    // The newer composer ("Ask ChatGPT") is a textarea; the old one keeps a hidden one named prompt-textarea.
+    if (!editors.size) {
+      const textareas = document.querySelectorAll(
+        'form textarea[name="prompt"], textarea[data-mobile-composer-prompt], textarea#prompt-textarea, form textarea[aria-label*="ChatGPT" i], form textarea[placeholder*="ChatGPT" i]',
+      );
+      for (const el of textareas) {
+        if (el instanceof HTMLTextAreaElement && !el.disabled && isVisible(el)) editors.add(el);
+      }
+    }
+
     if (!editors.size) return null;
 
     const candidates = [...editors];
@@ -72,7 +82,8 @@
   }
 
   function findAssistantMessages() {
-    const semanticMessages = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+    // [data-message-role] is the newer ChatGPT interface (ol[data-conversation-transcript] > li).
+    const semanticMessages = [...document.querySelectorAll('[data-message-author-role="assistant"], [data-message-role="assistant"]')];
     if (semanticMessages.length) return semanticMessages;
     return [...document.querySelectorAll('[data-markdown-text-style="assistant-message"]')];
   }
@@ -129,6 +140,10 @@
   }
 
   function clearComposer(editor) {
+    if (editor instanceof HTMLTextAreaElement) {
+      setTextareaValue(editor, '');
+      return !readEditorText(editor);
+    }
     activateComposer(editor);
     try {
       document.execCommand('selectAll', false, null);
@@ -178,7 +193,25 @@
   function isVoiceOrDictationButton(btn) {
     if (!(btn instanceof HTMLButtonElement)) return false;
     const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-    return /voice|dictation|microphone|start voice/i.test(label);
+    // The newer composer marks its dictation buttons with data attributes and empty labels.
+    const dictationData = (btn.getAttributeNames?.() || []).some((name) => /dictation/i.test(name));
+    return dictationData || /voice|dictation|microphone|start voice/i.test(label);
+  }
+
+  // The newer ChatGPT composer is a plain textarea; React notices a value only through the
+  // native setter plus an input event.
+  function setTextareaValue(textarea, text) {
+    textarea.focus();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+    if (setter) setter.call(textarea, text);
+    else textarea.value = text;
+    textarea.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      inputType: text ? 'insertText' : 'deleteContent',
+      data: text || null,
+    }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function insertViaFallbackTextarea(editor, text) {
@@ -246,6 +279,10 @@
   }
 
   function insertIntoProseMirror(editor, text) {
+    if (editor instanceof HTMLTextAreaElement) {
+      setTextareaValue(editor, text);
+      return readEditorText(editor) === cleanText(text);
+    }
     if (!(editor instanceof HTMLElement) || !editor.isContentEditable) return false;
     activateComposer(editor);
 
@@ -323,6 +360,7 @@
           label.includes('send')
           || el.getAttribute('data-testid') === 'send-button'
           || (el.getAttribute('type') === 'submit' && form?.matches('[data-chatgpt-composer], [data-type="unified-composer"]'))
+          || (el.getAttribute('type') === 'submit' && editor instanceof HTMLTextAreaElement && form === editor.closest('form'))
         ) {
           return el;
         }
@@ -404,6 +442,7 @@
   function findUserMessages() {
     const selectors = [
       '[data-message-author-role="user"]',
+      '[data-message-role="user"]',
       '[data-markdown-text-tone="user-message"]',
       'article[data-turn="user"]',
       '[data-testid*="conversation-turn-user" i]',
@@ -476,7 +515,7 @@
     return next && !next.querySelector('[contenteditable="true"], textarea') && cleanText(next.innerText) ? next : null;
   }
 
-  const TURN_SELECTOR = 'article, [data-turn], [data-testid^="conversation-turn"], [data-message-author-role]';
+  const TURN_SELECTOR = 'article, [data-turn], [data-testid^="conversation-turn"], [data-message-author-role], [data-message-role]';
 
   // The sent message found by its text, when ChatGPT's message markers have changed.
   function findSentTurnByText(marker) {

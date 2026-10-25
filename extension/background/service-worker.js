@@ -2793,10 +2793,14 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const generating = Boolean(composer?.isGenerating?.());
         const text = String(response?.innerText || response?.textContent || '').trim();
         // ChatGPT shows the copy button under an answer once it has finished writing it.
-        const turn = response?.closest?.('article, [data-testid^="conversation-turn"]');
-        const finished = Boolean(turn?.querySelector(
-          '[data-testid="copy-turn-action-button"], button[aria-label="Copy"], button[aria-label="Copy message"]',
-        ));
+        const turn = response?.closest?.('article, [data-testid^="conversation-turn"], [data-message-role]');
+        // The newer interface marks a finished answer with data-message-complete.
+        const finished = Boolean(
+          response?.closest?.('[data-message-complete]')
+          || turn?.querySelector(
+            '[data-testid="copy-turn-action-button"], button[aria-label="Copy"], button[aria-label="Copy message"], button[aria-label="Copy response"]',
+          ),
+        );
         const errorPattern = /something went wrong|an error occurred|error generating|you['’]ve (?:reached|hit) (?:your|the)|usage (?:cap|limit)|rate limit|too many requests|network error|unusual activity|try again later|cloudflare_challenge|couldn['’]t load your account|browser check couldn['’]t finish/i;
         const errorNode = [...document.querySelectorAll(
           '[role="alert"], [data-testid*="error" i], .text-token-text-error, [class*="text-red"]',
@@ -2921,6 +2925,46 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     return created;
   }
 
+  // A step card in the corner of the ChatGPT tab, so the Manager can follow Generation there. It also
+  // leaves window.__qtsSetGenerationStep behind for steps that run inside the page (typing, sending).
+  function generationStepCardInPage(step, message, kind) {
+    const colors = { info: '#2563eb', success: '#059669', warn: '#d97706', error: '#dc2626' };
+    const show = (nextStep, nextMessage, nextKind = 'info') => {
+      let host = document.getElementById('qts-generation-steps');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'qts-generation-steps';
+        host.style.cssText = 'all:initial;position:fixed;top:12px;right:12px;z-index:2147483647;pointer-events:none;';
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = '<style>.card{width:300px;padding:10px 12px;border-radius:12px;background:#0f172aee;color:#f8fafc;'
+          + 'font:13px/1.4 system-ui,sans-serif;box-shadow:0 10px 30px #0006;border-left:5px solid var(--c)}'
+          + '.title{font-weight:700;font-size:12px;letter-spacing:.02em;color:#cbd5e1}.step{font-weight:700;margin-top:2px}'
+          + '.message{margin-top:2px;color:#e2e8f0;overflow-wrap:anywhere}</style>'
+          + '<div class="card"><div class="title">QTS Generation</div><div class="step"></div><div class="message"></div></div>';
+        (document.body || document.documentElement).append(host);
+      }
+      const root = host.shadowRoot;
+      root.querySelector('.card').style.setProperty('--c', colors[nextKind] || colors.info);
+      root.querySelector('.step').textContent = nextStep;
+      root.querySelector('.message').textContent = nextMessage;
+    };
+    window.__qtsSetGenerationStep = show;
+    show(step, message, kind);
+  }
+
+  async function showGenerationChatGptStep(chatTabId, step, message, kind = 'info') {
+    if (!Number.isInteger(chatTabId)) return;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: chatTabId },
+        func: generationStepCardInPage,
+        args: [step, message, kind],
+      });
+    } catch {
+      // The page is loading or reloading; the next step shows the card again.
+    }
+  }
+
   // ChatGPT sometimes stops at a browser check ("cloudflare_challenge", "We couldn't load your
   // account"); reloading the page clears it. Up to two reloads, then the Manager has to look.
   const CHATGPT_BROWSER_CHECK_PATTERN = /cloudflare_challenge|couldn[’']t load your account|browser check couldn[’']t finish|verify you are human|checking your browser/i;
@@ -2928,6 +2972,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   async function clearChatGptBrowserCheck(chatTabId) {
     for (let reloads = 0; ; reloads += 1) {
       await waitForScannerChatGptTab(chatTabId, 60000);
+      await showGenerationChatGptStep(chatTabId, '1/6 · Opening ChatGPT', 'Waiting for the page to be ready...');
       await sleep(2000);
       const [check] = await chrome.scripting.executeScript({
         target: { tabId: chatTabId },
@@ -2938,6 +2983,13 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       if (reloads >= 2) {
         throw new Error("ChatGPT's browser check did not finish after reloading. Open ChatGPT, complete the check, then retry Generation.");
       }
+      await showGenerationChatGptStep(
+        chatTabId,
+        '1/6 · ChatGPT browser check',
+        `Reloading ChatGPT to clear its browser check (${reloads + 1} of 2)...`,
+        'warn',
+      );
+      await sleep(1000);
       await chrome.tabs.reload(chatTabId);
     }
   }
@@ -2978,7 +3030,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
                 messageCount: messages.length,
                 lastText: String(messages[messages.length - 1]?.innerText || '').trim(),
               };
-              const result = await composer.runUnifiedComposerHandoffAsync(message);
+              window.__qtsSetGenerationStep?.('2/6 · Typing the prompt', 'Putting the prompt into the ChatGPT message box...');
+              const result = await composer.runUnifiedComposerHandoffAsync(message, {
+                onSending: () => window.__qtsSetGenerationStep?.('3/6 · Sending the prompt', 'Clicking Send (Enter if needed)...'),
+              });
               return { ...result, baseline };
             }
             return {
@@ -3063,6 +3118,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     let lastStatusCheck = startedAt;
     let lastText = '';
     let quietSince = 0;
+    let lastShownSecond = -1;
     while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS) {
       await sleep(750);
       active.local();
@@ -3071,6 +3127,15 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         lastStatusCheck = Date.now();
       }
       const snapshot = await scannerChatGptSnapshot(chatTabId, generationId);
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      if (seconds !== lastShownSecond && seconds % 3 === 0) {
+        lastShownSecond = seconds;
+        await showGenerationChatGptStep(
+          chatTabId,
+          '4/6 · ChatGPT is writing',
+          `${snapshot?.generating || snapshot?.text ? 'Writing the résumé and cover letter' : 'Waiting for ChatGPT to start'}... ${seconds}s of ${GENERATION_ANSWER_MAX_WAIT_MS / 1000}s`,
+        );
+      }
       if (snapshot?.chatError && !snapshot.generating) throw chatGptPageError(snapshot.chatError);
       if (!snapshot?.isNew || !snapshot.text || snapshot.generating) {
         lastText = '';
@@ -3098,6 +3163,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         return await waitForGenerationAnswer(chatTabId, generationId, active);
       } catch (error) {
         if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;
+        await showGenerationChatGptStep(chatTabId, '4/6 · ChatGPT showed an error', `${error.message} Refreshing the tab and sending again...`, 'warn');
+        await sleep(1500);
         await chrome.tabs.reload(chatTabId);
         await sleep(1500);
       }
@@ -3183,6 +3250,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         active.local();
         await active.server();
         await updateGenerationBrowserState({ phase: 'validating_response' });
+        await showGenerationChatGptStep(chatTab.id, '5/6 · Checking the answer', 'Reading the JSON and saving it to QTS...');
         const responseJson = self.__qtsGenerationChatGpt?.extractJsonObject?.(responseText) || null;
         const saved = responseJson
           ? await workerApiRequest('POST', '/api/extension/generation/complete', {
@@ -3199,6 +3267,12 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             : saved.message || 'QTS could not save the Generation result.');
         }
         await showGenerationPageStatus(jobTabId, 'Asking ChatGPT to correct its answer...');
+        await showGenerationChatGptStep(
+          chatTab.id,
+          '5/6 · Asking ChatGPT to correct its answer',
+          saved.message || 'The answer was not valid JSON.',
+          'warn',
+        );
         const followUp = self.__qtsGenerationChatGpt.buildTaskPrompt(
           `Your previous reply could not be used: ${saved.message || 'it was not valid JSON.'} `
           + 'Reply again with only the complete, valid JSON object in the required structure, with no other text before or after it.',
@@ -3207,11 +3281,22 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         responseText = await askGenerationChatGpt(chatTab.id, followUp, generationId, active);
       }
       await updateGenerationBrowserState({ phase: 'response_saved' });
+      await showGenerationChatGptStep(chatTab.id, '6/6 · Answer saved', 'Making the résumé and cover-letter PDFs and downloading them...', 'success');
       const message = 'Generation completed and saved with the JD.';
       await showGenerationPageStatus(jobTabId, message, 'success');
       return { ok: true, status: 'generation', message, generationId, parsed: true, chatTabId };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Generation failed.';
+      if (Number.isInteger(chatTabId)) {
+        // Leave the reason on screen for a moment before the tab closes.
+        await showGenerationChatGptStep(
+          chatTabId,
+          isGenerationCancelled(error) ? 'Cancelled' : 'Stopped',
+          message,
+          isGenerationCancelled(error) ? 'info' : 'error',
+        );
+        await sleep(4000);
+      }
       if (generationId && jobDescription && !isGenerationCancelled(error)) {
         try {
           const failed = await workerApiRequest('POST', '/api/extension/generation/complete', {
