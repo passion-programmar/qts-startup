@@ -18,16 +18,22 @@ export type GeminiApiOperation = "generate_content" | "count_tokens";
 
 const maxStoredGeminiResponseBytes = 1_000_000;
 
-// Google response records are kept for today and the two previous Pacific days;
-// anything from three or more days ago is removed as new requests are logged.
-async function removeOldGeminiApiCallLogs(): Promise<void> {
+// Google response records are kept for today and the two previous Pacific days.
+// Records from three or more days ago are removed only when a Super Admin opens
+// Gemini Usage, and only if any exist.
+export async function removeOldGeminiApiCallLogs(): Promise<number> {
+  const olderThanKeptDays = sql`${geminiApiCallLogs.startedAt} < (
+    date_trunc('day', now() at time zone 'America/Los_Angeles') - interval '2 days'
+  ) at time zone 'America/Los_Angeles'`;
   try {
-    await db.delete(geminiApiCallLogs).where(sql`${geminiApiCallLogs.startedAt} < (
-      date_trunc('day', now() at time zone 'America/Los_Angeles') - interval '2 days'
-    ) at time zone 'America/Los_Angeles'`);
+    const [old] = await db.select({ id: geminiApiCallLogs.id }).from(geminiApiCallLogs).where(olderThanKeptDays).limit(1);
+    if (!old) return 0;
+    const removed = await db.delete(geminiApiCallLogs).where(olderThanKeptDays).returning({ id: geminiApiCallLogs.id });
+    return removed.length;
   } catch (error) {
-    // Cleanup must never block a Gemini request.
+    // Cleanup must never block the Gemini Usage page.
     console.warn("Could not remove old Gemini API response records.", error instanceof Error ? error.name : error);
+    return 0;
   }
 }
 
@@ -38,7 +44,6 @@ export async function requestGeminiApi(
   init: RequestInit,
   tokenCounts: { local?: number | null; gemini?: number | null } = {},
 ): Promise<{ ok: boolean; status: number; body: string }> {
-  await removeOldGeminiApiCallLogs();
   const [log] = await db
     .insert(geminiApiCallLogs)
     .values({

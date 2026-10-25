@@ -11,6 +11,7 @@ import {
   getGeminiApiKeyHash,
   getGeminiApiKeys,
   getGeminiApiLimits,
+  removeOldGeminiApiCallLogs,
 } from "@/lib/gemini-usage";
 import { requireUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
@@ -37,6 +38,8 @@ export default async function GeminiUsagePage({
 }) {
   const currentUser = await requireUser();
   if (currentUser.role !== "super_admin") redirect("/");
+  // Old Google response records (3+ Pacific days ago) are cleaned up only when a Super Admin visits.
+  await removeOldGeminiApiCallLogs();
   // Sub tabs are links (?tab=responses), so each tab is server-rendered and can be bookmarked.
   const activeTab: GeminiUsageTab = (await searchParams).tab === "responses" ? "responses" : "limits";
   const tokenCountMode = activeTab === "responses" ? await getGeminiTokenCountMode() : "local";
@@ -277,7 +280,7 @@ export default async function GeminiUsagePage({
               Google API responses today
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              Latest 100 requests today, in Pacific time. Records are kept for today and the two previous days, then removed automatically. Response bodies are capped at 1 MB; prompts and API keys are not stored.
+              Latest 100 requests today, in Pacific time. Records from three or more days ago are removed when a Super Admin opens this page. Response bodies are capped at 1 MB; prompts and API keys are not stored.
             </p>
           </div>
           <PaginatedTable
