@@ -5,6 +5,8 @@ export type ExtensionSavedJob = {
   jobTitle: string;
   company: string;
   description: string;
+  /** Plain page innerText; saved only when the job has no description. */
+  pageText: string | null;
   location: string | null;
   country: string | null;
   employmentType: string | null;
@@ -16,7 +18,10 @@ export type ExtensionSavedJob = {
 export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null {
   if (!isRecord(value) || !isRecord(value.job)) return null;
   const job = value.job;
+  const pageText = typeof value.pageText === "string" ? value.pageText.trim() : "";
   if (
+    (value.pageText !== undefined && typeof value.pageText !== "string") ||
+    pageText.length > 100_000 ||
     typeof job.jobUrl !== "string" ||
     typeof job.title !== "string" ||
     typeof job.company !== "string" ||
@@ -32,7 +37,8 @@ export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null 
     job.title.length > 500 ||
     job.company.trim().length === 0 ||
     job.company.length > 500 ||
-    job.description.trim().length === 0 ||
+    // A job needs a description, or page text to fall back on.
+    (job.description.trim().length === 0 && !pageText) ||
     job.description.length > 100_000 ||
     job.location.length > 500 ||
     !isHttpUrl(job.jobUrl)
@@ -44,6 +50,7 @@ export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null 
     jobTitle: job.title.trim(),
     company: job.company.trim(),
     description: job.description.trim(),
+    pageText: pageText || null,
     location: job.location.trim() || null,
     country: optionalText(job.country),
     employmentType: optionalText(job.employmentType),

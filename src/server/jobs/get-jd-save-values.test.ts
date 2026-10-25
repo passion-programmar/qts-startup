@@ -23,6 +23,7 @@ test("extension job saves preserve the extracted description", () => {
     jobTitle: "Senior Engineer",
     company: "Example",
     description: "Build reliable services.",
+    pageText: null,
     location: "Remote",
     country: "Romania",
     employmentType: "Full-time",
@@ -75,4 +76,16 @@ test("extension job saves reject a missing or oversized description", () => {
     readExtensionSavedJob({ job: { ...base, description: "x".repeat(100_001) } }),
     null,
   );
+});
+
+test("page text is kept, and lets a save without a description through", () => {
+  const job = (description: string, pageText?: unknown) => readExtensionSavedJob({
+    job: { jobUrl: "https://example.com/jobs/1", title: "Engineer", company: "Example", description, location: "" },
+    ...(pageText === undefined ? {} : { pageText }),
+  });
+  assert.equal(job("", "  Full page text  ")?.pageText, "Full page text");
+  assert.equal(job("", "  ")?.description ?? null, null);
+  assert.equal(job("", undefined), null);
+  assert.equal(job("Has a description")?.pageText, null);
+  assert.equal(job("Has a description", 42), null);
 });

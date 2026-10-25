@@ -1,12 +1,14 @@
 "use server";
 
-import { and, eq, ne, or, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { jobs, profiles, users } from "@/db/schema";
+import { bids, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
+import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import type { RecordActionState } from "@/app/record-action-state";
+import { effectiveJobDescription } from "@/server/jobs/job-description";
 
 export async function updateJobAction(
   _state: RecordActionState,
@@ -40,7 +42,7 @@ export async function updateJobAction(
     .where(and(eq(profiles.userId, candidateId), eq(users.parentUserId, manager.id), eq(users.role, "account"))).limit(1);
   if (!candidate) return { error: "Select one of your candidate accounts.", success: null };
 
-  const [existingJob] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
+  const [existingJob] = await db.select({ generationStatus: jobs.generationStatus, relationId: jobs.relationId }).from(jobs)
     .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
   if (!existingJob) return { error: "Job was not found.", success: null };
   if (existingJob.generationStatus === "processing") {
@@ -48,11 +50,19 @@ export async function updateJobAction(
   }
 
   const normalizedUrl = normalizeJobUrl(jobUrl);
+  const jobKey = computeJobKey({ url: normalizedUrl, title: jobTitle, company });
+  const titleCompanyKey = computeTitleCompanyKey(jobTitle, company) || null;
+  // The same job by URL or title + company: shared keys, or the legacy match for rows not backfilled yet.
   const duplicate = await db.select({ id: jobs.id }).from(jobs).where(and(
     eq(jobs.managerId, manager.id),
     eq(jobs.candidateId, candidateId),
     ne(jobs.id, id),
+    ...(existingJob.relationId
+      ? [or(isNull(jobs.relationId), ne(jobs.relationId, existingJob.relationId))]
+      : []),
     or(
+      ...(jobKey ? [eq(jobs.jobKey, jobKey)] : []),
+      ...(titleCompanyKey ? [eq(jobs.titleCompanyKey, titleCompanyKey)] : []),
       sql`regexp_replace(split_part(btrim(${jobs.jobUrl}), '#', 1), '/+$', '') = ${normalizedUrl}`,
       and(
         sql`lower(btrim(${jobs.jobTitle})) = ${jobTitle.trim().toLowerCase()}`,
@@ -64,24 +74,37 @@ export async function updateJobAction(
     return { error: "This candidate already has a job row with the same URL or title and company.", success: null };
   }
 
+  // Job details are shared by every row of the job (all Managers); account fields stay on this row.
+  const sharedDetails = {
+    jobUrl: normalizedUrl, jobTitle, company, jobKey, titleCompanyKey,
+    description: description || null,
+    ...(description ? { pageText: null } : {}),
+    location: location || null,
+    country: country || null,
+    employmentType: employmentType || null,
+    workplaceType: workplaceType || null,
+    salary: salary || null,
+  };
   let updated: { id: string }[];
   try {
-    updated = await db.update(jobs).set({
-      candidateId, jobUrl: normalizedUrl, jobTitle, company,
-      description: description || null,
-      location: location || null,
-      country: country || null,
-      employmentType: employmentType || null,
-      workplaceType: workplaceType || null,
-      salary: salary || null,
-      autoSavedByGetJd: false,
-      date, status: status as "todo" | "pending" | "applied" | "failed",
-      failureReason: failureReason || null, updatedAt: new Date(),
-    }).where(and(
-      eq(jobs.id, id),
-      eq(jobs.managerId, manager.id),
-      ne(jobs.generationStatus, "processing"),
-    )).returning({ id: jobs.id });
+    const [ownRow] = await db.batch([
+      db.update(jobs).set({
+        ...sharedDetails,
+        candidateId,
+        autoSavedByGetJd: false,
+        date, status: status as "todo" | "pending" | "applied" | "failed",
+        failureReason: failureReason || null, updatedAt: new Date(),
+      }).where(and(
+        eq(jobs.id, id),
+        eq(jobs.managerId, manager.id),
+        ne(jobs.generationStatus, "processing"),
+      )).returning({ id: jobs.id }),
+      db.update(jobs).set({ ...sharedDetails, updatedAt: new Date() }).where(and(
+        existingJob.relationId ? eq(jobs.relationId, existingJob.relationId) : sql`false`,
+        ne(jobs.id, id),
+      )),
+    ]);
+    updated = ownRow;
   } catch (error) {
     if (isUniqueViolation(error)) {
       return { error: "This candidate already has a job row with the same URL or title and company.", success: null };
@@ -111,7 +134,7 @@ export async function setJobGenerationQueueAction(
     .select({
       generationStatus: jobs.generationStatus,
       generationAttemptCount: jobs.generationAttemptCount,
-      description: jobs.description,
+      description: effectiveJobDescription(),
       resumeLocalPath: jobs.resumeLocalPath,
       jdMatching: profiles.jdMatching,
     })
@@ -213,18 +236,33 @@ export async function deleteJobAction(
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
   const id = text(formData, "id", 36);
   if (!uuid(id)) return { error: "Invalid job.", success: null };
+  // A row whose account applied (a bid exists) keeps its job; delete the bid on the Bids page first.
+  const appliedBid = sql`exists (
+    select 1 from ${bids}
+     where ${bids.sourceJobId} = ${jobs.id}
+        or (${bids.managerId} = ${jobs.managerId}
+            and ${bids.candidateId} = ${jobs.candidateId}
+            and (${bids.jobKey} = ${jobs.jobKey} or ${bids.titleCompanyKey} = ${jobs.titleCompanyKey}))
+  )`;
   try {
     const deleted = await db.delete(jobs).where(and(
       eq(jobs.id, id),
       eq(jobs.managerId, manager.id),
       ne(jobs.generationStatus, "processing"),
+      sql`not ${appliedBid}`,
     )).returning({ id: jobs.id });
     if (!deleted.length) {
-      const [job] = await db.select({ generationStatus: jobs.generationStatus }).from(jobs)
+      const [job] = await db.select({
+        generationStatus: jobs.generationStatus,
+        hasBid: sql<boolean>`${appliedBid}`,
+      }).from(jobs)
         .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
       if (!job) return { error: "Job was not found. Refresh the page and try again.", success: null };
       if (job.generationStatus === "processing") {
         return { error: "Cancel Generation before deleting a job that is currently processing.", success: null };
+      }
+      if (job.hasBid) {
+        return { error: "This candidate applied to this job. Delete the bid on the Bids page first.", success: null };
       }
       return { error: "The job could not be deleted. Refresh the page and try again.", success: null };
     }

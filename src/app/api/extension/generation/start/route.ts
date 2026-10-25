@@ -10,6 +10,7 @@ import {
   MissingDocumentPromptError,
 } from "@/server/generation/manager-prompt";
 import { normalizeJobUrl } from "@/server/jobs/job-values";
+import { effectiveJobDescription } from "@/server/jobs/job-description";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -51,7 +52,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           employmentType: jobs.employmentType,
           workplaceType: jobs.workplaceType,
           salary: jobs.salary,
-          description: jobs.description,
+          description: effectiveJobDescription(),
           resumeLocalPath: jobs.resumeLocalPath,
           candidateId: profiles.userId,
           firstName: profiles.firstName,

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
+import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
 
 const leaseDurationMs = 20 * 60 * 1000;
 
@@ -105,7 +106,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             employmentType: jobs.employmentType,
             workplaceType: jobs.workplaceType,
             salary: jobs.salary,
-            description: jobs.description,
+            description: effectiveJobDescription(),
           })
           .from(jobs)
           .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -115,7 +116,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             inArray(jobs.generationStatus, ["queued", "not_queued", "failed"]),
             lt(jobs.generationAttemptCount, 2),
             isNull(jobs.resumeLocalPath),
-            sql`length(btrim(${jobs.description})) > 0`,
+            hasEffectiveJobDescription(),
             sql`length(btrim(${profiles.jdMatching})) > 0`,
             eq(users.parentUserId, manager.id),
             eq(users.role, "account"),

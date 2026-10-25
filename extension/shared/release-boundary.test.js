@@ -530,8 +530,9 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   const detailUpdater = duplicateHelper.slice(
     duplicateHelper.indexOf('export async function updateExistingGetJdJobDetails'),
   );
-  assert.ok(detailUpdater.includes('eq(jobs.managerId, job.managerId)'));
-  assert.ok(detailUpdater.includes('duplicateConditions(jobs, job)'));
+  // Job details are shared across Managers: empty fields fill on every row of the same job.
+  assert.equal(detailUpdater.includes('eq(jobs.managerId, job.managerId)'), false);
+  assert.ok(detailUpdater.includes('sameJobCondition(jobs, keys)'));
   assert.equal(detailUpdater.includes('eq(jobs.candidateId, job.candidateId)'), false);
   assert.ok(evaluationRoute.includes('autoSavedProfileIds: [...autoSavedProfileIds]'));
   assert.ok(serviceWorker.includes('autoSavedProfileIds.length === 0'));
@@ -539,9 +540,11 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(serviceWorker.includes("'DELETE'"));
   assert.ok(serviceWorker.includes('/api/extension/get-jd/auto-saved-jobs/${encodeURIComponent(job.jobId)}'));
   assert.ok(serviceWorker.includes('uncheckedAutoSavedJobs = autoSavedJobs.filter'));
-  assert.ok(autoSavedJobRoute.includes('eq(jobs.autoSavedByGetJd, true)'));
-  assert.ok(autoSavedJobRoute.includes('eq(jobs.managerId, manager.id)'));
-  assert.ok(autoSavedJobRoute.includes('eq(jobs.generationStatus, "not_queued")'));
+  assert.ok(autoSavedJobRoute.includes('removeGetJdJobAccount(manager.id, jobId, { autoSavedOnly: true })'));
+  const remover = duplicateHelper.slice(duplicateHelper.indexOf('export async function removeGetJdJobAccount'));
+  assert.ok(remover.includes('eq(jobs.autoSavedByGetJd, true)'));
+  assert.ok(remover.includes('eq(jobs.managerId, managerId)'));
+  assert.ok(remover.includes("sql`${jobs.generationStatus} <> 'processing'`"));
   assert.ok(apiWorker.includes("get-jd\\/auto-saved-jobs\\/"));
   assert.ok(review.includes('profile.available === false && profile.autoSaved !== true'));
   assert.ok(review.includes("profile.autoSaved === true ? 'Saved automatically' : ''"));
@@ -552,7 +555,7 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(duplicateHelper.includes('.from(jobs)'));
   assert.ok(duplicateHelper.includes('.from(bids)'));
   assert.ok(duplicateHelper.includes('jobStatus: row.status'));
-  assert.ok(duplicateHelper.includes('current.jobStatus === "todo"'));
+  assert.ok(duplicateHelper.includes('kind: row.status === "applied" ? "applied" : "job_list"'));
   assert.ok(serviceWorker.includes('savedCount !== profileIds.length'));
   assert.ok(serviceWorker.includes('duplicateCount > 0'));
 });
@@ -875,4 +878,25 @@ test('Get JD matching mode is assigned per Manager, not globally', () => {
   assert.ok(migration.includes("\"key\" = 'get_jd_matching_mode' AND \"value\" = 'gemini'"));
   assert.ok(settingsPage.includes('<ManagerGeminiMatchingForm'));
   assert.equal(settingsPage.includes('get_jd_matching_mode'), false);
+});
+
+test('Get JD saves use shared job keys, explicit removals, and skip Gemini when nothing is left', () => {
+  const root = path.join(extensionRoot, '..');
+  const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
+  const jobsHelper = read('src', 'server', 'jobs', 'get-jd-jobs.ts');
+  const saveRoute = read('src', 'app', 'api', 'extension', 'get-jd', 'save', 'route.ts');
+  const geminiRoute = read('src', 'app', 'api', 'extension', 'get-jd', 'route.ts');
+  const jobActions = read('src', 'app', 'jobs', 'actions.ts');
+  const claimRoute = read('src', 'app', 'api', 'extension', 'generation', 'claim', 'route.ts');
+
+  assert.ok(jobsHelper.includes('pg_advisory_xact_lock(hashtextextended($1, 0))'));
+  assert.ok(jobsHelper.includes('coalesce((SELECT relation_id FROM base), gen_random_uuid())'));
+  assert.ok(jobsHelper.includes('CASE WHEN m.description IS NULL THEN m.page_text END'));
+  assert.ok(saveRoute.includes('readProfileIds(body, "removeProfileIds")'));
+  assert.ok(saveRoute.includes('removeGetJdJobAccount(manager.id, rowId)'));
+  assert.ok(geminiRoute.includes('skippedEvaluation: true'));
+  assert.ok(geminiRoute.indexOf('availableProfiles.length === 0') < geminiRoute.indexOf('requestGeminiJson(apiKey, promptText)'));
+  assert.ok(jobActions.includes('eq(jobs.relationId, existingJob.relationId)'));
+  assert.ok(jobActions.includes('Delete the bid on the Bids page first.'));
+  assert.ok(claimRoute.includes('hasEffectiveJobDescription()'));
 });

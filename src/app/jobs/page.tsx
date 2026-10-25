@@ -10,6 +10,7 @@ import {
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { effectiveJobDescription } from "@/server/jobs/job-description";
 
 export const instant = false;
 
@@ -22,7 +23,7 @@ export default async function JobsPage() {
       id: jobs.id,
       title: jobs.jobTitle,
       company: jobs.company,
-      description: jobs.description,
+      description: effectiveJobDescription(),
       location: jobs.location,
       country: jobs.country,
       employmentType: jobs.employmentType,

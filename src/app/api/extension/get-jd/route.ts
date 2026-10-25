@@ -34,6 +34,7 @@ import { getGeminiTokenCountMode, type GeminiTokenCountMode } from "@/server/gem
 import {
   findGetJdDuplicateDetails,
   findManagerJobPresence,
+  getJdAccountState,
   insertGetJdJob,
   updateExistingGetJdJobDetails,
 } from "@/server/jobs/get-jd-jobs";
@@ -123,7 +124,49 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
     const candidateProfiles = profileResult.profiles;
-    const candidatesForEvaluation = candidatesWithJdNotes(candidateProfiles);
+    // Accounts that already have this job (by URL) are not sent to Gemini; only
+    // available accounts are evaluated, and Gemini is skipped when none remain.
+    const urlDuplicates = await findGetJdDuplicateDetails(
+      manager.id,
+      { jobUrl: pageUrl, jobTitle: "", company: "" },
+      candidateProfiles.map((profile) => profile.id),
+    );
+    const availableProfiles = candidateProfiles.filter((profile) => !urlDuplicates.has(profile.id));
+    if (availableProfiles.length === 0) {
+      const presence = await findManagerJobPresence(manager.id, { jobUrl: pageUrl, jobTitle: "", company: "" });
+      return jsonResponse({
+        success: true,
+        skippedEvaluation: true,
+        classification: { isJobPage: true, isRemote: true, matchingProfileIds: [] },
+        profiles: candidateProfiles.map((candidate) => {
+          const duplicate = urlDuplicates.get(candidate.id) ?? null;
+          return {
+            id: candidate.id,
+            name: candidate.name,
+            category: candidate.category,
+            recommended: false,
+            autoSaved: false,
+            autoSaveJobId: null,
+            autoSaveFailed: false,
+            available: false,
+            state: getJdAccountState(duplicate),
+            rowId: duplicate?.rowId ?? null,
+            duplicateKind: duplicate?.kind ?? null,
+            jobStatus: duplicate?.jobStatus ?? null,
+          };
+        }),
+        autoSavedProfileIds: [],
+        autoSavedJobs: [],
+        autoSaveFailureCount: 0,
+        allCandidatesAssigned: true,
+        exists: true,
+        ...presence,
+        toastKind: presence.inBids ? "applied" : "added",
+        toastMessage: "All candidates already have this job.",
+        message: "All candidates already have this job.",
+      });
+    }
+    const candidatesForEvaluation = candidatesWithJdNotes(availableProfiles);
 
     const [prompt] = await db
       .select({ promptTemplate: prompts.promptTemplate })
@@ -241,6 +284,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         workplaceType: classification.job.workplaceType,
         salary: classification.job.salary,
         jobReason: classification.job.reason,
+        pageText,
         managerId: manager.id,
         candidateId: candidate.id,
         autoSavedByGetJd: true,
@@ -259,15 +303,12 @@ export async function POST(request: Request): Promise<NextResponse> {
         if (result.status === "saved") {
           autoSavedProfileIds.add(candidate.id);
           autoSavedJobs.set(candidate.id, result.jobId);
-        } else if (result.status === "applied") {
-          duplicateDetails.set(candidate.id, {
-            kind: "applied",
-            jobStatus: null,
-          });
         } else {
           duplicateDetails.set(candidate.id, {
-            kind: "job_list",
-            jobStatus: "todo",
+            kind: result.status,
+            jobStatus: null,
+            rowId: null,
+            generationStatus: null,
           });
         }
       } catch (error) {
@@ -275,7 +316,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         logGetJdFailure(`get_jd_auto_save_${getGetJdFailureCode(error)}`);
       }
     }
-    if (autoSavedProfileIds.size > 0) {
+    if (autoSavedProfileIds.size > 0 || duplicateDetails.size > 0) {
       [duplicateDetails, presence] = await Promise.all([
         findGetJdDuplicateDetails(manager.id, jobIdentity, candidateProfiles.map((profile) => profile.id)),
         findManagerJobPresence(manager.id, jobIdentity),
@@ -292,7 +333,10 @@ export async function POST(request: Request): Promise<NextResponse> {
         autoSaved,
         autoSaveJobId: autoSavedJobs.get(candidate.id) ?? null,
         autoSaveFailed: autoSaveFailedProfileIds.has(candidate.id),
-        available: !autoSaved && (duplicate === null || (duplicate.kind === "job_list" && duplicate.jobStatus === "todo")),
+        // An account that has the job (saved earlier or just auto-saved) is not "available" to add again.
+        available: !autoSaved && duplicate === null,
+        state: autoSaved ? "has_job" : getJdAccountState(duplicate),
+        rowId: autoSavedJobs.get(candidate.id) ?? duplicate?.rowId ?? null,
         duplicateKind: duplicate?.kind ?? null,
         jobStatus: duplicate?.jobStatus ?? null,
       };

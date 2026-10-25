@@ -149,7 +149,7 @@ Closed or expired postings ("no longer accepting applications", "this job has ex
 1. Page passes detection. The extension extracts title, company, description and the other fields locally, and reads `innerText` again right before sending.
 2. `POST /api/extension/get-jd/check` with `{ job, pageText }`. The server computes `job_key` and returns `{ relationId | null, accounts: [{ id, state }], summary }` for this Manager.
 3. The panel lists accounts by state: applied ones checked and disabled, saved ones checked, the rest unchecked. The Manager checks new accounts or unchecks saved ones, and clicks Save.
-4. `POST /api/extension/get-jd/save` with `{ job, pageText, accountIds }`, where `accountIds` is the full checked set. The server adds newly checked accounts (the first one creates the `relation_id`) and removes unchecked saved ones, one by one, applying the description rules, and returns a per-account result.
+4. `POST /api/extension/get-jd/save` with `{ job, pageText, profileIds, removeProfileIds }`: `profileIds` are newly checked accounts and `removeProfileIds` are saved accounts the Manager unchecked. Removals are explicit, never inferred from what is missing, so an older extension can never delete rows by accident. The server removes, then adds, one by one (the first addition creates the `relation_id`), applying the description rules, and returns a per-account result (`saved`, `already_exists`, `removed`, `locked`, `failed`).
 
 ### Gemini mode (Manager assigned)
 1. Page passes detection. The extension sends `{ pageUrl, pageTitle, pageText }` to `POST /api/extension/get-jd`.
@@ -186,7 +186,7 @@ Nothing is renamed or dropped except those two indexes and one setting. Bids and
 1. ✅ Extension: red flash, whole-word keywords, scored and settled detection, suggested keywords.
 2. ✅ Per-Manager Gemini assignment (settings, `mode` route, migration flag).
 3. ✅ code: `job-key.ts` and `job-relations.ts` with tests, migration 0049 (nullable columns and indexes), `npm run db:backfill:job-relations`. Still to do: run them on a Neon branch and review the report.
-4. Server: Get JD routes on `relation_id`, `job_key` and account states; Jobs page edits and delete rules; Bids `job_key`; then the constrain migration.
+4. ✅ code: Get JD routes on `relation_id`, `job_key` and account states (rows not backfilled yet still match by the legacy URL or title + company); explicit removals; Gemini skipped when no account is available; Jobs page edits update the whole job and deletes are blocked by bids; Generation and the Jobs page use the effective description. Still to do: the constrain migration, after the backfill report is clean.
 5. Extension: `pageText` in general mode, account checkboxes and summary, Gemini only on available accounts.
 6. Extractor coverage additions.
 

@@ -5,6 +5,8 @@ import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import {
   findGetJdDuplicateDetails,
+  getJdAccountState,
+  summarizeAccountStates,
   findManagerJobPresence,
 } from "@/server/jobs/get-jd-jobs";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
@@ -84,8 +86,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     ]);
     const candidateProfiles = candidateRows.map((candidate) => {
       const duplicate = duplicateDetails.get(candidate.id) ?? null;
-      const available = duplicate === null
-        || (duplicate.kind === "job_list" && duplicate.jobStatus === "todo");
+      // An account that already has this job is shown as saved, never offered again.
+      const available = duplicate === null;
       return {
         id: candidate.id,
         name: [candidate.firstName, candidate.lastName]
@@ -93,11 +95,14 @@ export async function POST(request: Request): Promise<NextResponse> {
           .join(" ") || "Candidate",
         category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
         available,
+        state: getJdAccountState(duplicate),
+        rowId: duplicate?.rowId ?? null,
         duplicateKind: duplicate?.kind ?? null,
         jobStatus: duplicate?.jobStatus ?? null,
       };
     });
     const allCandidatesAssigned = candidateProfiles.every((candidate) => !candidate.available);
+    const summary = summarizeAccountStates(candidateProfiles.map((candidate) => candidate.state));
     const toastKind = presence.inBids
       ? "applied"
       : presence.inJobs
@@ -110,17 +115,14 @@ export async function POST(request: Request): Promise<NextResponse> {
       allCandidatesAssigned,
       ...presence,
       toastKind,
-      toastMessage: toastKind === "applied"
-        ? "Already applied — this job is in your Bids."
-        : toastKind === "added"
-          ? "Already added — this job is in your Jobs list."
-          : "New job — not in your Jobs or Bids yet.",
+      toastMessage: toastKind === "new" ? "New job — not in your Jobs or Bids yet." : summary.text,
+      summary,
       profiles: candidateProfiles,
       message: allCandidatesAssigned
-        ? "This job already exists for every active candidate."
+        ? "All candidates already have this job."
         : duplicateDetails.size > 0
-          ? "This job already exists for some candidates. Select from the available candidates."
-          : "This is a new job! Select candidates to save it.",
+          ? `${summary.text} Select more candidates to add them.`
+          : "New job. Select candidates to save it.",
     });
   } catch (error) {
     console.error(

@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
+import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -38,7 +39,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const rows = await db
       .select({
         id: jobs.id,
-        description: jobs.description,
+        description: effectiveJobDescription(),
         jdMatching: profiles.jdMatching,
         resumeLocalPath: jobs.resumeLocalPath,
         generationAttemptCount: jobs.generationAttemptCount,
@@ -91,7 +92,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           inArray(jobs.generationStatus, ["not_queued", "failed", "cancelled"]),
           lt(jobs.generationAttemptCount, 2),
           isNull(jobs.resumeLocalPath),
-          sql`length(btrim(${jobs.description})) > 0`,
+          hasEffectiveJobDescription(),
           sql`length(btrim(${profiles.jdMatching})) > 0`,
         ));
     }

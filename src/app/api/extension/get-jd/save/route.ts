@@ -4,9 +4,9 @@ import { categories, profiles, subCategories, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import {
-  findGetJdDuplicate,
+  findGetJdDuplicateDetails,
   insertGetJdJob,
-  updateExistingGetJdJobDetails,
+  removeGetJdJobAccount,
 } from "@/server/jobs/get-jd-jobs";
 import { readExtensionSavedJob } from "@/server/jobs/get-jd-save-values";
 import { isGetJdEvaluationAccepted } from "@/server/gemini/job-evaluation-config";
@@ -18,7 +18,7 @@ type SaveProfileResult = {
   profileId: string;
   name: string;
   category: string | null;
-  status: "saved" | "already_exists" | "failed";
+  status: "saved" | "already_exists" | "removed" | "locked" | "failed";
   message: string;
   jobId?: string;
 };
@@ -43,8 +43,14 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const job = readExtensionSavedJob(body);
-  const profileIds = readProfileIds(body);
-  if (!job || !profileIds) {
+  const profileIds = readProfileIds(body, "profileIds");
+  // Explicit removals (accounts unchecked in the panel); never inferred from what is missing.
+  const removeProfileIds = readProfileIds(body, "removeProfileIds");
+  if (
+    !job || !profileIds || !removeProfileIds ||
+    profileIds.length + removeProfileIds.length === 0 ||
+    profileIds.some((id) => removeProfileIds.includes(id))
+  ) {
     return jsonResponse(
       { success: false, message: "The job details or candidate selection are invalid. Run Get JD on the page again." },
       400,
@@ -52,6 +58,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   try {
     if (
+      profileIds.length > 0 &&
       await getGetJdMatchingMode(manager.id) === "gemini" &&
       !isGetJdEvaluationAccepted(readEvaluationDecision(body))
     ) {
@@ -81,11 +88,11 @@ export async function POST(request: Request): Promise<NextResponse> {
           eq(users.parentUserId, manager.id),
           eq(users.role, "account"),
           isNull(users.blockedAt),
-          inArray(users.id, profileIds),
+          inArray(users.id, [...profileIds, ...removeProfileIds]),
         ),
       );
 
-    if (candidates.length !== profileIds.length) {
+    if (candidates.length !== profileIds.length + removeProfileIds.length) {
       return jsonResponse(
         { success: false, message: "One or more selected candidates are no longer available. Run Get JD again to refresh the list." },
         403,
@@ -93,64 +100,51 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const results: SaveProfileResult[] = [];
-    for (const candidate of candidates) {
-      const name = [candidate.firstName, candidate.lastName]
-        .filter(Boolean)
-        .join(" ") || "Candidate";
-      const duplicate = await findGetJdDuplicate(manager.id, job, candidate.id);
-      if (duplicate) {
-        await updateExistingGetJdJobDetails({
-          ...job,
-          managerId: manager.id,
-          candidateId: candidate.id,
-        });
-        results.push({
-          profileId: candidate.id,
-          name,
-          category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
-          status: "already_exists",
-          message: duplicate === "applied"
-            ? "Already applied (in Bids)."
-            : "Already in Jobs.",
-        });
-        continue;
-      }
+    const describe = (candidate: (typeof candidates)[number]) => ({
+      profileId: candidate.id,
+      name: [candidate.firstName, candidate.lastName].filter(Boolean).join(" ") || "Candidate",
+      category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
+    });
 
+    // Removals first, account by account; applied accounts and running Generation are kept.
+    if (removeProfileIds.length > 0) {
+      const existing = await findGetJdDuplicateDetails(manager.id, job, removeProfileIds);
+      for (const candidate of candidates.filter((entry) => removeProfileIds.includes(entry.id))) {
+        const rowId = existing.get(candidate.id)?.rowId ?? null;
+        try {
+          const removed = rowId ? await removeGetJdJobAccount(manager.id, rowId) : false;
+          results.push({
+            ...describe(candidate),
+            status: removed ? "removed" : rowId ? "locked" : "removed",
+            message: removed || !rowId
+              ? "Removed from this job."
+              : "Kept: this candidate applied or Generation is running.",
+          });
+        } catch (error) {
+          logSaveFailure(error);
+          results.push({ ...describe(candidate), status: "failed", message: "Could not remove this candidate from the job." });
+        }
+      }
+    }
+
+    // Additions, one by one: the first account creates the job's relation_id, later ones reuse it.
+    for (const candidate of candidates.filter((entry) => profileIds.includes(entry.id))) {
       try {
         const savedJob = await insertGetJdJob({
           ...job,
           managerId: manager.id,
           candidateId: candidate.id,
         });
-        if (savedJob.status !== "saved") {
-          results.push({
-            profileId: candidate.id,
-            name,
-            category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
+        results.push(savedJob.status === "saved"
+          ? { ...describe(candidate), status: "saved", message: "Saved to Jobs.", jobId: savedJob.jobId }
+          : {
+            ...describe(candidate),
             status: "already_exists",
-            message: savedJob.status === "applied"
-              ? "Already applied (in Bids)."
-              : "Already in Jobs.",
+            message: savedJob.status === "applied" ? "Already applied (in Bids)." : "Already in Jobs.",
           });
-          continue;
-        }
-        results.push({
-          profileId: candidate.id,
-          name,
-          category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
-          status: "saved",
-          message: "Saved to Jobs.",
-          jobId: savedJob.jobId,
-        });
       } catch (error) {
         logSaveFailure(error);
-        results.push({
-          profileId: candidate.id,
-          name,
-          category: [candidate.category, candidate.subCategory].filter(Boolean).join(" / ") || null,
-          status: "failed",
-          message: "Could not save this candidate to Jobs.",
-        });
+        results.push({ ...describe(candidate), status: "failed", message: "Could not save this candidate to Jobs." });
       }
     }
 
@@ -160,6 +154,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       savedCount: results.filter((result) => result.status === "saved").length,
       failedCount: results.filter((result) => result.status === "failed").length,
       duplicateCount: results.filter((result) => result.status === "already_exists").length,
+      removedCount: results.filter((result) => result.status === "removed").length,
+      lockedCount: results.filter((result) => result.status === "locked").length,
     });
   } catch (error) {
     logSaveFailure(error);
@@ -170,11 +166,12 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 }
 
-function readProfileIds(value: unknown): string[] | null {
-  if (!isRecord(value) || !Array.isArray(value.profileIds)) return null;
-  const profileIds = value.profileIds;
+function readProfileIds(value: unknown, field: "profileIds" | "removeProfileIds"): string[] | null {
+  if (!isRecord(value)) return null;
+  if (value[field] === undefined) return [];
+  if (!Array.isArray(value[field])) return null;
+  const profileIds = value[field];
   if (
-    profileIds.length === 0 ||
     profileIds.length > maxProfilesPerSave ||
     !profileIds.every((id) => typeof id === "string" && /^[0-9a-f-]{36}$/i.test(id)) ||
     new Set(profileIds).size !== profileIds.length

@@ -1,8 +1,6 @@
-import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { jobs } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { db } from "@/lib/db";
+import { removeGetJdJobAccount } from "@/server/jobs/get-jd-jobs";
 
 type RouteContext = { params: Promise<{ jobId: string }> };
 
@@ -20,23 +18,15 @@ export async function DELETE(
     if (!isUuid(jobId)) {
       return jsonResponse({ success: false, message: "Invalid auto-saved job ID." }, 400);
     }
-    const [deleted] = await db
-      .delete(jobs)
-      .where(and(
-        eq(jobs.id, jobId),
-        eq(jobs.managerId, manager.id),
-        eq(jobs.autoSavedByGetJd, true),
-        eq(jobs.status, "todo"),
-        eq(jobs.generationStatus, "not_queued"),
-      ))
-      .returning({ id: jobs.id });
-    if (!deleted) {
+    // Same guard as unchecking in the panel: applied accounts and running Generation are kept.
+    const removed = await removeGetJdJobAccount(manager.id, jobId, { autoSavedOnly: true });
+    if (!removed) {
       return jsonResponse({
         success: false,
-        message: "This auto-saved job is no longer removable. It may have been changed or Generation may have started.",
+        message: "This job can't be removed: the candidate applied, Generation is running, or it was already removed.",
       }, 409);
     }
-    return jsonResponse({ success: true, jobId: deleted.id });
+    return jsonResponse({ success: true, jobId });
   } catch (error) {
     const code = getErrorCode(error);
     console.error(`Could not remove auto-saved Get JD job (code: ${code}).`);
