@@ -20,9 +20,22 @@ import { TokenComparisonForm } from "./token-comparison-form";
 
 export const instant = false;
 
-export default async function GeminiUsagePage() {
+type GeminiUsageTab = "limits" | "responses";
+
+const GEMINI_USAGE_TABS: { id: GeminiUsageTab; label: string; description: string }[] = [
+  { id: "limits", label: "Usage limits & key status", description: "Per-key limits and each key's current usage." },
+  { id: "responses", label: "Google responses & calibration", description: "Today's Google API responses and token calibration." },
+];
+
+export default async function GeminiUsagePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string | string[] }>;
+}) {
   const currentUser = await requireUser();
   if (currentUser.role !== "super_admin") redirect("/");
+  // Sub tabs are links (?tab=responses), so each tab is server-rendered and can be bookmarked.
+  const activeTab: GeminiUsageTab = (await searchParams).tab === "responses" ? "responses" : "limits";
 
   const keys = getGeminiApiKeys();
   const limits = await getGeminiApiLimits();
@@ -31,7 +44,8 @@ export default async function GeminiUsagePage() {
     date_trunc('day', now() at time zone 'America/Los_Angeles')
       at time zone 'America/Los_Angeles'
   `;
-  const usageRows = keyHashes.length
+  // Each tab loads only the data it shows.
+  const usageRows = keyHashes.length && activeTab === "limits"
     ? await db
         .select({
           keyHash: geminiKeyUsageEvents.keyHash,
@@ -70,7 +84,7 @@ export default async function GeminiUsagePage() {
         .groupBy(geminiKeyUsageEvents.keyHash)
     : [];
   const usageByKey = new Map(usageRows.map((row) => [row.keyHash, row]));
-  const recentApiCalls = keyHashes.length
+  const recentApiCalls = keyHashes.length && activeTab === "responses"
     ? await db
         .select({
           id: geminiApiCallLogs.id,
@@ -95,7 +109,7 @@ export default async function GeminiUsagePage() {
         .limit(100)
     : [];
   const keyNumberByHash = new Map(keyHashes.map((hash, index) => [hash, index + 1]));
-  const busyRows = keyHashes.length
+  const busyRows = keyHashes.length && activeTab === "limits"
     ? await db
         .select({ keyHash: geminiKeyBusyLeases.keyHash })
         .from(geminiKeyBusyLeases)
@@ -114,12 +128,12 @@ export default async function GeminiUsagePage() {
       <div className="mx-auto max-w-5xl">
         <header className="mb-7 flex flex-wrap items-center justify-between gap-4">
           <div>
-                      <p className="mt-1 text-sm text-slate-600">
-              Monitor recorded API calls and configure per-key request and input-token limits.
+            <p className="mt-1 text-sm text-slate-600">
+              Configure per-key limits, check key status, and review Google API responses.
             </p>
           </div>
           <div className="flex gap-2">
-            <Link className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="/settings/gemini-usage">
+            <Link className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" href={`/settings/gemini-usage?tab=${activeTab}`}>
               Refresh
             </Link>
             <Link className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="/settings">
@@ -128,6 +142,31 @@ export default async function GeminiUsagePage() {
           </div>
         </header>
 
+        <nav aria-label="Gemini usage sections" className="mb-6 flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
+          {GEMINI_USAGE_TABS.map((tab) => {
+            const active = tab.id === activeTab;
+            return (
+              <Link
+                aria-current={active ? "page" : undefined}
+                className={`min-w-0 flex-1 rounded-lg px-4 py-2.5 text-left transition sm:min-w-[14rem] ${
+                  active
+                    ? "bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200"
+                    : "text-slate-600 hover:bg-white/60 hover:text-slate-900"
+                }`}
+                href={`/settings/gemini-usage?tab=${tab.id}`}
+                key={tab.id}
+              >
+                <span className="block text-sm font-semibold">{tab.label}</span>
+                <span className={`mt-0.5 block text-xs ${active ? "text-slate-500" : "text-slate-400"}`}>
+                  {tab.description}
+                </span>
+              </Link>
+            );
+          })}
+        </nav>
+
+        {activeTab === "limits" ? (
+        <>
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <h2 className="mb-4 text-sm font-semibold text-slate-800">Per-key usage limits</h2>
           <GeminiApiLimitsForm
@@ -137,6 +176,7 @@ export default async function GeminiUsagePage() {
           />
         </section>
 
+        <h2 className="mb-3 text-sm font-semibold text-slate-800">Key status</h2>
         {keys.length === 0 ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
             No Gemini API keys are configured on the server.
@@ -216,7 +256,10 @@ export default async function GeminiUsagePage() {
             })}
           />
         )}
-        <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        </>
+        ) : (
+        <>
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="mb-4">
             <h2 className="text-sm font-semibold text-slate-800">
               Google API responses today
@@ -290,7 +333,16 @@ export default async function GeminiUsagePage() {
         process.env.VERCEL_ENV === "production" &&
         process.env.ENABLE_GEMINI_TOKEN_COMPARISON === "true" ? (
           <TokenComparisonForm />
-        ) : null}
+        ) : (
+          <section className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600">
+            <h2 className="text-sm font-semibold text-slate-800">Gemini token calibration</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Available on the production deployment when <code>ENABLE_GEMINI_TOKEN_COMPARISON=true</code> is set in Vercel.
+            </p>
+          </section>
+        )}
+        </>
+        )}
       </div>
     </main>
     </WorkspaceShell>
