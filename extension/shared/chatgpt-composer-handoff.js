@@ -1,7 +1,7 @@
 // Shared ChatGPT unified-composer handoff (ProseMirror #prompt-textarea).
 // Loaded in content scripts and service worker (importScripts).
 (function initQtsChatGptComposerHandoff(global) {
-  const HANDOFF_VERSION = 12;
+  const HANDOFF_VERSION = 13;
   // How long each send attempt waits for ChatGPT to show the sent message.
   const SEND_CONFIRM_MS = 8000;
   const FALLBACK_CONFIRM_MS = 4000;
@@ -639,7 +639,9 @@
     }
 
     const prefix = message.slice(0, 8);
-    const before = readEditorText(editor);
+    // retype: the box may show the prompt while ChatGPT's page code, still loading, never saw it.
+    const shown = readEditorText(editor);
+    const before = options.retype && shown === message && clearComposer(editor) ? '' : shown;
     if (before && before !== message && !clearComposer(editor)) {
       return {
         ok: false,

@@ -3030,10 +3030,28 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
                 messageCount: messages.length,
                 lastText: String(messages[messages.length - 1]?.innerText || '').trim(),
               };
-              window.__qtsSetGenerationStep?.('2/6 · Typing the prompt', 'Putting the prompt into the ChatGPT message box...');
-              const result = await composer.runUnifiedComposerHandoffAsync(message, {
-                onSending: () => window.__qtsSetGenerationStep?.('3/6 · Sending the prompt', 'Clicking Send (Enter if needed)...'),
-              });
+              // The message box shows before ChatGPT's page code is running; typing then does not reach it.
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+              // Up to three rounds while the prompt stays unsent in the box (so it is never sent twice):
+              // ChatGPT may still be loading, so later rounds wait, retype the prompt and send again.
+              let result = null;
+              for (let round = 1; round <= 3; round += 1) {
+                if (round > 1) {
+                  window.__qtsSetGenerationStep?.('3/6 · Sending the prompt', `ChatGPT wasn't ready; trying again (${round} of 3)...`);
+                  await new Promise((resolve) => setTimeout(resolve, 3000));
+                  if (composer.isGenerating?.()) return { ok: true, sent: true, method: 'generating_after_retry_wait', baseline };
+                  const start = message.replace(/\s+/g, ' ').trim().slice(0, 120);
+                  const box = composer.findUnifiedComposerEditor?.(message);
+                  if (!box || !composer.readEditorText(box).includes(start)) break;
+                } else {
+                  window.__qtsSetGenerationStep?.('2/6 · Typing the prompt', 'Putting the prompt into the ChatGPT message box...');
+                }
+                result = await composer.runUnifiedComposerHandoffAsync(message, {
+                  retype: round > 1,
+                  onSending: () => window.__qtsSetGenerationStep?.('3/6 · Sending the prompt', 'Clicking Send (Enter if needed)...'),
+                });
+                if (result.sent || !result.needsManualSend) break;
+              }
               return { ...result, baseline };
             }
             return {
