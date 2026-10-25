@@ -59,8 +59,14 @@ check while Get JD monitoring is active.
 Application-session, text-highlight, Gmail, and automatic-application code
 remains in the repository as unfinished product work. The Jobs-table
 Generation queue is supported; its generated files are rendered in memory and
-downloaded by the extension rather than persisted as server files. Generation
-run data remains in the database. A feature must not be enabled until its API,
+downloaded by the extension rather than persisted as server files. The résumé
+and cover-letter PDFs are printed by headless Chromium from the same HTML
+templates the Resume page previews (`public/resume-templates`), in the
+candidate's saved template, with bundled metric-compatible fonts and no
+outside network requests; if Chromium fails, the built-in `pdf-lib` renderer
+produces them instead. Local development sets `PDF_CHROME_EXECUTABLE_PATH` to
+an installed Chrome or Edge. Generation run data remains in the database. A
+feature must not be enabled until its API,
 authorization checks, migrations, integration tests, and user-facing recovery
 behavior are present.
 

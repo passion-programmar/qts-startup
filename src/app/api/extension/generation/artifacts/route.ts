@@ -6,7 +6,11 @@ import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
-import { isPdfTemplate } from "@/server/pdf/pdf-templates";
+import { isPdfTemplate, type PdfTemplate } from "@/server/pdf/pdf-templates";
+import { renderTemplatePdfPackage } from "@/server/pdf/template-pdf";
+
+// Chromium's first launch on a cold instance takes a few seconds.
+export const maxDuration = 60;
 
 export async function GET(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -55,7 +59,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     const data = parsePdfPackage(JSON.stringify(row.responseJson));
     const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "qts-standard";
-    const pdfs = await renderPdfPackage(data, template);
+    const pdfs = await renderGenerationPdfs(data, template);
     const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
     const paths = generationDownloadPaths({
       managerName: manager.displayName,
@@ -95,5 +99,22 @@ export async function GET(request: Request): Promise<NextResponse> {
       { success: false, message: "QTS could not prepare the three download files." },
       { status: 500 },
     );
+  }
+}
+
+// The HTML templates match the Resume page preview; if Chromium cannot print them, the
+// built-in renderer still produces both PDFs so the Generation queue keeps moving.
+async function renderGenerationPdfs(
+  data: ReturnType<typeof parsePdfPackage>,
+  template: PdfTemplate,
+): Promise<{ resume: Uint8Array; coverLetter: Uint8Array }> {
+  try {
+    return await renderTemplatePdfPackage(data, template);
+  } catch (error) {
+    console.error(
+      "Template PDF printing failed; using the built-in PDF renderer.",
+      error instanceof Error ? error.message : "Unknown error",
+    );
+    return renderPdfPackage(data, template);
   }
 }
