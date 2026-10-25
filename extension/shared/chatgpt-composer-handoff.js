@@ -1,7 +1,7 @@
 // Shared ChatGPT unified-composer handoff (ProseMirror #prompt-textarea).
 // Loaded in content scripts and service worker (importScripts).
 (function initQtsChatGptComposerHandoff(global) {
-  const HANDOFF_VERSION = 9;
+  const HANDOFF_VERSION = 10;
   // How long each send attempt waits for ChatGPT to show the sent message.
   const SEND_CONFIRM_MS = 8000;
   const FALLBACK_CONFIRM_MS = 4000;
@@ -384,13 +384,21 @@
     return { sent: false, method: 'unified_needs_manual_send', submitAttempted };
   }
 
+  // ChatGPT shows a Stop button while it writes; its test id and label change between versions.
   function isGenerating() {
-    return Boolean(
-      document.querySelector('[data-testid="stop-button"]')
-      || [...document.querySelectorAll('button')].some((button) =>
-        /stop generating|stop streaming/i.test(button.getAttribute('aria-label') || '')
-      )
-    );
+    if (document.querySelector('[data-testid="stop-button"]')) return true;
+    return [...document.querySelectorAll('button')].some((button) => {
+      const label = `${button.getAttribute('aria-label') || ''} ${button.getAttribute('data-testid') || ''}`;
+      return /\bstop\b/i.test(label) && !/dictat|record|voice|listen|audio|shar/i.test(label) && isVisible(button);
+    });
+  }
+
+  // The sent text shows on the page outside the message box, whatever ChatGPT's message markup is.
+  function pageShowsSentText(editor, expectedText) {
+    const probe = cleanText(expectedText).slice(0, MATCH_PREFIX_LENGTH);
+    if (!probe) return false;
+    const count = (text) => text.split(probe).length - 1;
+    return count(cleanText(document.body?.innerText || '')) > count(readEditorText(editor));
   }
 
   function findUserMessages() {
@@ -423,6 +431,7 @@
     return editor.isConnected
       && readEditorText(editor).includes(cleanText(expectedText).slice(0, MATCH_PREFIX_LENGTH))
       && countUserMessages() === initialUserMessageCount
+      && !pageShowsSentText(editor, expectedText)
       && !isGenerating();
   }
 
@@ -450,16 +459,38 @@
       .sort((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
       )
-      .at(-1);
+      .at(-1) || findSentTurnByText(marker);
     if (!userMessage) return null;
-    return findAssistantMessages()
+    const answer = findAssistantMessages()
       .filter((message) => Boolean(
         userMessage.compareDocumentPosition(message)
         & Node.DOCUMENT_POSITION_FOLLOWING,
       ))
       .sort((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-      )[0] || null;
+      )[0];
+    if (answer) return answer;
+    // Unknown markup: the answer is the conversation turn after the sent one.
+    const turn = userMessage.closest?.(TURN_SELECTOR);
+    const next = turn?.nextElementSibling;
+    return next && !next.querySelector('[contenteditable="true"], textarea') && cleanText(next.innerText) ? next : null;
+  }
+
+  const TURN_SELECTOR = 'article, [data-turn], [data-testid^="conversation-turn"], [data-message-author-role]';
+
+  // The sent message found by its text, when ChatGPT's message markers have changed.
+  function findSentTurnByText(marker) {
+    if (!document.body || typeof document.createTreeWalker !== 'function') return null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let found = null;
+    while (walker.nextNode()) {
+      const parent = walker.currentNode.parentElement;
+      if (!parent || !walker.currentNode.nodeValue.includes(marker.slice(0, 20))) continue;
+      if (parent.closest('[contenteditable="true"], textarea, form')) continue;
+      if (!cleanText(parent.closest(TURN_SELECTOR)?.innerText || parent.innerText).includes(marker)) continue;
+      found = parent.closest(TURN_SELECTOR) || parent;
+    }
+    return found;
   }
 
   async function waitForSubmission(editor, initialUserMessageCount, timeoutMs, expectedText) {
@@ -470,7 +501,9 @@
       if (newMessages.some((message) => messageContainsExpectedText(message, expectedText))) {
         return { sent: true, method: 'matching_user_message_added' };
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 100));
+      if (pageShowsSentText(editor, expectedText)) return { sent: true, method: 'sent_text_on_page' };
+      if (!readEditorText(editor) && isGenerating()) return { sent: true, method: 'composer_cleared_while_generating' };
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
     }
     return null;
   }
@@ -723,6 +756,7 @@
     findAssistantMessages,
     findUserMessages,
     findAssistantResponseForTask,
+    isGenerating,
     insertIntoProseMirror,
     activateComposer,
     readEditorText,

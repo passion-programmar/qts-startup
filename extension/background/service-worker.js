@@ -2788,26 +2788,25 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: (taskId) => {
-        const response = globalThis.__qtsChatGptComposerHandoff
-          ?.findAssistantResponseForTask?.(taskId);
-        const generating = Boolean(
-          document.querySelector('[data-testid="stop-button"]')
-          || [...document.querySelectorAll('button')].some((button) =>
-            /stop generating|stop streaming/i.test(button.getAttribute('aria-label') || '')
-          )
-        );
+        const composer = globalThis.__qtsChatGptComposerHandoff;
+        const response = composer?.findAssistantResponseForTask?.(taskId);
+        const generating = Boolean(composer?.isGenerating?.());
         const text = String(response?.innerText || response?.textContent || '').trim();
         // ChatGPT shows the copy button under an answer once it has finished writing it.
         const turn = response?.closest?.('article, [data-testid^="conversation-turn"]');
         const finished = Boolean(turn?.querySelector(
           '[data-testid="copy-turn-action-button"], button[aria-label="Copy"], button[aria-label="Copy message"]',
         ));
-        const errorPattern = /something went wrong|an error occurred|error generating|you['’]ve (?:reached|hit) (?:your|the)|usage (?:cap|limit)|rate limit|too many requests|network error|unusual activity|try again later/i;
+        const errorPattern = /something went wrong|an error occurred|error generating|you['’]ve (?:reached|hit) (?:your|the)|usage (?:cap|limit)|rate limit|too many requests|network error|unusual activity|try again later|cloudflare_challenge|couldn['’]t load your account|browser check couldn['’]t finish/i;
         const errorNode = [...document.querySelectorAll(
           '[role="alert"], [data-testid*="error" i], .text-token-text-error, [class*="text-red"]',
         )].find((node) => errorPattern.test(node.innerText || ''));
         let chatError = errorNode ? String(errorNode.innerText).trim().slice(0, 200) : '';
         if (!chatError && text && !text.includes('{') && errorPattern.test(text)) chatError = text.slice(0, 200);
+        // The browser check can replace the whole page instead of showing an alert.
+        if (!chatError && /cloudflare_challenge|couldn['’]t load your account|browser check couldn['’]t finish/i.test(document.body?.innerText || '')) {
+          chatError = "ChatGPT's browser check stopped the page.";
+        }
         return { text, isNew: Boolean(response), generating, finished, chatError };
       },
       args: [generationId],
@@ -2922,6 +2921,27 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     return created;
   }
 
+  // ChatGPT sometimes stops at a browser check ("cloudflare_challenge", "We couldn't load your
+  // account"); reloading the page clears it. Up to two reloads, then the Manager has to look.
+  const CHATGPT_BROWSER_CHECK_PATTERN = /cloudflare_challenge|couldn[’']t load your account|browser check couldn[’']t finish|verify you are human|checking your browser/i;
+
+  async function clearChatGptBrowserCheck(chatTabId) {
+    for (let reloads = 0; ; reloads += 1) {
+      await waitForScannerChatGptTab(chatTabId, 60000);
+      await sleep(2000);
+      const [check] = await chrome.scripting.executeScript({
+        target: { tabId: chatTabId },
+        func: (source) => new RegExp(source, 'i').test(document.body?.innerText || ''),
+        args: [CHATGPT_BROWSER_CHECK_PATTERN.source],
+      });
+      if (!check?.result) return;
+      if (reloads >= 2) {
+        throw new Error("ChatGPT's browser check did not finish after reloading. Open ChatGPT, complete the check, then retry Generation.");
+      }
+      await chrome.tabs.reload(chatTabId);
+    }
+  }
+
   async function sendGenerationPromptWithRecovery(chatTabId, prompt) {
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -2930,6 +2950,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       }
       try {
         await waitForScannerChatGptTab(chatTabId, attempt === 0 ? 60000 : 45000);
+        await clearChatGptBrowserCheck(chatTabId);
         await chrome.scripting.executeScript({
           target: { tabId: chatTabId },
           files: ['shared/chatgpt-composer-handoff.js'],
@@ -2948,13 +2969,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
                 await new Promise((resolve) => setTimeout(resolve, 300));
                 continue;
               }
-              const generating = Boolean(
-                document.querySelector('[data-testid="stop-button"]')
-                || [...document.querySelectorAll('button')].some((button) =>
-                  /stop generating|stop streaming/i.test(button.getAttribute('aria-label') || '')
-                )
-              );
-              if (generating) {
+              // Never type a prompt while ChatGPT is still writing an answer.
+              if (composer.isGenerating?.()) {
                 return { ok: false, error: 'ChatGPT is already generating. Wait for it to finish and retry.' };
               }
               const messages = composer.findAssistantMessages?.() || [];
