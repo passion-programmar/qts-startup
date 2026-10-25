@@ -94,7 +94,7 @@ export function WorkspaceShellClient({
   const navigation = navigationGroups.flatMap((group) => group.items);
   const pageLabel = navigation.find((item) => item.href === activeHref)?.label || "Overview";
   const initials = user.displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "Q";
-  // Managers and admins see Japan and Romania time; Super Admins have their own clock on Gemini usage.
+  // Managers and admins see two time-zone clocks; Super Admins have their own clock on Gemini usage.
   const showClocks = user.role !== "super_admin";
 
   useEffect(() => {
