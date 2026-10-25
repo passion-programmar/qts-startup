@@ -400,6 +400,13 @@ export const jobs = pgTable(
     jobTitle: text("job_title").notNull(),
     company: text("company").notNull(),
     description: text("description"),
+    // Plain page innerText, kept only while description is empty.
+    pageText: text("page_text"),
+    // Shared-job identity (docs/get-jd-redesign.md). Nullable until the backfill
+    // script fills existing rows; the constrain step then makes them required.
+    relationId: uuid("relation_id"),
+    jobKey: text("job_key"),
+    titleCompanyKey: text("title_company_key"),
     location: text("location"),
     country: text("country"),
     employmentType: text("employment_type"),
@@ -450,6 +457,9 @@ export const jobs = pgTable(
       sql`lower(btrim(${table.company}))`,
     ),
     index("jobs_manager_date_index").on(table.managerId, table.date),
+    index("jobs_relation_id_index").on(table.relationId),
+    index("jobs_job_key_index").on(table.jobKey),
+    index("jobs_title_company_key_index").on(table.titleCompanyKey),
     index("jobs_candidate_date_status_index").on(
       table.candidateId,
       table.date,
@@ -480,6 +490,9 @@ export const bids = pgTable(
     jobUrl: text("job_url").notNull(),
     jobTitle: text("job_title").notNull(),
     company: text("company").notNull(),
+    // Same-job keys, so "Applied" is still found if the jobs row was deleted.
+    jobKey: text("job_key"),
+    titleCompanyKey: text("title_company_key"),
     location: text("location"),
     employmentType: text("employment_type"),
     workplaceType: text("workplace_type"),
@@ -498,6 +511,8 @@ export const bids = pgTable(
   },
   (table) => [
     uniqueIndex("bids_source_job_id_unique").on(table.sourceJobId),
+    index("bids_manager_job_key_index").on(table.managerId, table.jobKey),
+    index("bids_manager_title_company_key_index").on(table.managerId, table.titleCompanyKey),
     index("bids_manager_applied_at_index").on(table.managerId, table.appliedAt),
     index("bids_candidate_applied_at_index").on(
       table.candidateId,

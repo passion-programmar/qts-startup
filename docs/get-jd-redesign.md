@@ -185,7 +185,7 @@ Nothing is renamed or dropped except those two indexes and one setting. Bids and
 
 1. ✅ Extension: red flash, whole-word keywords, scored and settled detection, suggested keywords.
 2. ✅ Per-Manager Gemini assignment (settings, `mode` route, migration flag).
-3. `job-key.ts` with tests, the column migration and backfill script, run on a Neon branch first.
+3. ✅ code: `job-key.ts` and `job-relations.ts` with tests, migration 0049 (nullable columns and indexes), `npm run db:backfill:job-relations`. Still to do: run them on a Neon branch and review the report.
 4. Server: Get JD routes on `relation_id`, `job_key` and account states; Jobs page edits and delete rules; Bids `job_key`; then the constrain migration.
 5. Extension: `pageText` in general mode, account checkboxes and summary, Gemini only on available accounts.
 6. Extractor coverage additions.

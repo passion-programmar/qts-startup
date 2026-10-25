@@ -15,7 +15,8 @@
     "db:generate": "node --require ./scripts/node-user-shim.cjs ./node_modules/drizzle-kit/bin.cjs generate",
     "db:migrate": "node --require ./scripts/node-user-shim.cjs ./node_modules/drizzle-kit/bin.cjs migrate",
     "db:seed:super-admin": "tsx scripts/seed-super-admin.ts",
-    "db:seed:prompts": "tsx scripts/seed-prompts.ts"
+    "db:seed:prompts": "tsx scripts/seed-prompts.ts",
+    "db:backfill:job-relations": "tsx scripts/backfill-job-relations.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
