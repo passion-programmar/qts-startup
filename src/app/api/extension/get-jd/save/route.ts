@@ -52,7 +52,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   try {
     if (
-      await getGetJdMatchingMode() === "gemini" &&
+      await getGetJdMatchingMode(manager.id) === "gemini" &&
       !isGetJdEvaluationAccepted(readEvaluationDecision(body))
     ) {
       return jsonResponse(

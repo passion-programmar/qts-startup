@@ -1,16 +1,17 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
-import { settings } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
+import { users } from "@/db/schema";
 import { db } from "@/lib/db";
 
 export type GetJdMatchingMode = "manual" | "gemini";
 
-export async function getGetJdMatchingMode(): Promise<GetJdMatchingMode> {
+// Gemini matching is assigned per Manager by a Super Admin; everyone else uses general Get JD.
+export async function getGetJdMatchingMode(managerId: string): Promise<GetJdMatchingMode> {
   const [row] = await db
-    .select({ value: settings.value })
-    .from(settings)
-    .where(eq(settings.key, "get_jd_matching_mode"))
+    .select({ useGeminiMatching: users.useGeminiMatching })
+    .from(users)
+    .where(and(eq(users.id, managerId), eq(users.role, "manager")))
     .limit(1);
-  return row?.value === "gemini" ? "gemini" : "manual";
+  return row?.useGeminiMatching ? "gemini" : "manual";
 }

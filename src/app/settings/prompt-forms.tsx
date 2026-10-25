@@ -11,7 +11,7 @@ import {
   updateManagerJobDetectionUrlAccessAction,
   unassignPromptAction,
   updatePromptModeAction,
-  updateGetJdMatchingModeAction,
+  updateManagerGeminiMatchingAction,
   updateGeminiTokenCountModeAction,
   type PromptActionState,
 } from "@/app/settings/actions";
@@ -62,25 +62,41 @@ export function PromptModeForm({ mode }: { mode: "global" | "private" }) {
   );
 }
 
-export function GetJdMatchingModeForm({ mode }: { mode: "manual" | "gemini" }) {
-  const [state, formAction, isPending] = useActionState(updateGetJdMatchingModeAction, initialState);
+export function ManagerGeminiMatchingForm({
+  managerId,
+  useGemini,
+}: {
+  managerId: string;
+  useGemini: boolean;
+}) {
+  const [state, formAction, isPending] = useActionState(
+    updateManagerGeminiMatchingAction,
+    initialState,
+  );
+
   return (
-    <form action={formAction} className="space-y-4">
-      <div>
-        <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor="getJdMatchingMode">
-          Candidate matching flow
-        </label>
-        <select className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 sm:max-w-sm" defaultValue={mode} id="getJdMatchingMode" name="getJdMatchingMode">
-          <option value="manual">Manual candidate selection</option>
-          <option value="gemini">Gemini candidate matching</option>
-        </select>
-      </div>
+    <div className="min-w-0 space-y-2">
+      <form action={formAction} className="flex flex-wrap items-center gap-2">
+        <input name="managerId" type="hidden" value={managerId} />
+        <input name="enabled" type="hidden" value={String(!useGemini)} />
+        <span className={`text-xs font-medium ${useGemini ? "text-emerald-700" : "text-slate-500"}`}>
+          {useGemini ? "Gemini matching" : "General matching"}
+        </span>
+        <button
+          className={`inline-flex h-8 items-center rounded-lg px-3 text-[11px] font-semibold disabled:opacity-60 ${
+            useGemini
+              ? "border border-rose-200 text-rose-700 hover:bg-rose-50"
+              : "bg-indigo-600 text-white hover:bg-indigo-700"
+          }`}
+          disabled={isPending}
+          type="submit"
+        >
+          {isPending && <LoadingIcon className="mr-1 size-3.5" />}
+          {isPending ? "Saving..." : useGemini ? "Remove Gemini" : "Assign Gemini"}
+        </button>
+      </form>
       <ActionFeedback state={state} />
-      <button className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60" disabled={isPending} type="submit">
-        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
-        {isPending ? "Saving..." : "Save Get JD mode"}
-      </button>
-    </form>
+    </div>
   );
 }
 

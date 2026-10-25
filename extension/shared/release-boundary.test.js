@@ -860,3 +860,19 @@ test('disabled page UI removes its listeners and the queue alarm only runs durin
   const installHandler = worker.slice(worker.indexOf('chrome.runtime.onInstalled.addListener'));
   assert.equal(installHandler.slice(0, 300).includes('chrome.alarms.create'), false);
 });
+
+test('Get JD matching mode is assigned per Manager, not globally', () => {
+  const root = path.join(extensionRoot, '..');
+  const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
+  const modeHelper = read('src', 'server', 'jobs', 'get-jd-mode.ts');
+  const migration = read('drizzle', '0048_manager_gemini_matching.sql');
+  const settingsPage = read('src', 'app', 'settings', 'page.tsx');
+  const routes = ['mode', '', 'save'].map((name) => read('src', 'app', 'api', 'extension', 'get-jd', ...(name ? [name] : []), 'route.ts'));
+
+  assert.ok(modeHelper.includes('useGeminiMatching: users.useGeminiMatching'));
+  assert.equal(modeHelper.includes('get_jd_matching_mode'), false);
+  for (const route of routes) assert.ok(route.includes('getGetJdMatchingMode(manager.id)'));
+  assert.ok(migration.includes("\"key\" = 'get_jd_matching_mode' AND \"value\" = 'gemini'"));
+  assert.ok(settingsPage.includes('<ManagerGeminiMatchingForm'));
+  assert.equal(settingsPage.includes('get_jd_matching_mode'), false);
+});

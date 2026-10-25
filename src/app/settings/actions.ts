@@ -199,35 +199,47 @@ export async function updatePromptModeAction(
   };
 }
 
-export async function updateGetJdMatchingModeAction(
+export async function updateManagerGeminiMatchingAction(
   _previousState: PromptActionState,
   formData: FormData,
 ): Promise<PromptActionState> {
   const actor = await requireUser();
   if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can change Get JD matching mode." };
+    return { ...emptyState, error: "Only Super Admin can assign Gemini matching." };
   }
-  const mode = readText(formData, "getJdMatchingMode", 16);
-  if (mode !== "manual" && mode !== "gemini") {
-    return { ...emptyState, error: "Choose a valid Get JD matching mode." };
+  const managerId = readText(formData, "managerId", 36);
+  const enabledValue = formData.get("enabled");
+  if (!isUuid(managerId) || (enabledValue !== "true" && enabledValue !== "false")) {
+    return { ...emptyState, error: "Select a valid Manager and Gemini matching value." };
   }
+
   try {
-    await db.insert(settings).values({
-      key: "get_jd_matching_mode",
-      value: mode,
-      updatedByUserId: actor.id,
-    }).onConflictDoUpdate({
-      target: settings.key,
-      set: { value: mode, updatedByUserId: actor.id, updatedAt: new Date() },
-    });
+    const [manager] = await db
+      .update(users)
+      .set({
+        useGeminiMatching: enabledValue === "true",
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(users.id, managerId),
+        eq(users.role, "manager"),
+        isNull(users.blockedAt),
+      ))
+      .returning({ id: users.id });
+    if (!manager) {
+      return { ...emptyState, error: "That active Manager was not found." };
+    }
   } catch (error) {
-    logPromptActionFailure("updating Get JD matching mode", error);
-    return { ...emptyState, error: "Get JD matching mode could not be updated." };
+    logPromptActionFailure("updating Gemini matching", error);
+    return { ...emptyState, error: "The Manager's Gemini matching could not be updated." };
   }
+
   revalidatePath("/settings");
   return {
     error: null,
-    success: `Get JD matching set to ${mode === "gemini" ? "Gemini candidate matching" : "Manual candidate selection"}.`,
+    success: enabledValue === "true"
+      ? "Gemini matching was assigned. This Manager's Get JD now uses Gemini."
+      : "Gemini matching was removed. This Manager's Get JD now uses general matching.",
   };
 }
 

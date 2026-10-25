@@ -22,9 +22,10 @@ The supported browser-extension workflow is deliberately narrow:
    if job signals (job-site URL, Apply button or CV upload, posting headings,
    keywords; job lists penalized) score 3 or more. Closed or expired postings
    are rejected. A rejected page is not extracted or sent to the server, and
-   the launcher flashes red once. Super Admin selects manual
-   matching or Gemini matching. Manual mode extracts locally and checks Jobs and
-   Bids. Gemini mode sends body HTML to the server with the default evaluation
+   the launcher flashes red once. Super Admin assigns Gemini matching to
+   individual Managers in Settings; every other Manager uses general matching.
+   General mode extracts locally and checks Jobs and Bids. Gemini mode sends the
+   page's plain innerText to the server with the default evaluation
    prompt and candidate ID/JD-note pairs, then prechecks returned candidate IDs.
    A Manager with the corresponding Super-assigned permission can add, edit,
    and delete only their own blocked URL fragments and job-page detection keywords.

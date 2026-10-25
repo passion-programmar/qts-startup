@@ -11,7 +11,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     );
   }
   return NextResponse.json(
-    { success: true, mode: await getGetJdMatchingMode() },
+    { success: true, mode: await getGetJdMatchingMode(manager.id) },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

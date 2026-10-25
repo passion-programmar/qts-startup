@@ -2,8 +2,8 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import {
   GlobalPromptForm,
-  GetJdMatchingModeForm,
   GeminiTokenCountModeForm,
+  ManagerGeminiMatchingForm,
   ManagerTextHighlightAccessForm,
   ManagerPageExclusionAccessForm,
   ManagerJobDetectionUrlAccessForm,
@@ -45,13 +45,12 @@ export default async function SettingsPage() {
   const currentUser = await requireUser();
   if (currentUser.role !== "super_admin") redirect("/");
 
-  const [modeRows, getJdModeRows, tokenModeRows, activePrompts, managerRows] = await Promise.all([
+  const [modeRows, tokenModeRows, activePrompts, managerRows] = await Promise.all([
     db
       .select({ value: settings.value })
       .from(settings)
       .where(eq(settings.key, "prompt_mode"))
       .limit(1),
-    db.select({ value: settings.value }).from(settings).where(eq(settings.key, "get_jd_matching_mode")).limit(1),
     db.select({ value: settings.value }).from(settings).where(eq(settings.key, "gemini_token_count_mode")).limit(1),
     db
       .select({
@@ -77,6 +76,7 @@ export default async function SettingsPage() {
         canManageTextHighlights: users.canManageTextHighlights,
         canManagePageExclusions: users.canManagePageExclusions,
         canManageJobDetectionUrlRules: users.canManageJobDetectionUrlRules,
+        useGeminiMatching: users.useGeminiMatching,
       })
       .from(users)
       .leftJoin(
@@ -91,7 +91,6 @@ export default async function SettingsPage() {
   ]);
 
   const mode = modeRows[0]?.value === "private" ? "private" : "global";
-  const getJdMode = getJdModeRows[0]?.value === "gemini" ? "gemini" : "manual";
   const tokenMode = tokenModeRows[0]?.value === "gemini" ? "gemini" : "local";
   const chatGptPrompts = activePrompts.filter(
     (prompt) =>
@@ -120,11 +119,6 @@ export default async function SettingsPage() {
             Prompt mode
           </h2>
           <PromptModeForm mode={mode} />
-        </section>
-
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-sm font-semibold text-slate-800">Get JD candidate matching</h2>
-          <GetJdMatchingModeForm mode={getJdMode} />
         </section>
 
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
@@ -196,11 +190,12 @@ export default async function SettingsPage() {
           </div>
           <PaginatedTable
             columns={[
-              { label: "Manager", className: "w-[20%]" },
-              { label: "Prompt assignment", className: "w-[28%]" },
-              { label: "Text highlight access", className: "w-[17%]" },
-              { label: "Excluded rules · job match", className: "w-[17%]" },
-              { label: "Job-detection rules · block", className: "w-[18%]" },
+              { label: "Manager", className: "w-[17%]" },
+              { label: "Prompt assignment", className: "w-[25%]" },
+              { label: "Get JD matching", className: "w-[14%]" },
+              { label: "Text highlight access", className: "w-[14%]" },
+              { label: "Excluded rules · job match", className: "w-[15%]" },
+              { label: "Job-detection rules · block", className: "w-[15%]" },
             ]}
             emptyMessage="No active Managers"
             rows={managerRows.map((manager) => ({
@@ -224,6 +219,11 @@ export default async function SettingsPage() {
                     name: prompt.name,
                     version: prompt.version,
                   }))}
+                />,
+                <ManagerGeminiMatchingForm
+                  key="gemini-matching"
+                  managerId={manager.id}
+                  useGemini={manager.useGeminiMatching}
                 />,
                 <ManagerTextHighlightAccessForm
                   canManage={manager.canManageTextHighlights}

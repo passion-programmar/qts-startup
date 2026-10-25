@@ -103,8 +103,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    if (await getGetJdMatchingMode() !== "gemini") {
-      return jsonResponse({ success: false, message: "Gemini Get JD matching is not enabled." }, 409);
+    if (await getGetJdMatchingMode(manager.id) !== "gemini") {
+      return jsonResponse({ success: false, message: "Gemini matching is not assigned to your account. Ask your Super Admin." }, 409);
     }
     const profileResult = await loadManagerCandidateProfiles(manager.id);
     if (profileResult.tooMany) {

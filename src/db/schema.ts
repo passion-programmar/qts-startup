@@ -116,6 +116,8 @@ export const users = pgTable(
     canManageJobDetectionUrlRules: boolean("can_manage_job_detection_url_rules")
       .default(false)
       .notNull(),
+    // Super Admin assigns Gemini candidate matching per Manager; others use general Get JD.
+    useGeminiMatching: boolean("use_gemini_matching").default(false).notNull(),
     authVersion: integer("auth_version").default(0).notNull(),
     blockedAt: timestamp("blocked_at", { withTimezone: true, mode: "date" }),
     blockedBy: uuid("blocked_by").references((): AnyPgColumn => users.id, {

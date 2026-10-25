@@ -1,6 +1,6 @@
 # Get JD redesign: shared jobs, per-Manager Gemini, scored detection
 
-Status: **approved**. Step 1 (scored detection) is implemented; later steps follow section 9.
+Status: **approved**. Steps 1 (scored detection) and 2 (per-Manager Gemini) are implemented; later steps follow section 9.
 
 ## 1. Decisions
 
@@ -184,7 +184,7 @@ Nothing is renamed or dropped except those two indexes and one setting. Bids and
 ## 9. Delivery order
 
 1. ✅ Extension: red flash, whole-word keywords, scored and settled detection, suggested keywords.
-2. Per-Manager Gemini assignment (settings, `mode` route, migration flag).
+2. ✅ Per-Manager Gemini assignment (settings, `mode` route, migration flag).
 3. `job-key.ts` with tests, the column migration and backfill script, run on a Neon branch first.
 4. Server: Get JD routes on `relation_id`, `job_key` and account states; Jobs page edits and delete rules; Bids `job_key`; then the constrain migration.
 5. Extension: `pageText` in general mode, account checkboxes and summary, Gemini only on available accounts.
