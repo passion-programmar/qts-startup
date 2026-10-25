@@ -29,12 +29,13 @@ export class DocumentPageLimitError extends Error {
 export async function renderTemplatePdfPackage(
   data: PdfPackage,
   template: PdfTemplate,
+  { enforcePageLimits = true }: { enforcePageLimits?: boolean } = {},
 ): Promise<{ resume: Uint8Array; coverLetter: Uint8Array }> {
   const browser = await getBrowser();
   const templateData = toResumeTemplateData(data, template);
   const [resume, coverLetter] = await Promise.all([
-    printDocument(browser, "resume", template, templateData),
-    printDocument(browser, "cover-letter", template, templateData),
+    printDocument(browser, "resume", template, templateData, enforcePageLimits),
+    printDocument(browser, "cover-letter", template, templateData, enforcePageLimits),
   ]);
   return { resume, coverLetter };
 }
@@ -44,6 +45,7 @@ async function printDocument(
   document: "resume" | "cover-letter",
   template: PdfTemplate,
   templateData: ReturnType<typeof toResumeTemplateData>,
+  enforcePageLimits: boolean,
 ): Promise<Uint8Array> {
   const page = await browser.newPage();
   try {
@@ -63,9 +65,11 @@ async function printDocument(
     const state = await page.evaluate(() => window.document.documentElement.dataset.renderState);
     if (state !== "ready") throw new Error(`The ${template} ${document} template did not render.`);
     const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true, timeout: renderTimeoutMs });
-    const { PDFDocument } = await import("pdf-lib");
-    const limit = pageLimits[document];
-    if ((await PDFDocument.load(pdf)).getPageCount() > limit.pages) throw new DocumentPageLimitError(limit.message);
+    if (enforcePageLimits) {
+      const { PDFDocument } = await import("pdf-lib");
+      const limit = pageLimits[document];
+      if ((await PDFDocument.load(pdf)).getPageCount() > limit.pages) throw new DocumentPageLimitError(limit.message);
+    }
     return pdf;
   } finally {
     await page.close().catch(() => undefined);
