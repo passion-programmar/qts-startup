@@ -36,7 +36,8 @@ export async function GET(request: Request): Promise<NextResponse> {
         company: generationRuns.company,
         firstName: profiles.firstName,
         lastName: profiles.lastName,
-        pdfTemplate: profiles.pdfTemplate,
+        runTemplate: generationRuns.pdfTemplate,
+        profileTemplate: profiles.pdfTemplate,
         createdAt: generationRuns.createdAt,
       })
       .from(generationRuns)
@@ -57,7 +58,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
 
     const data = parsePdfPackage(JSON.stringify(row.responseJson));
-    const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "qts-standard";
+    // Runs from before template rotation have no saved template and use the account's.
+    const savedTemplate = row.runTemplate ?? row.profileTemplate;
+    const template = isPdfTemplate(savedTemplate) ? savedTemplate : "qts-standard";
     // No page limit: a longer résumé or cover letter is delivered as it is.
     const pdfs = await renderDocumentPdfs(data, template, { enforcePageLimits: false });
     const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";

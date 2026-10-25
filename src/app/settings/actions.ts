@@ -9,8 +9,11 @@ import {
   jobRecordTimeZoneOptions,
   jobRecordTimeZoneSettingKey,
 } from "@/server/jobs/job-record-time-zones";
+import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 import {
+  categories,
   managerPromptAssignments,
+  managerPromptOverrides,
   prompts,
   settings,
   users,
@@ -49,6 +52,7 @@ export async function saveGlobalPromptAction(
   const promptTemplate = readText(formData, "promptTemplate", 50000);
   const requestedGroupId = readText(formData, "promptGroupId", 36);
   const makeDefault = formData.get("makeDefault") === "on";
+  const categoryId = readText(formData, "categoryId", 36);
   if (
     !isPromptProvider(provider) ||
     !isPromptPurpose(purpose) ||
@@ -59,8 +63,23 @@ export async function saveGlobalPromptAction(
   ) {
     return { ...emptyState, error: "Enter a valid provider, purpose, name, and prompt." };
   }
+  // Document prompts are written per category; Gemini prompts have none.
+  const isDocumentPrompt = purpose === "document_generation";
+  if (isDocumentPrompt && !isUuid(categoryId)) {
+    return { ...emptyState, error: "Choose the category this prompt is written for." };
+  }
 
   try {
+    if (isDocumentPrompt) {
+      const [category] = await db
+        .select({ id: categories.id })
+        .from(categories)
+        .where(eq(categories.id, categoryId))
+        .limit(1);
+      if (!category) {
+        return { ...emptyState, error: "That category no longer exists. Refresh and try again." };
+      }
+    }
     const existingGroup = requestedGroupId
       ? await db
           .select({
@@ -107,13 +126,14 @@ export async function saveGlobalPromptAction(
       `,
       tx`
         insert into prompts (
-          prompt_group_id, provider, purpose, name, prompt_template, version,
+          prompt_group_id, provider, purpose, category_id, name, prompt_template, version,
           is_active, is_default, created_by_user_id
         )
         select
           ${promptGroupId}::uuid,
           ${provider}::prompt_provider,
           ${purpose}::prompt_purpose,
+          ${isDocumentPrompt ? categoryId : null}::uuid,
           ${name},
           ${promptTemplate},
           coalesce(max(version), 0) + 1,
@@ -198,8 +218,8 @@ export async function updatePromptModeAction(
   return {
     error: null,
     success: mode === "private"
-      ? "Saved. Managers now see their assigned prompt."
-      : "Saved. The Manager prompt tab is hidden.",
+      ? "Saved. Managers can now read the prompts assigned to them."
+      : "Saved. Managers now see only the names of their assigned prompts.",
   };
 }
 
@@ -370,7 +390,7 @@ export async function assignPromptAction(
     let promptId: string | undefined;
     if (isUuid(promptChoice)) {
       const [selectedPrompt] = await db
-        .select({ id: prompts.id })
+        .select({ id: prompts.id, categoryId: prompts.categoryId })
         .from(prompts)
         .where(
           and(
@@ -381,6 +401,12 @@ export async function assignPromptAction(
           ),
         )
         .limit(1);
+      if (selectedPrompt && !selectedPrompt.categoryId) {
+        return {
+          ...emptyState,
+          error: "Choose a category for this prompt in the prompt library before assigning it.",
+        };
+      }
       promptId = selectedPrompt?.id;
     }
 
@@ -391,21 +417,18 @@ export async function assignPromptAction(
       };
     }
 
-    await db
+    const added = await db
       .insert(managerPromptAssignments)
       .values({
         managerId,
         promptId,
         assignedByUserId: actor.id,
       })
-      .onConflictDoUpdate({
-        target: managerPromptAssignments.managerId,
-        set: {
-          promptId,
-          assignedByUserId: actor.id,
-          assignedAt: new Date(),
-        },
-      });
+      .onConflictDoNothing()
+      .returning({ promptId: managerPromptAssignments.promptId });
+    if (added.length === 0) {
+      return { ...emptyState, error: "This prompt is already assigned to the Manager." };
+    }
   } catch (error) {
     logPromptActionFailure("assigning a prompt", error);
     return {
@@ -416,7 +439,7 @@ export async function assignPromptAction(
 
   revalidatePath("/settings");
   revalidatePath("/prompts");
-  return { error: null, success: "The ChatGPT prompt was assigned to the Manager." };
+  return { error: null, success: "The prompt was added to the Manager's rotation." };
 }
 
 export async function unassignPromptAction(
@@ -429,18 +452,27 @@ export async function unassignPromptAction(
   }
 
   const managerId = readText(formData, "managerId", 36);
-  if (!isUuid(managerId)) {
-    return { ...emptyState, error: "Select a valid Manager." };
+  const promptId = readText(formData, "promptId", 36);
+  if (!isUuid(managerId) || !isUuid(promptId)) {
+    return { ...emptyState, error: "Select a valid Manager and prompt." };
   }
 
+  let remaining = 0;
   try {
     const removed = await db
       .delete(managerPromptAssignments)
-      .where(eq(managerPromptAssignments.managerId, managerId))
+      .where(and(
+        eq(managerPromptAssignments.managerId, managerId),
+        eq(managerPromptAssignments.promptId, promptId),
+      ))
       .returning({ managerId: managerPromptAssignments.managerId });
     if (removed.length === 0) {
-      return { ...emptyState, error: "This Manager has no assigned prompt." };
+      return { ...emptyState, error: "That prompt is no longer assigned to this Manager." };
     }
+    remaining = await db.$count(
+      managerPromptAssignments,
+      eq(managerPromptAssignments.managerId, managerId),
+    );
   } catch (error) {
     logPromptActionFailure("unassigning a prompt", error);
     return {
@@ -453,8 +485,114 @@ export async function unassignPromptAction(
   revalidatePath("/prompts");
   return {
     error: null,
-    success: "The assignment was removed. The Manager's normal prompt will be used.",
+    success: remaining > 0
+      ? "The prompt was removed from the Manager's rotation."
+      : "The last assigned prompt was removed. The Manager's own prompt will be used.",
   };
+}
+
+// Replaces the templates a Manager rotates through. Kept templates keep their place in the rotation.
+export async function saveManagerTemplatesAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can choose Manager templates." };
+  }
+
+  const managerId = readText(formData, "managerId", 36);
+  const templates = [...new Set(formData.getAll("templates").map(String))];
+  if (!isUuid(managerId) || !templates.every(isPdfTemplate)) {
+    return { ...emptyState, error: "Select a valid Manager and templates." };
+  }
+
+  try {
+    const [manager] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(
+        eq(users.id, managerId),
+        eq(users.role, "manager"),
+        isNull(users.blockedAt),
+      ))
+      .limit(1);
+    if (!manager) return { ...emptyState, error: "That active Manager was not found." };
+
+    await neonSql.transaction((tx) => [
+      tx`
+        delete from manager_template_assignments
+        where manager_id = ${managerId}::uuid
+          and not (template = any(${templates}::text[]))
+      `,
+      tx`
+        insert into manager_template_assignments (manager_id, template)
+        select ${managerId}::uuid, unnest(${templates}::text[])
+        on conflict do nothing
+      `,
+    ]);
+  } catch (error) {
+    logPromptActionFailure("saving Manager templates", error);
+    return { ...emptyState, error: "The templates could not be saved. Please try again." };
+  }
+
+  revalidatePath("/settings");
+  return {
+    error: null,
+    success: templates.length === 0
+      ? "No templates selected. Each candidate's own template will be used."
+      : `${templates.length} template${templates.length === 1 ? "" : "s"} saved for rotation.`,
+  };
+}
+
+// A Manager saves their own prompt; Super Admin can save any active Manager's.
+export async function saveManagerOwnPromptAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager" && actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Managers and Super Admin can edit Manager prompts." };
+  }
+
+  const managerId = actor.role === "manager"
+    ? actor.id
+    : readText(formData, "managerId", 36);
+  const promptTemplate = readText(formData, "promptTemplate", 50000);
+  if (!isUuid(managerId)) {
+    return { ...emptyState, error: "Select a valid Manager." };
+  }
+  if (!promptTemplate) {
+    return { ...emptyState, error: "Enter the prompt text (50,000 characters or fewer)." };
+  }
+
+  try {
+    const [manager] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(
+        eq(users.id, managerId),
+        eq(users.role, "manager"),
+        isNull(users.blockedAt),
+      ))
+      .limit(1);
+    if (!manager) return { ...emptyState, error: "That active Manager was not found." };
+
+    await db
+      .insert(managerPromptOverrides)
+      .values({ managerId, promptTemplate })
+      .onConflictDoUpdate({
+        target: managerPromptOverrides.managerId,
+        set: { promptTemplate, updatedAt: new Date() },
+      });
+  } catch (error) {
+    logPromptActionFailure("saving a Manager's own prompt", error);
+    return { ...emptyState, error: "The prompt could not be saved. Please try again." };
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/prompts");
+  return { error: null, success: "The prompt was saved." };
 }
 
 export async function updateManagerTextHighlightAccessAction(

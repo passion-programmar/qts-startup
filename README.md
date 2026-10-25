@@ -240,12 +240,29 @@ Job title and URL each have independent PostgreSQL trigram indexes on both
 Jobs and Bids to support partial text search. The `pg_trgm` extension is enabled
 by the database migration. The application workflow that transitions a Job to
 `applied` and inserts its Bid atomically still needs to be implemented.
-Prompt selection mode is stored in the global `settings` row with key
-`prompt_mode` and defaults to `global`. After applying migrations, seed editable
-global starter prompts and this default with `npm run db:seed:prompts`. Super
-Admin manages prompt versions, mode, and Manager assignments from `/settings`.
-Managers can edit their private ChatGPT prompt at `/prompts` when private mode
-is enabled; that page never reads Gemini prompts.
+After applying migrations, seed editable global starter prompts with
+`npm run db:seed:prompts`. Super Admin manages prompt versions and Manager
+assignments from `/settings`. The resume and cover-letter prompt for a
+Generation is chosen per Manager:
+
+- ChatGPT document prompts are written per candidate category
+  (`prompts.category_id`) and are only ever used for accounts in that category.
+- A Manager with assigned global prompts rotates through the ones for the
+  account's category, least recently used first
+  (`manager_prompt_assignments.last_used_at`). If none match, or the account has
+  no category, Generation refuses to start. The PDF template rotates the same
+  way through the templates Super Admin picked for that Manager
+  (`manager_template_assignments`), or uses the account's own template when none
+  are picked. The chosen template is saved on the run
+  (`generation_runs.pdf_template`) so every download of it matches.
+- A Manager without assignments uses their own single prompt
+  (`manager_prompt_overrides`). There is no global fallback: Generation refuses
+  to start until that prompt is written. Managers edit it at `/prompts`; Super
+  Admin can edit it from `/settings`.
+
+The `prompt_mode` setting only decides whether Managers can read the text of
+their assigned prompts (`private`) or see just their names (`global`, the
+default). `/prompts` never reads Gemini prompts.
 
 `resume_pdf_id` is nullable and intentionally has no foreign key yet. The
 resume-template table and its ownership/storage model are deferred, so no

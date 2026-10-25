@@ -6,6 +6,7 @@ import {
   index,
   pgEnum,
   pgTable,
+  primaryKey,
   integer,
   jsonb,
   text,
@@ -71,30 +72,6 @@ export const categories = pgTable(
     uniqueIndex("categories_name_normalized_unique").on(
       sql`lower(btrim(${table.name}))`,
     ),
-  ],
-);
-
-export const subCategories = pgTable(
-  "sub_categories",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    categoryId: uuid("category_id")
-      .notNull()
-      .references(() => categories.id, { onDelete: "restrict" }),
-    name: text("name").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    uniqueIndex("sub_categories_category_name_normalized_unique").on(
-      table.categoryId,
-      sql`lower(btrim(${table.name}))`,
-    ),
-    index("sub_categories_category_id_index").on(table.categoryId),
   ],
 );
 
@@ -164,7 +141,7 @@ export const profiles = pgTable(
     userId: uuid("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "restrict" }),
-    subCategoryId: uuid("category_id").references(() => subCategories.id, {
+    categoryId: uuid("category_id").references(() => categories.id, {
       onDelete: "set null",
     }),
     resumePdfId: uuid("resume_pdf_id"),
@@ -190,7 +167,7 @@ export const profiles = pgTable(
       .notNull(),
   },
   (table) => [
-    index("profiles_category_id_index").on(table.subCategoryId),
+    index("profiles_category_id_index").on(table.categoryId),
     uniqueIndex("profiles_candidate_email_normalized_unique")
       .on(sql`lower(btrim(${table.candidateEmail}))`)
       .where(sql`${table.candidateEmail} is not null`),
@@ -291,6 +268,10 @@ export const prompts = pgTable(
     promptGroupId: uuid("prompt_group_id").defaultRandom().notNull(),
     provider: promptProvider("provider").notNull(),
     purpose: promptPurpose("purpose").notNull(),
+    // ChatGPT document prompts are written per category and only used for that category's accounts.
+    categoryId: uuid("category_id").references(() => categories.id, {
+      onDelete: "restrict",
+    }),
     name: text("name").notNull(),
     promptTemplate: text("prompt_template").notNull(),
     version: integer("version").notNull(),
@@ -322,9 +303,15 @@ export const prompts = pgTable(
       "prompts_provider_matches_purpose_check",
       sql`(${table.provider} = 'openai' and ${table.purpose} = 'document_generation') or (${table.provider} = 'gemini' and ${table.purpose} in ('job_description_evaluation', 'application_answer'))`,
     ),
+    check(
+      "prompts_category_only_for_documents_check",
+      sql`${table.purpose} = 'document_generation' or ${table.categoryId} is null`,
+    ),
+    index("prompts_category_id_index").on(table.categoryId),
   ],
 );
 
+// A Manager's own ChatGPT document prompt, used when no prompts are assigned to them.
 export const managerPromptOverrides = pgTable("manager_prompt_overrides", {
   managerId: uuid("manager_id")
     .primaryKey()
@@ -341,20 +328,48 @@ export const managerPromptOverrides = pgTable("manager_prompt_overrides", {
     .notNull(),
 });
 
-export const managerPromptAssignments = pgTable("manager_prompt_assignments", {
-  managerId: uuid("manager_id")
-    .primaryKey()
-    .references(() => users.id, { onDelete: "cascade" }),
-  promptId: uuid("prompt_id")
-    .notNull()
-    .references(() => prompts.id, { onDelete: "restrict" }),
-  assignedByUserId: uuid("assigned_by_user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "restrict" }),
-  assignedAt: timestamp("assigned_at", { withTimezone: true, mode: "date" })
-    .defaultNow()
-    .notNull(),
-});
+// Global prompts assigned to a Manager. Generation rotates through them, least recently used first.
+export const managerPromptAssignments = pgTable(
+  "manager_prompt_assignments",
+  {
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    promptId: uuid("prompt_id")
+      .notNull()
+      .references(() => prompts.id, { onDelete: "restrict" }),
+    assignedByUserId: uuid("assigned_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    assignedAt: timestamp("assigned_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+  },
+  (table) => [primaryKey({ columns: [table.managerId, table.promptId] })],
+);
+
+// PDF templates Super Admin picks for a Manager with assigned prompts, rotated least recently used first.
+export const managerTemplateAssignments = pgTable(
+  "manager_template_assignments",
+  {
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    template: text("template").notNull(),
+    assignedAt: timestamp("assigned_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.managerId, table.template] }),
+    check(
+      "manager_template_assignments_template_check",
+      sql`${table.template} in ('qts-standard', 'classic', 'harvard', 'executive', 'minimal', 'swiss', 'corporate', 'technical', 'timeline', 'banded', 'elegant', 'bold', 'creative', 'compact', 'academic', 'nordic', 'slate', 'ledger', 'startup', 'professional', 'centered', 'high-contrast', 'modern-serif', 'graphite')`,
+    ),
+  ],
+);
 
 export const generationRuns = pgTable(
   "generation_runs",
@@ -371,6 +386,8 @@ export const generationRuns = pgTable(
     jobDescription: text("job_description").notNull(),
     promptTemplate: text("prompt_template").notNull(),
     composedPrompt: text("composed_prompt").notNull(),
+    // Chosen when the run starts, so every download of this run uses the same template.
+    pdfTemplate: text("pdf_template"),
     responseText: text("response_text"),
     responseJson: jsonb("response_json"),
     status: generationRunStatus("status").default("pending").notNull(),

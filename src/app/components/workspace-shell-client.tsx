@@ -43,12 +43,10 @@ const profileItem: NavigationItem = { label: "My profile", href: "/profile", ico
 export function WorkspaceShellClient({
   user,
   activeHref,
-  managerPromptEnabled,
   children,
 }: {
   user: StaffSession;
   activeHref: string;
-  managerPromptEnabled: boolean;
   children: ReactNode;
 }) {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -83,7 +81,7 @@ export function WorkspaceShellClient({
           { label: "AI settings", href: "/settings", icon: Settings2 },
           { label: "Gemini usage", href: "/settings/gemini-usage", icon: Activity },
         ]
-      : user.role === "manager" && managerPromptEnabled
+      : user.role === "manager"
         ? [{ label: "My AI prompt", href: "/prompts", icon: Sparkles }]
         : [];
   const navigationGroups = [

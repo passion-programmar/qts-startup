@@ -1,46 +1,107 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
-import { managerPromptAssignments, prompts } from "@/db/schema";
-import { db } from "@/lib/db";
+import { eq } from "drizzle-orm";
+import { managerPromptAssignments, managerPromptOverrides } from "@/db/schema";
+import { db, neonSql } from "@/lib/db";
+import { isPdfTemplate, type PdfTemplate } from "@/server/pdf/pdf-templates";
 
 export class MissingDocumentPromptError extends Error {
-  constructor() {
-    super("No active saved document-generation prompt is configured.");
+  constructor(message: string) {
+    super(message);
     this.name = "MissingDocumentPromptError";
   }
 }
 
-export async function getManagerDocumentPrompt(managerId: string): Promise<string> {
-  const [assignedRows, defaultRows] = await Promise.all([
-    db
-      .select({ promptTemplate: prompts.promptTemplate })
-      .from(managerPromptAssignments)
-      .innerJoin(prompts, eq(prompts.id, managerPromptAssignments.promptId))
-      .where(and(
-        eq(managerPromptAssignments.managerId, managerId),
-        eq(prompts.provider, "openai"),
-        eq(prompts.purpose, "document_generation"),
-        eq(prompts.isActive, true),
-      ))
-      .limit(1),
-    db
-      .select({ promptTemplate: prompts.promptTemplate })
-      .from(prompts)
-      .where(and(
-        eq(prompts.provider, "openai"),
-        eq(prompts.purpose, "document_generation"),
-        eq(prompts.isActive, true),
-        eq(prompts.isDefault, true),
-      ))
-      .limit(1),
-  ]);
+export type GenerationSetup = {
+  promptTemplate: string;
+  pdfTemplate: PdfTemplate;
+};
 
-  const selected =
-    assignedRows[0]?.promptTemplate ?? defaultRows[0]?.promptTemplate;
-  const promptTemplate = selected?.trim();
-  if (!promptTemplate) throw new MissingDocumentPromptError();
-  return promptTemplate;
+/**
+ * Picks the prompt and PDF template for one Generation.
+ *
+ * A Manager with assigned prompts rotates through those written for the account's category,
+ * and through the templates Super Admin picked for them (the account's own template when none
+ * are picked). Each pick is recorded so the next Generation moves on. Prompts for another
+ * category are never used, so an account without a matching prompt cannot be generated.
+ *
+ * A Manager without assignments uses their own prompt and the account's own template.
+ */
+export async function getManagerGenerationSetup(
+  managerId: string,
+  account: { categoryId: string | null; pdfTemplate: string },
+): Promise<GenerationSetup> {
+  const accountTemplate = isPdfTemplate(account.pdfTemplate) ? account.pdfTemplate : "qts-standard";
+  const [anyAssignment] = await db
+    .select({ promptId: managerPromptAssignments.promptId })
+    .from(managerPromptAssignments)
+    .where(eq(managerPromptAssignments.managerId, managerId))
+    .limit(1);
+
+  if (!anyAssignment) {
+    const [own] = await db
+      .select({ promptTemplate: managerPromptOverrides.promptTemplate })
+      .from(managerPromptOverrides)
+      .where(eq(managerPromptOverrides.managerId, managerId))
+      .limit(1);
+    const promptTemplate = own?.promptTemplate.trim();
+    if (!promptTemplate) {
+      throw new MissingDocumentPromptError(
+        "Write your resume and cover-letter prompt on the My AI prompt page before starting Generation.",
+      );
+    }
+    return { promptTemplate, pdfTemplate: accountTemplate };
+  }
+
+  if (!account.categoryId) {
+    throw new MissingDocumentPromptError(
+      "This candidate has no category, so none of your assigned prompts can be used. Ask your Super Admin to set the candidate's category.",
+    );
+  }
+  const promptRows = await neonSql`
+    update manager_prompt_assignments
+    set last_used_at = now()
+    from prompts
+    where prompts.id = manager_prompt_assignments.prompt_id
+      and manager_prompt_assignments.manager_id = ${managerId}::uuid
+      and manager_prompt_assignments.prompt_id = (
+        select assignment.prompt_id
+        from manager_prompt_assignments assignment
+        join prompts candidate on candidate.id = assignment.prompt_id
+        where assignment.manager_id = ${managerId}::uuid
+          and candidate.provider = 'openai'
+          and candidate.purpose = 'document_generation'
+          and candidate.is_active
+          and candidate.category_id = ${account.categoryId}::uuid
+        order by assignment.last_used_at asc nulls first, assignment.assigned_at asc
+        limit 1
+        for update of assignment
+      )
+    returning prompts.prompt_template
+  `;
+  const promptTemplate = String(promptRows[0]?.prompt_template ?? "").trim();
+  if (!promptTemplate) {
+    throw new MissingDocumentPromptError(
+      "None of your assigned prompts is written for this candidate's category. Ask your Super Admin to assign one.",
+    );
+  }
+
+  const templateRows = await neonSql`
+    update manager_template_assignments
+    set last_used_at = now()
+    where manager_id = ${managerId}::uuid
+      and template = (
+        select assignment.template
+        from manager_template_assignments assignment
+        where assignment.manager_id = ${managerId}::uuid
+        order by assignment.last_used_at asc nulls first, assignment.template asc
+        limit 1
+        for update
+      )
+    returning template
+  `;
+  const rotated = String(templateRows[0]?.template ?? "");
+  return { promptTemplate, pdfTemplate: isPdfTemplate(rotated) ? rotated : accountTemplate };
 }
 
 export type GenerationJob = {

@@ -5,7 +5,7 @@ import { PaginatedTable } from "@/app/components/paginated-table";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { BidActions } from "@/app/components/record-forms";
-import { bids, categories, profiles, subCategories, users } from "@/db/schema";
+import { bids, categories, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -39,12 +39,10 @@ export default async function BidsPage() {
       firstName: profiles.firstName,
       lastName: profiles.lastName,
       category: categories.name,
-      subCategory: subCategories.name,
     })
     .from(bids)
     .innerJoin(profiles, eq(profiles.userId, bids.candidateId))
-    .leftJoin(subCategories, eq(subCategories.id, profiles.subCategoryId))
-    .leftJoin(categories, eq(categories.id, subCategories.categoryId))
+    .leftJoin(categories, eq(categories.id, profiles.categoryId))
     .where(eq(bids.managerId, currentUser.id))
     .orderBy(desc(bids.appliedAt));
   const candidateRows = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
@@ -84,7 +82,7 @@ export default async function BidsPage() {
             cells: [
               index + 1,
               [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
-              [row.category, row.subCategory].filter(Boolean).join(" / ") || "Uncategorized",
+              row.category || "Uncategorized",
               <div key="job"><span className="block font-medium">{row.title}</span><span className="mt-1 block text-xs text-slate-500">{row.company}</span></div>,
               row.location ?? "—",
               [row.employmentType, row.workplaceType].filter(Boolean).join(" · ") || "—",

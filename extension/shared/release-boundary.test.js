@@ -645,26 +645,35 @@ test('document generation uses saved manager prompt assignments and gates prompt
     'utf8',
   );
 
-  assert.ok(promptResolver.includes('managerPromptAssignments'));
-  assert.ok(promptResolver.includes('assignedRows[0]?.promptTemplate'));
-  assert.ok(promptResolver.includes('eq(prompts.isActive, true)'));
+  // Assigned prompts rotate least recently used first; unassigned Managers use their own prompt only.
+  assert.ok(promptResolver.includes('update manager_prompt_assignments'));
+  assert.ok(promptResolver.includes('order by assignment.last_used_at asc nulls first'));
+  assert.ok(promptResolver.includes('candidate.is_active'));
+  // A prompt is only used for accounts in its own category.
+  assert.ok(promptResolver.includes('and candidate.category_id = ${account.categoryId}::uuid'));
+  assert.ok(promptResolver.includes('update manager_template_assignments'));
+  assert.ok(promptResolver.includes('managerPromptOverrides'));
+  assert.ok(!promptResolver.includes('prompts.isDefault'));
   assert.ok(promptResolver.includes('MissingDocumentPromptError'));
   assert.ok(promptActions.includes('update manager_prompt_assignments'));
+  assert.ok(promptActions.includes('saveManagerOwnPromptAction'));
   assert.ok(!promptActions.includes('promptChoice === "random"'));
   assert.ok(!promptForms.includes('Random active prompt'));
-  assert.ok(promptPage.includes('modeRows[0]?.value !== "private"'));
-  assert.ok(workspaceShell.includes('modeRows[0]?.value === "private"'));
-  assert.ok(workspaceClient.includes('user.role === "manager" && managerPromptEnabled'));
+  assert.ok(promptPage.includes('showAssignedText = modeRows[0]?.value === "private"'));
+  assert.ok(promptPage.includes('<ManagerOwnPromptForm'));
+  assert.ok(!workspaceShell.includes('prompt_mode'));
+  assert.ok(workspaceClient.includes('{ label: "My AI prompt", href: "/prompts"'));
+  assert.ok(!workspaceClient.includes('managerPromptEnabled'));
   assert.ok(workspaceClient.includes('const [sidebarCollapsed, setSidebarCollapsed] = useState(false)'));
 });
 
-test('candidate profiles use grouped subcategories and legacy assignments are preserved', () => {
+test('candidate profiles belong to a category directly and subcategory assignments move to their parent', () => {
   const schema = fs.readFileSync(
     path.join(extensionRoot, '..', 'src', 'db', 'schema.ts'),
     'utf8',
   );
   const migration = fs.readFileSync(
-    path.join(extensionRoot, '..', 'drizzle', '0025_outgoing_zzzax.sql'),
+    path.join(extensionRoot, '..', 'drizzle', '0056_remove_sub_categories.sql'),
     'utf8',
   );
   const userActions = fs.readFileSync(
@@ -676,14 +685,17 @@ test('candidate profiles use grouped subcategories and legacy assignments are pr
     'utf8',
   );
 
-  assert.ok(schema.includes('export const subCategories = pgTable('));
-  assert.ok(schema.includes('subCategoryId: uuid("category_id").references(() => subCategories.id'));
-  assert.ok(migration.includes("VALUES ('General')"));
-  assert.ok(migration.includes('SELECT "id", general_category_id, "name"'));
-  assert.ok(migration.includes('profiles_category_id_sub_categories_id_fk'));
-  assert.ok(userActions.includes('from(subCategories)'));
-  assert.ok(userForms.includes('label="Subcategory"'));
-  assert.ok(userForms.includes('<optgroup key={categoryName} label={categoryName}>'));
+  assert.ok(!schema.includes('subCategories'));
+  assert.ok(schema.includes('categoryId: uuid("category_id").references(() => categories.id'));
+  // Accounts move to the parent category before the subcategory table is dropped.
+  assert.ok(
+    migration.indexOf('SET "category_id" = "sub_categories"."category_id"')
+      < migration.indexOf('DROP TABLE "sub_categories"'),
+  );
+  assert.ok(migration.includes('profiles_category_id_categories_id_fk'));
+  assert.ok(userActions.includes('.from(categories)'));
+  assert.ok(userForms.includes('label="Category"'));
+  assert.ok(!userForms.includes('<optgroup'));
 });
 
 test('the login panel submits completed credentials without a timer or button', () => {

@@ -2,7 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { categories, subCategories } from "@/db/schema";
+import { categories } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -77,90 +77,13 @@ export async function deleteCategoryAction(
     if (!deleted) return failure("That category no longer exists. Refresh and try again.");
   } catch (error) {
     if (isForeignKeyViolation(error)) {
-      return failure("Delete this category's subcategories before deleting the category.");
+      return failure("Move this category's ChatGPT prompts to another category before deleting it.");
     }
     throw error;
   }
 
   revalidateCategoryPages();
-  return success("Category deleted.");
-}
-
-export async function createSubCategoryAction(
-  _previousState: CategoryActionState,
-  formData: FormData,
-): Promise<CategoryActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") return denied();
-
-  const categoryId = readId(formData, "categoryId");
-  const name = readName(formData);
-  if (!categoryId || !name) return failure("Choose a category and enter a subcategory name.");
-
-  let created: { id: string } | undefined;
-  try {
-    [created] = await db
-      .insert(subCategories)
-      .values({ categoryId, name })
-      .onConflictDoNothing()
-      .returning({ id: subCategories.id });
-  } catch (error) {
-    if (isForeignKeyViolation(error)) {
-      return failure("That category no longer exists. Refresh and try again.");
-    }
-    throw error;
-  }
-  if (!created) return failure("That subcategory already exists in this category.");
-
-  revalidateCategoryPages();
-  return success("Subcategory added.");
-}
-
-export async function updateSubCategoryAction(
-  _previousState: CategoryActionState,
-  formData: FormData,
-): Promise<CategoryActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") return denied();
-
-  const id = readId(formData, "subCategoryId");
-  const categoryId = readId(formData, "categoryId");
-  const name = readName(formData);
-  if (!id || !categoryId || !name) return failure("Choose a category and enter a valid subcategory name.");
-
-  try {
-    const [updated] = await db.update(subCategories)
-      .set({ categoryId, name, updatedAt: new Date() })
-      .where(eq(subCategories.id, id))
-      .returning({ id: subCategories.id });
-    if (!updated) return failure("That subcategory no longer exists. Refresh and try again.");
-  } catch (error) {
-    if (isForeignKeyViolation(error)) return failure("That category no longer exists. Refresh and try again.");
-    if (isUniqueViolation(error)) return failure("That subcategory already exists in this category.");
-    throw error;
-  }
-
-  revalidateCategoryPages();
-  return success("Subcategory updated.");
-}
-
-export async function deleteSubCategoryAction(
-  _previousState: CategoryActionState,
-  formData: FormData,
-): Promise<CategoryActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") return denied();
-
-  const id = readId(formData, "subCategoryId");
-  if (!id) return failure("Select a valid subcategory.");
-
-  const [deleted] = await db.delete(subCategories)
-    .where(eq(subCategories.id, id))
-    .returning({ id: subCategories.id });
-  if (!deleted) return failure("That subcategory no longer exists. Refresh and try again.");
-
-  revalidateCategoryPages();
-  return success("Subcategory deleted. Assigned candidates are now uncategorized.");
+  return success("Category deleted. Its candidates are now uncategorized.");
 }
 
 function readName(formData: FormData): string {
@@ -205,5 +128,6 @@ function success(message: string): CategoryActionState {
 function revalidateCategoryPages(): void {
   revalidatePath("/categories");
   revalidatePath("/users");
+  revalidatePath("/settings");
   revalidatePath("/");
 }

@@ -39,7 +39,7 @@ type CreateUserFormProps = {
   categories: CandidateCategoryOption[];
 };
 
-export type CandidateCategoryOption = { id: string; name: string; categoryName: string };
+export type CandidateCategoryOption = { id: string; name: string };
 
 export function CreateUserForm({ role, categories }: CreateUserFormProps) {
   const [educationRows, setEducationRows] = useState([0]);
@@ -179,9 +179,9 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               name="postalCode"
             />
             <SelectField
-              id="subCategoryId"
-              label="Subcategory"
-              name="subCategoryId"
+              id="categoryId"
+              label="Category"
+              name="categoryId"
               options={categories}
             />
           </div>
@@ -441,7 +441,7 @@ export type CandidateProfileValues = {
   addressLine1: string | null;
   postalCode: string | null;
   jdMatching: string | null;
-  subCategoryId: string | null;
+  categoryId: string | null;
   education: {
     institution: string;
     degree: string | null;
@@ -620,10 +620,10 @@ export function EditCandidateProfileForm({
             name="postalCode"
           />
           <SelectField
-            defaultValue={candidate.subCategoryId ?? ""}
-            id={fieldId("subCategoryId")}
-            label="Subcategory"
-            name="subCategoryId"
+            defaultValue={candidate.categoryId ?? ""}
+            id={fieldId("categoryId")}
+            label="Category"
+            name="categoryId"
             options={categories}
           />
           </div>
@@ -1199,21 +1199,9 @@ function SelectField({
         defaultValue={defaultValue}
       >
         <option value="">No category</option>
-        {Array.from(
-          options.reduce((groups, option) => {
-            const group = groups.get(option.categoryName) ?? [];
-            group.push(option);
-            groups.set(option.categoryName, group);
-            return groups;
-          }, new Map<string, CandidateCategoryOption[]>()),
-          ([categoryName, categoryOptions]) => (
-            <optgroup key={categoryName} label={categoryName}>
-              {categoryOptions.map((option) => (
-                <option key={option.id} value={option.id}>{option.name}</option>
-              ))}
-            </optgroup>
-          ),
-        )}
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>{option.name}</option>
+        ))}
       </select>
     </div>
   );

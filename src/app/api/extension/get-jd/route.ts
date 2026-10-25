@@ -10,7 +10,6 @@ import {
   categories,
   profiles,
   prompts,
-  subCategories,
   users,
 } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
@@ -479,13 +478,11 @@ async function loadManagerCandidateProfiles(
       firstName: profiles.firstName,
       lastName: profiles.lastName,
       category: categories.name,
-      subCategory: subCategories.name,
       jdMatching: profiles.jdMatching,
     })
     .from(users)
     .innerJoin(profiles, eq(profiles.userId, users.id))
-    .leftJoin(subCategories, eq(subCategories.id, profiles.subCategoryId))
-    .leftJoin(categories, eq(categories.id, subCategories.categoryId))
+    .leftJoin(categories, eq(categories.id, profiles.categoryId))
     .where(
       and(
         eq(users.parentUserId, managerId),
@@ -503,7 +500,7 @@ async function loadManagerCandidateProfiles(
       id: row.id,
       name: ([row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate")
         .slice(0, 300),
-      category: [row.category, row.subCategory].filter(Boolean).join(" / ") || null,
+      category: row.category || null,
       jdMatching: row.jdMatching,
     })),
   };

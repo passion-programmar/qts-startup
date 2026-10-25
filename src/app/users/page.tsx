@@ -3,9 +3,9 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { asc, desc, inArray, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { categories, educations, experiences, subCategories } from "@/db/schema";
+import { categories, educations, experiences } from "@/db/schema";
 import {
   CopyableAccountField,
   CopyLinkedInUrl,
@@ -62,7 +62,6 @@ type UserRow = {
   jd_matching: string | null;
   category_id: string | null;
   category_name: string | null;
-  sub_category_name: string | null;
 };
 
 function userName(user: UserRow): string {
@@ -117,12 +116,10 @@ export default async function UsersPage() {
       profiles.postal_code,
       profiles.jd_matching,
       profiles.category_id,
-      categories.name as category_name,
-      sub_categories.name as sub_category_name
+      categories.name as category_name
     from visible_users
     left join profiles on profiles.user_id = visible_users.id
-    left join sub_categories on sub_categories.id = profiles.category_id
-    left join categories on categories.id = sub_categories.category_id
+    left join categories on categories.id = profiles.category_id
     order by
       profiles.first_name nulls last,
       profiles.last_name nulls last,
@@ -154,14 +151,9 @@ export default async function UsersPage() {
         : "account";
 
   const categoryOptions: CandidateCategoryOption[] = await db
-    .select({
-      id: subCategories.id,
-      name: subCategories.name,
-      categoryName: categories.name,
-    })
-    .from(subCategories)
-    .innerJoin(categories, eq(categories.id, subCategories.categoryId))
-    .orderBy(categories.name, subCategories.name);
+    .select({ id: categories.id, name: categories.name })
+    .from(categories)
+    .orderBy(categories.name);
 
   const candidateIds = result.rows
     .filter((user) => user.role === "account")
@@ -260,7 +252,7 @@ export default async function UsersPage() {
                 columns={[
                   { label: "No", className: "w-[4%] text-center" },
                   { label: "Full name", className: "w-[14%]" },
-                  { label: "Category / Subcategory", className: "w-[12%]" },
+                  { label: "Category", className: "w-[12%]" },
                   { label: "Contact", className: "w-[18%]" },
                   { label: "Street address", className: "w-[16%]" },
                   { label: "Postal code", className: "w-[10%]" },
@@ -293,13 +285,9 @@ export default async function UsersPage() {
                       <CopyableAccountField
                         ariaLabel={`Copy category for ${userName(candidate)}`}
                         key="category"
-                        value={candidate.sub_category_name
-                          ? `${candidate.category_name} / ${candidate.sub_category_name}`
-                          : "Uncategorized"}
+                        value={candidate.category_name ?? "Uncategorized"}
                       >
-                        {candidate.sub_category_name
-                          ? `${candidate.category_name} / ${candidate.sub_category_name}`
-                          : "Uncategorized"}
+                        {candidate.category_name ?? "Uncategorized"}
                       </CopyableAccountField>,
                       <CopyableAccountField
                         ariaLabel={`Copy contact for ${userName(candidate)}`}
@@ -355,7 +343,7 @@ export default async function UsersPage() {
                           addressLine1: candidate.address_line_1,
                           postalCode: candidate.postal_code,
                           jdMatching: candidate.jd_matching,
-                          subCategoryId: candidate.category_id,
+                          categoryId: candidate.category_id,
                           education: (educationByCandidate.get(candidate.id) ?? []).map(
                             (entry) => ({
                               institution: entry.institution,

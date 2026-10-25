@@ -6,7 +6,7 @@ import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import {
   composeGenerationPrompt,
-  getManagerDocumentPrompt,
+  getManagerGenerationSetup,
   MissingDocumentPromptError,
 } from "@/server/generation/manager-prompt";
 import { normalizeJobUrl } from "@/server/jobs/job-values";
@@ -67,6 +67,8 @@ export async function POST(request: Request): Promise<NextResponse> {
           addressLine1: profiles.addressLine1,
           postalCode: profiles.postalCode,
           jdMatching: profiles.jdMatching,
+          categoryId: profiles.categoryId,
+          pdfTemplate: profiles.pdfTemplate,
         })
         .from(jobs)
         .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -96,7 +98,6 @@ export async function POST(request: Request): Promise<NextResponse> {
         { status: 409 },
       );
     }
-    const promptTemplate = await getManagerDocumentPrompt(manager.id);
     const [education, experience] = await Promise.all([
         db.select({
           institution: educations.institution,
@@ -165,6 +166,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       salary: savedJob.salary || "",
       jobDescription: savedJob.description,
     };
+    // Picked after every other check, so a refused start does not move the rotation on.
+    const { promptTemplate, pdfTemplate } = await getManagerGenerationSetup(manager.id, {
+      categoryId: savedJob.categoryId,
+      pdfTemplate: savedJob.pdfTemplate,
+    });
     const composedPrompt = composeGenerationPrompt(promptTemplate, normalizedJob, candidateProfile);
     await db
       .update(generationRuns)
@@ -190,6 +196,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         jobDescription: normalizedJob.jobDescription,
         promptTemplate,
         composedPrompt,
+        pdfTemplate,
       })
       .returning({ id: generationRuns.id });
     return NextResponse.json({
@@ -204,7 +211,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         {
           success: false,
           errorCode: "generation_prompt_missing",
-          message: "No saved resume and cover-letter prompt is available. Ask your Super Admin to configure one.",
+          message: error.message,
         },
         { status: 409 },
       );
