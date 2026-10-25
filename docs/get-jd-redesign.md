@@ -1,6 +1,6 @@
 # Get JD redesign: shared jobs, per-Manager Gemini, scored detection
 
-Status: **approved**. Steps 1 (scored detection) and 2 (per-Manager Gemini) are implemented; later steps follow section 9.
+Status: **approved**. Steps 1–6 are implemented in code; the database steps still need to run on a Neon branch, then production; later steps follow section 9.
 
 ## 1. Decisions
 
@@ -188,7 +188,7 @@ Nothing is renamed or dropped except those two indexes and one setting. Bids and
 3. ✅ code: `job-key.ts` and `job-relations.ts` with tests, migration 0049 (nullable columns and indexes), `npm run db:backfill:job-relations`. Still to do: run them on a Neon branch and review the report.
 4. ✅ code: Get JD routes on `relation_id`, `job_key` and account states (rows not backfilled yet still match by the legacy URL or title + company); explicit removals; Gemini skipped when no account is available; Jobs page edits update the whole job and deletes are blocked by bids; Generation and the Jobs page use the effective description. Unique keys: migration 0050 adds UNIQUE (job_key, candidate_id) and UNIQUE (title_company_key, candidate_id) and deletes the retired setting. Null keys never conflict, so it is safe before the backfill; the backfill refuses `--apply` while it reports collisions. The columns stay nullable because Drizzle applies pending migrations in one transaction and a NOT NULL step would fail before the backfill; the app writes the keys on every save.
 5. ✅ Extension: checkboxes per state (applied and running Generation checked and locked, saved accounts checked and uncheckable, available unchecked); ticking only stores the selection and Save applies the difference (additions through the save route, removals by row id through `DELETE /api/extension/get-jd/job-accounts/:rowId`); the summary line; plain `innerText` sent only when a job has no description; checkboxes frozen during a save.
-6. Extractor coverage additions.
+6. ✅ Extractor coverage additions (`extension/content/extractors/job-sites.js`): readers for Workday, iCIMS, Jobvite, Teamtailor, Recruitee, BambooHR, Breezy, JazzHR, Personio, Rippling, Wellfound, Taleo and SuccessFactors; company from job-site URLs for 16 systems; platform names never kept as the company; "Title at Company" page titles; jobs read from embedded job-board frames, which also count as a detection signal.
 
 Each step is its own commit with tests; steps 3–4 are deployed together.
 

@@ -53,3 +53,9 @@ test('job lists are penalized, but a list with a selected job is judged on that 
   assert.equal(evaluate({ ...list, headingMatches: 0 }, []).isJobPage, false);
   assert.equal(evaluate({ ...list, headingMatches: 0, url: `${list.url}&currentJobId=4012345678` }, []).isJobPage, true);
 });
+
+test('an embedded job board frame counts as a job signal', () => {
+  const embeddingPage = { url: 'https://acme.com/careers?gh_jid=7781234', hasJobBoardFrame: true };
+  assert.equal(evaluate(embeddingPage, []).isJobPage, true);
+  assert.equal(evaluate({ url: 'https://acme.com/about', hasJobBoardFrame: true }, []).isJobPage, false);
+});

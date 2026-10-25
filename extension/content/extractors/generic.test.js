@@ -986,3 +986,16 @@ test('generic extractor prefers explicitly labeled job location over nearby remo
     'Germany (Remote/Hybrid) - will require travel across Europe',
   );
 });
+
+test('company is read from "Title at Company" and "Title - Company | Careers" page titles', () => {
+  const companyFor = (pageTitle, jobTitle) => {
+    const sandbox = { document: { title: pageTitle, querySelectorAll: () => [], querySelector: () => null }, window: {}, URL };
+    vm.runInNewContext(genericSource, sandbox);
+    return sandbox.getCompanyFromPageTitle(jobTitle);
+  };
+  assert.equal(companyFor('Frontend Engineer at Acme | Careers', 'Frontend Engineer'), 'Acme');
+  assert.equal(companyFor('Frontend Engineer - Acme | Careers', 'Frontend Engineer'), 'Acme');
+  assert.equal(companyFor('Acme – Frontend Engineer', 'Frontend Engineer'), 'Acme');
+  assert.equal(companyFor('Frontend Engineer | Acme Inc.', 'Frontend Engineer'), 'Acme Inc.');
+  assert.equal(companyFor('Careers', 'Frontend Engineer'), '');
+});

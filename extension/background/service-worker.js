@@ -384,7 +384,12 @@ function collectJobPageSnapshotInPage() {
   const hasJobDetailPane = Boolean(document.querySelector(
     '.jobs-search__job-details, .jobs-details, .job-view-layout, #jobsearch-ViewjobPaneWrapper, .jobsearch-JobComponent, [data-testid="jobsearch-ViewjobPaneWrapper"]',
   ));
-  return { url: location.href, text, hasJobPostingData, headingMatches, hasApplyControl, hasCvUpload, jobLinkCount, hasJobDetailPane };
+  // An embedded job board's text is not part of this page's innerText, so the frame itself counts as a signal.
+  const hasJobBoardFrame = [...document.querySelectorAll('iframe[src]')].some((frame) => (
+    /^https:\/\/(?:[^/]+\.)?(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com|icims\.com|jobvite\.com|smartrecruiters\.com|workable\.com|recruitee\.com|teamtailor\.com|bamboohr\.com|breezy\.hr|applytojob\.com|personio\.(?:de|com)|rippling\.com)\//i
+      .test(frame.src)
+  ));
+  return { url: location.href, text, hasJobPostingData, headingMatches, hasApplyControl, hasCvUpload, jobLinkCount, hasJobDetailPane, hasJobBoardFrame };
 }
 
 async function readJobPageSnapshot(tabId, settle = null) {
@@ -560,6 +565,7 @@ const EXTRACTOR_FILES = [
   'content/extractors/indeed.js',
   'content/extractors/glassdoor.js',
   'content/extractors/ats.js',
+  'content/extractors/job-sites.js',
   'content/extractor-manager.js',
 ];
 const DETECT_TOAST_FILE = 'content/detect-toast.js';
@@ -856,6 +862,34 @@ async function injectJobPanelWatch(tabId, pageUrl) {
   }
 }
 
+// Company career pages often embed a Greenhouse, Lever, Workday or similar board in a frame.
+const EMBEDDED_JOB_BOARD_URL = /^https:\/\/(?:[^/]+\.)?(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com|icims\.com|jobvite\.com|smartrecruiters\.com|workable\.com|recruitee\.com|teamtailor\.com|bamboohr\.com|breezy\.hr|applytojob\.com|personio\.(?:de|com)|rippling\.com)\//i;
+const EMBEDDED_JOB_FIELDS = ['title', 'company', 'description', 'location', 'country', 'employmentType', 'workplaceType', 'salary'];
+
+// Reads the job from an embedded job-board frame when the page itself does not show it.
+async function extractJobFromEmbeddedBoard(tabId) {
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+  for (const frame of frames || []) {
+    if (frame.frameId === 0 || !EMBEDDED_JOB_BOARD_URL.test(frame.url || '')) continue;
+    try {
+      const target = { tabId, frameIds: [frame.frameId] };
+      const [probe] = await chrome.scripting.executeScript({
+        target,
+        func: () => typeof window.__extractJobData === 'function',
+      });
+      if (!probe?.result) await chrome.scripting.executeScript({ target, files: EXTRACTOR_FILES });
+      const [result] = await chrome.scripting.executeScript({
+        target,
+        func: () => (window.__extractJobData ? window.__extractJobData() : null),
+      });
+      if (result?.result?.title) return result.result;
+    } catch {
+      // The frame is not readable (navigated away or restricted); try the next one.
+    }
+  }
+  return null;
+}
+
 async function extractJobFromTab(tabId, { requireCompany = false } = {}) {
   const tab = await getTab(tabId);
   if (!tab?.id) {
@@ -891,6 +925,20 @@ async function extractJobFromTab(tabId, { requireCompany = false } = {}) {
         && (!requireCompany || normalizeDetectedJobData(data, tab.url).company)
       ) {
         break;
+      }
+    }
+    if (
+      !isValidDetectedJob(data, tab.url)
+      || (requireCompany && !normalizeDetectedJobData(data, tab.url).company)
+    ) {
+      const embedded = await extractJobFromEmbeddedBoard(tab.id);
+      if (embedded) {
+        // The frame holds the job; the page URL stays the job's address (e.g. careers?gh_jid=123).
+        const merged = { ...(data || {}), url: data?.url || tab.url };
+        for (const field of EMBEDDED_JOB_FIELDS) {
+          if (String(embedded[field] || '').trim()) merged[field] = embedded[field];
+        }
+        data = merged;
       }
     }
     return {

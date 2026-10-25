@@ -656,10 +656,17 @@ function getCompanyFromPageTitle(title) {
   const pageTitle = String(document.title || '').trim();
   const jobTitle = String(title || '').trim();
   if (!pageTitle || !jobTitle) return '';
+  // "Title at Company | Careers" and "Title - Company | Careers": keep only the company part.
+  const firstPart = (value) => value.split(/\s+[|–—-]\s+/)[0].trim();
 
+  const lowerTitle = pageTitle.toLowerCase();
+  const atPrefix = `${jobTitle} at `.toLowerCase();
+  if (lowerTitle.startsWith(atPrefix)) {
+    return firstPart(pageTitle.slice(atPrefix.length));
+  }
   for (const separator of [' | ', ' - ', ' – ', ' — ']) {
-    if (pageTitle.toLowerCase().startsWith(`${jobTitle}${separator}`.toLowerCase())) {
-      return pageTitle.slice(jobTitle.length + separator.length).trim();
+    if (lowerTitle.startsWith(`${jobTitle}${separator}`.toLowerCase())) {
+      return firstPart(pageTitle.slice(jobTitle.length + separator.length));
     }
     const suffix = `${separator}${jobTitle}`;
     if (pageTitle.toLowerCase().endsWith(suffix.toLowerCase())) {

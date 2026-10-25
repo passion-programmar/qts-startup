@@ -121,3 +121,24 @@ test('extractor manager does not replace non-empty platform fields', () => {
   assert.equal(result.salary, 'Platform salary');
   assert.equal(result.url, 'https://jobs.smartrecruiters.com/company/job');
 });
+
+test('extractor manager replaces a platform-name company with the company in the job-site URL', () => {
+  const jobSitesSource = fs.readFileSync(path.join(__dirname, 'extractors', 'job-sites.js'), 'utf8');
+  const run = (company, href) => {
+    const url = new URL(href);
+    const window = {
+      location: { hostname: url.hostname, href, search: url.search },
+      __leverExtract: () => ({ title: 'Engineer', company, description: 'A complete job description' }),
+      __genericExtract: () => ({ title: 'Engineer', company: 'Lever', description: 'A complete job description' }),
+      __normalizeJobUrl: (value) => value,
+    };
+    const context = { window, document: { location: { href }, querySelector: () => null }, console, URL, URLSearchParams };
+    vm.runInNewContext(jobSitesSource, context);
+    vm.runInNewContext(managerSource, context);
+    return window.__extractJobData();
+  };
+
+  assert.equal(run('', 'https://jobs.lever.co/acme-labs/5ac21346-8e0c-4494-8e7a-3eb92ff77902').company, 'Acme Labs');
+  assert.equal(run('Lever', 'https://jobs.lever.co/acme-labs/5ac21346-8e0c-4494-8e7a-3eb92ff77902').company, 'Acme Labs');
+  assert.equal(run('Acme Labs Inc', 'https://jobs.lever.co/acme-labs/5ac21346-8e0c-4494-8e7a-3eb92ff77902').company, 'Acme Labs Inc');
+});

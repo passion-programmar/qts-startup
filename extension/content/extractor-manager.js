@@ -12,7 +12,7 @@ function selectExtractor(hostname) {
   if (hostname.includes('workable.com')) return window.__workableExtract;
   if (hostname.includes('smartrecruiters.com')) return window.__smartrecruitersExtract;
   if (hostname.includes('ashbyhq.com')) return window.__ashbyExtract;
-  return window.__genericExtract;
+  return window.__jobSiteExtractorFor?.(hostname) || window.__genericExtract;
 }
 
 function extractJobData() {
@@ -41,6 +41,10 @@ function extractJobData() {
         console.error('[QTS_Startup] Generic extraction fallback error:', e);
       }
     }
+    // Platform names ("Greenhouse", "Careers") are not companies; job-site URLs usually name the real one.
+    if (window.__isJobPlatformName?.(data.company)) {
+      data.company = window.__companyFromJobSiteUrl?.(window.location.href) || '';
+    }
     if (!data.url) data.url = window.location.href;
     if (window.__normalizeJobUrl) {
       data.url = window.__normalizeJobUrl(data.url);
@@ -65,7 +69,7 @@ function detectSource(hostname, search = '') {
   if (hostname.includes('workable')) return 'workable';
   if (hostname.includes('smartrecruiters')) return 'smartrecruiters';
   if (hostname.includes('ashby')) return 'ashby';
-  return hostname.replace(/^www\./, '').split('.')[0];
+  return window.__jobSiteSourceFor?.(hostname) || hostname.replace(/^www\./, '').split('.')[0];
 }
 
 window.__extractJobData = extractJobData;

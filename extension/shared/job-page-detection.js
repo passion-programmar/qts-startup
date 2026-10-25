@@ -61,6 +61,7 @@
     let score = Math.min(keywordMatches, MAX_KEYWORD_POINTS);
     if (hasJobSiteUrl(url)) score += SIGNAL_POINTS;
     if (snapshot?.hasApplyControl || snapshot?.hasCvUpload) score += SIGNAL_POINTS;
+    if (snapshot?.hasJobBoardFrame) score += SIGNAL_POINTS;
     if (Number(snapshot?.headingMatches || 0) >= 2) score += SIGNAL_POINTS;
     if (looksLikeJobList) score -= JOB_LIST_PENALTY;
 
