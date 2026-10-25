@@ -13,9 +13,25 @@ import {
   estimateGeminiInputTokens,
   geminiModel,
 } from "@/server/gemini/gemini-request";
+import { estimateGeminiImageTokens } from "@/server/gemini/image-token-estimate";
 import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
 
 const maxPromptCharacters = 750_000;
+// Vercel caps request bodies near 4.5 MB and base64 adds about a third, so images stay under 3 MB.
+const maxImageBytes = 3 * 1024 * 1024;
+const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"]);
+
+type ComparisonImage = { mimeType: string; data: string; width: number | null; height: number | null };
+
+function readComparisonImage(value: unknown): ComparisonImage | null | "invalid" {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || typeof value.mimeType !== "string" || typeof value.data !== "string") return "invalid";
+  if (!imageMimeTypes.has(value.mimeType) || !/^[A-Za-z0-9+/]+={0,2}$/.test(value.data)) return "invalid";
+  if (Math.floor((value.data.length * 3) / 4) > maxImageBytes) return "invalid";
+  const dimension = (side: unknown) =>
+    typeof side === "number" && Number.isSafeInteger(side) && side > 0 && side <= 100_000 ? side : null;
+  return { mimeType: value.mimeType, data: value.data, width: dimension(value.width), height: dimension(value.height) };
+}
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (!isComparisonEnabled()) {
@@ -36,14 +52,22 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
+  const image = isRecord(body) ? readComparisonImage(body.image) : "invalid";
+  if (image === "invalid") {
+    return NextResponse.json(
+      { error: "The image must be a PNG, JPEG, WebP, HEIC, or HEIF file of 3 MB or less." },
+      { status: 400 },
+    );
+  }
+  // A prompt, an image, or both: at least one is required.
   if (
     !isRecord(body) ||
-    typeof body.prompt !== "string" ||
-    body.prompt.trim().length === 0 ||
-    body.prompt.length > maxPromptCharacters
+    typeof (body.prompt ?? "") !== "string" ||
+    String(body.prompt ?? "").length > maxPromptCharacters ||
+    (String(body.prompt ?? "").trim().length === 0 && !image)
   ) {
     return NextResponse.json(
-      { error: `Prompt must contain 1-${maxPromptCharacters.toLocaleString()} characters.` },
+      { error: `Enter a prompt of up to ${maxPromptCharacters.toLocaleString()} characters, choose an image, or both.` },
       { status: 400 },
     );
   }
@@ -56,11 +80,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const prompt = body.prompt;
+  const prompt = String(body.prompt ?? "");
+  const imageEstimate = image ? estimateGeminiImageTokens(image.width ?? 0, image.height ?? 0) : null;
   const localEstimate = estimateGeminiInputTokens(
     prompt,
     geminiJobEvaluationGenerationConfig,
-  );
+  ) + (imageEstimate ?? 0);
   const selectedKey = await selectTrackedGeminiKey(apiKeys, await getGeminiApiLimits());
   if (!selectedKey) {
     return NextResponse.json(
@@ -71,7 +96,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   let googleCount: number;
   try {
-    googleCount = await requestGoogleTokenCount(selectedKey.apiKey, prompt);
+    googleCount = await requestGoogleTokenCount(selectedKey.apiKey, prompt, image);
   } catch (error) {
     console.error(
       "Temporary Gemini token comparison failed.",
@@ -94,6 +119,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     difference,
     differencePercent,
     safe: localEstimate >= googleCount,
+    imageEstimate,
+    imageSize: image?.width && image.height ? `${image.width} × ${image.height}` : null,
     keyNumber: selectedKey.keyIndex + 1,
     keyHashPrefix: getGeminiApiKeyHash(selectedKey.apiKey).slice(0, 10),
   });
@@ -132,7 +159,12 @@ function isSameOriginRequest(request: Request): boolean {
 async function requestGoogleTokenCount(
   apiKey: string,
   prompt: string,
+  image: ComparisonImage | null,
 ): Promise<number> {
+  const parts = [
+    ...(prompt.trim() ? [{ text: prompt }] : []),
+    ...(image ? [{ inlineData: { mimeType: image.mimeType, data: image.data } }] : []),
+  ];
   await recordGeminiApiCall(apiKey, "count_tokens");
   const response = await requestGeminiApi(
     apiKey,
@@ -147,7 +179,7 @@ async function requestGoogleTokenCount(
       body: JSON.stringify({
         generateContentRequest: {
           model: `models/${geminiModel}`,
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          contents: [{ role: "user", parts }],
           generationConfig: geminiJobEvaluationGenerationConfig,
         },
       }),
