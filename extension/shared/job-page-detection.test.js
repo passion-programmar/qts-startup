@@ -47,6 +47,11 @@ test('closed or expired postings are rejected even with keywords', () => {
   assert.equal(result.reason, 'closed');
 });
 
+test('a removed posting is rejected', () => {
+  const result = evaluate({ url: 'https://jobs.ashbyhq.com/pleo/56c51ea0', text: 'Job not found. The job you requested was not found.' });
+  assert.equal(result.reason, 'closed');
+});
+
 test('a closed notice that the page does not show does not reject it', () => {
   const result = evaluate({
     text: 'Responsibilities, qualifications. No longer accepting applications.',

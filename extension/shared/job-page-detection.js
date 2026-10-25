@@ -19,6 +19,7 @@
     /\b(?:position|role|vacancy) has been filled\b/i,
     /\bjob (?:posting )?(?:has )?expired\b/i,
     /\bapplications? (?:are |is )?(?:now )?closed\b/i,
+    /\b(?:job|position|posting|vacancy) (?:you requested )?(?:was )?not found\b/i,
   ];
 
   const JOB_SITE_HOST = /(?:^|\.)(?:greenhouse\.io|lever\.co|myworkdayjobs\.com|myworkdaysite\.com|ashbyhq\.com|smartrecruiters\.com|icims\.com|jobvite\.com|teamtailor\.com|recruitee\.com|bamboohr\.com|breezy\.hr|applytojob\.com|jazzhr\.com|personio\.(?:de|com)|rippling\.com|wellfound\.com|workable\.com|taleo\.net|successfactors\.(?:com|eu)|oraclecloud\.com|justjoin\.it)$/i;

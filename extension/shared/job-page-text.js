@@ -15,11 +15,27 @@
   ]);
   const CHROME_ROLES = /^(?:banner|navigation|contentinfo|search|menu|menubar|alertdialog|listbox|option|combobox|tooltip)$/i;
   const CONSENT = /cookie|consent|gdpr|onetrust|didomi|usercentrics|truste|cookiebot|cc-(?:banner|window|revoke)|qc-cmp|osano|iubenda|cmplz|(?:^|\s)cky-/i;
+  const COOKIE_NOTICE_START = /^(?:we|this (?:web)?site|our (?:web)?site|[\w.-]+ and our (?:selected )?partners) (?:uses?|may use) cookies\b/i;
   // Other postings listed beside this one, and list paging.
   const OTHER_JOBS = /(?:similar|related|recommended|other|more)[-_ ]?(?:jobs?|positions?|openings?|roles?|vacanc)|pagination/i;
   const OTHER_JOBS_HEADING = /^(?:similar|related|recommended|other|more|recent|latest|open)\b.{0,30}\b(?:jobs?|positions?|openings?|roles?|vacanc(?:y|ies)|opportunit(?:y|ies))\b|^(?:you may also like|people also viewed|jobs you might like)/i;
   // Screen-reader-only labels ("opens in a new tab", "page is loaded").
   const SCREEN_READER_ONLY = /(?:^|\s)(?:sr-only|visually-hidden|visuallyhidden|screen-reader-text|screenreader|a11y-hidden|assistive-text)(?:$|\s)/i;
+  // A footer block, even inside the content, when it holds the copyright or the site's policies.
+  const FOOTER_NAME = /footer/i;
+  const SITE_FINE_PRINT = /©|copyright|all rights? reserved|privacy (?:policy|notice|statement)|terms (?:of|and) (?:use|service|conditions)/i;
+  // Share buttons and social links, and application forms built without a <form>.
+  const SHARE_NAMES = /(?:^|[\s_-])(?:share|sharing|social)(?:$|[\s_-])/i;
+  const APPLICATION_FORM_NAMES = /application[-_]?form|apply[-_]?form/i;
+  // Copyright lines, and lines of nothing but policy links, wherever they sit.
+  const POLICY_LINK = '(?:privacy(?: policy| notice)?|cookie (?:policy|settings|preferences)|terms(?: of (?:use|service)| and conditions)?|imprint|impressum|legal(?: notice)?|accessibility|sitemap)';
+  const FINE_PRINT_LINE = new RegExp(`^(?:copyright\\s*)?©|^copyright \\d{4}|all rights? reserved\\.?$|^${POLICY_LINK}(?:\\s*[•|·/,]?\\s*${POLICY_LINK})*$`, 'i');
+  // A block of links with little else (footer columns, site maps, menus without markup). A job's own
+  // skill tags can be links too, and rarely number 20.
+  const LINK_FARM_MIN_LINKS = 20;
+  const LINK_FARM_RATIO = 0.8;
+  // Page data and styles left as text in hidden elements: JSON objects and CSS rules.
+  const CODE_LINE = /^[{[]\s*["{[]|^@(?:keyframes|media|font-face|import|supports)\b|^[\w.#:\s>,*-]{1,80}\{[^}]*:[^}]*;/;
   // Site-wide bars named by class or id; "job-header" and similar stay, since they hold the job.
   const CHROME_NAMES = /(?:^|[\s_-])(?:site|global|page|top|main)[-_]?(?:header|footer|nav|navbar|navigation|menu)(?:$|[\s_-])|(?:^|\s)(?:header|footer|navbar|nav-bar|topbar|top-bar|masthead|mega-?menu|skip-?link|breadcrumbs?)(?:$|\s)/i;
 
@@ -40,6 +56,16 @@
     return ![...element.querySelectorAll('h1')].some((h1) => h1 !== headings[0]);
   }
 
+  function isLinkFarm(element) {
+    const links = element.getElementsByTagName('a');
+    if (links.length < LINK_FARM_MIN_LINKS) return false;
+    const total = (element.textContent || '').replace(/\s+/g, '').length;
+    if (!total) return false;
+    let linked = 0;
+    for (const link of links) linked += (link.textContent || '').replace(/\s+/g, '').length;
+    return linked / total >= LINK_FARM_RATIO;
+  }
+
   // Header, footer, navigation, cookie or consent banners, other postings, and application forms:
   // never part of the job text. Lenient mode keeps all but the first four, for pages these rules
   // would leave nearly empty.
@@ -52,16 +78,23 @@
     // A cookie notice in a dialog or notice bar that its class or id does not name.
     if ((role === 'dialog' || element.getAttribute('aria-modal') === 'true' || /modal|popup|banner|notice/i.test(label))
       && textLength(element) < 8000 && /\bcookies?\b/i.test(element.textContent || '')) return true;
+    // A cookie notice with no names at all, known by how it starts.
+    if (textLength(element) < 2000 && COOKIE_NOTICE_START.test((element.textContent || '').trim())) return true;
     // A header or footer inside the content belongs to it (an article's header holds the job title).
     if ((tag === 'HEADER' || tag === 'FOOTER') && !inContent(element) && !element.querySelector('h1')) return true;
     if (CHROME_NAMES.test(label) && !inContent(element) && !element.querySelector('h1')) return true;
+    const idAndClass = `${element.id || ''} ${typeof element.className === 'string' ? element.className : ''}`;
+    if ((tag === 'FOOTER' || FOOTER_NAME.test(idAndClass)) && textLength(element) < 5000 && !element.querySelector('h1')
+      && SITE_FINE_PRINT.test(element.textContent || '')) return true;
+    if (SHARE_NAMES.test(label) && textLength(element) < 600) return true;
     if (tag === 'A' && /^#/.test(element.getAttribute('href') || '') && /^skip to\b/i.test((element.textContent || '').trim())) return true;
     if (SCREEN_READER_ONLY.test(label) && textLength(element) < 200) return true;
     if ((role === 'alert' || role === 'status') && textLength(element) < 200) return true;
     if (lenient) return false;
     if (isOtherJobsBlock(element)) return true;
     if (element.querySelector('h1')) return false;
-    if (OTHER_JOBS.test(label)) return true;
+    if (OTHER_JOBS.test(label) || APPLICATION_FORM_NAMES.test(label)) return true;
+    if (isLinkFarm(element)) return true;
     // The application form; a form around the whole page holds the job's h1 and stays.
     return tag === 'FORM' && element.querySelectorAll('input:not([type="hidden"]), select, textarea').length >= 2;
   }
@@ -102,7 +135,7 @@
     const lines = [];
     for (const raw of parts.join('').split('\n')) {
       const line = raw.replace(/\s+/g, ' ').trim();
-      if (!line || line === '•') {
+      if (!line || line === '•' || FINE_PRINT_LINE.test(line) || CODE_LINE.test(line)) {
         if (lines.length && lines[lines.length - 1] !== '') lines.push('');
         continue;
       }
