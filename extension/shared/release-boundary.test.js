@@ -31,7 +31,9 @@ test('the page launcher is the only user entry point', () => {
   );
   assert.ok(serviceWorker.includes("'../shared/page-exclusions.js'"));
   assert.equal(manifest.action.default_popup, undefined);
-  assert.equal(serviceWorker.includes('chrome.action.onClicked.addListener'), false);
+  // The toolbar icon only forwards to the page launcher; it never opens a popup of its own.
+  assert.ok(serviceWorker.includes('chrome.action.onClicked.addListener'));
+  assert.ok(serviceWorker.includes("type: 'QTS_TOOLBAR_ICON_CLICKED'"));
   assert.ok(manifest.web_accessible_resources.some((entry) => (
     entry.resources || []
   ).includes('assets/wys-launcher.png')));
@@ -55,12 +57,12 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(highlighter.includes("window.addEventListener('load', startPageTextHighlighterAfterLoad, { once: true })"));
   assert.ok(launcher.includes('conic-gradient(from 0deg'));
   assert.ok(launcher.includes('qts-border-rotate'));
-  assert.ok(launcher.includes('animation: qts-border-rotate 1.5s linear infinite'));
-  assert.ok(launcher.includes('.launcher:not(.signed-in)::before'));
-  assert.ok(launcher.includes('.launcher:not(.signed-in) .action'));
-  assert.ok(launcher.includes('.launcher.signed-in .main { border-color: #c7d2fe; background: #fff; }'));
+  assert.ok(launcher.includes('animation: qts-border-rotate 4s linear infinite'));
+  // Signed out, the launcher is hidden and the toolbar icon toggles the Sign In card.
+  assert.ok(launcher.includes('.launcher:not(.signed-in) { display: none; }'));
   assert.ok(launcher.includes("launcher.classList.toggle('signed-in', signedIn)"));
-  assert.ok(launcher.includes("if (!signedIn) {\n      showSignInForm();"));
+  assert.ok(launcher.includes("message?.type === 'QTS_TOOLBAR_ICON_CLICKED'"));
+  assert.ok(launcher.includes('if (signInForm.hidden) showSignInForm();\n    else hideSignInForm();'));
   assert.equal(launcher.includes("launcher.classList.toggle('loading'"), false);
 });
 

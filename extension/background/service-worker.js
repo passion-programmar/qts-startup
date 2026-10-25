@@ -5754,6 +5754,34 @@ self.chrome?.alarms?.onAlarm?.addListener((alarm) => {
 
 self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
 
+// The toolbar icon toggles the page Sign In form while signed out and the launcher actions after sign-in.
+chrome.action.onClicked.addListener((tab) => {
+  if (tab?.id == null) return;
+  chrome.tabs.sendMessage(tab.id, { type: 'QTS_TOOLBAR_ICON_CLICKED' }, { frameId: 0 })
+    .then((response) => {
+      if (response?.ok) return;
+      chrome.notifications?.create?.(`qts-toolbar-${Date.now()}`, {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('assets/icon128.png'),
+        title: 'QTS_Startup',
+        message: response?.excluded
+          ? 'QTS is turned off on this page.'
+          : 'QTS could not open on this page.',
+      });
+    })
+    .catch(() => {
+      // No content script: a browser page, or a tab opened before the extension was reloaded.
+      chrome.notifications?.create?.(`qts-toolbar-${Date.now()}`, {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('assets/icon128.png'),
+        title: 'QTS_Startup',
+        message: /^https?:/i.test(tab.url || '')
+          ? 'Reload this page to use QTS.'
+          : 'QTS works on web pages. Open a website and click the icon again.',
+      });
+    });
+});
+
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const tab = await getTab(activeInfo.tabId);
   const onPinnedGpt = await isPinnedGptTab(activeInfo.tabId);

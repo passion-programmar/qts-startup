@@ -28,32 +28,68 @@ async function initializeQtsPageLauncher() {
   style.textContent = `
     :host { all: initial; }
     * { box-sizing: border-box; }
-    .launcher { position: fixed; right: 180px; bottom: 24px; width: 58px; height: 58px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
-    .launcher::before { content: ""; position: absolute; inset: -5px; z-index: 1; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0deg 245deg, #3b82f6 285deg, #22d3ee 325deg, #818cf8 350deg, transparent 360deg); opacity: 1; transform: rotate(0deg); animation: qts-border-rotate 1.5s linear infinite; pointer-events: none; }
-    .launcher:not(.signed-in)::before { opacity: 0; animation: none; }
+    .launcher { position: fixed; right: 180px; bottom: 24px; width: 60px; height: 60px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
+    /* Signed out, the launcher is hidden; the toolbar icon opens the Sign In card instead. */
+    .launcher:not(.signed-in) { display: none; }
+    .launcher.signed-in { animation: qts-launcher-enter .7s cubic-bezier(.34,1.56,.64,1) both; }
+    @keyframes qts-launcher-enter { from { opacity: 0; transform: translateY(24px) scale(.3) rotate(-120deg); } to { opacity: 1; transform: none; } }
+    .launcher::after { content: ""; position: absolute; inset: -16px; z-index: 0; border-radius: 50%; background: radial-gradient(circle, #a78bfa73 0%, #22d3ee40 42%, transparent 70%); filter: blur(6px); animation: qts-breathe 3.2s ease-in-out infinite; pointer-events: none; }
+    @keyframes qts-breathe { 0%, 100% { opacity: .55; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.1); } }
+    .launcher::before { content: ""; position: absolute; inset: -3px; z-index: 1; border-radius: 50%; background: conic-gradient(from 0deg, #f59e0b, #f43f5e, #d946ef, #6366f1, #06b6d4, #10b981, #f59e0b); box-shadow: 0 0 20px #8b5cf670; animation: qts-border-rotate 4s linear infinite; pointer-events: none; }
+    .launcher.open::before { animation-duration: 1.6s; }
     @keyframes qts-border-rotate { to { transform: rotate(360deg); } }
-    .main { position: absolute; inset: 4px; z-index: 3; display: grid; place-items: center; width: 50px; height: 50px; padding: 4px; border: 1px solid #475569; border-radius: 50%; background: #334155; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease, border-color .18s ease; }
-    .launcher.signed-in .main { border-color: #c7d2fe; background: #fff; }
-    .launcher.not-job-page .main, .launcher.not-job-page .main:hover { border-color: #fca5a5; background: #dc2626; box-shadow: 0 0 0 6px #dc262633, 0 12px 32px #0f172a42; transition: background .2s ease, box-shadow .2s ease; }
-    .main:hover { transform: scale(1.06); background: #1e293b; }
-    .launcher.signed-in .main:hover { background: #f8fafc; }
-    .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
-    .brand-icon { display: block; width: 40px; height: 40px; object-fit: contain; object-position: center; }
-    .action { --x: 0px; --y: 0px; position: absolute; top: 50%; left: 50%; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 72px; margin: -36px 0 0 -36px; padding: 7px; aspect-ratio: 1; border: 1px solid #c7d2fe; border-radius: 50%; background: #fff; color: #1e293b; box-shadow: 0 9px 24px #0f172a30; font: 700 10px/1.05 system-ui, sans-serif; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.45); transition: transform .2s ease, opacity .16s ease, visibility .2s; }
+    .burst { position: absolute; inset: 0; z-index: 0; border: 3px solid #8b5cf6; border-radius: 50%; opacity: 0; pointer-events: none; }
+    .launcher.activated .burst { animation: qts-burst 1.1s cubic-bezier(.2,.8,.2,1) .35s; }
+    .launcher.activated .burst + .burst { border-color: #22d3ee; animation-delay: .55s; }
+    @keyframes qts-burst { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(2.8); } }
+    .main { position: absolute; inset: 3px; z-index: 3; display: grid; place-items: center; width: 54px; height: 54px; padding: 0; overflow: hidden; border: 2px solid #fff; border-radius: 50%; background: radial-gradient(circle at 32% 26%, #fff 0%, #f8fafc 40%, #e0e7ff 100%); box-shadow: inset 0 -8px 16px #6366f12e, 0 10px 28px #4f46e559; cursor: pointer; transition: transform .35s cubic-bezier(.34,1.56,.64,1), box-shadow .2s ease, background .2s ease; }
+    .main::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 35%, #ffffffe6 50%, transparent 65%); transform: translateX(-130%); animation: qts-sheen 4.5s ease-in-out infinite; pointer-events: none; }
+    @keyframes qts-sheen { 0%, 72% { transform: translateX(-130%); } 100% { transform: translateX(130%); } }
+    .main:hover { transform: scale(1.08); box-shadow: inset 0 -8px 16px #6366f12e, 0 14px 36px #4f46e580; }
+    .launcher.open .main { transform: scale(.94); }
+    .launcher.not-job-page .main, .launcher.not-job-page .main:hover { border-color: #fecaca; background: radial-gradient(circle at 32% 26%, #fecaca 0%, #dc2626 100%); box-shadow: 0 0 0 6px #dc262633, 0 12px 32px #dc262666; animation: qts-shake .45s ease; }
+    .launcher.not-job-page::before { background: #ef4444; }
+    @keyframes qts-shake { 0%, 100% { translate: 0; } 20% { translate: -4px; } 40% { translate: 4px; } 60% { translate: -3px; } 80% { translate: 3px; } }
+    .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #a78bfa; outline-offset: 3px; }
+    .brand-icon { position: relative; z-index: 1; display: block; width: 38px; height: 38px; object-fit: contain; object-position: center; filter: drop-shadow(0 2px 3px #0f172a47); transition: transform .35s cubic-bezier(.34,1.56,.64,1); }
+    .launcher.open .brand-icon { transform: rotate(-12deg) scale(.92); }
+    .busy-dot { position: absolute; top: -2px; right: -2px; z-index: 4; display: none; width: 15px; height: 15px; border: 2px solid #fff; border-radius: 50%; background: #10b981; animation: qts-ping 1.6s ease-out infinite; pointer-events: none; }
+    .launcher.busy .busy-dot { display: block; }
+    @keyframes qts-ping { 0% { box-shadow: 0 0 0 0 #10b981aa; } 100% { box-shadow: 0 0 0 11px #10b98100; } }
+    .action { --x: 0px; --y: 0px; --a1: #6366f1; --a2: #8b5cf6; --glow: #6366f166; position: absolute; top: 50%; left: 50%; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; width: 76px; height: 76px; margin: -38px 0 0 -38px; padding: 8px 4px; border: 1.5px solid transparent; border-radius: 24px; background: linear-gradient(160deg, #ffffffee, #f8fafcdb) padding-box, linear-gradient(135deg, var(--a1), var(--a2)) border-box; color: #0f172a; box-shadow: 0 12px 28px -8px var(--glow), 0 3px 8px #0f172a1f; backdrop-filter: blur(14px) saturate(1.5); font: 700 10px/1.1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .01em; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.3) rotate(-25deg); transition: transform .42s cubic-bezier(.34,1.56,.64,1), opacity .2s ease, visibility .42s, box-shadow .2s ease; }
     .action[hidden] { display: none; }
-    .launcher:not(.signed-in) .action { display: none; }
-    .action:hover { color: #3730a3; background: #eef2ff; border-color: #818cf8; }
-    .action-icon { color: #4f46e5; font-size: 20px; line-height: 1; }
-    .launcher.open .action { opacity: 1; visibility: visible; transform: translate(var(--x), var(--y)) scale(1); }
+    .action-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 11px; background: linear-gradient(135deg, var(--a1), var(--a2)); color: #fff; font-size: 17px; line-height: 1; box-shadow: 0 6px 14px -4px var(--glow), inset 0 1px 0 #ffffff5c; text-shadow: 0 1px 1px #0f172a40; }
+    .launcher.open .action { opacity: 1; visibility: visible; transform: translate(var(--x), var(--y)) scale(1); transition-delay: calc(var(--i, 0) * 40ms); }
+    .launcher.open .action:hover { transform: translate(var(--x), calc(var(--y) - 4px)) scale(1.08); box-shadow: 0 18px 34px -8px var(--glow), 0 4px 10px #0f172a24; transition-delay: 0s; }
+    .launcher.open .action:disabled { opacity: .6; cursor: progress; }
+    .action.get-jd { --a1: #06b6d4; --a2: #3b82f6; --glow: #0ea5e966; }
+    .action.generation { --a1: #8b5cf6; --a2: #d946ef; --glow: #a855f766; }
+    .action.apply { --a1: #10b981; --a2: #14b8a6; --glow: #10b98166; }
+    .action.logout { --a1: #f43f5e; --a2: #fb923c; --glow: #f43f5e66; }
+    .action.text-highlights { --a1: #f59e0b; --a2: #eab308; --glow: #f59e0b66; }
+    .action.page-exclusions { --a1: #64748b; --a2: #6366f1; --glow: #6366f155; }
+    /* A running mode turns its button into a pulsing red Cancel. */
+    .action.running { --a1: #ef4444; --a2: #f97316; --glow: #ef444466; }
+    .action.running .action-icon { animation: qts-pulse 1.4s ease-in-out infinite; }
+    @keyframes qts-pulse { 50% { transform: scale(1.14); } }
     .get-jd { --x: -150px; --y: 0px; }
     .generation { --x: -122px; --y: -88px; }
     .apply { --x: -46px; --y: -143px; }
     .logout { --x: 46px; --y: -143px; }
     .text-highlights { --x: 122px; --y: -88px; }
     .page-exclusions { --x: 150px; --y: 0px; }
-    .sign-in-form { position: fixed; top: 18px; right: 18px; z-index: 5; width: min(312px, calc(100vw - 36px)); height: 220px; pointer-events: auto; }
+    .sign-in-form { position: fixed; top: 16px; right: 16px; z-index: 5; width: min(328px, calc(100vw - 32px)); overflow: hidden; padding: 18px 16px 14px; border: 1px solid #ffffffb3; border-radius: 20px; background: linear-gradient(160deg, #ffffffeb, #f5f3ffe6); box-shadow: 0 28px 64px -14px #312e8173, 0 0 0 1px #6366f11f; backdrop-filter: blur(18px) saturate(1.6); color: #0f172a; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; animation: qts-card-in .34s cubic-bezier(.2,.9,.3,1.2) both; }
+    .sign-in-form::before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(90deg, #f59e0b, #f43f5e, #d946ef, #6366f1, #06b6d4); }
     .sign-in-form[hidden] { display: none; }
-    .sign-in-form iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; color-scheme: normal; }
+    @keyframes qts-card-in { from { opacity: 0; transform: translateY(-12px) scale(.96); } to { opacity: 1; transform: none; } }
+    .sign-in-header { display: flex; align-items: center; gap: 11px; margin-bottom: 12px; }
+    .sign-in-logo { display: grid; flex: none; place-items: center; width: 40px; height: 40px; border-radius: 13px; background: radial-gradient(circle at 32% 26%, #fff 0%, #e0e7ff 100%); box-shadow: inset 0 -4px 10px #6366f12e, 0 6px 16px -4px #4f46e566; }
+    .sign-in-logo img { width: 28px; height: 28px; object-fit: contain; filter: drop-shadow(0 1px 2px #0f172a47); }
+    .sign-in-title { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+    .sign-in-title strong { font: 800 15px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .sign-in-title span { color: #64748b; font: 500 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .sign-in-form .close { width: 28px; height: 28px; background: #eef2ff; color: #4338ca; font-size: 18px; }
+    .sign-in-form iframe { display: block; width: 100%; height: 206px; border: 0; background: transparent; color-scheme: normal; transition: height .2s ease; }
     .preview { position: fixed; top: 16px; right: 16px; width: min(390px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 17px; border: 1px solid #cbd5e1; border-radius: 13px; background: #fff; color: #0f172a; box-shadow: 0 14px 42px #0f172a38; font: 13px/1.45 system-ui, sans-serif; pointer-events: auto; }
     .preview[hidden] { display: none; }
     .preview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
@@ -67,17 +103,21 @@ async function initializeQtsPageLauncher() {
     .description { max-height: 180px; overflow: auto; padding: 9px; border-radius: 8px; background: #f8fafc; }
     .launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }
     @media (max-width: 520px) {
-      .launcher { right: calc(50vw - 29px); bottom: 18px; }
-      .action { width: 66px; height: 66px; margin: -33px 0 0 -33px; }
+      .launcher { right: calc(50vw - 30px); bottom: 18px; }
+      .action { width: 66px; height: 66px; margin: -33px 0 0 -33px; border-radius: 21px; }
+      .action-icon { width: 28px; height: 28px; font-size: 15px; }
       .get-jd { --x: -112px; --y: 0px; }
       .generation { --x: -91px; --y: -66px; }
       .apply { --x: -35px; --y: -106px; }
       .logout { --x: 35px; --y: -106px; }
       .text-highlights { --x: 91px; --y: -66px; }
       .page-exclusions { --x: 112px; --y: 0px; }
-      .launcher.get-jd-active { right: calc(50vw - 29px); }
+      .launcher.get-jd-active { right: calc(50vw - 30px); }
     }
-    @media (prefers-reduced-motion: reduce) { .main, .action, .launcher { transition: none; } .launcher::before { animation: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .main, .action, .launcher, .brand-icon, .sign-in-form iframe { transition: none; }
+      .launcher, .launcher::before, .launcher::after, .main::after, .burst, .busy-dot, .action-icon, .main, .sign-in-form { animation: none !important; }
+    }
 `;
 
   const launcher = document.createElement('div');
@@ -93,7 +133,15 @@ async function initializeQtsPageLauncher() {
   brandIcon.alt = '';
   brandIcon.setAttribute('aria-hidden', 'true');
   main.appendChild(brandIcon);
-  launcher.appendChild(main);
+  const busyDot = document.createElement('span');
+  busyDot.className = 'busy-dot';
+  // Two rings ripple out once when the launcher activates after sign-in.
+  const bursts = [0, 1].map(() => {
+    const ring = document.createElement('span');
+    ring.className = 'burst';
+    return ring;
+  });
+  launcher.append(...bursts, main, busyDot);
 
   const actions = [
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
@@ -103,9 +151,12 @@ async function initializeQtsPageLauncher() {
     ['apply', 'Apply', '→', 'apply'],
     ['session', 'Sign In', '↪', 'logout'],
   ];
+  // Buttons fan out left to right around the arc.
+  const revealOrder = ['get-jd', 'generation', 'apply', 'logout', 'text-highlights', 'page-exclusions'];
   for (const [action, label, icon, positionClass] of actions) {
     const button = document.createElement('button');
     button.className = `action ${positionClass}`;
+    button.style.setProperty('--i', String(revealOrder.indexOf(positionClass)));
     button.type = 'button';
     button.dataset.action = action;
     button.setAttribute('aria-label', label);
@@ -123,6 +174,30 @@ async function initializeQtsPageLauncher() {
   const signInForm = document.createElement('div');
   signInForm.className = 'sign-in-form';
   signInForm.hidden = true;
+  signInForm.setAttribute('role', 'dialog');
+  signInForm.setAttribute('aria-label', 'QTS Manager sign in');
+  const signInHeader = document.createElement('div');
+  signInHeader.className = 'sign-in-header';
+  const signInLogo = document.createElement('span');
+  signInLogo.className = 'sign-in-logo';
+  const signInLogoImage = document.createElement('img');
+  signInLogoImage.src = chrome.runtime.getURL('assets/wys-launcher.png');
+  signInLogoImage.alt = '';
+  signInLogo.appendChild(signInLogoImage);
+  const signInTitle = document.createElement('div');
+  signInTitle.className = 'sign-in-title';
+  const signInHeading = document.createElement('strong');
+  signInHeading.textContent = 'QTS Manager';
+  const signInSubtitle = document.createElement('span');
+  signInSubtitle.textContent = 'Sign in to activate the launcher';
+  signInTitle.append(signInHeading, signInSubtitle);
+  const signInClose = document.createElement('button');
+  signInClose.className = 'close';
+  signInClose.type = 'button';
+  signInClose.setAttribute('aria-label', 'Close sign in');
+  signInClose.textContent = '×';
+  signInHeader.append(signInLogo, signInTitle, signInClose);
+  signInForm.appendChild(signInHeader);
   let signInFrame = null;
 
   const preview = document.createElement('section');
@@ -199,6 +274,31 @@ async function initializeQtsPageLauncher() {
     signInFrame?.remove();
     signInFrame = null;
   }
+
+  // The toolbar icon: signed out it shows or hides the Sign In card; signed in it opens or closes the actions.
+  async function toggleFromToolbar() {
+    if (await syncSessionAction()) {
+      setOpen(!launcher.classList.contains('open'));
+      main.focus();
+      return;
+    }
+    if (signInForm.hidden) showSignInForm();
+    else hideSignInForm();
+  }
+
+  function playActivation() {
+    launcher.classList.remove('activated');
+    void launcher.offsetWidth; // Restart the ripple if it is still running.
+    launcher.classList.add('activated');
+    setTimeout(() => launcher.classList.remove('activated'), 1800);
+  }
+
+  // The sign-in frame reports its content height so the card fits an error message without a scrollbar.
+  const onWindowMessage = (event) => {
+    if (!signInFrame || event.source !== signInFrame.contentWindow) return;
+    const height = Number(event.data?.qtsSignInHeight);
+    if (Number.isFinite(height) && height > 0) signInFrame.style.height = `${Math.min(Math.ceil(height), 400)}px`;
+  };
 
   async function syncTextHighlightAction() {
     const highlightButton = launcher.querySelector('[data-action="text_highlights"]');
@@ -318,9 +418,11 @@ async function initializeQtsPageLauncher() {
     const label = button.querySelector('.action-icon + span');
     if (icon) icon.textContent = signedIn ? '↪' : '→';
     if (label) label.textContent = signedIn ? 'Sign Out' : 'Sign In';
-    if (!signedIn) {
-      setOpen(false);
+    // Signed out, an open Sign In card stays put: sign-in clears the old session first, which lands here mid-login.
+    if (signedIn) {
       hideSignInForm();
+    } else {
+      setOpen(false);
       preview.hidden = true;
       if (expiresAt > 0) {
         chrome.storage.local.set({ qtsExtensionStatus: null }).catch((error) => {
@@ -339,10 +441,12 @@ async function initializeQtsPageLauncher() {
       generation: 'Generation',
       apply: 'Apply',
     };
+    launcher.classList.toggle('busy', Object.hasOwn(labels, activeStatus || ''));
     for (const [action, defaultLabel] of Object.entries(labels)) {
       const button = launcher.querySelector(`[data-action="${action}"]`);
       if (!button) continue;
       const active = activeStatus === action;
+      button.classList.toggle('running', active);
       button.dataset.modeAction = active ? 'cancel_status' : action;
       button.setAttribute('aria-label', active ? `Cancel ${defaultLabel}` : defaultLabel);
       const icon = button.querySelector('.action-icon');
@@ -400,18 +504,15 @@ async function initializeQtsPageLauncher() {
   }
 
   main.addEventListener('click', async () => {
-    const signedIn = await syncSessionAction();
-    if (!signedIn) {
-      showSignInForm();
-      return;
-    }
-    hideSignInForm();
+    // The launcher is only visible while signed in; a session that just expired hides it here.
+    if (!(await syncSessionAction())) return;
     setOpen(!launcher.classList.contains('open'));
   });
   launcher.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
   });
   close.addEventListener('click', () => { preview.hidden = true; });
+  signInClose.addEventListener('click', hideSignInForm);
   // Page-wide listeners belong to this launcher instance and are removed by disable().
   const onStorageChanged = (changes, area) => {
     if (area !== 'local') return;
@@ -422,6 +523,7 @@ async function initializeQtsPageLauncher() {
       // Sign-in always clears the previous session first, so a fresh expiry means a new sign-in.
       if (changes.authExpiresAt.newValue && !changes.authExpiresAt.oldValue) {
         hideSignInForm();
+        playActivation();
         showToast('Signed in. QTS actions are ready.', 'success');
       }
     }
@@ -456,6 +558,7 @@ async function initializeQtsPageLauncher() {
   chrome.storage.onChanged.addListener(onStorageChanged);
   chrome.runtime.onMessage.addListener(onRuntimeMessage);
   document.addEventListener('keydown', onKeydown);
+  window.addEventListener('message', onWindowMessage);
 
   syncSessionAction().catch(() => {});
   syncModeActions().catch(() => {});
@@ -477,6 +580,7 @@ async function initializeQtsPageLauncher() {
     syncModeActions,
     syncTextHighlightAction,
     openPageExclusionPanel,
+    toggleFromToolbar,
     disable() {
       setOpen(false);
       preview.hidden = true;
@@ -485,6 +589,7 @@ async function initializeQtsPageLauncher() {
       chrome.storage.onChanged.removeListener(onStorageChanged);
       chrome.runtime.onMessage.removeListener(onRuntimeMessage);
       document.removeEventListener('keydown', onKeydown);
+      window.removeEventListener('message', onWindowMessage);
       host.remove();
       globalThis.__qtsPageLauncher = { excluded: true };
     },
@@ -516,7 +621,25 @@ globalThis.__qtsInitializePageLauncher = initializeQtsPageLauncherOnce;
 // These listeners outlive any one launcher so a disabled launcher can come back.
 if (!globalThis.__qtsPageLauncherNavigationListener) {
   globalThis.__qtsPageLauncherNavigationListener = true;
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'QTS_TOOLBAR_ICON_CLICKED') {
+      // A click before the page finishes loading starts the launcher early instead of being dropped.
+      initializeQtsPageLauncherOnce()
+        .then(async () => {
+          const pageLauncher = globalThis.__qtsPageLauncher;
+          if (!pageLauncher || pageLauncher.excluded) {
+            sendResponse({ ok: false, excluded: true });
+            return;
+          }
+          await pageLauncher.toggleFromToolbar();
+          sendResponse({ ok: true });
+        })
+        .catch((error) => {
+          console.error('[QTS extension] Could not respond to the toolbar icon:', error);
+          sendResponse({ ok: false });
+        });
+      return true;
+    }
     if (message?.type !== 'QTS_PAGE_URL_CHANGED') return;
     if (message.excluded) {
       globalThis.__qtsPageLauncher?.disable?.();
