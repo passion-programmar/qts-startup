@@ -915,3 +915,14 @@ test('Local Count never calls CountTokens; Gemini Count records both counts on t
   assert.ok(modeForm.includes('label: "Local Count"'));
   assert.ok(modeForm.includes('label: "Gemini Count"'));
 });
+
+test('raw shared-job save SQL types every value Postgres cannot infer', () => {
+  const helper = fs.readFileSync(path.join(extensionRoot, '..', 'src', 'server', 'jobs', 'get-jd-jobs.ts'), 'utf8');
+  const update = helper.slice(helper.indexOf('`UPDATE jobs SET'), helper.indexOf('`,', helper.indexOf('`UPDATE jobs SET')));
+  // A bare "$n IS NOT NULL" fails with "could not determine data type of parameter $n" and rolls the save back.
+  assert.equal(/\$\d+ IS NOT NULL/.test(update), false);
+  for (const typed of ['$6::text IS NOT NULL', '$7::text IS NOT NULL', '$12::text IS NOT NULL']) {
+    assert.ok(update.includes(typed), typed);
+  }
+  assert.ok(helper.includes('$16::text, $17::boolean, $7::uuid, $6::uuid, $18::date'));
+});

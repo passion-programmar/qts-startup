@@ -228,13 +228,13 @@ export async function insertGetJdJob(
        ), merged AS (
          SELECT
            coalesce((SELECT relation_id FROM base), gen_random_uuid()) AS relation_id,
-           coalesce(nullif(btrim((SELECT description FROM base)), ''), $9) AS description,
-           coalesce(nullif((SELECT page_text FROM base), ''), $10) AS page_text,
-           coalesce(nullif(btrim((SELECT location FROM base)), ''), $11) AS location,
-           coalesce(nullif(btrim((SELECT country FROM base)), ''), $12) AS country,
-           coalesce(nullif(btrim((SELECT employment_type FROM base)), ''), $13) AS employment_type,
-           coalesce(nullif(btrim((SELECT workplace_type FROM base)), ''), $14) AS workplace_type,
-           coalesce(nullif(btrim((SELECT salary FROM base)), ''), $15) AS salary
+           coalesce(nullif(btrim((SELECT description FROM base)), ''), $9::text) AS description,
+           coalesce(nullif((SELECT page_text FROM base), ''), $10::text) AS page_text,
+           coalesce(nullif(btrim((SELECT location FROM base)), ''), $11::text) AS location,
+           coalesce(nullif(btrim((SELECT country FROM base)), ''), $12::text) AS country,
+           coalesce(nullif(btrim((SELECT employment_type FROM base)), ''), $13::text) AS employment_type,
+           coalesce(nullif(btrim((SELECT workplace_type FROM base)), ''), $14::text) AS workplace_type,
+           coalesce(nullif(btrim((SELECT salary FROM base)), ''), $15::text) AS salary
        )
        INSERT INTO jobs (
          relation_id, job_key, title_company_key, job_url, job_title, company,
@@ -242,10 +242,10 @@ export async function insertGetJdJob(
          job_reason, auto_saved_by_get_jd, manager_id, candidate_id, date, status
        )
        SELECT
-         m.relation_id, $1, $2, $8, $4, $5,
+         m.relation_id, $1::text, $2::text, $8::text, $4::text, $5::text,
          m.description, CASE WHEN m.description IS NULL THEN m.page_text END,
          m.location, m.country, m.employment_type, m.workplace_type, m.salary,
-         $16, $17, $7, $6, $18::date, 'todo'
+         $16::text, $17::boolean, $7::uuid, $6::uuid, $18::date, 'todo'
          FROM merged m
         WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE candidate_id = $6 AND ${SAME_JOB_SQL})
        ON CONFLICT DO NOTHING
@@ -270,26 +270,26 @@ export async function insertGetJdJob(
     // Fill empty shared details on the job's other rows; a new description clears page_text.
     neonSql.query(
       `UPDATE jobs SET
-         description = coalesce(nullif(btrim(description), ''), $6),
+         description = coalesce(nullif(btrim(description), ''), $6::text),
          page_text = CASE
-           WHEN coalesce(nullif(btrim(description), ''), $6) IS NOT NULL THEN NULL
-           ELSE coalesce(nullif(page_text, ''), $7)
+           WHEN coalesce(nullif(btrim(description), ''), $6::text) IS NOT NULL THEN NULL
+           ELSE coalesce(nullif(page_text, ''), $7::text)
          END,
-         location = coalesce(nullif(btrim(location), ''), $8),
-         country = coalesce(nullif(btrim(country), ''), $9),
-         employment_type = coalesce(nullif(btrim(employment_type), ''), $10),
-         workplace_type = coalesce(nullif(btrim(workplace_type), ''), $11),
-         salary = coalesce(nullif(btrim(salary), ''), $12),
+         location = coalesce(nullif(btrim(location), ''), $8::text),
+         country = coalesce(nullif(btrim(country), ''), $9::text),
+         employment_type = coalesce(nullif(btrim(employment_type), ''), $10::text),
+         workplace_type = coalesce(nullif(btrim(workplace_type), ''), $11::text),
+         salary = coalesce(nullif(btrim(salary), ''), $12::text),
          updated_at = now()
        WHERE ${SAME_JOB_SQL}
          AND (
-           (nullif(btrim(description), '') IS NULL AND ($6 IS NOT NULL OR (page_text IS NULL AND $7 IS NOT NULL)))
+           (nullif(btrim(description), '') IS NULL AND ($6::text IS NOT NULL OR (page_text IS NULL AND $7::text IS NOT NULL)))
            OR (page_text IS NOT NULL AND nullif(btrim(description), '') IS NOT NULL)
-           OR (nullif(btrim(location), '') IS NULL AND $8 IS NOT NULL)
-           OR (nullif(btrim(country), '') IS NULL AND $9 IS NOT NULL)
-           OR (nullif(btrim(employment_type), '') IS NULL AND $10 IS NOT NULL)
-           OR (nullif(btrim(workplace_type), '') IS NULL AND $11 IS NOT NULL)
-           OR (nullif(btrim(salary), '') IS NULL AND $12 IS NOT NULL)
+           OR (nullif(btrim(location), '') IS NULL AND $8::text IS NOT NULL)
+           OR (nullif(btrim(country), '') IS NULL AND $9::text IS NOT NULL)
+           OR (nullif(btrim(employment_type), '') IS NULL AND $10::text IS NOT NULL)
+           OR (nullif(btrim(workplace_type), '') IS NULL AND $11::text IS NOT NULL)
+           OR (nullif(btrim(salary), '') IS NULL AND $12::text IS NOT NULL)
          )`,
       [
         ...sameJobParams,
