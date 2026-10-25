@@ -146,6 +146,9 @@ async function initializeGetJdReviewOnce() {
       .manager-settings-actions button, .manager-settings-rule-actions button { min-height: 34px; padding: 0 10px; font-size: 11px; }
       .manager-settings-save { width: 100%; min-height: 38px !important; color: #fff; background: #00a884; }
       .manager-settings-save:hover:not(:disabled) { background: #008f70; }
+      .manager-settings-suggest { width: 100%; min-height: 34px; margin: 0 0 10px; padding: 0 10px; border: 1px dashed #00a884; border-radius: 8px; color: #00795f; background: #f0fdf9; font: 700 11px/1 system-ui, sans-serif; cursor: pointer; }
+      .manager-settings-suggest:hover:not(:disabled) { background: #dcfce7; }
+      .manager-settings-suggest:disabled { opacity: .6; cursor: wait; }
       .manager-settings-delete { border: 1px solid #fecaca; color: #b91c1c; background: #fff; }
       .manager-settings-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
       .manager-settings-rule { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 9px; border: 1px solid #dbe4ef; border-radius: 8px; background: #fff; }
@@ -339,7 +342,8 @@ async function initializeGetJdReviewOnce() {
         <div class="manager-settings-view" data-settings-view="page-exclusions" hidden>
           <section class="manager-settings-group" data-page-exclusions-group hidden>
             <h3>Job-page detection keywords</h3>
-            <p>A loaded page is treated as a job page when at least two distinct saved keywords appear in its visible text.</p>
+            <p>A page is treated as a job page when two saved keywords appear in its visible text as whole words (plurals count). Pages without them can still pass on other job signals, such as an Apply button or job-posting sections.</p>
+            <button type="button" class="manager-settings-suggest" data-exclusion-suggest>Add suggested keywords</button>
             <form data-exclusion-form>
               <label class="manager-settings-label" for="qts-manager-exclusion-url">Keyword or phrase</label>
               <input class="manager-settings-input" id="qts-manager-exclusion-url" name="url" type="text" maxlength="200" placeholder="preferred qualifications" autocomplete="off" required>
@@ -394,6 +398,7 @@ async function initializeGetJdReviewOnce() {
       exclusionList: section.querySelector('[data-exclusion-list]'),
       exclusionCancel: section.querySelector('[data-exclusion-cancel]'),
       exclusionSave: section.querySelector('[data-exclusion-save]'),
+      exclusionSuggest: section.querySelector('[data-exclusion-suggest]'),
       jobDetectionGroup: section.querySelector('[data-job-detection-group]'),
       jobDetectionForm: section.querySelector('[data-job-detection-form]'),
       jobDetectionList: section.querySelector('[data-job-detection-list]'),
@@ -406,6 +411,7 @@ async function initializeGetJdReviewOnce() {
     refs.highlightCancel.addEventListener('click', () => resetSettingsForm('text-highlights'));
     refs.highlightDelete.addEventListener('click', deleteSelectedHighlightRule);
     refs.exclusionForm.addEventListener('submit', savePageExclusion);
+    refs.exclusionSuggest.addEventListener('click', addSuggestedPageExclusions);
     refs.exclusionCancel.addEventListener('click', () => resetSettingsForm('page-exclusions'));
     refs.jobDetectionForm.addEventListener('submit', saveJobDetectionRule);
     refs.jobDetectionCancel.addEventListener('click', () => resetSettingsForm('job-detection'));
@@ -824,6 +830,43 @@ async function initializeGetJdReviewOnce() {
       setSettingsStatus(error.message, true);
     } finally {
       save.disabled = false;
+    }
+  }
+
+  // Posting-specific phrases that rarely appear on non-job pages.
+  const SUGGESTED_JOB_PAGE_KEYWORDS = [
+    'responsibilities', 'requirements', 'qualifications', 'job description', 'about the role',
+    "what you'll do", 'apply now', 'years of experience', 'full-time', 'remote', 'salary', 'benefits',
+  ];
+
+  async function addSuggestedPageExclusions() {
+    const settings = host.__qtsElements.managerSettings;
+    const button = settings.exclusionSuggest;
+    const existing = new Set(pageExclusionRules.map((rule) => String(rule.url || '').trim().toLowerCase()));
+    const missing = SUGGESTED_JOB_PAGE_KEYWORDS.filter((keyword) => !existing.has(keyword));
+    if (!missing.length) {
+      setSettingsStatus('All suggested keywords are already saved.', false);
+      return;
+    }
+    button.disabled = true;
+    let added = 0;
+    try {
+      for (const keyword of missing) {
+        try {
+          const response = await sendSettingsMessage({ type: 'ADD_MANAGER_PAGE_EXCLUSION', url: keyword });
+          pageExclusionRules = response.exclusions || pageExclusionRules;
+          added += 1;
+        } catch (error) {
+          // A keyword saved meanwhile (another tab) is fine to skip; anything else stops the run.
+          if (!/already exists/i.test(error.message)) throw error;
+        }
+      }
+      setSettingsStatus(`Added ${added} suggested keyword${added === 1 ? '' : 's'}.`, false);
+    } catch (error) {
+      setSettingsStatus(added ? `Added ${added}, then stopped: ${error.message}` : error.message, true);
+    } finally {
+      renderUrlSettings();
+      button.disabled = false;
     }
   }
 

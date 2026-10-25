@@ -143,11 +143,13 @@ JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
 toolbar icon has no click behavior. Sign In opens the Manager login form in an
 extension-origin frame on the current page, so the page cannot observe the
 credentials, and the frame closes after a successful login.
-Get JD stores persistent `get_jd` status and waits until a page has finished
-loading. A matching Manager-owned blocked URL fragment blocks QTS on that page. There is no built-in URL blocklist. Otherwise,
-at least two distinct Manager-owned detection keywords must appear in the visible page text before
-extraction or any job-processing server request. Pages without two keyword
-matches are ignored. Managers can maintain job-page
+Get JD stores persistent `get_jd` status and starts when a page's HTML is
+ready. A matching Manager-owned blocked URL fragment blocks QTS on that page.
+There is no built-in URL blocklist. Otherwise, once the content settles, the
+page is a job page if two Manager keywords appear as whole words, if it has
+`JobPosting` structured data, or if other job signals score high enough (see
+`extension/shared/job-page-detection.js`). Only job pages are extracted or
+sent to the server; any other page makes the launcher flash red once. Managers can maintain job-page
 detection keywords and blocked URL fragments from URL Settings when a Super Admin
 grants the matching permissions. An assigned Manager can add, edit, and delete
 their own rules; every server mutation is scoped to that Manager. Both rule

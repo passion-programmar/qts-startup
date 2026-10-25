@@ -130,17 +130,18 @@ test('Get JD supports Super-selected manual and Gemini matching flows', () => {
   assert.ok(serviceWorker.includes('matchingProfileIds'));
 });
 
-test('Get JD applies Manager URL blocks and page-keyword detection after load before duplicate checks', () => {
+test('Get JD applies Manager URL blocks, then settled job-page detection, before duplicate checks', () => {
   const serviceWorker = fs.readFileSync(
     path.join(extensionRoot, 'background', 'service-worker.js'),
     'utf8',
   );
-  const completedPageIndex = serviceWorker.indexOf("tab.status !== 'complete'");
+  const completedPageIndex = serviceWorker.indexOf('async function processGetJdPage(');
   const blockedRuleIndex = serviceWorker.indexOf(
     'if (await isPageBlockedForManager(url)) return;',
+    completedPageIndex,
   );
   const detectionIndex = serviceWorker.indexOf(
-    'if (!(await isPageDetectedAsJobForManager(tabId))) return;',
+    'const detection = await detectGetJdJobPage(tabId, url, pageKey);',
     blockedRuleIndex,
   );
   const extractionIndex = serviceWorker.indexOf(
@@ -161,7 +162,11 @@ test('Get JD applies Manager URL blocks and page-keyword detection after load be
   assert.equal(serviceWorker.includes('__qtsPageExclusions.shouldSkipPage'), false);
   assert.equal(serviceWorker.includes('function isIgnoredSite('), false);
   assert.equal(serviceWorker.includes("const ignored = new Set(["), false);
-  assert.ok(serviceWorker.includes("await processGetJdPage(tabId, url, 'complete');"));
+  assert.equal(serviceWorker.includes("await processGetJdPage(tabId, url, 'complete');"), false);
+  const domReadyListener = serviceWorker.slice(serviceWorker.indexOf('chrome.webNavigation.onDOMContentLoaded.addListener'));
+  assert.ok(domReadyListener.slice(0, 600).includes('processGetJdPage(details.tabId, details.url'));
+  assert.ok(serviceWorker.includes("chrome.tabs.sendMessage(tabId, { type: 'QTS_NOT_JOB_PAGE' }"));
+  assert.ok(serviceWorker.includes('func: waitForPageToSettleInPage'));
   const committedListener = serviceWorker.slice(
     serviceWorker.indexOf('chrome.webNavigation.onCommitted.addListener'),
     serviceWorker.indexOf('chrome.webNavigation.onHistoryStateUpdated.addListener'),
@@ -245,7 +250,7 @@ test('Manager URL rule CRUD is permission-gated and scoped to its owner', () => 
   assert.ok(managerSettings.includes('ManagerJobDetectionUrlAccessForm'));
   assert.ok(serviceWorker.includes('isManagerBlockedUrl'));
   assert.ok(serviceWorker.includes('isPageDetectedAsJobForManager'));
-  assert.ok(serviceWorker.includes('pageHasJobDetectionSignals'));
+  assert.ok(serviceWorker.includes('countPageDetectionKeywordMatches'));
   assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_PAGE_EXCLUSION'"));
   const popup = fs.readFileSync(
     path.join(extensionRoot, 'popup', 'popup.js'),

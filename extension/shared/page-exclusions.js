@@ -13,8 +13,24 @@
     return normalized;
   }
 
+  function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function normalizeApostrophes(value) {
+    return value.replace(/[‘’ʼ]/g, "'");
+  }
+
+  // Keywords match as whole words or phrases with an optional plural ending, so "job"
+  // matches "jobs" but not "jobless", and "intern" no longer matches "international".
+  function keywordPattern(keyword) {
+    const body = normalizeApostrophes(keyword).split(' ').map(escapeRegExp).join('\\s+');
+    const plural = /\p{L}$/u.test(keyword) ? '(?:s|es)?' : '';
+    return new RegExp(`(?<![\\p{L}\\p{N}])${body}${plural}(?![\\p{L}\\p{N}])`, 'iu');
+  }
+
   function countPageDetectionKeywordMatches(pageText, rules) {
-    const normalizedText = String(pageText || '').replace(/\s+/g, ' ').toLowerCase();
+    const text = normalizeApostrophes(String(pageText || ''));
     const uniqueKeywords = new Set(
       (Array.isArray(rules) ? rules : [])
         .map((rule) => normalizePageDetectionKeyword(rule?.keyword ?? rule?.url ?? rule))
@@ -22,7 +38,7 @@
     );
     let matches = 0;
     for (const keyword of uniqueKeywords) {
-      if (normalizedText.includes(keyword)) matches += 1;
+      if (keywordPattern(keyword).test(text)) matches += 1;
     }
     return matches;
   }

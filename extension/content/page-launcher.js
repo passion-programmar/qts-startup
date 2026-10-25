@@ -34,6 +34,7 @@ async function initializeQtsPageLauncher() {
     @keyframes qts-border-rotate { to { transform: rotate(360deg); } }
     .main { position: absolute; inset: 4px; z-index: 3; display: grid; place-items: center; width: 50px; height: 50px; padding: 4px; border: 1px solid #475569; border-radius: 50%; background: #334155; box-shadow: 0 12px 32px #0f172a42; cursor: pointer; transition: transform .18s ease, background .18s ease, border-color .18s ease; }
     .launcher.signed-in .main { border-color: #c7d2fe; background: #fff; }
+    .launcher.not-job-page .main, .launcher.not-job-page .main:hover { border-color: #fca5a5; background: #dc2626; box-shadow: 0 0 0 6px #dc262633, 0 12px 32px #0f172a42; transition: background .2s ease, box-shadow .2s ease; }
     .main:hover { transform: scale(1.06); background: #1e293b; }
     .launcher.signed-in .main:hover { background: #f8fafc; }
     .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
@@ -426,9 +427,17 @@ async function initializeQtsPageLauncher() {
     }
     if (changes.qtsExtensionStatus) syncModeActions().catch(() => {});
   };
+  let notJobPageTimer = null;
   const onRuntimeMessage = (message) => {
     if (message?.type === 'QTS_HIDE_SIGN_IN_FRAME') {
       hideSignInForm();
+      return;
+    }
+    // Get JD found no job on this page: flash the launcher red once instead of showing a toast.
+    if (message?.type === 'QTS_NOT_JOB_PAGE') {
+      clearTimeout(notJobPageTimer);
+      launcher.classList.add('not-job-page');
+      notJobPageTimer = setTimeout(() => launcher.classList.remove('not-job-page'), 1200);
       return;
     }
     if (message?.type !== 'QTS_GENERATION_PROGRESS') return;

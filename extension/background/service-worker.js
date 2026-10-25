@@ -2,6 +2,7 @@
 
 importScripts(
   '../shared/page-exclusions.js',
+  '../shared/job-page-detection.js',
   '../shared/runtime-config.js',
   '../shared/application-flow.js',
   '../shared/job-detect.js',
@@ -323,19 +324,124 @@ async function readVisiblePageText(tabId) {
   return String(results?.[0]?.result || '');
 }
 
+// Runs in the page. Resolves once the DOM has been quiet for quietMs (or after maxMs),
+// so single-page sites have rendered the job before it is read.
+function waitForPageToSettleInPage(quietMs, maxMs) {
+  return new Promise((resolve) => {
+    let quietTimer = null;
+    let finished = false;
+    const observer = new MutationObserver(() => {
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(finish, quietMs);
+    });
+    function finish() {
+      if (finished) return;
+      finished = true;
+      observer.disconnect();
+      clearTimeout(quietTimer);
+      clearTimeout(maxTimer);
+      resolve(true);
+    }
+    const maxTimer = setTimeout(finish, maxMs);
+    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    quietTimer = setTimeout(finish, quietMs);
+  });
+}
+
+// Runs in the page. Collects the visible text and the structural job signals.
+function collectJobPageSnapshotInPage() {
+  const text = String(document.body?.innerText || document.documentElement?.innerText || '').slice(0, 2_000_000);
+  const readText = (element) => String(element?.innerText || element?.textContent || '').trim();
+  const hasJobPostingData = [...document.querySelectorAll('script[type="application/ld+json"]')]
+    .some((script) => /"@type"\s*:\s*(?:\[[^\]]*)?"(?:https?:\/\/schema\.org\/)?JobPosting"/i.test(script.textContent || ''))
+    || Boolean(document.querySelector('[itemtype*="schema.org/JobPosting" i]'));
+  const headingPattern = /^(?:key |main |your |the |job |role )?(responsibilities|requirements|qualifications|preferred qualifications|minimum qualifications|basic qualifications|about the (?:role|job|position|opportunity)|what you['’]ll do|what you will do|what we['’]re looking for|what you['’]ll bring|who you are|benefits|perks|job description|role description|skills and experience)\b/i;
+  const headingMatches = new Set(
+    [...document.querySelectorAll('h1, h2, h3, h4, h5, strong, b, dt, [role="heading"]')]
+      .slice(0, 600)
+      .map(readText)
+      .filter((value) => value && value.length <= 80)
+      .map((value) => value.match(headingPattern)?.[1]?.toLowerCase().replace(/’/g, "'"))
+      .filter(Boolean),
+  ).size;
+  const applyPattern = /^(?:apply|apply now|apply here|apply online|easy apply|quick apply|apply for (?:this )?(?:job|role|position)|submit (?:your )?application|start (?:your )?application|i['’]m interested)$/i;
+  const hasApplyControl = [...document.querySelectorAll('a, button, [role="button"], input[type="submit"], input[type="button"]')]
+    .slice(0, 3000)
+    .some((element) => applyPattern.test(
+      (readText(element) || element.value || element.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim(),
+    ));
+  const hasCvUpload = [...document.querySelectorAll('input[type="file"]')]
+    .some((input) => /resume|r[eé]sum[eé]|\bcv\b|curriculum|pdf/i.test(
+      [input.name, input.id, input.accept, input.getAttribute('aria-label')].join(' '),
+    ));
+  const jobLinkPattern = /\/(?:jobs?|careers?|positions?|vacanc(?:y|ies)|openings?|postings?)\/[^/?#]+|[?&](?:gh_jid|jk|currentJobId|jobId)=/i;
+  const jobLinkCount = new Set(
+    [...document.querySelectorAll('a[href]')]
+      .slice(0, 4000)
+      .map((anchor) => String(anchor.href || '').split('#')[0])
+      .filter((href) => jobLinkPattern.test(href)),
+  ).size;
+  const hasJobDetailPane = Boolean(document.querySelector(
+    '.jobs-search__job-details, .jobs-details, .job-view-layout, #jobsearch-ViewjobPaneWrapper, .jobsearch-JobComponent, [data-testid="jobsearch-ViewjobPaneWrapper"]',
+  ));
+  return { url: location.href, text, hasJobPostingData, headingMatches, hasApplyControl, hasCvUpload, jobLinkCount, hasJobDetailPane };
+}
+
+async function readJobPageSnapshot(tabId, settle = null) {
+  const target = { tabId, frameIds: [0] };
+  if (settle) {
+    await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [settle.quietMs, settle.maxMs] });
+  }
+  const [result] = await chrome.scripting.executeScript({ target, func: collectJobPageSnapshotInPage });
+  return result?.result || null;
+}
+
+async function evaluateJobPageForManager(tabId, settle = null) {
+  const keywords = await getManagerPageExclusions();
+  const snapshot = await readJobPageSnapshot(tabId, settle);
+  if (!snapshot) return null;
+  return self.__qtsJobPageDetection.evaluateJobPage(
+    snapshot,
+    keywords.success === true ? keywords.exclusions || [] : [],
+    self.__qtsPageExclusions.countPageDetectionKeywordMatches,
+  );
+}
+
 async function isPageDetectedAsJobForManager(tabId) {
-  const result = await getManagerPageExclusions();
-  if (result.success !== true) return false;
-  const rules = result.exclusions || [];
-  if (rules.length < self.__qtsPageExclusions.MIN_JOB_PAGE_KEYWORD_MATCHES) return false;
   try {
-    return self.__qtsPageExclusions.pageHasJobDetectionSignals(
-      await readVisiblePageText(tabId),
-      rules,
-    );
+    return (await evaluateJobPageForManager(tabId))?.isJobPage === true;
   } catch {
     return false;
   }
+}
+
+// Late-loading content is the main cause of missed jobs, so a page is checked after it
+// settles and again at +2 s and +5 s before it is treated as not a job page.
+const GET_JD_DETECTION_ATTEMPTS = [
+  { delayMs: 0, quietMs: 700, maxMs: 6000 },
+  { delayMs: 2000, quietMs: 500, maxMs: 2500 },
+  { delayMs: 5000, quietMs: 500, maxMs: 2500 },
+];
+
+// Returns 'pass', 'rejected', or 'cancelled' (a newer navigation, Get JD stopped, or an unreadable page).
+async function detectGetJdJobPage(tabId, url, pageKey) {
+  const stillCurrent = async () => getJdLastPageByTab.get(tabId) === pageKey
+    && (await getTab(tabId))?.url === url
+    && await isGetJdActive();
+  for (const attempt of GET_JD_DETECTION_ATTEMPTS) {
+    if (attempt.delayMs) await sleep(attempt.delayMs);
+    if (!(await stillCurrent())) return 'cancelled';
+    let evaluation;
+    try {
+      evaluation = await evaluateJobPageForManager(tabId, attempt);
+    } catch {
+      return 'cancelled';
+    }
+    if (!(await stillCurrent())) return 'cancelled';
+    if (evaluation?.isJobPage) return 'pass';
+    if (evaluation?.reason === 'closed') return 'rejected';
+  }
+  return 'rejected';
 }
 
 async function buildManagerDetectedJobEntry(tabId, pageUrl, data) {
@@ -1044,15 +1150,21 @@ async function processGetJdPage(tabId, url, documentId = '') {
   if (getJdInFlightTabs.has(tabId)) return;
 
   if (!(await isGetJdActive())) return;
+  // Starts when the page HTML is ready; detection itself waits for the content to settle.
   const tab = await getTab(tabId);
-  if (!tab?.id || tab.url !== url || tab.status !== 'complete') return;
+  if (!tab?.id || tab.url !== url) return;
 
   if (await isPageBlockedForManager(url)) return;
-  if (!(await isPageDetectedAsJobForManager(tabId))) return;
 
   const pageKey = `${documentId}:${url}`;
   if (getJdLastPageByTab.get(tabId) === pageKey) return;
+  // Claiming the page first lets a newer navigation in this tab cancel this check.
   getJdLastPageByTab.set(tabId, pageKey);
+  const detection = await detectGetJdJobPage(tabId, url, pageKey);
+  if (detection === 'rejected') {
+    chrome.tabs.sendMessage(tabId, { type: 'QTS_NOT_JOB_PAGE' }, { frameId: 0 }).catch(() => {});
+  }
+  if (detection !== 'pass' || getJdInFlightTabs.has(tabId)) return;
   getJdInFlightTabs.add(tabId);
 
   const initialResult = {
@@ -1212,7 +1324,11 @@ async function processGetJdPage(tabId, url, documentId = '') {
       });
       return;
     }
-    if (await isPageBlockedForManager(url) || !(await isPageDetectedAsJobForManager(tabId))) return;
+    // Detection already passed; only a blocked-URL rule added meanwhile stops the check here.
+    if (await isPageBlockedForManager(url)) {
+      await saveGetJdResult(tabId, { ...initialResult, status: 'cancelled', updatedAt: Date.now() });
+      return;
+    }
     const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
       job: {
         jobUrl: extractedJobDetails.url,
@@ -5593,11 +5709,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!url || !isExtractablePageUrl(url)) return;
   if (changeInfo.status === 'complete') {
     (async () => {
-      await processGetJdPage(tabId, url, 'complete');
       if (await isAutoApplyArmed()) maybeDetectApplyMethodOnOpen(tabId, url);
       maybeTrackAutoOpen(tabId, url);
     })().catch(() => {});
   }
+});
+
+// Get JD starts once the page HTML is ready instead of waiting for every image and ad;
+// detection then waits for the content to settle.
+chrome.webNavigation.onDOMContentLoaded.addListener((details) => {
+  if (details.frameId !== 0) return;
+  if (details.documentLifecycle && details.documentLifecycle !== 'active') return;
+  if (!isExtractablePageUrl(details.url)) return;
+  processGetJdPage(details.tabId, details.url, details.documentId || `dom:${Date.now()}`).catch((error) => {
+    console.error('[QTS Get JD] Could not process the loaded page:', error);
+  });
 });
 
 chrome.webNavigation.onCommitted.addListener((details) => {

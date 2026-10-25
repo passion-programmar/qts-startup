@@ -13,12 +13,16 @@ The supported browser-extension workflow is deliberately narrow:
 4. Text Highlight and URL Settings render directly in the same docked in-page
    panel as the candidate profile list. The panel reserves right-side page
    space, does not open a popup/iframe, and returns to profiles with Back.
-5. Get JD enables persistent monitoring. After a page finishes loading, a
-   matching Manager-owned blocked URL fragment blocks QTS on that page. There
-   is no built-in URL blocklist. Every other page
-   must contain at least two distinct job-page detection keywords saved for the
-   signed-in Manager before Get JD continues. Pages below that threshold are
-   ignored without extraction or a server request. Super Admin selects manual
+5. Get JD enables persistent monitoring. When a page's HTML is ready (or a
+   single-page site changes URL), a matching Manager-owned blocked URL fragment
+   blocks QTS on that page silently. There is no built-in URL blocklist. Every
+   other page is checked after its content settles, and again at +2 s and +5 s:
+   it is a job page if two of the Manager's job-page detection keywords appear
+   as whole words (plurals count), if it carries JSON-LD `JobPosting` data, or
+   if job signals (job-site URL, Apply button or CV upload, posting headings,
+   keywords; job lists penalized) score 3 or more. Closed or expired postings
+   are rejected. A rejected page is not extracted or sent to the server, and
+   the launcher flashes red once. Super Admin selects manual
    matching or Gemini matching. Manual mode extracts locally and checks Jobs and
    Bids. Gemini mode sends body HTML to the server with the default evaluation
    prompt and candidate ID/JD-note pairs, then prechecks returned candidate IDs.

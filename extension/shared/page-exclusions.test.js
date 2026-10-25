@@ -33,3 +33,16 @@ test('a job page requires two distinct configured keywords in visible text', () 
   assert.equal(exclusions.pageHasJobDetectionSignals('Responsibilities and qualifications', rules), true);
   assert.equal(exclusions.pageHasJobDetectionSignals('Responsibilities only', rules), false);
 });
+
+test('keywords match whole words and phrases, with plurals, across languages', () => {
+  const exclusions = loadPageExclusions();
+  const count = (text, keywords) => exclusions.countPageDetectionKeywordMatches(text, keywords.map((url) => ({ url })));
+  assert.equal(count('Open jobs at Acme', ['job']), 1);
+  assert.equal(count('Jobless claims rose', ['job']), 0);
+  assert.equal(count('International sales', ['intern']), 0);
+  assert.equal(count('We hire interns', ['intern']), 1);
+  assert.equal(count('5+ years\nof   experience', ['years of experience']), 1);
+  assert.equal(count('What you’ll do', ["what you'll do"]), 1);
+  assert.equal(count('Wymagania: doświadczenie', ['doświadczenie']), 1);
+  assert.equal(count('Benefit: remote-first', ['remote']), 1);
+});
