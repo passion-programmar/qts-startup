@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
 import { isPdfTemplate, type PdfTemplate } from "@/server/pdf/pdf-templates";
-import { renderTemplatePdfPackage } from "@/server/pdf/template-pdf";
+import { DocumentPageLimitError, renderTemplatePdfPackage } from "@/server/pdf/template-pdf";
 
 // Chromium's first launch on a cold instance takes a few seconds.
 export const maxDuration = 60;
@@ -103,7 +103,8 @@ export async function GET(request: Request): Promise<NextResponse> {
 }
 
 // The HTML templates match the Resume page preview; if Chromium cannot print them, the
-// built-in renderer still produces both PDFs so the Generation queue keeps moving.
+// built-in renderer still produces both PDFs so the Generation queue keeps moving. Content
+// that is too long fails here as it always has: the built-in renderer would refuse it too.
 async function renderGenerationPdfs(
   data: ReturnType<typeof parsePdfPackage>,
   template: PdfTemplate,
@@ -111,6 +112,7 @@ async function renderGenerationPdfs(
   try {
     return await renderTemplatePdfPackage(data, template);
   } catch (error) {
+    if (error instanceof DocumentPageLimitError) throw error;
     console.error(
       "Template PDF printing failed; using the built-in PDF renderer.",
       error instanceof Error ? error.message : "Unknown error",

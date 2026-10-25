@@ -5,7 +5,7 @@
    Fonts: Arial Black + Arial. Best for: sales, startups, creative leads. */
 
 :root {
-  --font-name: "Arial Black", var(--font-arial);
+  --font-name: var(--font-arial-black);
   --color-accent: #c2410c;
   --color-keyword: var(--color-accent);
   --color-name: var(--color-ink);

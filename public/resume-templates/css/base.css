@@ -44,19 +44,22 @@
   --page-margin-inline: 16mm;
   --page-margin-bottom: 17mm;
 
-  /* Font stacks. Each ends with free, metric-compatible fonts for Linux
-     render servers, so line and page breaks match the designer's machine.
+  /* Font stacks. Each starts with a bundled open font from css/fonts.css, which
+     the Resume page preview and the PDF printer both load, so every computer
+     and the render server use the same font files and break lines identically.
+     The system names after it are fallbacks only.
      theme.fontFamily / theme.headingFont pick one of these by name. */
-  --font-arial: Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
-  --font-georgia: Georgia, Gelasio, "Times New Roman", serif;
-  --font-times: "Times New Roman", "Liberation Serif", Tinos, Times, serif;
-  --font-calibri: Calibri, Carlito, "Segoe UI", Arial, sans-serif;
-  --font-cambria: Cambria, Caladea, Georgia, serif;
-  --font-palatino: "Palatino Linotype", Palatino, "Book Antiqua", "TeX Gyre Pagella", Georgia, serif;
-  --font-verdana: Verdana, "DejaVu Sans", Arial, sans-serif;
-  --font-tahoma: Tahoma, Verdana, "DejaVu Sans", sans-serif;
-  --font-trebuchet: "Trebuchet MS", Arial, sans-serif;
-  --font-mono: Consolas, "Liberation Mono", Cousine, "Courier New", monospace;
+  --font-arial: "QTS Arial", Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
+  --font-arial-black: "QTS Arial Black", "Arial Black", Arial, sans-serif;
+  --font-georgia: "QTS Georgia", Georgia, Gelasio, "Times New Roman", serif;
+  --font-times: "QTS Times", "Times New Roman", "Liberation Serif", Tinos, Times, serif;
+  --font-calibri: "QTS Calibri", Calibri, Carlito, "Segoe UI", Arial, sans-serif;
+  --font-cambria: "QTS Cambria", Cambria, Caladea, Georgia, serif;
+  --font-palatino: "QTS Palatino", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-verdana: "QTS Verdana", Verdana, "DejaVu Sans", Arial, sans-serif;
+  --font-tahoma: "QTS Tahoma", Tahoma, Verdana, "DejaVu Sans", sans-serif;
+  --font-trebuchet: "QTS Trebuchet", "Trebuchet MS", Arial, sans-serif;
+  --font-mono: "QTS Mono", Consolas, "Liberation Mono", Cousine, "Courier New", monospace;
 
   /* Font roles */
   --font-body: var(--font-arial);
@@ -137,7 +140,7 @@
   /* Page numbers from page 2 on (Chromium 131+, WeasyPrint, Prince). */
   @bottom-right {
     content: "Page " counter(page) " of " counter(pages);
-    font-family: Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
+    font-family: "QTS Arial", Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
     font-size: 8pt;
     color: #5f666d;
   }

@@ -4,14 +4,23 @@ import { readFile } from "node:fs/promises";
 import type { Browser, HTTPRequest } from "puppeteer-core";
 import { type PdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
 import type { PdfTemplate } from "@/server/pdf/pdf-templates";
-import {
-  resolveTemplateRenderAsset,
-  templateFontStylesheet,
-  templateFontStylesheetPath,
-  templateRenderOrigin,
-} from "@/server/pdf/template-pdf-assets";
+import { resolveTemplateRenderAsset, templateRenderOrigin } from "@/server/pdf/template-pdf-assets";
 
 const renderTimeoutMs = 25_000;
+
+// The same limits the built-in renderer enforces; the templates shrink to compact density
+// first, so content that still overflows has to be shortened.
+const pageLimits = {
+  resume: { pages: 2, message: "The résumé exceeds two A4 pages. Shorten its content." },
+  "cover-letter": { pages: 1, message: "The cover letter exceeds one A4 page. Shorten its paragraphs." },
+} as const;
+
+export class DocumentPageLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DocumentPageLimitError";
+  }
+}
 
 /**
  * Prints the résumé and cover letter with the same HTML templates the Resume page previews,
@@ -40,8 +49,9 @@ async function printDocument(
   try {
     await page.setRequestInterception(true);
     page.on("request", (request) => void answerRequest(request));
-    // Layout is measured for print, so page fitting matches the printed result.
-    await page.emulateMediaType("print");
+    // Lay out like the Resume page preview (on screen, the sheet at its full paper width) so
+    // automatic compact density is decided the same way; only page.pdf() switches to print.
+    await page.setViewport({ width: 1240, height: 1754 });
     await page.evaluateOnNewDocument((value) => {
       (window as unknown as { RESUME_DATA: unknown }).RESUME_DATA = value;
     }, templateData);
@@ -52,7 +62,11 @@ async function printDocument(
     await page.waitForSelector('html[data-render-state="ready"], html[data-render-state="error"]', { timeout: renderTimeoutMs });
     const state = await page.evaluate(() => window.document.documentElement.dataset.renderState);
     if (state !== "ready") throw new Error(`The ${template} ${document} template did not render.`);
-    return await page.pdf({ preferCSSPageSize: true, printBackground: true, timeout: renderTimeoutMs });
+    const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true, timeout: renderTimeoutMs });
+    const { PDFDocument } = await import("pdf-lib");
+    const limit = pageLimits[document];
+    if ((await PDFDocument.load(pdf)).getPageCount() > limit.pages) throw new DocumentPageLimitError(limit.message);
+    return pdf;
   } finally {
     await page.close().catch(() => undefined);
   }
@@ -78,14 +92,7 @@ async function answerRequest(request: HTTPRequest): Promise<void> {
     return;
   }
   try {
-    if (asset.kind === "font-stylesheet") {
-      await request.respond({ status: 200, contentType: "text/css; charset=utf-8", body: await templateFontStylesheet() });
-      return;
-    }
-    let body: Buffer | string = await readCachedFile(asset.filePath);
-    if (asset.contentType.startsWith("text/html")) {
-      body = body.toString("utf8").replace("</head>", `  <link rel="stylesheet" href="${templateFontStylesheetPath}">\n</head>`);
-    }
+    const body = await readCachedFile(asset.filePath);
     await request.respond({ status: 200, contentType: asset.contentType, body });
   } catch {
     await request.respond({ status: 404, contentType: "text/plain", body: "" }).catch(() => undefined);

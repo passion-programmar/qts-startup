@@ -615,9 +615,31 @@ function fallbackSectionSlug(value: string): string {
   return value.toLowerCase().normalize("NFKD").replace(/[^a-z\d]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+// The bundled template fonts, also loaded by the server's PDF printer, so the preview and the
+// downloaded PDF use the same font files. @font-face rules are global and need no scoping.
+function loadTemplateFonts(): Promise<void> {
+  const existing = document.head.querySelector<HTMLLinkElement>("link[data-qts-resume-fonts]");
+  if (existing?.sheet) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const link = existing ?? document.createElement("link");
+    link.addEventListener("load", () => resolve(), { once: true });
+    link.addEventListener("error", () => {
+      link.remove();
+      reject(new Error("The resume template fonts could not be loaded."));
+    }, { once: true });
+    if (!existing) {
+      link.rel = "stylesheet";
+      link.href = "/resume-templates/css/fonts.css";
+      link.dataset.qtsResumeFonts = "true";
+      document.head.append(link);
+    }
+  });
+}
+
 async function loadBaseStyles(): Promise<void> {
   if (!baseStylesPromise) {
-    baseStylesPromise = fetch("/resume-templates/css/base.css")
+    baseStylesPromise = loadTemplateFonts()
+      .then(() => fetch("/resume-templates/css/base.css"))
       .then(async (response) => {
         if (!response.ok) throw new Error("The resume template styles could not be loaded.");
         const style = document.createElement("style");

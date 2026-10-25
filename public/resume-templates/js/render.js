@@ -731,6 +731,9 @@
       mount.replaceChildren(article);
     }
 
+    // Web fonts only start loading once the text is laid out, so lay it out first; otherwise
+    // fonts.ready resolves at once and the pages are measured with a fallback font.
+    article.getBoundingClientRect();
     if (document.fonts) await document.fonts.ready;
     if (run !== renderCount) return null;
 
