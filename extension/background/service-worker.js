@@ -1256,6 +1256,8 @@ async function processGetJdPage(tabId, url, documentId = '') {
         pageText,
       });
       if (geminiResult.success !== true) {
+        // The diagnostic code (for example gemini_http_400) names the real cause for troubleshooting.
+        console.warn('[QTS Get JD] Gemini evaluation failed:', geminiResult.diagnosticCode || `HTTP ${geminiResult._httpStatus || '?'}`);
         throw new Error(geminiResult.message || 'Gemini candidate matching failed.');
       }
       if (geminiResult.classification?.isJobPage !== true) {
