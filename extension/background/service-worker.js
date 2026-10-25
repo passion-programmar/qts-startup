@@ -368,8 +368,46 @@ async function readVisiblePageText(tabId) {
   return frameText ? `${pageText}\n\nJob from the embedded job board:\n${frameText}` : pageText;
 }
 
+// Background tabs Get JD opens to read a description page; Get JD itself never runs in them.
+const getJdHelperTabs = new Set();
+const HELPER_TAB_LOAD_TIMEOUT_MS = 15_000;
+
+// Reads a page that builds its job with scripts (Workable) in a background tab next to the job tab,
+// then closes that tab.
+async function readJobTextInBackgroundTab(openerTab, url) {
+  let helperTabId = null;
+  try {
+    const helper = await chrome.tabs.create({
+      url,
+      active: false,
+      windowId: openerTab.windowId,
+      index: openerTab.index + 1,
+      openerTabId: openerTab.id,
+    });
+    helperTabId = helper.id;
+    getJdHelperTabs.add(helperTabId);
+    const deadline = Date.now() + HELPER_TAB_LOAD_TIMEOUT_MS;
+    while ((await getTab(helperTabId))?.status !== 'complete') {
+      if (Date.now() > deadline) return '';
+      await sleep(250);
+    }
+    const target = { tabId: helperTabId, frameIds: [0] };
+    await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [700, 6000] });
+    const [text = ''] = await readJobTextInFrames(helperTabId, [0]);
+    return text;
+  } catch {
+    return '';
+  } finally {
+    if (helperTabId != null) {
+      await chrome.tabs.remove(helperTabId).catch(() => {});
+      getJdHelperTabs.delete(helperTabId);
+    }
+  }
+}
+
 // Get JD's job text. An apply-form page (Lever, Workable, PeopleForce) is read from its description
-// page instead; applyFormOnly says that page could not be read, with its address to open.
+// page instead: fetched in place when the site sends the job in its HTML, otherwise loaded in a
+// background tab. applyFormOnly says neither worked, with the description's address to open.
 async function readGetJdJobText(tabId, url) {
   const descriptionUrl = self.__qtsJobPageDetection.descriptionUrlForApplyPage(url);
   if (descriptionUrl) {
@@ -380,7 +418,11 @@ async function readGetJdJobText(tabId, url) {
       func: (address) => globalThis.__qtsReadJobPageTextFrom?.(address).catch(() => '') ?? '',
       args: [descriptionUrl],
     }).catch(() => []);
-    const descriptionText = String(result?.result || '');
+    let descriptionText = String(result?.result || '');
+    if (descriptionText.length < APPLY_DESCRIPTION_MIN_TEXT) {
+      const tab = await getTab(tabId);
+      if (tab) descriptionText = await readJobTextInBackgroundTab(tab, descriptionUrl);
+    }
     if (descriptionText.length >= APPLY_DESCRIPTION_MIN_TEXT) {
       return { text: descriptionText, descriptionUrl, applyFormOnly: false };
     }
@@ -1361,7 +1403,7 @@ function showGetJdRejection(tabId, url, reason) {
 // options.force runs Get JD without the job-page check and reads the page as it is ("Send anyway").
 async function processGetJdPage(tabId, url, documentId = '', options = {}) {
   if (!isExtractablePageUrl(url) || isChatGptHostUrl(url)) return;
-  if (getJdInFlightTabs.has(tabId)) return;
+  if (getJdInFlightTabs.has(tabId) || getJdHelperTabs.has(tabId)) return;
 
   if (!(await isGetJdActive())) return;
   // Starts when the page HTML is ready; detection itself waits for the content to settle.
