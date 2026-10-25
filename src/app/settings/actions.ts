@@ -6,7 +6,6 @@ import { revalidatePath } from "next/cache";
 import { parseGeminiApiLimits } from "@/server/gemini/gemini-api-limits";
 import {
   managerPromptAssignments,
-  geminiKeyUsageEvents,
   prompts,
   settings,
   users,
@@ -309,69 +308,6 @@ export async function saveGeminiApiLimitsAction(
 
   revalidatePath("/settings/gemini-usage");
   return { error: null, success: "Gemini API limits were updated." };
-}
-
-export async function deleteGeminiUsageEventAction(
-  _previousState: PromptActionState,
-  formData: FormData,
-): Promise<PromptActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can remove Gemini usage records." };
-  }
-
-  const eventId = readText(formData, "eventId", 36);
-  if (!isUuid(eventId)) {
-    return { ...emptyState, error: "Select a valid Gemini usage record." };
-  }
-
-  try {
-    const removed = await db
-      .update(geminiKeyUsageEvents)
-      .set({ deletedAt: new Date() })
-      .where(
-        and(
-          eq(geminiKeyUsageEvents.id, eventId),
-          isNull(geminiKeyUsageEvents.deletedAt),
-        ),
-      )
-      .returning({ id: geminiKeyUsageEvents.id });
-    if (removed.length === 0) {
-      return { ...emptyState, error: "That usage record was already removed. Refresh the page." };
-    }
-  } catch (error) {
-    logPromptActionFailure("removing a Gemini usage record", error);
-    return { ...emptyState, error: "The Gemini usage record could not be removed." };
-  }
-
-  revalidatePath("/settings/gemini-usage");
-  return { error: null, success: "Gemini usage record removed from history." };
-}
-
-export async function clearGeminiUsageHistoryAction(
-  _previousState: PromptActionState,
-  formData: FormData,
-): Promise<PromptActionState> {
-  const actor = await requireUser();
-  if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can clear Gemini usage history." };
-  }
-  if (formData.get("confirmClearAll") !== "true") {
-    return { ...emptyState, error: "Confirm clearing Gemini usage history." };
-  }
-
-  try {
-    await db
-      .update(geminiKeyUsageEvents)
-      .set({ deletedAt: new Date() })
-      .where(isNull(geminiKeyUsageEvents.deletedAt));
-  } catch (error) {
-    logPromptActionFailure("clearing Gemini usage history", error);
-    return { ...emptyState, error: "Gemini usage history could not be cleared." };
-  }
-
-  revalidatePath("/settings/gemini-usage");
-  return { error: null, success: "Gemini usage history was cleared." };
 }
 
 export async function assignPromptAction(

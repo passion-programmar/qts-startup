@@ -76,12 +76,11 @@ response schema, and adds headroom targeting roughly twenty percent above
 observed Google counts. This estimate protects local capacity but is not an
 exact tokenizer result. Normal Get JD sends one `generateContent` request and
 does not call `countTokens`. The Gemini Usage page shows per-key totals and the
-100 most recent recorded attempts for the current Pacific day. It does not store
-prompts, page HTML, job details, or Gemini responses. If no key has capacity,
-QTS does not generate the evaluation. QTS also does not retry another key after
-a Gemini API error.
-Super Admin can remove individual usage records or clear the visible history.
-Removed events remain in quota accounting so history cleanup cannot reset limits.
+latest 100 Google API responses for the current Pacific day (status, duration,
+and the response body capped at 1 MB). It does not store prompts, page text, or
+API keys. If no key has capacity, QTS does not generate the evaluation. A Gemini
+5xx overload (for example 503 "high demand") is retried once on the same key
+after 2 seconds and counted as another request; other errors are not retried.
 
 Gemini keys are reserved atomically in Neon while a Get JD evaluation is
 running. A concurrent request skips a busy key and tries another free key.

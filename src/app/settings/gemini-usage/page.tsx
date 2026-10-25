@@ -1,4 +1,4 @@
-import { and, desc, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, gte, inArray, sql } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
@@ -16,10 +16,6 @@ import { requireUser } from "@/lib/session";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { GeminiApiLimitsForm } from "./limits-form";
-import {
-  GeminiUsageClearHistoryForm,
-  GeminiUsageEventDeleteForm,
-} from "./history-actions";
 import { TokenComparisonForm } from "./token-comparison-form";
 
 export const instant = false;
@@ -74,26 +70,6 @@ export default async function GeminiUsagePage() {
         .groupBy(geminiKeyUsageEvents.keyHash)
     : [];
   const usageByKey = new Map(usageRows.map((row) => [row.keyHash, row]));
-  const recentEvents = keyHashes.length
-    ? await db
-        .select({
-          id: geminiKeyUsageEvents.id,
-          keyHash: geminiKeyUsageEvents.keyHash,
-          operation: geminiKeyUsageEvents.operation,
-          inputTokens: geminiKeyUsageEvents.inputTokens,
-          occurredAt: geminiKeyUsageEvents.occurredAt,
-        })
-        .from(geminiKeyUsageEvents)
-        .where(
-          and(
-            inArray(geminiKeyUsageEvents.keyHash, keyHashes),
-            gte(geminiKeyUsageEvents.occurredAt, pacificDayStart),
-            isNull(geminiKeyUsageEvents.deletedAt),
-          ),
-        )
-        .orderBy(desc(geminiKeyUsageEvents.occurredAt))
-        .limit(100)
-    : [];
   const recentApiCalls = keyHashes.length
     ? await db
         .select({
@@ -240,47 +216,6 @@ export default async function GeminiUsagePage() {
             })}
           />
         )}
-        <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mb-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-800">Recorded API calls today</h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  Newest 100 visible records in Pacific time. Removing a record hides it but retains quota accounting.
-                </p>
-              </div>
-              <GeminiUsageClearHistoryForm />
-            </div>
-          </div>
-          <PaginatedTable
-            columns={[
-              { label: "Time (Pacific)", className: "w-[28%]" },
-              { label: "API key", className: "w-[20%]" },
-              { label: "Operation", className: "w-[25%]" },
-              { label: "Input tokens", className: "w-[27%]" },
-              { label: "Manage", className: "w-[12%]" },
-            ]}
-            emptyMessage={keys.length ? "No Gemini API calls recorded today." : "Configure a Gemini API key to see usage."}
-            rows={recentEvents.map((event) => ({
-              id: event.id,
-              cells: [
-                new Intl.DateTimeFormat("en-US", {
-                  dateStyle: "medium",
-                  timeStyle: "medium",
-                  timeZone: "America/Los_Angeles",
-                }).format(event.occurredAt),
-                <span className="font-mono text-xs" key="key">
-                  Key {keyNumberByHash.get(event.keyHash) ?? "?"} · {event.keyHash.slice(0, 10)}
-                </span>,
-                event.operation === "count_tokens" ? "CountTokens" : "GenerateContent",
-                event.operation === "count_tokens" && event.inputTokens === 0
-                  ? "—"
-                  : event.inputTokens.toLocaleString(),
-                <GeminiUsageEventDeleteForm eventId={event.id} key="manage" />,
-              ],
-            }))}
-          />
-        </section>
         <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="mb-4">
             <h2 className="text-sm font-semibold text-slate-800">
