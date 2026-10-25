@@ -521,7 +521,8 @@ async function initializeGetJdReviewOnce() {
     renderCurrentResult();
   }
 
-  async function openManagerSettings(panel, tabId, permissions = {}) {
+  // options.prefillBlockedUrl fills the blocked-URL field for the Manager to review and save.
+  async function openManagerSettings(panel, tabId, permissions = {}, options = {}) {
     if (
       !['text-highlights', 'page-exclusions'].includes(panel)
       || !Number.isInteger(tabId)
@@ -575,6 +576,18 @@ async function initializeGetJdReviewOnce() {
       if (panel === 'text-highlights') await loadHighlightRules();
       else await loadUrlSettings();
       if (panel === 'page-exclusions') settings.status.textContent = '';
+      const blockedUrlInput = settings.root.querySelector('#qts-manager-job-url');
+      if (
+        panel === 'page-exclusions'
+        && typeof options.prefillBlockedUrl === 'string'
+        && options.prefillBlockedUrl
+        && managerSettingsPermissions.canManageJobDetectionUrlRules
+        && blockedUrlInput
+      ) {
+        blockedUrlInput.value = options.prefillBlockedUrl;
+        blockedUrlInput.focus();
+        settings.status.textContent = 'Check the suggested URL fragment, then click Add blocked URL.';
+      }
     } catch (error) {
       settings.status.textContent = error?.message || 'Could not load Manager settings.';
       settings.status.classList.add('is-error');

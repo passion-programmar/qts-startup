@@ -104,6 +104,26 @@ async function initializeQtsPageLauncher() {
     .details dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .description { max-height: 180px; overflow: auto; padding: 9px; border-radius: 8px; background: #f8fafc; }
     .launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }
+    /* A Get JD page that needs the Manager keeps an orange badge until the notice is resolved. */
+    .notice-badge { position: absolute; top: -4px; left: -4px; z-index: 4; display: none; place-items: center; width: 20px; height: 20px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: #f97316; color: #fff; font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: 0 2px 8px #f9731688; cursor: pointer; }
+    .launcher.has-notice .notice-badge { display: grid; }
+    .outcome { position: fixed; right: 16px; bottom: 100px; z-index: 5; width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; border: 1px solid #e2e8f0; border-left: 4px solid #10b981; border-radius: 14px; background: #fff; color: #0f172a; box-shadow: 0 18px 44px -12px #0f172a59; font: 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; animation: qts-card-in .28s cubic-bezier(.2,.9,.3,1.2) both; }
+    .outcome[hidden] { display: none; }
+    .outcome.tone-info { border-left-color: #3b82f6; }
+    .outcome.tone-warn { border-left-color: #f97316; }
+    .outcome.tone-error { border-left-color: #ef4444; }
+    .outcome.get-jd-active { right: calc(min(400px, 48vw) + 16px); }
+    .outcome-head { display: flex; align-items: flex-start; gap: 10px; }
+    .outcome-message { flex: 1; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+    .outcome .close { flex: none; width: 24px; height: 24px; font-size: 16px; }
+    .outcome-countdown { margin: 6px 0 0; color: #475569; font-size: 12px; }
+    .outcome-countdown[hidden] { display: none; }
+    .outcome-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .outcome-actions:empty { display: none; }
+    .outcome-actions button { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; color: #0f172a; font: 700 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .outcome-actions button.primary { border-color: #4f46e5; background: #4f46e5; color: #fff; }
+    .outcome-actions button:disabled { opacity: .6; cursor: progress; }
+    .outcome-auto { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: #64748b; font-size: 12px; cursor: pointer; }
     @media (max-width: 520px) {
       .launcher { right: calc(50vw - 30px); bottom: 18px; }
       .action { width: 66px; height: 66px; margin: -33px 0 0 -33px; border-radius: 21px; }
@@ -143,7 +163,12 @@ async function initializeQtsPageLauncher() {
     ring.className = 'burst';
     return ring;
   });
-  launcher.append(...bursts, main, busyDot);
+  const noticeBadge = document.createElement('button');
+  noticeBadge.className = 'notice-badge';
+  noticeBadge.type = 'button';
+  noticeBadge.textContent = '!';
+  noticeBadge.setAttribute('aria-label', 'Show what Get JD needs on this page');
+  launcher.append(...bursts, main, busyDot, noticeBadge);
 
   const actions = [
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
@@ -223,7 +248,34 @@ async function initializeQtsPageLauncher() {
   details.className = 'details';
   preview.append(previewHeader, localNote, details);
 
-  root.append(style, launcher, signInForm, preview);
+  // How Get JD ended on this page: a closing countdown, or a notice with the actions that resolve it.
+  const outcomeCard = document.createElement('section');
+  outcomeCard.className = 'outcome';
+  outcomeCard.hidden = true;
+  outcomeCard.setAttribute('role', 'status');
+  outcomeCard.setAttribute('aria-live', 'polite');
+  const outcomeHead = document.createElement('div');
+  outcomeHead.className = 'outcome-head';
+  const outcomeMessage = document.createElement('p');
+  outcomeMessage.className = 'outcome-message';
+  const outcomeClose = document.createElement('button');
+  outcomeClose.className = 'close';
+  outcomeClose.type = 'button';
+  outcomeClose.setAttribute('aria-label', 'Hide this message');
+  outcomeClose.textContent = '×';
+  outcomeHead.append(outcomeMessage, outcomeClose);
+  const outcomeCountdown = document.createElement('p');
+  outcomeCountdown.className = 'outcome-countdown';
+  const outcomeActions = document.createElement('div');
+  outcomeActions.className = 'outcome-actions';
+  const outcomeAuto = document.createElement('label');
+  outcomeAuto.className = 'outcome-auto';
+  const outcomeAutoInput = document.createElement('input');
+  outcomeAutoInput.type = 'checkbox';
+  outcomeAuto.append(outcomeAutoInput, document.createTextNode('Close finished job tabs automatically'));
+  outcomeCard.append(outcomeHead, outcomeCountdown, outcomeActions, outcomeAuto);
+
+  root.append(style, launcher, signInForm, preview, outcomeCard);
   (document.documentElement || document.body).appendChild(host);
 
   function setOpen(open) {
@@ -238,10 +290,9 @@ async function initializeQtsPageLauncher() {
   }
 
   function syncGetJdDocking() {
-    launcher.classList.toggle(
-      'get-jd-active',
-      document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true',
-    );
+    const docked = document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true';
+    launcher.classList.toggle('get-jd-active', docked);
+    outcomeCard.classList.toggle('get-jd-active', docked);
   }
 
   const getJdDockObserver = new MutationObserver(syncGetJdDocking);
@@ -333,7 +384,7 @@ async function initializeQtsPageLauncher() {
     await globalThis.__qtsInitializeGetJdReview?.();
   }
 
-  async function openManagerPanel(button, panel, permissionKey, permissionName) {
+  async function openManagerPanel(button, panel, permissionKey, permissionName, options = {}) {
     setOpen(false);
     button.disabled = true;
     try {
@@ -360,7 +411,7 @@ async function initializeQtsPageLauncher() {
         canManageTextHighlights: response.canManageTextHighlights === true,
         canManagePageExclusions: response.canManagePageExclusions === true,
         canManageJobDetectionUrlRules: response.canManageJobDetectionUrlRules === true,
-      });
+      }, options);
     } catch (error) {
       showToast(error?.message || 'Could not open Manager settings.', 'error');
     } finally {
@@ -377,14 +428,169 @@ async function initializeQtsPageLauncher() {
     );
   }
 
-  async function openPageExclusionPanel(button) {
+  async function openPageExclusionPanel(button, options = {}) {
     await openManagerPanel(
       button,
       'page-exclusions',
       ['canManagePageExclusions', 'canManageJobDetectionUrlRules'],
       'URL settings access',
+      options,
     );
   }
+
+  // Get JD outcome card: the countdown before a finished tab closes, or a notice that keeps the badge.
+  let currentOutcome = null;
+  let outcomeTimer = null;
+  let outcomeHideTimer = null;
+
+  function clearOutcomeTimers() {
+    clearInterval(outcomeTimer);
+    clearTimeout(outcomeHideTimer);
+    outcomeTimer = null;
+    outcomeHideTimer = null;
+  }
+
+  function clearOutcome() {
+    clearOutcomeTimers();
+    currentOutcome = null;
+    outcomeCard.hidden = true;
+    launcher.classList.remove('has-notice');
+  }
+
+  const OUTCOME_ACTIONS = {
+    open_description: 'Open description',
+    try_again: 'Try again',
+    send_anyway: 'Send anyway',
+    never_on_site: 'Never on this site',
+  };
+
+  async function canBlockUrls() {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_EXTENSION_FEATURES' }).catch(() => null);
+    return response?.ok === true && response.canManageJobDetectionUrlRules === true;
+  }
+
+  async function runOutcomeAction(action, button) {
+    const outcome = currentOutcome;
+    if (!outcome) return;
+    if (action === 'open_description' && outcome.descriptionUrl) {
+      location.assign(outcome.descriptionUrl);
+      return;
+    }
+    if (action === 'never_on_site') {
+      const urlButton = launcher.querySelector('[data-action="page_exclusions"]');
+      outcomeCard.hidden = true;
+      await openPageExclusionPanel(urlButton || button, { prefillBlockedUrl: outcome.blockedUrlFragment || '' });
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'QTS_GET_JD_RETRY', force: action === 'send_anyway' });
+      if (!response?.ok) throw new Error(response?.error || 'Could not run Get JD again.');
+      clearOutcome();
+      showToast(action === 'send_anyway' ? 'Sending this page to Get JD…' : 'Checking this page again…');
+    } catch (error) {
+      showToast(error?.message || 'Could not run Get JD again.', 'error');
+      button.disabled = false;
+    }
+  }
+
+  async function showOutcome(outcome) {
+    if (outcome?.kind === 'clear') {
+      clearOutcome();
+      return;
+    }
+    if (!outcome?.message || (outcome.pageUrl && outcome.pageUrl !== location.href)) return;
+    clearOutcomeTimers();
+    currentOutcome = outcome;
+    outcomeCard.className = `outcome tone-${outcome.tone || 'success'}`;
+    syncGetJdDocking();
+    outcomeMessage.textContent = outcome.message;
+    outcomeAutoInput.checked = outcome.autoClose !== false;
+    outcomeActions.replaceChildren();
+    const actions = Array.isArray(outcome.actions) ? outcome.actions : [];
+    const allowBlocking = actions.includes('never_on_site') && await canBlockUrls();
+    if (currentOutcome !== outcome) return;
+    actions
+      .filter((action) => OUTCOME_ACTIONS[action] && (action !== 'never_on_site' || allowBlocking))
+      .forEach((action, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = OUTCOME_ACTIONS[action];
+        if (index === 0) button.className = 'primary';
+        button.addEventListener('click', () => runOutcomeAction(action, button));
+        outcomeActions.appendChild(button);
+      });
+    launcher.classList.toggle('has-notice', outcome.kind === 'notice');
+    outcomeCard.hidden = false;
+    const seconds = Number(outcome.closeInSeconds) || 0;
+    if (outcome.kind !== 'done') {
+      outcomeCountdown.hidden = true;
+      return;
+    }
+    if (seconds <= 0) {
+      // Nothing to close here (auto-close is off or not allowed on this tab): the message fades out.
+      outcomeCountdown.hidden = true;
+      outcomeHideTimer = setTimeout(clearOutcome, 6000);
+      return;
+    }
+    const keepOpen = document.createElement('button');
+    keepOpen.type = 'button';
+    keepOpen.className = 'primary';
+    keepOpen.textContent = 'Keep open';
+    keepOpen.addEventListener('click', () => {
+      clearOutcomeTimers();
+      outcomeCountdown.textContent = 'This tab stays open.';
+      keepOpen.remove();
+      outcomeHideTimer = setTimeout(clearOutcome, 4000);
+    });
+    outcomeActions.appendChild(keepOpen);
+    let remaining = seconds;
+    const tick = () => {
+      outcomeCountdown.hidden = false;
+      outcomeCountdown.textContent = `Closing this tab in ${remaining} s…`;
+    };
+    tick();
+    outcomeTimer = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        tick();
+        return;
+      }
+      clearOutcomeTimers();
+      outcomeCountdown.textContent = 'Closing…';
+      chrome.runtime.sendMessage({ type: 'QTS_GET_JD_CLOSE_TAB', pageUrl: outcome.pageUrl })
+        .then((response) => {
+          if (response?.ok) return;
+          outcomeCountdown.textContent = 'This tab stays open.';
+          keepOpen.remove();
+          outcomeHideTimer = setTimeout(clearOutcome, 4000);
+        })
+        .catch(() => {});
+    }, 1000);
+  }
+
+  outcomeClose.addEventListener('click', () => {
+    // Hiding a notice keeps its badge; hiding a countdown also keeps the tab open.
+    if (currentOutcome?.kind === 'notice') {
+      clearOutcomeTimers();
+      outcomeCard.hidden = true;
+    } else {
+      clearOutcome();
+    }
+  });
+  noticeBadge.addEventListener('click', () => {
+    if (currentOutcome?.kind === 'notice') outcomeCard.hidden = !outcomeCard.hidden;
+  });
+  outcomeAutoInput.addEventListener('change', () => {
+    const enabled = outcomeAutoInput.checked;
+    chrome.runtime.sendMessage({ type: 'QTS_SET_GET_JD_AUTO_CLOSE', enabled }).catch(() => {});
+    if (!enabled && outcomeTimer) {
+      clearOutcomeTimers();
+      outcomeCountdown.textContent = 'Auto-close is off. This tab stays open.';
+      outcomeActions.querySelector('.primary')?.remove();
+      outcomeHideTimer = setTimeout(clearOutcome, 4000);
+    }
+  });
 
   function appendDetail(label, value, className = '') {
     const wrapper = document.createElement('div');
@@ -535,6 +741,10 @@ async function initializeQtsPageLauncher() {
   const onRuntimeMessage = (message) => {
     if (message?.type === 'QTS_HIDE_SIGN_IN_FRAME') {
       hideSignInForm();
+      return;
+    }
+    if (message?.type === 'QTS_GET_JD_OUTCOME') {
+      showOutcome(message.outcome).catch(() => {});
       return;
     }
     // Get JD found no job on this page: flash the launcher red once instead of showing a toast.

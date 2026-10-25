@@ -154,7 +154,7 @@
     return collectText(parser.parseFromString(decoded, 'text/html').body);
   }
 
-  function jobPostings() {
+  function jobPostings(doc) {
     const found = [];
     const add = (value) => {
       if (Array.isArray(value)) return value.forEach(add);
@@ -162,7 +162,7 @@
       if ([].concat(value['@type'] || []).some((type) => /JobPosting$/i.test(String(type)))) found.push(value);
       if (value['@graph']) add(value['@graph']);
     };
-    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
       try {
         add(JSON.parse(script.textContent || ''));
       } catch {
@@ -195,17 +195,17 @@
     ].filter(Boolean).join('\n');
   }
 
-  function readJobPageText() {
+  function readJobPageText(doc = document) {
     // The page's main region when it has the content; the site's bars sit outside it.
-    const main = [...document.querySelectorAll('main, [role="main"], #mainContent, #main-content, #main')]
+    const main = [...doc.querySelectorAll('main, [role="main"], #mainContent, #main-content, #main')]
       .find((element) => (element.textContent || '').trim().length >= 500);
-    const root = main || document.body;
+    const root = main || doc.body;
     if (!root) return '';
     let text = collectText(root);
-    if (text.length < 300) text = collectText(document.body, true);
+    if (text.length < 300) text = collectText(doc.body, true);
     const compact = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
     const pageCompact = compact(text);
-    for (const posting of jobPostings()) {
+    for (const posting of jobPostings(doc)) {
       const description = posting.description ? htmlToText(posting.description) : '';
       // Added only when the page text lacks it, so the description is not sent twice.
       if (description && pageCompact.includes(compact(description).slice(0, 300))) continue;
@@ -214,5 +214,16 @@
     return text.slice(0, MAX_LENGTH);
   }
 
-  global.__qtsReadJobPageText = readJobPageText;
+  // Reads another page of the same site (an apply form's description page) without opening it.
+  // The fetched markup is parsed inertly, so its scripts do not run; pages that build the job with
+  // scripts come back short, and the caller keeps the current page's text then.
+  async function readJobPageTextFrom(url) {
+    const response = await fetch(url, { credentials: 'same-origin', redirect: 'follow' });
+    if (!response.ok) return '';
+    const html = await response.text();
+    return readJobPageText(new DOMParser().parseFromString(html, 'text/html'));
+  }
+
+  global.__qtsReadJobPageText = () => readJobPageText();
+  global.__qtsReadJobPageTextFrom = readJobPageTextFrom;
 })(typeof globalThis !== 'undefined' ? globalThis : self);

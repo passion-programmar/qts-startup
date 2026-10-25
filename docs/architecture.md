@@ -20,9 +20,23 @@ The supported browser-extension workflow is deliberately narrow:
    it is a job page if two of the Manager's job-page detection keywords appear
    as whole words (plurals count), if it carries JSON-LD `JobPosting` data, or
    if job signals (job-site URL, Apply button or CV upload, posting headings,
-   keywords; job lists penalized) score 3 or more. Closed or expired postings
-   are rejected. A rejected page is not extracted or sent to the server, and
-   the launcher flashes red once. Super Admin assigns Gemini matching to
+   keywords; job lists penalized) score 3 or more. A job page showing a closed,
+   expired, or not-found notice with no description (no `JobPosting` data and
+   fewer than two posting headings) is rejected as closed. A rejected page is
+   not extracted or sent to the server. The launcher flashes red once on an
+   ordinary page; a browser check or sign-in page ("didn't load", with Try
+   again) and a page one job signal short of passing ("not sure", with Send
+   anyway and, for Managers who manage blocked URLs, Never on this site that
+   pre-fills URL Settings) keep an orange badge and a notice instead. Lever,
+   Workable, and PeopleForce apply-form pages are read from their description
+   page; when that cannot be read, the notice offers Open description. Job
+   text from embedded job-board frames (Greenhouse, Ashby, Lever, and others)
+   is added to the page's. When Get JD needs nothing more on a tab (Gemini
+   saved the job for every candidate it picked, the job is already saved, it is
+   not eligible or not a job, it is closed, or the Manager saved the review),
+   the tab closes after a 3-second countdown with Keep open. Pinned tabs, a
+   window's last tab, and search pages showing one selected job never close,
+   and the Manager can turn auto-close off on the card. Super Admin assigns Gemini matching to
    individual Managers in Settings; every other Manager uses general matching.
    General mode extracts locally and checks Jobs and Bids. Gemini mode sends the
    job's plain text to the server (shown and collapsed text alike, without the
