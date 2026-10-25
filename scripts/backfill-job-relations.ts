@@ -66,6 +66,12 @@ async function main(): Promise<void> {
     console.log("\nReport only. Re-run with --apply to write the keys.");
     return;
   }
+  // The unique indexes (migration 0050) would reject these rows, so they must be resolved first.
+  if (plan.collisions.length) {
+    console.log("\nNot writing: resolve the rows above first (delete or edit one row of each pair on the Jobs page), then run again.");
+    process.exitCode = 1;
+    return;
+  }
 
   for (let index = 0; index < plan.updates.length; index += batchSize) {
     const batch = plan.updates.slice(index, index + batchSize);

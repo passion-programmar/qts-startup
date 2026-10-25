@@ -458,8 +458,10 @@ export const jobs = pgTable(
     ),
     index("jobs_manager_date_index").on(table.managerId, table.date),
     index("jobs_relation_id_index").on(table.relationId),
-    index("jobs_job_key_index").on(table.jobKey),
-    index("jobs_title_company_key_index").on(table.titleCompanyKey),
+    // An account never gets the same job twice, by URL or by title + company.
+    // Null keys (rows not backfilled yet) never conflict.
+    uniqueIndex("jobs_job_key_candidate_unique").on(table.jobKey, table.candidateId),
+    uniqueIndex("jobs_title_company_key_candidate_unique").on(table.titleCompanyKey, table.candidateId),
     index("jobs_candidate_date_status_index").on(
       table.candidateId,
       table.date,
