@@ -94,6 +94,8 @@ export function WorkspaceShellClient({
   const navigation = navigationGroups.flatMap((group) => group.items);
   const pageLabel = navigation.find((item) => item.href === activeHref)?.label || "Overview";
   const initials = user.displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "Q";
+  // Managers and admins see Japan and Romania time; Super Admins have their own clock on Gemini usage.
+  const showClocks = user.role !== "super_admin";
 
   useEffect(() => {
     if (!mobileNavigationOpen) return;
@@ -122,6 +124,7 @@ export function WorkspaceShellClient({
             <span className="workspace-header__page">{pageLabel}</span>
           </span>
         </div>
+        {showClocks ? <div className="hidden xl:block"><WorkspaceClocks compact /></div> : null}
         <div className="workspace-header__actions">
           <span className="workspace-status"><span aria-hidden="true" />Connected</span>
           <details className="workspace-account">
@@ -176,10 +179,10 @@ export function WorkspaceShellClient({
         </Link>
       </aside>
       <div className="workspace-body"><div id="workspace-content" tabIndex={-1} className="workspace-content">
-        {/* Stays under the fixed header while the page scrolls. The Resume page keeps the clocks in its
-            own header instead, since its panels fill the window and never scroll. */}
-        {user.role !== "super_admin" && activeHref !== "/pdf" ? (
-          <div className="sticky top-(--header-height) z-30 -mx-1 mb-4 flex justify-center bg-surface/95 px-1 py-2 backdrop-blur">
+        {/* Below 1280px the header has no room for the clocks, so they stay under it while the page scrolls.
+            The Resume page keeps them in its own header instead, since its panels fill the window and never scroll. */}
+        {showClocks && activeHref !== "/pdf" ? (
+          <div className="sticky top-(--header-height) z-30 -mx-1 mb-4 flex justify-center bg-surface/95 px-1 py-2 backdrop-blur xl:hidden">
             <WorkspaceClocks />
           </div>
         ) : null}

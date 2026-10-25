@@ -188,7 +188,8 @@ export function PdfWorkspace({
           <ExternalLink className="size-4" />
           Resume
         </a>
-        <WorkspaceClocks />
+        {/* From 1280px up the clocks are in the workspace header. */}
+        <WorkspaceClocks className="xl:hidden" />
         <nav aria-label="Document preview selection" className="flex items-center gap-3">
           <button
             aria-label="Show resume"

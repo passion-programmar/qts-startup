@@ -352,7 +352,9 @@ textarea {
 /* Workspace chrome: a light sidebar with grouped navigation, a translucent toolbar, and indigo accents. */
 .workspace-shell { --sidebar-width: 264px; --header-height: 64px; min-height: 100vh; background: var(--color-surface); color: var(--color-slate-900); }
 .workspace-header { position: fixed; top: 0; right: 0; left: var(--sidebar-width); height: var(--header-height); z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 28px; border-bottom: 1px solid var(--color-slate-200); background: color-mix(in oklab, var(--color-white) 82%, transparent); backdrop-filter: saturate(180%) blur(14px); transition: left .2s ease; }
-.workspace-header__location, .workspace-header__actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.workspace-header__location, .workspace-header__actions { display: flex; flex: 1 1 0; align-items: center; gap: 12px; min-width: 0; }
+/* Equal-width sides keep the header clocks centered; the actions never shrink below their content. */
+.workspace-header__actions { justify-content: flex-end; min-width: auto; }
 .workspace-header__crumbs { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .workspace-header__eyebrow { color: var(--color-slate-400); font-size: 11px; font-weight: 500; letter-spacing: .02em; }
 .workspace-header__page { color: var(--color-slate-900); font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -.01em; }
