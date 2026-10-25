@@ -870,7 +870,8 @@ test('Get JD matching mode is assigned per Manager, not globally', () => {
   assert.ok(modeHelper.includes('useGeminiMatching: users.useGeminiMatching'));
   assert.equal(modeHelper.includes('get_jd_matching_mode'), false);
   for (const route of routes) assert.ok(route.includes('getGetJdMatchingMode(manager.id)'));
-  assert.ok(migration.includes("\"key\" = 'get_jd_matching_mode' AND \"value\" = 'gemini'"));
+  // settings.value is jsonb, so the stored mode is compared as the JSON string "gemini".
+  assert.ok(migration.includes(`"key" = 'get_jd_matching_mode' AND "value" = '"gemini"'::jsonb`));
   assert.ok(settingsPage.includes('<ManagerGeminiMatchingForm'));
   assert.equal(settingsPage.includes('get_jd_matching_mode'), false);
 });
