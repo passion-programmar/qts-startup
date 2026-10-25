@@ -40,8 +40,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     try {
       parsedPackage = parsePdfPackage(JSON.stringify(responseJson));
       validPackage = true;
-    } catch {
-      validPackage = false;
+    } catch (error) {
+      // The extension sends this reason back to ChatGPT so it can correct its answer.
+      if (!failureReason) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: `The document JSON is invalid: ${error instanceof Error ? error.message : "it does not match the required structure."}`,
+          },
+          { status: 422 },
+        );
+      }
     }
   }
   const completed = Boolean(responseText && validPackage);

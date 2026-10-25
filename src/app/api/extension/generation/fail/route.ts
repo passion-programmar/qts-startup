@@ -71,6 +71,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         ));
       return NextResponse.json({ success: true, jobId, cancelled: true });
     }
+    // "failed" too: saving the failed run (generation/complete) may already have marked the job.
     const [failed] = await db
       .update(jobs)
       .set({
@@ -82,16 +83,17 @@ export async function POST(request: Request): Promise<NextResponse> {
       .where(and(
         eq(jobs.id, jobId),
         eq(jobs.managerId, manager.id),
-        eq(jobs.generationStatus, "processing"),
+        inArray(jobs.generationStatus, ["processing", "failed"]),
       ))
-      .returning({ id: jobs.id });
+      .returning({ id: jobs.id, attempts: jobs.generationAttemptCount });
     if (!failed) {
       return NextResponse.json(
         { success: false, message: "The queued job is not currently processing." },
         { status: 409 },
       );
     }
-    return NextResponse.json({ success: true, jobId });
+    // Claims allow two attempts; the extension retries a failed job only while one is left.
+    return NextResponse.json({ success: true, jobId, canRetry: failed.attempts < 2 });
   } catch (error) {
     console.error("Could not record queued Generation failure.", error);
     return NextResponse.json(

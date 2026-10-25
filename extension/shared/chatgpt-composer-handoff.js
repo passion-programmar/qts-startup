@@ -1,7 +1,7 @@
 // Shared ChatGPT unified-composer handoff (ProseMirror #prompt-textarea).
 // Loaded in content scripts and service worker (importScripts).
 (function initQtsChatGptComposerHandoff(global) {
-  const HANDOFF_VERSION = 8;
+  const HANDOFF_VERSION = 9;
   // How long each send attempt waits for ChatGPT to show the sent message.
   const SEND_CONFIRM_MS = 8000;
   const FALLBACK_CONFIRM_MS = 4000;
@@ -444,9 +444,13 @@
   function findAssistantResponseForTask(generationId) {
     const marker = `QTS_GENERATION_ID: ${String(generationId || '').trim()}`;
     if (!/^QTS_GENERATION_ID: [0-9a-f-]{36}$/i.test(marker)) return null;
-    const userMessage = findUserMessages().find((message) =>
-      messageContainsExpectedText(message, marker),
-    );
+    // The latest message for the task: a follow-up asking for a corrected answer carries the marker too.
+    const userMessage = findUserMessages()
+      .filter((message) => messageContainsExpectedText(message, marker))
+      .sort((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      )
+      .at(-1);
     if (!userMessage) return null;
     return findAssistantMessages()
       .filter((message) => Boolean(

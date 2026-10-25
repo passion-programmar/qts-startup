@@ -186,7 +186,7 @@ test('Scanner waits asynchronously for ChatGPT to accept a send-button click', a
 
   try {
     const composer = require('./chatgpt-composer-handoff');
-    assert.equal(composer.version, 8);
+    assert.equal(composer.version, 9);
     assert.equal(composer.findUnifiedComposerEditor(), editor);
     assert.deepEqual(composer.findAssistantMessages(), assistantMessages);
     let sendingStatusShown = false;

@@ -58,8 +58,8 @@ export async function GET(request: Request): Promise<NextResponse> {
 
     const data = parsePdfPackage(JSON.stringify(row.responseJson));
     const template = isPdfTemplate(row.pdfTemplate) ? row.pdfTemplate : "qts-standard";
-    // Over-long content fails here as it always has: Generation keeps the page limits.
-    const pdfs = await renderDocumentPdfs(data, template, { enforcePageLimits: true });
+    // No page limit: a longer résumé or cover letter is delivered as it is.
+    const pdfs = await renderDocumentPdfs(data, template, { enforcePageLimits: false });
     const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
     const paths = generationDownloadPaths({
       managerName: manager.displayName,

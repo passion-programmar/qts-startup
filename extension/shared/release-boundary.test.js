@@ -344,8 +344,13 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.equal(serviceWorker.includes('Generation must be started from a job page.'), false);
   assert.ok(serviceWorker.includes('Checking the oldest eligible saved job'));
   assert.ok(serviceWorker.includes('pinned: true'));
-  assert.ok(serviceWorker.includes('while (Date.now() - waitStartedAt < GENERATION_RESPONSE_MAX_WAIT_MS)'));
-  assert.ok(serviceWorker.includes('GENERATION_RESPONSE_START_TIMEOUT_MS'));
+  // ChatGPT gets one minute per answer; an error refreshes the tab and resends once; an unusable
+  // answer gets one follow-up; a failed job is tried once more in the run.
+  assert.ok(serviceWorker.includes('const GENERATION_ANSWER_MAX_WAIT_MS = 60 * 1000;'));
+  assert.ok(serviceWorker.includes('while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS)'));
+  assert.ok(serviceWorker.includes("if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;"));
+  assert.ok(serviceWorker.includes('if (!unusable || followUps > 0)'));
+  assert.ok(serviceWorker.includes('const retrying = failed.success === true && failed.canRetry === true && failures < 2;'));
   assert.ok(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'));
   assert.ok(serviceWorker.includes('persistGenerationQueueRun(runId, excludedJobIds)'));
   assert.ok(serviceWorker.includes('notifyGenerationManager'));

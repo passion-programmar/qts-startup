@@ -64,8 +64,10 @@ let generationQueueInFlight = false;
 const generationHeartbeatOkAt = new Map();
 // The server lease lasts 20 minutes, so brief heartbeat outages are safe to ride out.
 const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
-const GENERATION_RESPONSE_START_TIMEOUT_MS = 3 * 60 * 1000;
-const GENERATION_RESPONSE_MAX_WAIT_MS = 10 * 60 * 1000;
+// ChatGPT has this long from sending a prompt to finishing its answer.
+const GENERATION_ANSWER_MAX_WAIT_MS = 60 * 1000;
+// Without ChatGPT's copy button, an answer that stopped changing this long counts as finished.
+const GENERATION_ANSWER_QUIET_MS = 3000;
 const GENERATION_QUEUE_ALARM = 'qts-generation-queue';
 let lastSourceTabId = null;
 const lastAutoDetectKeyByTab = new Map();
@@ -2794,11 +2796,19 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             /stop generating|stop streaming/i.test(button.getAttribute('aria-label') || '')
           )
         );
-        return {
-          text: String(response?.innerText || response?.textContent || '').trim(),
-          isNew: Boolean(response),
-          generating,
-        };
+        const text = String(response?.innerText || response?.textContent || '').trim();
+        // ChatGPT shows the copy button under an answer once it has finished writing it.
+        const turn = response?.closest?.('article, [data-testid^="conversation-turn"]');
+        const finished = Boolean(turn?.querySelector(
+          '[data-testid="copy-turn-action-button"], button[aria-label="Copy"], button[aria-label="Copy message"]',
+        ));
+        const errorPattern = /something went wrong|an error occurred|error generating|you['’]ve (?:reached|hit) (?:your|the)|usage (?:cap|limit)|rate limit|too many requests|network error|unusual activity|try again later/i;
+        const errorNode = [...document.querySelectorAll(
+          '[role="alert"], [data-testid*="error" i], .text-token-text-error, [class*="text-red"]',
+        )].find((node) => errorPattern.test(node.innerText || ''));
+        let chatError = errorNode ? String(errorNode.innerText).trim().slice(0, 200) : '';
+        if (!chatError && text && !text.includes('{') && errorPattern.test(text)) chatError = text.slice(0, 200);
+        return { text, isNew: Boolean(response), generating, finished, chatError };
       },
       args: [generationId],
     });
@@ -3024,6 +3034,60 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     return result.success && typeof result.generationStatus === 'string' ? result.generationStatus : '';
   }
 
+  function chatGptPageError(message) {
+    const error = new Error(`ChatGPT showed an error: ${message}`);
+    error.name = 'ChatGptPageError';
+    return error;
+  }
+
+  // Waits for ChatGPT to finish the answer to this task's latest prompt: the Stop button is gone and
+  // the copy button shows (or, without it, the text stopped changing).
+  async function waitForGenerationAnswer(chatTabId, generationId, active) {
+    const startedAt = Date.now();
+    let lastStatusCheck = startedAt;
+    let lastText = '';
+    let quietSince = 0;
+    while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS) {
+      await sleep(750);
+      active.local();
+      if (Date.now() - lastStatusCheck >= 3000) {
+        await active.server();
+        lastStatusCheck = Date.now();
+      }
+      const snapshot = await scannerChatGptSnapshot(chatTabId, generationId);
+      if (snapshot?.chatError && !snapshot.generating) throw chatGptPageError(snapshot.chatError);
+      if (!snapshot?.isNew || !snapshot.text || snapshot.generating) {
+        lastText = '';
+        continue;
+      }
+      if (snapshot.finished) return snapshot.text;
+      if (snapshot.text !== lastText) {
+        lastText = snapshot.text;
+        quietSince = Date.now();
+      } else if (Date.now() - quietSince >= GENERATION_ANSWER_QUIET_MS) {
+        return snapshot.text;
+      }
+    }
+    throw new Error('ChatGPT did not finish the answer within 1 minute.');
+  }
+
+  // Sends one prompt and returns ChatGPT's finished answer. If ChatGPT shows an error, the tab is
+  // refreshed once and the prompt sent again.
+  async function askGenerationChatGpt(chatTabId, prompt, generationId, active) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await updateGenerationBrowserState({ phase: 'sending_prompt' });
+        await sendGenerationPromptWithRecovery(chatTabId, prompt);
+        await updateGenerationBrowserState({ phase: 'waiting_for_response' });
+        return await waitForGenerationAnswer(chatTabId, generationId, active);
+      } catch (error) {
+        if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;
+        await chrome.tabs.reload(chatTabId);
+        await sleep(1500);
+      }
+    }
+  }
+
   async function runGenerationForTab(jobTabId, queuedJob = null) {
     if (!queuedJob?.id) {
       throw new Error('Generation requires a saved candidate Job. Run Get JD and save candidates first.');
@@ -3091,64 +3155,43 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       chatTabId = chatTab.id;
       await updateGenerationBrowserState({ chatTabId });
       ensureGenerationIsActive(cancellationKey, cancellationToken);
-      await updateGenerationBrowserState({ phase: 'sending_prompt' });
-      const handoff = await sendGenerationPromptWithRecovery(chatTab.id, generationPrompt);
-
+      const active = {
+        local: () => ensureGenerationIsActive(cancellationKey, cancellationToken),
+        server: () => ensureQueuedGenerationIsActive(queuedJob.id),
+      };
       await showGenerationPageStatus(jobTabId, 'ChatGPT is generating the résumé and cover letter...');
-      await updateGenerationBrowserState({ phase: 'waiting_for_response' });
-      const waitStartedAt = Date.now();
-      let previousText = '';
-      let stableSince = 0;
-      let responseText = '';
-      let lastStatusCheck = 0;
-      let responseStarted = false;
-      while (Date.now() - waitStartedAt < GENERATION_RESPONSE_MAX_WAIT_MS) {
-        await sleep(750);
-        ensureGenerationIsActive(cancellationKey, cancellationToken);
-        if (Date.now() - lastStatusCheck >= 3000) {
-          await ensureQueuedGenerationIsActive(queuedJob.id);
-          lastStatusCheck = Date.now();
+      let responseText = await askGenerationChatGpt(chatTab.id, generationPrompt, generationId, active);
+
+      // An answer QTS cannot use gets one follow-up in the same chat that says why.
+      for (let followUps = 0; ; followUps += 1) {
+        active.local();
+        await active.server();
+        await updateGenerationBrowserState({ phase: 'validating_response' });
+        const responseJson = self.__qtsGenerationChatGpt?.extractJsonObject?.(responseText) || null;
+        const saved = responseJson
+          ? await workerApiRequest('POST', '/api/extension/generation/complete', {
+            generationId,
+            responseText,
+            responseJson,
+          })
+          : { success: false, message: 'The reply was not one valid JSON object.', unusable: true };
+        if (saved.success) break;
+        const unusable = saved.unusable || saved._httpStatus === 400 || saved._httpStatus === 422;
+        if (!unusable || followUps > 0) {
+          throw new Error(unusable
+            ? `ChatGPT's answer could not be used: ${saved.message}`
+            : saved.message || 'QTS could not save the Generation result.');
         }
-        const snapshot = await scannerChatGptSnapshot(chatTab.id, generationId);
-        if (snapshot?.isNew && (snapshot.text || snapshot.generating)) responseStarted = true;
-        if (!responseStarted && Date.now() - waitStartedAt >= GENERATION_RESPONSE_START_TIMEOUT_MS) break;
-        if (!snapshot?.isNew || !snapshot.text || snapshot.generating) {
-          previousText = '';
-          stableSince = 0;
-          continue;
-        }
-        if (snapshot.text !== previousText) {
-          previousText = snapshot.text;
-          stableSince = Date.now();
-          continue;
-        }
-        if (Date.now() - stableSince >= 5000) {
-          responseText = snapshot.text;
-          break;
-        }
+        await showGenerationPageStatus(jobTabId, 'Asking ChatGPT to correct its answer...');
+        const followUp = self.__qtsGenerationChatGpt.buildTaskPrompt(
+          `Your previous reply could not be used: ${saved.message || 'it was not valid JSON.'} `
+          + 'Reply again with only the complete, valid JSON object in the required structure, with no other text before or after it.',
+          generationId,
+        );
+        responseText = await askGenerationChatGpt(chatTab.id, followUp, generationId, active);
       }
-      if (!responseText) {
-        throw new Error(responseStarted
-          ? 'Timed out waiting for ChatGPT to finish. Check the ChatGPT tab before retrying.'
-          : 'ChatGPT did not start responding. Check the ChatGPT tab before retrying.');
-      }
-      ensureGenerationIsActive(cancellationKey, cancellationToken);
-      await ensureQueuedGenerationIsActive(queuedJob.id);
-      await updateGenerationBrowserState({ phase: 'validating_response' });
-      const responseJson = self.__qtsGenerationChatGpt?.extractJsonObject?.(responseText) || null;
-      if (!responseJson) {
-        throw new Error('ChatGPT response was not valid résumé and cover-letter JSON.');
-      }
-      const saved = await workerApiRequest('POST', '/api/extension/generation/complete', {
-        generationId,
-        responseText,
-        responseJson,
-      });
-      if (!saved.success) throw new Error(saved.message || 'QTS could not save the Generation result.');
       await updateGenerationBrowserState({ phase: 'response_saved' });
-      const message = responseJson
-        ? 'Generation completed and saved with the JD.'
-        : 'Generation response and JD saved, but the response was not valid résumé/cover-letter JSON.';
+      const message = 'Generation completed and saved with the JD.';
       await showGenerationPageStatus(jobTabId, message, 'success');
       return { ok: true, status: 'generation', message, generationId, parsed: true, chatTabId };
     } catch (error) {
@@ -3415,6 +3458,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
     let runId = '';
     const excludedJobIds = new Set();
+    const failuresThisRun = new Map();
     let completedCount = 0;
     let failedCount = 0;
     let shouldStop = false;
@@ -3471,7 +3515,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             );
           } else if (completedCount || failedCount) {
             await notifyGenerationManager(
-              `Generation run finished: ${completedCount} job(s) completed and ${failedCount} job(s) failed. Failed jobs can be retried on a later run; after two failures, use Reset Generation on the Jobs page.`,
+              `Generation run finished: ${completedCount} job(s) completed and ${failedCount} job(s) failed. Each failed job was tried twice; use Reset Generation on the Jobs page to try it again.`,
             );
           } else {
             await notifyGenerationManager(
@@ -3564,9 +3608,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             await notifyGenerationManager(`Generation stopped because setup is incomplete: ${reason}`);
             shouldStop = true;
           } else if (!isGenerationCancelled(handledError)) {
-            excludedJobIds.add(queuedJob.id);
-            await persistGenerationQueueRun(runId, excludedJobIds);
-            failedCount += 1;
+            // A failed job is tried once more in this run (the server allows two attempts), then left.
+            const failures = (failuresThisRun.get(queuedJob.id) || 0) + 1;
+            failuresThisRun.set(queuedJob.id, failures);
             const failed = await workerApiRequest(
               'POST',
               '/api/extension/generation/fail',
@@ -3575,8 +3619,16 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             if (!failed.success) {
               console.error('[QTS Generation] Could not mark the queued job failed:', failed.message);
             }
+            const retrying = failed.success === true && failed.canRetry === true && failures < 2;
+            if (!retrying) {
+              excludedJobIds.add(queuedJob.id);
+              await persistGenerationQueueRun(runId, excludedJobIds);
+              failedCount += 1;
+            }
             console.error('[QTS Generation] Queued job failed:', queuedJob.id, reason);
-            await notifyGenerationManager(`Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason}`);
+            await notifyGenerationManager(retrying
+              ? `Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason} Trying it once more.`
+              : `Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason}`);
           } else {
             await workerApiRequest(
               'POST',
