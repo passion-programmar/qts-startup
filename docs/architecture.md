@@ -29,7 +29,8 @@ The supported browser-extension workflow is deliberately narrow:
    prompt and candidate ID/JD-note pairs, then prechecks returned candidate IDs.
    A Manager with the corresponding Super-assigned permission can add, edit,
    and delete only their own blocked URL fragments and job-page detection keywords.
-   Super Admin also selects local token estimation or Gemini CountTokens and
+   Super Admin also selects Local Count or Gemini Count (both counts recorded per
+   request for comparison) and
    configures per-key request and generation-input-token limits from Gemini
    Usage. The usage page shows per-key totals and the latest 100 Google API
    responses for the Pacific day. Usage events (operation, key hash, token

@@ -258,9 +258,12 @@ export async function updateGeminiTokenCountModeAction(
     return { ...emptyState, error: "Token counting mode could not be updated." };
   }
   revalidatePath("/settings");
+  revalidatePath("/settings/gemini-usage");
   return {
     error: null,
-    success: `Token counting set to ${mode === "gemini" ? "Gemini CountTokens API" : "Local estimate"}.`,
+    success: mode === "gemini"
+      ? "Gemini Count is on: each request is counted locally and with Google's CountTokens."
+      : "Local Count is on: QTS estimates tokens locally and makes no CountTokens calls.",
   };
 }
 

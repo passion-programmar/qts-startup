@@ -891,8 +891,27 @@ test('Get JD saves use shared job keys, explicit removals, and skip Gemini when 
   assert.ok(saveRoute.includes('readProfileIds(body, "removeProfileIds")'));
   assert.ok(saveRoute.includes('removeGetJdJobAccount(manager.id, rowId)'));
   assert.ok(geminiRoute.includes('skippedEvaluation: true'));
-  assert.ok(geminiRoute.indexOf('availableProfiles.length === 0') < geminiRoute.indexOf('requestGeminiJson(apiKey, promptText)'));
+  assert.ok(geminiRoute.indexOf('availableProfiles.length === 0') < geminiRoute.indexOf('requestGeminiJson(apiKey, promptText, tokenCounts)'));
   assert.ok(jobActions.includes('eq(jobs.relationId, existingJob.relationId)'));
   assert.ok(jobActions.includes('Delete the bid on the Bids page first.'));
   assert.ok(claimRoute.includes('hasEffectiveJobDescription()'));
+});
+
+test('Local Count never calls CountTokens; Gemini Count records both counts on the request', () => {
+  const root = path.join(extensionRoot, '..');
+  const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
+  const route = read('src', 'app', 'api', 'extension', 'get-jd', 'route.ts');
+  const usage = read('src', 'lib', 'gemini-usage.ts');
+  const page = read('src', 'app', 'settings', 'gemini-usage', 'page.tsx');
+  const modeForm = read('src', 'app', 'settings', 'gemini-usage', 'token-count-mode-form.tsx');
+
+  assert.ok(route.includes('local: estimateGeminiInputTokens(prompt, config)'));
+  assert.ok(route.includes('gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, prompt) : null'));
+  assert.ok(usage.includes('localInputTokens: tokenCounts.local ?? null'));
+  assert.ok(usage.includes('geminiInputTokens: tokenCounts.gemini ?? null'));
+  assert.ok(page.includes('{ label: "No", className: "w-[5%]" }'));
+  assert.ok(page.includes('{ label: "Local tokens"'));
+  assert.ok(page.includes('{ label: "Gemini tokens"'));
+  assert.ok(modeForm.includes('label: "Local Count"'));
+  assert.ok(modeForm.includes('label: "Gemini Count"'));
 });

@@ -12,7 +12,6 @@ import {
   unassignPromptAction,
   updatePromptModeAction,
   updateManagerGeminiMatchingAction,
-  updateGeminiTokenCountModeAction,
   type PromptActionState,
 } from "@/app/settings/actions";
 
@@ -97,26 +96,6 @@ export function ManagerGeminiMatchingForm({
       </form>
       <ActionFeedback state={state} />
     </div>
-  );
-}
-
-export function GeminiTokenCountModeForm({ mode }: { mode: "local" | "gemini" }) {
-  const [state, formAction, isPending] = useActionState(updateGeminiTokenCountModeAction, initialState);
-  return (
-    <form action={formAction} className="space-y-4">
-      <div>
-        <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor="geminiTokenCountMode">Gemini input-token calculation</label>
-        <select className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 sm:max-w-sm" defaultValue={mode} id="geminiTokenCountMode" name="geminiTokenCountMode">
-          <option value="local">Local estimate (no extra API call)</option>
-          <option value="gemini">Gemini CountTokens API</option>
-        </select>
-      </div>
-      <ActionFeedback state={state} />
-      <button className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60" disabled={isPending} type="submit">
-        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
-        {isPending ? "Saving..." : "Save token mode"}
-      </button>
-    </form>
   );
 }
 

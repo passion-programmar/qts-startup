@@ -681,6 +681,10 @@ export const geminiApiCallLogs = pgTable(
     responseTruncated: boolean("response_truncated").default(false).notNull(),
     errorMessage: text("error_message"),
     durationMs: integer("duration_ms"),
+    // Input-token counts for a GenerateContent request: QTS's local estimate always,
+    // and Google's CountTokens result only in Gemini Count mode, so the two can be compared.
+    localInputTokens: integer("local_input_tokens"),
+    geminiInputTokens: integer("gemini_input_tokens"),
     startedAt: timestamp("started_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),

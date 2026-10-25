@@ -234,10 +234,10 @@ export async function POST(request: Request): Promise<NextResponse> {
         503,
       );
     }
-    const { apiKey, leaseId } = selectedKey;
+    const { apiKey, leaseId, tokenCounts } = selectedKey;
     let modelResult: unknown;
     try {
-      modelResult = await requestGeminiJson(apiKey, promptText);
+      modelResult = await requestGeminiJson(apiKey, promptText, tokenCounts);
     } finally {
       await releaseGeminiKey(apiKey, leaseId);
     }
@@ -387,13 +387,15 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 }
 
+type GeminiTokenCounts = { local: number; gemini: number | null };
+
 async function selectAvailableGeminiApiKey(
   apiKeys: string[],
   prompt: string,
   config: typeof generationConfig,
   tokenCountMode: GeminiTokenCountMode,
   limits: Awaited<ReturnType<typeof getGeminiApiLimits>>,
-): Promise<{ apiKey: string; leaseId: string } | null> {
+): Promise<{ apiKey: string; leaseId: string; tokenCounts: GeminiTokenCounts } | null> {
   const shuffledKeys = [...apiKeys];
   for (let index = shuffledKeys.length - 1; index > 0; index -= 1) {
     const swapIndex = randomInt(index + 1);
@@ -407,11 +409,14 @@ async function selectAvailableGeminiApiKey(
     const leaseId = await acquireGeminiKey(apiKey, limits);
     if (!leaseId) continue;
     try {
-      const inputTokens = tokenCountMode === "gemini"
-        ? await requestGeminiTokenCount(apiKey, prompt)
-        : estimateGeminiInputTokens(prompt, config);
-      if (await reserveGeminiGeneration(apiKey, leaseId, inputTokens, limits)) {
-        return { apiKey, leaseId };
+      // Local Count: the local estimate only, with no CountTokens call. Gemini Count: both,
+      // recorded side by side for comparison; the key's limit uses Google's count.
+      const tokenCounts: GeminiTokenCounts = {
+        local: estimateGeminiInputTokens(prompt, config),
+        gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, prompt) : null,
+      };
+      if (await reserveGeminiGeneration(apiKey, leaseId, tokenCounts.gemini ?? tokenCounts.local, limits)) {
+        return { apiKey, leaseId, tokenCounts };
       }
     } catch (error) {
       await releaseGeminiKey(apiKey, leaseId);
@@ -509,6 +514,7 @@ async function loadManagerCandidateProfiles(
 async function requestGeminiJson(
   apiKey: string,
   prompt: string,
+  tokenCounts: GeminiTokenCounts,
 ): Promise<unknown> {
   // One 45-second budget covers the first attempt and a possible retry.
   const signal = AbortSignal.timeout(45_000);
@@ -530,6 +536,7 @@ async function requestGeminiJson(
         signal,
         cache: "no-store",
       },
+      tokenCounts,
     ),
     // The retry is another request against the key's per-minute limit; its tokens were reserved with the first.
     { beforeRetry: () => recordGeminiApiCall(apiKey, "generate_content") },

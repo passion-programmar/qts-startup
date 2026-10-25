@@ -17,6 +17,8 @@ import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { GeminiApiLimitsForm } from "./limits-form";
 import { TokenComparisonForm } from "./token-comparison-form";
+import { TokenCountModeForm } from "./token-count-mode-form";
+import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
 
 export const instant = false;
 
@@ -36,6 +38,7 @@ export default async function GeminiUsagePage({
   if (currentUser.role !== "super_admin") redirect("/");
   // Sub tabs are links (?tab=responses), so each tab is server-rendered and can be bookmarked.
   const activeTab: GeminiUsageTab = (await searchParams).tab === "responses" ? "responses" : "limits";
+  const tokenCountMode = activeTab === "responses" ? await getGeminiTokenCountMode() : "local";
 
   const keys = getGeminiApiKeys();
   const limits = await getGeminiApiLimits();
@@ -96,6 +99,8 @@ export default async function GeminiUsagePage({
           responseTruncated: geminiApiCallLogs.responseTruncated,
           errorMessage: geminiApiCallLogs.errorMessage,
           durationMs: geminiApiCallLogs.durationMs,
+          localInputTokens: geminiApiCallLogs.localInputTokens,
+          geminiInputTokens: geminiApiCallLogs.geminiInputTokens,
           startedAt: geminiApiCallLogs.startedAt,
         })
         .from(geminiApiCallLogs)
@@ -259,6 +264,9 @@ export default async function GeminiUsagePage({
         </>
         ) : (
         <>
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <TokenCountModeForm mode={tokenCountMode} />
+        </section>
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="mb-4">
             <h2 className="text-sm font-semibold text-slate-800">
@@ -270,15 +278,18 @@ export default async function GeminiUsagePage({
           </div>
           <PaginatedTable
             columns={[
-              { label: "Time (Pacific)", className: "w-[20%]" },
-              { label: "API key", className: "w-[14%]" },
-              { label: "Operation", className: "w-[16%]" },
-              { label: "Result", className: "w-[18%]" },
-              { label: "Duration", className: "w-[12%]" },
-              { label: "Google response / error", className: "w-[35%]" },
+              { label: "No", className: "w-[5%]" },
+              { label: "Time (Pacific)", className: "w-[15%]" },
+              { label: "API key", className: "w-[11%]" },
+              { label: "Operation", className: "w-[12%]" },
+              { label: "Result", className: "w-[14%]" },
+              { label: "Local tokens", className: "w-[9%]" },
+              { label: "Gemini tokens", className: "w-[11%]" },
+              { label: "Duration", className: "w-[8%]" },
+              { label: "Google response / error", className: "w-[15%]" },
             ]}
             emptyMessage={keys.length ? "No Google API requests recorded today." : "Configure a Gemini API key to see responses."}
-            rows={recentApiCalls.map((call) => {
+            rows={recentApiCalls.map((call, index) => {
               const responseText = call.responseBody ?? call.errorMessage ??
                 "No response body or error message was recorded.";
               const statusLabel = call.status === "http_success"
@@ -291,6 +302,7 @@ export default async function GeminiUsagePage({
               return {
                 id: call.id,
                 cells: [
+                  <span className="text-xs text-slate-500" key="number">{index + 1}</span>,
                   new Intl.DateTimeFormat("en-US", {
                     dateStyle: "medium",
                     timeStyle: "medium",
@@ -310,6 +322,12 @@ export default async function GeminiUsagePage({
                   >
                     {statusLabel}
                   </span>,
+                  <TokenCount key="local-tokens" value={call.localInputTokens} />,
+                  <TokenCount
+                    compareTo={call.localInputTokens}
+                    key="gemini-tokens"
+                    value={call.geminiInputTokens}
+                  />,
                   call.durationMs === null ? "—" : `${call.durationMs.toLocaleString()} ms`,
                   <details className="max-w-full" key="response">
                     <summary className="cursor-pointer text-xs font-medium text-indigo-700">
@@ -346,6 +364,25 @@ export default async function GeminiUsagePage({
       </div>
     </main>
     </WorkspaceShell>
+  );
+}
+
+// A token count, with the local estimate's difference from Google's count when both exist.
+function TokenCount({ value, compareTo }: { value: number | null; compareTo?: number | null }) {
+  if (value === null) return <span className="text-xs text-slate-400">—</span>;
+  const difference = compareTo != null && value > 0 ? Math.round(((compareTo - value) / value) * 100) : null;
+  return (
+    <span className="text-xs">
+      {value.toLocaleString()}
+      {difference !== null ? (
+        <span
+          className={`mt-0.5 block ${Math.abs(difference) <= 25 ? "text-emerald-700" : "text-amber-700"}`}
+          title="Local estimate compared with Google's count"
+        >
+          local {difference > 0 ? "+" : ""}{difference}%
+        </span>
+      ) : null}
+    </span>
   );
 }
 

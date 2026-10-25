@@ -23,6 +23,7 @@ export async function requestGeminiApi(
   operation: GeminiApiOperation,
   url: string,
   init: RequestInit,
+  tokenCounts: { local?: number | null; gemini?: number | null } = {},
 ): Promise<{ ok: boolean; status: number; body: string }> {
   const [log] = await db
     .insert(geminiApiCallLogs)
@@ -30,6 +31,8 @@ export async function requestGeminiApi(
       keyHash: getGeminiApiKeyHash(apiKey),
       operation,
       status: "pending",
+      localInputTokens: tokenCounts.local ?? null,
+      geminiInputTokens: tokenCounts.gemini ?? null,
     })
     .returning({ id: geminiApiCallLogs.id });
   if (!log) throw new Error("Could not create Gemini API request log.");

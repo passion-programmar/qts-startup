@@ -2,7 +2,6 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import {
   GlobalPromptForm,
-  GeminiTokenCountModeForm,
   ManagerGeminiMatchingForm,
   ManagerTextHighlightAccessForm,
   ManagerPageExclusionAccessForm,
@@ -45,13 +44,12 @@ export default async function SettingsPage() {
   const currentUser = await requireUser();
   if (currentUser.role !== "super_admin") redirect("/");
 
-  const [modeRows, tokenModeRows, activePrompts, managerRows] = await Promise.all([
+  const [modeRows, activePrompts, managerRows] = await Promise.all([
     db
       .select({ value: settings.value })
       .from(settings)
       .where(eq(settings.key, "prompt_mode"))
       .limit(1),
-    db.select({ value: settings.value }).from(settings).where(eq(settings.key, "gemini_token_count_mode")).limit(1),
     db
       .select({
         id: prompts.id,
@@ -91,7 +89,6 @@ export default async function SettingsPage() {
   ]);
 
   const mode = modeRows[0]?.value === "private" ? "private" : "global";
-  const tokenMode = tokenModeRows[0]?.value === "gemini" ? "gemini" : "local";
   const chatGptPrompts = activePrompts.filter(
     (prompt) =>
       prompt.provider === "openai" &&
@@ -119,11 +116,6 @@ export default async function SettingsPage() {
             Prompt mode
           </h2>
           <PromptModeForm mode={mode} />
-        </section>
-
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-sm font-semibold text-slate-800">Gemini token accounting</h2>
-          <GeminiTokenCountModeForm mode={tokenMode} />
         </section>
 
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">

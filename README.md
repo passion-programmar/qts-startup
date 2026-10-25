@@ -74,8 +74,11 @@ calibrated character and word formula. It uses the larger result, counts
 non-ASCII code points conservatively, includes the generation configuration and
 response schema, and adds headroom targeting roughly twenty percent above
 observed Google counts. This estimate protects local capacity but is not an
-exact tokenizer result. Normal Get JD sends one `generateContent` request and
-does not call `countTokens`. The Gemini Usage page shows per-key totals and the
+exact tokenizer result. In **Local Count** mode (the default) Get JD sends one
+`generateContent` request and never calls `countTokens`. In **Gemini Count**
+mode it also calls `countTokens` and records both counts on the request so they
+can be compared; the key's token limit then uses Google's count. Super Admin
+switches modes on Gemini Usage → Google responses & calibration. The Gemini Usage page shows per-key totals and the
 latest 100 Google API responses for the current Pacific day (status, duration,
 and the response body capped at 1 MB). It does not store prompts, page text, or
 API keys. If no key has capacity, QTS does not generate the evaluation. A Gemini
@@ -158,8 +161,8 @@ is no separate local job-page classification step. Super Admin chooses Manual
 candidate selection or Gemini candidate matching. Gemini mode sends the loaded
 body HTML together with the default evaluation prompt and candidate ID/JD-note
 pairs, then prechecks returned matching IDs for Manager review. Super Admin can
-independently choose local token estimation or Gemini CountTokens; Gemini Usage
-records CountTokens and generateContent operations separately.
+independently choose Local Count or Gemini Count; Gemini Usage records each
+request's local and Gemini token counts next to its Google response.
 Exclusion updates also apply to already-open pages. Text Highlight and URL
 Settings render as native controls inside the same docked in-page panel as the
 candidate profile list, rather than opening a popup, iframe, or page-covering
