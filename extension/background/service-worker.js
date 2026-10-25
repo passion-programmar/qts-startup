@@ -5754,10 +5754,25 @@ self.chrome?.alarms?.onAlarm?.addListener((alarm) => {
 
 self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
 
+// The launcher's page scripts, added to a tab that has none: one opened before the extension was
+// installed or reloaded, which Chrome leaves without the manifest's content scripts.
+const TOOLBAR_LAUNCHER_FILES = ['content/page-toast.js', 'content/page-launcher.js'];
+
+async function sendToolbarClick(tab) {
+  const message = { type: 'QTS_TOOLBAR_ICON_CLICKED' };
+  try {
+    return await chrome.tabs.sendMessage(tab.id, message, { frameId: 0 });
+  } catch (error) {
+    if (!/^https?:/i.test(tab.url || '')) throw error;
+    await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, files: TOOLBAR_LAUNCHER_FILES });
+    return chrome.tabs.sendMessage(tab.id, message, { frameId: 0 });
+  }
+}
+
 // The toolbar icon toggles the page Sign In form while signed out and the launcher actions after sign-in.
 chrome.action.onClicked.addListener((tab) => {
   if (tab?.id == null) return;
-  chrome.tabs.sendMessage(tab.id, { type: 'QTS_TOOLBAR_ICON_CLICKED' }, { frameId: 0 })
+  sendToolbarClick(tab)
     .then((response) => {
       if (response?.ok) return;
       chrome.notifications?.create?.(`qts-toolbar-${Date.now()}`, {
@@ -5770,7 +5785,7 @@ chrome.action.onClicked.addListener((tab) => {
       });
     })
     .catch(() => {
-      // No content script: a browser page, or a tab opened before the extension was reloaded.
+      // A browser page, the web store, or a page that refused the injected scripts.
       chrome.notifications?.create?.(`qts-toolbar-${Date.now()}`, {
         type: 'basic',
         iconUrl: chrome.runtime.getURL('assets/icon128.png'),

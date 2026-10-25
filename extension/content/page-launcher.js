@@ -19,6 +19,8 @@ async function initializeQtsPageLauncher() {
     return;
   }
 
+  // A launcher left by this extension before it was reloaded can no longer reach it.
+  document.querySelectorAll('[data-qts-page-launcher]').forEach((node) => node.remove());
   const host = document.createElement('div');
   host.setAttribute('data-qts-page-launcher', '');
   host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483646;pointer-events:none;';
