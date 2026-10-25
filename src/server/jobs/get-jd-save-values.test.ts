@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readExtensionSavedJob } from "@/server/jobs/get-jd-save-values";
+import { locationWithCountry, readExtensionSavedJob } from "@/server/jobs/get-jd-save-values";
+
+test("a separately sent country is kept inside location once", () => {
+  assert.equal(locationWithCountry("Bucharest", "Romania"), "Bucharest, Romania");
+  assert.equal(locationWithCountry("Bucharest, Romania", "romania"), "Bucharest, Romania");
+  assert.equal(locationWithCountry("", "Japan"), "Japan");
+  assert.equal(locationWithCountry(" Tokyo ", undefined), "Tokyo");
+  assert.equal(locationWithCountry("", ""), null);
+});
 
 test("extension job saves preserve the extracted description", () => {
   const job = readExtensionSavedJob({
@@ -24,8 +32,7 @@ test("extension job saves preserve the extracted description", () => {
     company: "Example",
     description: "Build reliable services.",
     pageText: null,
-    location: "Remote",
-    country: "Romania",
+    location: "Remote, Romania",
     employmentType: "Full-time",
     workplaceType: "Hybrid",
     salary: "$120,000-$150,000 per year",
@@ -47,7 +54,6 @@ test("extension job saves default optional job details to null", () => {
   assert.equal(job?.employmentType, null);
   assert.equal(job?.workplaceType, null);
   assert.equal(job?.salary, null);
-  assert.equal(job?.country, null);
   assert.equal(job?.jobReason, null);
 });
 

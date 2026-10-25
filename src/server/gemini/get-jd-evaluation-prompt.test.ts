@@ -50,3 +50,15 @@ test("database migrations replace stale URL handling and install the result reas
   assert.match(reasonMigration, /Accept eligibility limited to multiple specifically named countries/);
   assert.doesNotMatch(getJdEvaluationPromptTemplate, /Do not include `location` or `jobUrl`/);
 });
+
+test("the location-only migration asks Gemini for location with the country and no country field", () => {
+  const migration = readFileSync(
+    path.join(process.cwd(), "drizzle", "0054_drop_job_country_and_bid_job_key.sql"),
+    "utf8",
+  );
+  assert.match(migration, /DROP COLUMN "country"/);
+  assert.match(migration, /location \(city, region and country as written\)/);
+  assert.match(migration, /Do not return a separate country field/);
+  assert.doesNotMatch(getJdEvaluationPromptTemplate, /"country"/);
+  assert.match(getJdEvaluationPromptTemplate, /location \(city, region and country as written\)/);
+});

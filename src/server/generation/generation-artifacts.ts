@@ -22,7 +22,7 @@ export function generationDownloadPaths(input: {
   const candidate = safePathPart(input.candidateName, "Candidate");
   const job = safePathPart(input.jobTitle, "Job");
   const company = safePathPart(input.company, "Company");
-  const folder = `QTS_Resume/${manager}/${candidate}/${pacificTimestamp(input.createdAt)}_${job}_${company}`;
+  const folder = `QTS_Resume/${manager}/${candidate}/${japanTimestamp(input.createdAt)}_${job}_${company}`;
   return {
     resume: `${folder}/${candidate}.pdf`,
     coverLetter: `${folder}/${candidate}_Cover_Letter.pdf`,
@@ -38,9 +38,10 @@ function safePathPart(value: string, fallback: string): string {
     .trim() || fallback;
 }
 
-function pacificTimestamp(date: Date): string {
+// Generation file names always use Japan time, whatever the job record time zone is.
+function japanTimestamp(date: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Los_Angeles",
+    timeZone: "Asia/Tokyo",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

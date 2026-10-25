@@ -22,6 +22,8 @@ export const userRole = pgEnum("user_role", [
   "account",
 ]);
 
+// Apply status of one account's jobs row. "applied" exactly when the account has
+// a bid for the job (src/server/jobs/job-bids.ts keeps the two in step).
 export const jobStatus = pgEnum("job_status", [
   "todo",
   "pending",
@@ -408,7 +410,6 @@ export const jobs = pgTable(
     jobKey: text("job_key"),
     titleCompanyKey: text("title_company_key"),
     location: text("location"),
-    country: text("country"),
     employmentType: text("employment_type"),
     workplaceType: text("workplace_type"),
     salary: text("salary"),
@@ -424,6 +425,8 @@ export const jobs = pgTable(
     status: jobStatus("status").default("todo").notNull(),
     failureReason: text("failure_reason"),
     resumeLocalPath: text("resume_local_path"),
+    // Where the generated PDFs are saved on Google Drive, when they are uploaded.
+    googleDrivePath: text("google_drive_path"),
     generationStatus: generationQueueStatus("generation_status")
       .default("not_queued")
       .notNull(),
@@ -492,15 +495,18 @@ export const bids = pgTable(
     jobUrl: text("job_url").notNull(),
     jobTitle: text("job_title").notNull(),
     company: text("company").notNull(),
-    // Same-job keys, so "Applied" is still found if the jobs row was deleted.
-    jobKey: text("job_key"),
+    // Same-job key with job_url, so "Applied" is still found if the jobs row was deleted.
     titleCompanyKey: text("title_company_key"),
     location: text("location"),
     employmentType: text("employment_type"),
     workplaceType: text("workplace_type"),
     salary: text("salary"),
     resumeLocalPath: text("resume_local_path").notNull(),
-    googleDrivePath: text("googledriver_path"),
+    // The delivered Generation run whose documents were submitted, when known.
+    generationRunId: uuid("generation_run_id").references(() => generationRuns.id, {
+      onDelete: "set null",
+    }),
+    googleDrivePath: text("google_drive_path"),
     appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -513,7 +519,6 @@ export const bids = pgTable(
   },
   (table) => [
     uniqueIndex("bids_source_job_id_unique").on(table.sourceJobId),
-    index("bids_manager_job_key_index").on(table.managerId, table.jobKey),
     index("bids_manager_title_company_key_index").on(table.managerId, table.titleCompanyKey),
     index("bids_manager_applied_at_index").on(table.managerId, table.appliedAt),
     index("bids_candidate_applied_at_index").on(

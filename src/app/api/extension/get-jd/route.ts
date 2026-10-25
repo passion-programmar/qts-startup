@@ -67,7 +67,6 @@ type GetJdClassification = {
     company: string;
     description: string;
     location: string;
-    country: string;
     employmentType: string;
     workplaceType: string;
     salary: string;
@@ -283,7 +282,6 @@ export async function POST(request: Request): Promise<NextResponse> {
         company: classification.job.company,
         description: classification.job.description,
         location: classification.job.location,
-        country: classification.job.country,
         employmentType: classification.job.employmentType,
         workplaceType: classification.job.workplaceType,
         salary: classification.job.salary,
@@ -608,7 +606,6 @@ function validateClassification(
     "company",
     "description",
     "location",
-    "country",
     "employmentType",
     "workplaceType",
     "salary",
@@ -655,7 +652,6 @@ function validateClassification(
       company: String(job.company).slice(0, 500),
       description: String(job.description).slice(0, maxJobTextLength),
       location: String(job.location).slice(0, 500),
-      country: String(job.country).slice(0, 200),
       employmentType: String(job.employmentType).slice(0, 300),
       workplaceType: String(job.workplaceType).slice(0, 100),
       salary: String(job.salary).slice(0, 500),

@@ -5,7 +5,9 @@ import { revalidatePath } from "next/cache";
 import { bids, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
+import { deliveredGenerationRunId, jobHasBid } from "@/server/jobs/job-bids";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
+import { jobStatusChangeError, statusChangeCreatesBid, type JobStatus } from "@/server/jobs/job-status-change";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import type { RecordActionState } from "@/app/record-action-state";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
@@ -24,7 +26,6 @@ export async function updateJobAction(
   const company = text(formData, "company", 500);
   const description = text(formData, "description", 100_000);
   const location = text(formData, "location", 500);
-  const country = text(formData, "country", 200);
   const employmentType = text(formData, "employmentType", 200);
   const workplaceType = text(formData, "workplaceType", 200);
   const salary = text(formData, "salary", 500);
@@ -42,11 +43,25 @@ export async function updateJobAction(
     .where(and(eq(profiles.userId, candidateId), eq(users.parentUserId, manager.id), eq(users.role, "account"))).limit(1);
   if (!candidate) return { error: "Select one of your candidate accounts.", success: null };
 
-  const [existingJob] = await db.select({ generationStatus: jobs.generationStatus, relationId: jobs.relationId }).from(jobs)
+  const [existingJob] = await db.select({
+    status: jobs.status,
+    generationStatus: jobs.generationStatus,
+    relationId: jobs.relationId,
+    candidateId: jobs.candidateId,
+    resumeLocalPath: jobs.resumeLocalPath,
+    googleDrivePath: jobs.googleDrivePath,
+    hasBid: jobHasBid(),
+  }).from(jobs)
     .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
   if (!existingJob) return { error: "Job was not found.", success: null };
   if (existingJob.generationStatus === "processing") {
     return { error: "Cancel Generation before editing a job that is currently processing.", success: null };
+  }
+  const jobStatus = status as JobStatus;
+  const statusError = jobStatusChangeError(jobStatus, existingJob);
+  if (statusError) return { error: statusError, success: null };
+  if (existingJob.hasBid && candidateId !== existingJob.candidateId) {
+    return { error: "This candidate applied to this job. Delete the bid on the Bids page before changing the candidate.", success: null };
   }
 
   const normalizedUrl = normalizeJobUrl(jobUrl);
@@ -80,7 +95,6 @@ export async function updateJobAction(
     description: description || null,
     ...(description ? { pageText: null } : {}),
     location: location || null,
-    country: country || null,
     employmentType: employmentType || null,
     workplaceType: workplaceType || null,
     salary: salary || null,
@@ -92,7 +106,7 @@ export async function updateJobAction(
         ...sharedDetails,
         candidateId,
         autoSavedByGetJd: false,
-        date, status: status as "todo" | "pending" | "applied" | "failed",
+        date, status: jobStatus,
         failureReason: failureReason || null, updatedAt: new Date(),
       }).where(and(
         eq(jobs.id, id),
@@ -103,6 +117,22 @@ export async function updateJobAction(
         existingJob.relationId ? eq(jobs.relationId, existingJob.relationId) : sql`false`,
         ne(jobs.id, id),
       )),
+      // Applied is recorded as a bid, so the row and Bids never disagree.
+      ...(statusChangeCreatesBid(jobStatus, existingJob) && existingJob.resumeLocalPath
+        ? [db.insert(bids).values({
+          sourceJobId: id,
+          managerId: manager.id,
+          candidateId,
+          jobUrl: normalizedUrl, jobTitle, company, titleCompanyKey,
+          location: location || null,
+          employmentType: employmentType || null,
+          workplaceType: workplaceType || null,
+          salary: salary || null,
+          resumeLocalPath: existingJob.resumeLocalPath,
+          googleDrivePath: existingJob.googleDrivePath,
+          generationRunId: deliveredGenerationRunId(id),
+        }).onConflictDoNothing({ target: bids.sourceJobId })]
+        : []),
     ]);
     updated = ownRow;
   } catch (error) {
@@ -113,6 +143,7 @@ export async function updateJobAction(
   }
   if (!updated.length) return { error: "Job is unavailable or Generation started processing; refresh and try again.", success: null };
   revalidatePath("/jobs");
+  revalidatePath("/bids");
   return { error: null, success: "Job updated." };
 }
 
@@ -237,13 +268,7 @@ export async function deleteJobAction(
   const id = text(formData, "id", 36);
   if (!uuid(id)) return { error: "Invalid job.", success: null };
   // A row whose account applied (a bid exists) keeps its job; delete the bid on the Bids page first.
-  const appliedBid = sql`exists (
-    select 1 from ${bids}
-     where ${bids.sourceJobId} = ${jobs.id}
-        or (${bids.managerId} = ${jobs.managerId}
-            and ${bids.candidateId} = ${jobs.candidateId}
-            and (${bids.jobKey} = ${jobs.jobKey} or ${bids.titleCompanyKey} = ${jobs.titleCompanyKey}))
-  )`;
+  const appliedBid = jobHasBid();
   try {
     const deleted = await db.delete(jobs).where(and(
       eq(jobs.id, id),

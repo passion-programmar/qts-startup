@@ -5,6 +5,11 @@ import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { parseGeminiApiLimits } from "@/server/gemini/gemini-api-limits";
 import {
+  isJobRecordTimeZone,
+  jobRecordTimeZoneOptions,
+  jobRecordTimeZoneSettingKey,
+} from "@/server/jobs/job-record-time-zones";
+import {
   managerPromptAssignments,
   prompts,
   settings,
@@ -265,6 +270,26 @@ export async function updateGeminiTokenCountModeAction(
       ? "Gemini Count is on: each request is counted locally and with Google's CountTokens."
       : "Local Count is on: QTS estimates tokens locally and makes no CountTokens calls.",
   };
+}
+
+export async function updateJobRecordTimeZoneAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") return { ...emptyState, error: "Only Super Admin can change the job record time zone." };
+  const timeZone = readText(formData, "jobRecordTimeZone", 64);
+  if (!isJobRecordTimeZone(timeZone)) return { ...emptyState, error: "Choose a time zone from the list." };
+  try {
+    await db.insert(settings).values({ key: jobRecordTimeZoneSettingKey, value: timeZone, updatedByUserId: actor.id })
+      .onConflictDoUpdate({ target: settings.key, set: { value: timeZone, updatedByUserId: actor.id, updatedAt: new Date() } });
+  } catch (error) {
+    logPromptActionFailure("updating the job record time zone", error);
+    return { ...emptyState, error: "The job record time zone could not be updated." };
+  }
+  revalidatePath("/settings");
+  const label = jobRecordTimeZoneOptions.find((option) => option.value === timeZone)?.label ?? timeZone;
+  return { error: null, success: `New job records are dated in ${label} time (${timeZone}).` };
 }
 
 export async function saveGeminiApiLimitsAction(

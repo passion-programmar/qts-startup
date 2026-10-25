@@ -1,3 +1,4 @@
+// Default only; the job record time zone is a Super Admin setting (job-record-time-zone.ts).
 export const jobBusinessTimeZone = "America/Los_Angeles";
 
 export function isHttpUrl(value: string): boolean {
@@ -17,9 +18,9 @@ export function normalizeJobUrl(value: string): string {
   return url.href.replace(/\/+$/, "");
 }
 
-export function getJobBusinessDate(now = new Date()): string {
+export function getJobBusinessDate(now = new Date(), timeZone = jobBusinessTimeZone): string {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: jobBusinessTimeZone,
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

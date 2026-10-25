@@ -20,6 +20,8 @@ import { requireUser } from "@/lib/session";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
+import { JobRecordTimeZoneForm } from "@/app/settings/job-record-time-zone-form";
+import { getJobRecordTimeZone } from "@/server/jobs/job-record-time-zone";
 
 export const instant = false;
 
@@ -45,7 +47,7 @@ export default async function SettingsPage() {
   const currentUser = await requireUser();
   if (currentUser.role !== "super_admin") redirect("/");
 
-  const [modeRows, activePrompts, managerRows] = await Promise.all([
+  const [modeRows, activePrompts, managerRows, jobRecordTimeZone] = await Promise.all([
     db
       .select({ value: settings.value })
       .from(settings)
@@ -87,6 +89,7 @@ export default async function SettingsPage() {
         and(eq(users.role, "manager"), isNull(users.blockedAt)),
       )
       .orderBy(asc(users.displayName), asc(users.loginName)),
+    getJobRecordTimeZone(),
   ]);
 
   const mode = modeRows[0]?.value === "private" ? "private" : "global";
@@ -115,6 +118,16 @@ export default async function SettingsPage() {
             Prompt mode
           </h2>
           <PromptModeForm mode={mode} />
+        </section>
+
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <h2 className="text-sm font-semibold text-slate-800">
+            Job record time zone
+          </h2>
+          <p className="mb-4 mt-1 text-xs text-slate-500">
+            The date saved on new jobs follows this time zone. Existing jobs keep their dates.
+          </p>
+          <JobRecordTimeZoneForm timeZone={jobRecordTimeZone} />
         </section>
 
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">

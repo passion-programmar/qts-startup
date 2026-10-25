@@ -365,6 +365,27 @@
       "when": 1792896678946,
       "tag": "0051_gemini_call_token_counts",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1792912128280,
+      "tag": "0052_bid_generation_run_and_applied_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1792916736236,
+      "tag": "0053_google_drive_path",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1792916770070,
+      "tag": "0054_drop_job_country_and_bid_job_key",
+      "breakpoints": true
     }
   ]
 }

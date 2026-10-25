@@ -32,8 +32,8 @@ export async function GET(request: Request): Promise<NextResponse> {
       .select({
         responseJson: generationRuns.responseJson,
         jobDescription: generationRuns.jobDescription,
-        jobTitle: jobs.jobTitle,
-        company: jobs.company,
+        jobTitle: generationRuns.jobTitle,
+        company: generationRuns.company,
         firstName: profiles.firstName,
         lastName: profiles.lastName,
         pdfTemplate: profiles.pdfTemplate,

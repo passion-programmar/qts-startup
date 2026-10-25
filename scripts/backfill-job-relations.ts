@@ -1,5 +1,5 @@
 // Fills job_key, title_company_key and relation_id on existing jobs rows, and
-// the same keys on bids (docs/get-jd-redesign.md, section 8, step 2).
+// title_company_key on bids (bids keep no job_key, migration 0054) (docs/get-jd-redesign.md, section 8, step 2).
 //
 //   npm run db:backfill:job-relations            report only, writes nothing
 //   npm run db:backfill:job-relations -- --apply write the keys
@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { loadEnvConfig } from "@next/env";
 import { neon } from "@neondatabase/serverless";
-import { computeJobKey, computeTitleCompanyKey } from "../src/server/jobs/job-key";
+import { computeTitleCompanyKey } from "../src/server/jobs/job-key";
 import { planJobRelations, type JobRelationRow } from "../src/server/jobs/job-relations";
 
 loadEnvConfig(process.cwd());
@@ -93,12 +93,11 @@ async function main(): Promise<void> {
     const batch = bids.slice(index, index + batchSize);
     await sql.query(
       `UPDATE bids AS b
-          SET job_key = v.job_key, title_company_key = v.title_company_key
-         FROM unnest($1::uuid[], $2::text[], $3::text[]) AS v(id, job_key, title_company_key)
+          SET title_company_key = v.title_company_key
+         FROM unnest($1::uuid[], $2::text[]) AS v(id, title_company_key)
         WHERE b.id = v.id`,
       [
         batch.map((bid) => bid.id),
-        batch.map((bid) => computeJobKey({ url: bid.job_url, title: bid.job_title, company: bid.company })),
         batch.map((bid) => computeTitleCompanyKey(bid.job_title, bid.company) || null),
       ],
     );

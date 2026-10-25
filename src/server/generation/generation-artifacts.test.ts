@@ -12,7 +12,7 @@ test("generated resume path matches the local download filename", () => {
   );
 });
 
-test("application files use the manager, candidate, job, and company folder path", () => {
+test("application files use the manager, candidate, Japan-time stamp, job, and company folder path", () => {
   assert.deepEqual(
     generationDownloadPaths({
       managerName: "MSK",
@@ -22,9 +22,9 @@ test("application files use the manager, candidate, job, and company folder path
       createdAt: new Date("2026-10-21T19:34:56.000Z"),
     }),
     {
-      resume: "QTS_Resume/MSK/Jordan Taylor/2026-10-21_12-34-56_Program_Coordinator_Example_ Company/Jordan Taylor.pdf",
-      coverLetter: "QTS_Resume/MSK/Jordan Taylor/2026-10-21_12-34-56_Program_Coordinator_Example_ Company/Jordan Taylor_Cover_Letter.pdf",
-      jobDescription: "QTS_Resume/MSK/Jordan Taylor/2026-10-21_12-34-56_Program_Coordinator_Example_ Company/JD.txt",
+      resume: "QTS_Resume/MSK/Jordan Taylor/2026-10-22_04-34-56_Program_Coordinator_Example_ Company/Jordan Taylor.pdf",
+      coverLetter: "QTS_Resume/MSK/Jordan Taylor/2026-10-22_04-34-56_Program_Coordinator_Example_ Company/Jordan Taylor_Cover_Letter.pdf",
+      jobDescription: "QTS_Resume/MSK/Jordan Taylor/2026-10-22_04-34-56_Program_Coordinator_Example_ Company/JD.txt",
     },
   );
 });

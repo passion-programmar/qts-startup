@@ -921,8 +921,10 @@ test('raw shared-job save SQL types every value Postgres cannot infer', () => {
   const update = helper.slice(helper.indexOf('`UPDATE jobs SET'), helper.indexOf('`,', helper.indexOf('`UPDATE jobs SET')));
   // A bare "$n IS NOT NULL" fails with "could not determine data type of parameter $n" and rolls the save back.
   assert.equal(/\$\d+ IS NOT NULL/.test(update), false);
-  for (const typed of ['$6::text IS NOT NULL', '$7::text IS NOT NULL', '$12::text IS NOT NULL']) {
+  for (const typed of ['$6::text IS NOT NULL', '$7::text IS NOT NULL', '$11::text IS NOT NULL']) {
     assert.ok(update.includes(typed), typed);
   }
-  assert.ok(helper.includes('$16::text, $17::boolean, $7::uuid, $6::uuid, $18::date'));
+  // jobs keep no country column (migration 0054), so the save has no country parameter.
+  assert.equal(/\bcountry\b/.test(helper), false);
+  assert.ok(helper.includes('$15::text, $16::boolean, $7::uuid, $6::uuid, $17::date'));
 });

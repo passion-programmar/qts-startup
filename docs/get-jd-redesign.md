@@ -85,7 +85,7 @@ A checkbox means "this account has this job".
 
 | State | Rule (scoped to the current Manager) | Checkbox | Manager can |
 |---|---|---|---|
-| Applied | A bid exists for this account with the same `job_key` or `title_company_key`, or the account's row status is `applied` | Checked, disabled | Nothing |
+| Applied | A bid exists for this account with the same URL or `title_company_key`, or the account's row status is `applied` | Checked, disabled | Nothing |
 | Generation running | The account's row Generation is `processing` | Checked, disabled | Nothing until it finishes |
 | Has this job | A row exists for this account with the same `job_key` **or** `title_company_key` (also when it was saved from another site; the panel shows that site and date) | Checked | Uncheck it; Save removes that row |
 | Available | None of the above | Unchecked (Gemini-recommended accounts are auto-saved, so they show as Has this job) | Check it to add |
@@ -107,8 +107,8 @@ Summary toast and panel line, for example: **Applied by 1 candidate · 2 already
 Bids are written by the Apply workflow (still disabled) after a submission is confirmed.
 
 Rules:
-- `bids.job_key` and `bids.title_company_key` (backfilled from each bid's saved URL, title and company) mean "Applied" is found by (manager_id, account, either key), so it holds even if the `jobs` row was deleted. `bids.source_job_id` has no foreign key today.
-- An account is **Applied** if a matching bid exists **or** its row status is `applied`. Creating a bid also sets that status, so the two stay in step.
+- `bids.title_company_key` and the bid's saved URL mean "Applied" is found by (manager_id, account, URL or title + company), so it holds even if the `jobs` row was deleted. `bids.source_job_id` has no foreign key today. (Update: `bids.job_key` was dropped in migration 0054; the URL and title + company are enough.)
+- An account is **Applied** if a matching bid exists **or** its row status is `applied`. Creating a bid also sets that status and deleting it returns the row to To do, so the two stay in step (`src/server/jobs/job-bids.ts`). A bid is created only for a row whose Generation is `completed`.
 - Only the current Manager's bids count. Another Manager's bid for the same posting does not change what this Manager sees.
 - On the Jobs page, a row with a bid cannot be deleted; delete the bid on the Bids page first.
 - Retrying a failed application happens from the Jobs page (status back to todo). Get JD never re-adds an account that already has the job.

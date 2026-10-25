@@ -40,8 +40,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         id: generationRuns.id,
         firstName: profiles.firstName,
         lastName: profiles.lastName,
-        jobTitle: jobs.jobTitle,
-        company: jobs.company,
+        jobTitle: generationRuns.jobTitle,
+        company: generationRuns.company,
         createdAt: generationRuns.createdAt,
       })
       .from(generationRuns)

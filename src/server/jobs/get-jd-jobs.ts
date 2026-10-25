@@ -3,8 +3,10 @@ import "server-only";
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { bids, jobs } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
+import { jobHasBid } from "@/server/jobs/job-bids";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
-import { getJobBusinessDate, normalizeJobUrl } from "@/server/jobs/job-values";
+import { getJobRecordDate } from "@/server/jobs/job-record-time-zone";
+import { normalizeJobUrl } from "@/server/jobs/job-values";
 
 // Shared-jobs model (docs/get-jd-redesign.md): one row per account on a job; rows
 // of the same job share relation_id. Two pages are the same job when job_key or
@@ -38,7 +40,6 @@ type NewGetJdJob = GetJdJobIdentity & {
   /** Plain page innerText; stored only when the job has no description. */
   pageText?: string | null;
   location: string | null;
-  country: string | null;
   employmentType: string | null;
   workplaceType: string | null;
   salary: string | null;
@@ -68,7 +69,7 @@ function identityKeys(job: GetJdJobIdentity): JobIdentityKeys {
   };
 }
 
-function sameJobCondition(table: typeof jobs | typeof bids, keys: JobIdentityKeys) {
+function sameJobCondition(table: typeof jobs, keys: JobIdentityKeys) {
   const legacy = and(
     isNull(table.jobKey),
     or(
@@ -83,6 +84,19 @@ function sameJobCondition(table: typeof jobs | typeof bids, keys: JobIdentityKey
     ...(keys.jobKey ? [eq(table.jobKey, keys.jobKey)] : []),
     ...(keys.titleCompanyKey ? [eq(table.titleCompanyKey, keys.titleCompanyKey)] : []),
     legacy,
+  );
+}
+
+// A bid is the same job by its URL or its title + company (bids keep no job_key).
+function sameBidCondition(keys: JobIdentityKeys) {
+  return or(
+    sql`regexp_replace(split_part(btrim(${bids.jobUrl}), '#', 1), '/+$', '') = ${keys.legacyUrl}`,
+    ...(keys.titleCompanyKey ? [eq(bids.titleCompanyKey, keys.titleCompanyKey)] : []),
+    and(
+      isNull(bids.titleCompanyKey),
+      sql`lower(btrim(${bids.jobTitle})) = ${keys.title.toLowerCase()}`,
+      sql`lower(btrim(${bids.company})) = ${keys.company.toLowerCase()}`,
+    ),
   );
 }
 
@@ -106,7 +120,7 @@ export async function findManagerJobPresence(
     db
       .select({ id: bids.id })
       .from(bids)
-      .where(and(eq(bids.managerId, managerId), sameJobCondition(bids, keys)))
+      .where(and(eq(bids.managerId, managerId), sameBidCondition(keys)))
       .limit(1),
   ]);
 
@@ -173,7 +187,7 @@ export async function findGetJdDuplicateDetails(
         and(
           eq(bids.managerId, managerId),
           inArray(bids.candidateId, candidateIds),
-          sameJobCondition(bids, keys),
+          sameBidCondition(keys),
         ),
       ),
   ]);
@@ -216,12 +230,13 @@ export async function insertGetJdJob(
   const pageText = description ? null : job.pageText?.trim() || null;
   const lockKeys = [...new Set([keys.jobKey, keys.titleCompanyKey].filter((key): key is string => Boolean(key)))].sort();
   const sameJobParams = [keys.jobKey, keys.titleCompanyKey, keys.legacyUrl, keys.title, keys.company];
+  const recordDate = await getJobRecordDate();
 
   const results = await neonSql.transaction([
     ...lockKeys.map((key) => neonSql.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key])),
     neonSql.query(
       `WITH base AS (
-         SELECT relation_id, description, page_text, location, country, employment_type, workplace_type, salary
+         SELECT relation_id, description, page_text, location, employment_type, workplace_type, salary
            FROM jobs WHERE ${SAME_JOB_SQL}
           ORDER BY (relation_id IS NULL), created_at
           LIMIT 1
@@ -231,21 +246,20 @@ export async function insertGetJdJob(
            coalesce(nullif(btrim((SELECT description FROM base)), ''), $9::text) AS description,
            coalesce(nullif((SELECT page_text FROM base), ''), $10::text) AS page_text,
            coalesce(nullif(btrim((SELECT location FROM base)), ''), $11::text) AS location,
-           coalesce(nullif(btrim((SELECT country FROM base)), ''), $12::text) AS country,
-           coalesce(nullif(btrim((SELECT employment_type FROM base)), ''), $13::text) AS employment_type,
-           coalesce(nullif(btrim((SELECT workplace_type FROM base)), ''), $14::text) AS workplace_type,
-           coalesce(nullif(btrim((SELECT salary FROM base)), ''), $15::text) AS salary
+           coalesce(nullif(btrim((SELECT employment_type FROM base)), ''), $12::text) AS employment_type,
+           coalesce(nullif(btrim((SELECT workplace_type FROM base)), ''), $13::text) AS workplace_type,
+           coalesce(nullif(btrim((SELECT salary FROM base)), ''), $14::text) AS salary
        )
        INSERT INTO jobs (
          relation_id, job_key, title_company_key, job_url, job_title, company,
-         description, page_text, location, country, employment_type, workplace_type, salary,
+         description, page_text, location, employment_type, workplace_type, salary,
          job_reason, auto_saved_by_get_jd, manager_id, candidate_id, date, status
        )
        SELECT
          m.relation_id, $1::text, $2::text, $8::text, $4::text, $5::text,
          m.description, CASE WHEN m.description IS NULL THEN m.page_text END,
-         m.location, m.country, m.employment_type, m.workplace_type, m.salary,
-         $16::text, $17::boolean, $7::uuid, $6::uuid, $18::date, 'todo'
+         m.location, m.employment_type, m.workplace_type, m.salary,
+         $15::text, $16::boolean, $7::uuid, $6::uuid, $17::date, 'todo'
          FROM merged m
         WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE candidate_id = $6 AND ${SAME_JOB_SQL})
        ON CONFLICT DO NOTHING
@@ -258,13 +272,12 @@ export async function insertGetJdJob(
         description,
         pageText,
         job.location,
-        job.country,
         job.employmentType,
         job.workplaceType,
         job.salary,
         job.jobReason,
         job.autoSavedByGetJd ?? false,
-        getJobBusinessDate(),
+        recordDate,
       ],
     ),
     // Fill empty shared details on the job's other rows; a new description clears page_text.
@@ -276,27 +289,24 @@ export async function insertGetJdJob(
            ELSE coalesce(nullif(page_text, ''), $7::text)
          END,
          location = coalesce(nullif(btrim(location), ''), $8::text),
-         country = coalesce(nullif(btrim(country), ''), $9::text),
-         employment_type = coalesce(nullif(btrim(employment_type), ''), $10::text),
-         workplace_type = coalesce(nullif(btrim(workplace_type), ''), $11::text),
-         salary = coalesce(nullif(btrim(salary), ''), $12::text),
+         employment_type = coalesce(nullif(btrim(employment_type), ''), $9::text),
+         workplace_type = coalesce(nullif(btrim(workplace_type), ''), $10::text),
+         salary = coalesce(nullif(btrim(salary), ''), $11::text),
          updated_at = now()
        WHERE ${SAME_JOB_SQL}
          AND (
            (nullif(btrim(description), '') IS NULL AND ($6::text IS NOT NULL OR (page_text IS NULL AND $7::text IS NOT NULL)))
            OR (page_text IS NOT NULL AND nullif(btrim(description), '') IS NOT NULL)
            OR (nullif(btrim(location), '') IS NULL AND $8::text IS NOT NULL)
-           OR (nullif(btrim(country), '') IS NULL AND $9::text IS NOT NULL)
-           OR (nullif(btrim(employment_type), '') IS NULL AND $10::text IS NOT NULL)
-           OR (nullif(btrim(workplace_type), '') IS NULL AND $11::text IS NOT NULL)
-           OR (nullif(btrim(salary), '') IS NULL AND $12::text IS NOT NULL)
+           OR (nullif(btrim(employment_type), '') IS NULL AND $9::text IS NOT NULL)
+           OR (nullif(btrim(workplace_type), '') IS NULL AND $10::text IS NOT NULL)
+           OR (nullif(btrim(salary), '') IS NULL AND $11::text IS NOT NULL)
          )`,
       [
         ...sameJobParams,
         description,
         pageText,
         job.location,
-        job.country,
         job.employmentType,
         job.workplaceType,
         job.salary,
@@ -322,7 +332,6 @@ export async function updateExistingGetJdJobDetails(
       description: sql`coalesce(nullif(btrim(${jobs.description}), ''), ${description})`,
       pageText: sql`case when coalesce(nullif(btrim(${jobs.description}), ''), ${description}) is not null then null else ${jobs.pageText} end`,
       location: sql`coalesce(nullif(btrim(${jobs.location}), ''), ${job.location})`,
-      country: sql`coalesce(nullif(btrim(${jobs.country}), ''), ${job.country})`,
       employmentType: sql`coalesce(nullif(btrim(${jobs.employmentType}), ''), ${job.employmentType})`,
       workplaceType: sql`coalesce(nullif(btrim(${jobs.workplaceType}), ''), ${job.workplaceType})`,
       salary: sql`coalesce(nullif(btrim(${jobs.salary}), ''), ${job.salary})`,
@@ -334,7 +343,6 @@ export async function updateExistingGetJdJobDetails(
         sql`nullif(btrim(${jobs.description}), '') is null`,
         sql`${jobs.pageText} is not null`,
         sql`nullif(btrim(${jobs.location}), '') is null`,
-        sql`nullif(btrim(${jobs.country}), '') is null`,
         sql`nullif(btrim(${jobs.employmentType}), '') is null`,
         sql`nullif(btrim(${jobs.workplaceType}), '') is null`,
         sql`nullif(btrim(${jobs.salary}), '') is null`,
@@ -360,13 +368,7 @@ export async function removeGetJdJobAccount(
       sql`${jobs.status} <> 'applied'`,
       sql`${jobs.generationStatus} <> 'processing'`,
       ...(options.autoSavedOnly ? [eq(jobs.autoSavedByGetJd, true)] : []),
-      sql`not exists (
-        select 1 from ${bids}
-         where ${bids.sourceJobId} = ${jobs.id}
-            or (${bids.managerId} = ${jobs.managerId}
-                and ${bids.candidateId} = ${jobs.candidateId}
-                and (${bids.jobKey} = ${jobs.jobKey} or ${bids.titleCompanyKey} = ${jobs.titleCompanyKey}))
-      )`,
+      sql`not ${jobHasBid()}`,
     ))
     .returning({ id: jobs.id });
   return deleted.length > 0;

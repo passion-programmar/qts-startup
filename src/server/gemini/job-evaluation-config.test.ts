@@ -14,6 +14,7 @@ test("Get JD response schema requires remote eligibility, page validation, job d
   ]);
   assert.equal("passesJobPolicy" in geminiJobEvaluationResponseSchema.properties, false);
   assert.equal("location" in geminiJobEvaluationResponseSchema.properties.job.properties, true);
+  assert.equal("country" in geminiJobEvaluationResponseSchema.properties.job.properties, false);
   assert.equal("jobUrl" in geminiJobEvaluationResponseSchema.properties.job.properties, true);
   assert.equal("reason" in geminiJobEvaluationResponseSchema.properties.job.properties, true);
   assert.deepEqual(geminiJobEvaluationResponseSchema.properties.job.required, [
@@ -21,7 +22,6 @@ test("Get JD response schema requires remote eligibility, page validation, job d
     "company",
     "description",
     "location",
-    "country",
     "employmentType",
     "workplaceType",
     "salary",

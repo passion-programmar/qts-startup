@@ -7,8 +7,8 @@ export type ExtensionSavedJob = {
   description: string;
   /** Plain page innerText; saved only when the job has no description. */
   pageText: string | null;
+  /** Location as written, including the country (jobs keep no separate country). */
   location: string | null;
-  country: string | null;
   employmentType: string | null;
   workplaceType: string | null;
   salary: string | null;
@@ -51,13 +51,20 @@ export function readExtensionSavedJob(value: unknown): ExtensionSavedJob | null 
     company: job.company.trim(),
     description: job.description.trim(),
     pageText: pageText || null,
-    location: job.location.trim() || null,
-    country: optionalText(job.country),
+    location: locationWithCountry(job.location, job.country),
     employmentType: optionalText(job.employmentType),
     workplaceType: optionalText(job.workplaceType),
     salary: optionalText(job.salary),
     jobReason: optionalText(job.reason),
   };
+}
+
+/** Older extensions send the country on its own; it is kept inside location. */
+export function locationWithCountry(location: string, country: unknown): string | null {
+  const place = location.trim();
+  const countryName = typeof country === "string" ? country.trim() : "";
+  if (!countryName || place.toLowerCase().includes(countryName.toLowerCase())) return place || null;
+  return (place ? `${place}, ${countryName}` : countryName).slice(0, 500);
 }
 
 function optionalTextWithinLimit(value: unknown, max: number): boolean {

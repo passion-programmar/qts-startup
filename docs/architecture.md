@@ -46,7 +46,11 @@ The supported browser-extension workflow is deliberately narrow:
    If the service worker restarts mid-run, the next queue tick returns the
    interrupted job to the queue; signing out does the same before the token
    is cleared. Generation does not mark the job as applied; `applied` means the
-   application was submitted successfully. The extension's Generation action
+   application was submitted successfully, and exactly then the job has a bid.
+   A bid is created only when Apply completes, and only for a job whose
+   Generation is `completed`; until the Apply workflow ships, the Manager marks
+   it Applied on the Jobs page. Deleting the bid returns the job to To do.
+   Generation file names use Japan time. The extension's Generation action
    can cancel an active run, including a queued run; Apply remains a release
    placeholder.
 7. Sign Out clears persisted extension authentication and Get JD status.
@@ -138,7 +142,12 @@ URL rules suppress the launcher and other extension workflows.
   pair.
 - Inserts use `ON CONFLICT DO NOTHING`, making concurrent Get JD saves
   idempotent.
-- Job business dates use `America/Los_Angeles`.
+- Job dates use the time zone Super Admin chooses in Settings (Japan, Romania,
+  and others; `America/Los_Angeles` until one is chosen). Only new jobs use it.
+- A job keeps one `location`, including the country; there is no separate
+  country field. Bids copy it.
+- A bid is the same job as a jobs row by `source_job_id`, the cleaned URL, or
+  `title_company_key`; bids keep no `job_key`.
 - Gemini rolling request and token windows span Pacific midnight. Only the daily
   counter resets at midnight.
 - Login throttling is stored in PostgreSQL so it applies across serverless
