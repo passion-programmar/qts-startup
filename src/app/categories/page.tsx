@@ -13,6 +13,7 @@ import {
 import { categories, profiles, subCategories } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 
@@ -81,17 +82,18 @@ export default async function CategoriesPage() {
   return (
     <WorkspaceShell activeHref="/categories" user={actor}>
       <main className="py-1 text-slate-900">
-        <header className="mb-7">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Candidate categories</h1>
-          <p className="mt-1 text-sm text-slate-500">Organize candidate subcategories under parent categories.</p>
-        </header>
+        <PageHeader
+          description="Organize candidate subcategories under parent categories."
+          eyebrow="Administration"
+          title="Candidate categories"
+        />
 
-        <div className="mb-5 grid gap-4 xl:grid-cols-2">
-          <section className="rounded border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="mb-6 grid gap-4 lg:grid-cols-2">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <h2 className="mb-4 text-base font-semibold text-slate-800">Add category</h2>
             <CreateCategoryForm />
           </section>
-          <section className="rounded border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <h2 className="mb-4 text-base font-semibold text-slate-800">Add subcategory</h2>
             {categoryRows.length
               ? <CreateSubCategoryForm categories={categoryRows} />

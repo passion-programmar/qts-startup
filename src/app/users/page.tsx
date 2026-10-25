@@ -18,6 +18,7 @@ import {
 } from "@/app/users/user-forms";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
+import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import {
@@ -212,15 +213,12 @@ export default async function UsersPage() {
     <WorkspaceShell activeHref="/users" user={actor}>
     <main className="py-1">
       <div>
-        <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-              {actor.role === "manager"
-                ? "Candidate Accounts"
-                : ""}
-            </h1>
-          </div>
-        </div>
+        <PageHeader
+          description={actor.role === "manager"
+            ? "Create and maintain the candidate accounts you manage."
+            : "Everyone in your part of the organization, with their roles and reporting lines."}
+          title={actor.role === "manager" ? "Candidate accounts" : "People"}
+        />
         <section aria-label="Visible user totals" className="mb-5 grid gap-3 sm:grid-cols-3">
           {[
             { label: "Visible users", value: visibleCount, icon: Users },
@@ -230,17 +228,17 @@ export default async function UsersPage() {
             const Icon = item.icon;
             return (
               <article
-                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
                 key={item.label}
               >
-                <span className="flex size-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                  <Icon className="size-4" />
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
+                  <Icon className="size-5" strokeWidth={1.8} />
                 </span>
                 <div>
-                  <p className="text-xl font-semibold text-slate-900">
+                  <p className="text-2xl font-semibold tracking-tight text-slate-900 tabular-nums">
                     {item.value}
                   </p>
-                  <p className="text-[11px] text-slate-500">{item.label}</p>
+                  <p className="text-xs text-slate-500">{item.label}</p>
                 </div>
               </article>
             );
@@ -439,11 +437,11 @@ export default async function UsersPage() {
                       roleLabels[person.role] ?? person.role,
                       directReports.length,
                       person.blocked_at ? (
-                        <span className="rounded bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-100">
                           Blocked
                         </span>
                       ) : (
-                        <span className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-100">
                           Active
                         </span>
                       ),

@@ -14,6 +14,7 @@ import {
   removeOldGeminiApiCallLogs,
 } from "@/lib/gemini-usage";
 import { requireUser } from "@/lib/session";
+import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { GeminiApiLimitsForm } from "./limits-form";
@@ -135,24 +136,24 @@ export default async function GeminiUsagePage({
     <WorkspaceShell activeHref="/settings/gemini-usage" user={currentUser}>
     <main className="py-1 text-slate-900">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-7 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="mt-1 text-sm text-slate-600">
-              Configure per-key limits, check key status, and review Google API responses.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Link className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" href={`/settings/gemini-usage?tab=${activeTab}`}>
-              Refresh
-            </Link>
-            <Link className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="/settings">
-              Settings
-            </Link>
-          </div>
-        </header>
+        <PageHeader
+          actions={
+            <>
+              <Link className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50" href={`/settings/gemini-usage?tab=${activeTab}`}>
+                Refresh
+              </Link>
+              <Link className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50" href="/settings">
+                Settings
+              </Link>
+            </>
+          }
+          description="Configure per-key limits, check key status, and review Google API responses."
+          eyebrow="Administration"
+          title="Gemini usage"
+        />
 
-        {/* Stays under the fixed workspace header (68px below 640px, 76px above) while the page scrolls. */}
-        <div className="sticky top-[68px] z-30 -mx-1 mb-4 flex flex-col gap-3 bg-[#f6f8fc]/95 px-1 py-2 backdrop-blur sm:top-[76px] sm:flex-row sm:items-stretch">
+        {/* Stays under the fixed workspace header (60px below 640px, 64px above) while the page scrolls. */}
+        <div className="sticky top-[60px] z-30 -mx-1 mb-4 flex flex-col gap-3 bg-surface/95 px-1 py-2 backdrop-blur sm:top-16 sm:flex-row sm:items-stretch">
         <PacificClock />
         <nav aria-label="Gemini usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
           {GEMINI_USAGE_TABS.map((tab) => {
@@ -247,7 +248,7 @@ export default async function GeminiUsagePage({
                     limit={limits.inputTokensPerMinute}
                   />,
                   <span
-                    className={`inline-flex rounded px-2 py-1 text-xs font-medium ${
+                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
                       isBusy
                         ? "bg-amber-50 text-amber-700"
                         : isLimited
@@ -328,7 +329,7 @@ export default async function GeminiUsagePage({
                   </span>,
                   call.operation === "count_tokens" ? "CountTokens" : "GenerateContent",
                   <span
-                    className={`inline-flex rounded px-2 py-1 text-xs font-medium ${
+                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
                       call.status === "http_success"
                         ? "bg-emerald-50 text-emerald-700"
                         : "bg-rose-50 text-rose-700"
@@ -353,7 +354,7 @@ export default async function GeminiUsagePage({
                         Response was truncated after 1 MB.
                       </p>
                     ) : null}
-                    <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-3 text-[11px] text-slate-700">
+                    <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-[11px] text-slate-700">
                       {responseText}
                     </pre>
                   </details>,

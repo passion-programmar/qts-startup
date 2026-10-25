@@ -219,7 +219,7 @@ export function PromptAssignmentForm({
           <form action={unassignAction} onSubmit={() => setLastSubmitted("unassign")}>
             <input name="managerId" type="hidden" value={managerId} />
             <button
-              className="inline-flex h-7 items-center gap-1 rounded border border-rose-200 px-2 text-[10px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+              className="inline-flex h-7 items-center gap-1 rounded-lg border border-rose-200 px-2 text-[10px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
               disabled={unassignPending}
               type="submit"
             >
@@ -232,7 +232,7 @@ export function PromptAssignmentForm({
       <form action={assignAction} className="flex flex-col gap-2 sm:flex-row" onSubmit={() => setLastSubmitted("assign")}>
         <input name="managerId" type="hidden" value={managerId} />
         <select
-          className="h-9 min-w-0 flex-1 rounded border border-slate-300 bg-white px-2 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+          className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
           defaultValue={assignedPromptId ?? ""}
           name="promptChoice"
           required
@@ -247,7 +247,7 @@ export function PromptAssignmentForm({
           ))}
         </select>
         <button
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
           disabled={assignPending || prompts.length === 0}
           type="submit"
         >

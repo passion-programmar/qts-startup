@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
+import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { db } from "@/lib/db";
@@ -179,36 +180,33 @@ export default async function Home() {
   return (
     <WorkspaceShell activeHref="/" user={currentUser}>
       <main className="mx-auto max-w-[1440px] py-1 2xl:max-w-none">
-          <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-                Workspace overview
-              </h1>
-            </div>
-          </div>
+          <PageHeader
+            description="Your team, candidate profiles, and categories at a glance."
+            eyebrow={`Welcome back, ${currentUser.displayName}`}
+            title="Workspace overview"
+          />
 
-          <section aria-label="Workspace summary" className="grid gap-4 md:grid-cols-3">
+          <section aria-label="Workspace summary" className="grid gap-4 sm:grid-cols-3">
             {stats.map((stat) => {
               const Icon = stat.icon;
               return (
                 <article
-                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-indigo-200 hover:shadow-md"
+                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-md"
                   key={stat.label}
                 >
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs font-medium text-slate-500">
+                      <p className="text-sm font-medium text-slate-500">
                         {stat.label}
                       </p>
-                      <p className="mt-3 text-[28px] font-semibold tracking-[-0.05em]">
+                      <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-900 tabular-nums">
                         {stat.value}
                       </p>
                     </div>
-                    <div className="flex size-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                      <Icon className="size-[17px]" strokeWidth={1.8} />
+                    <div className="flex size-11 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-md shadow-indigo-500/20">
+                      <Icon className="size-5" strokeWidth={1.8} />
                     </div>
-                  </div>
-                </article>
+                  </div>                </article>
               );
             })}
           </section>
@@ -221,11 +219,12 @@ export default async function Home() {
                     People in your workspace
                   </h2>
                 </div>
-                <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-500">
+                <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
                   {workspaceUsers.length} total
                 </span>
               </div>
               <PaginatedTable
+                embedded
                 columns={[
                   { label: "Name", className: "w-[45%]" },
                   { label: "Role", className: "w-[25%]" },
@@ -281,6 +280,7 @@ export default async function Home() {
                     </h2>
                   </div>
                   <PaginatedTable
+                    embedded
                     columns={[
                       { label: "Name", className: "w-[35%]" },
                       { label: "Login", className: "w-[25%]" },

@@ -4,7 +4,6 @@ import {
   Activity,
   BriefcaseBusiness,
   ChevronDown,
-  ChevronRight,
   FileCheck2,
   FileText,
   X,
@@ -14,6 +13,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
+  Sparkles,
   Tags,
   UserRound,
   Users,
@@ -32,11 +32,11 @@ const roleLabels: Record<StaffSession["role"], string> = {
   manager: "Manager",
 };
 
-const baseNavigation = [
-  { label: "Overview", href: "/", icon: LayoutDashboard },
-  { label: "People", href: "/users", icon: Users },
-  { label: "My profile", href: "/profile", icon: UserRound },
-];
+type NavigationItem = { label: string; href: string; icon: typeof Users };
+
+const overviewItem: NavigationItem = { label: "Overview", href: "/", icon: LayoutDashboard };
+const peopleItem: NavigationItem = { label: "People", href: "/users", icon: Users };
+const profileItem: NavigationItem = { label: "My profile", href: "/profile", icon: UserRound };
 
 export function WorkspaceShellClient({
   user,
@@ -65,26 +65,31 @@ export function WorkspaceShellClient({
       return next;
     });
   }
-  const navigation = [
-    ...(user.role === "manager"
+  const workspaceItems: NavigationItem[] =
+    user.role === "manager"
       ? [
           { label: "Jobs", href: "/jobs", icon: BriefcaseBusiness },
           { label: "Bids", href: "/bids", icon: FileCheck2 },
           { label: "Resume", href: "/pdf", icon: FileText },
-          baseNavigation[1],
+          peopleItem,
         ]
-      : baseNavigation.slice(0, 2)),
-    ...(user.role === "super_admin"
+      : [overviewItem, peopleItem];
+  const adminItems: NavigationItem[] =
+    user.role === "super_admin"
       ? [
           { label: "Categories", href: "/categories", icon: Tags },
           { label: "AI settings", href: "/settings", icon: Settings2 },
           { label: "Gemini usage", href: "/settings/gemini-usage", icon: Activity },
         ]
       : user.role === "manager" && managerPromptEnabled
-        ? [{ label: "My AI prompt", href: "/prompts", icon: BriefcaseBusiness }]
-        : []),
-    baseNavigation[2],
-  ];
+        ? [{ label: "My AI prompt", href: "/prompts", icon: Sparkles }]
+        : [];
+  const navigationGroups = [
+    { label: "Workspace", items: workspaceItems },
+    { label: user.role === "super_admin" ? "Administration" : "AI", items: adminItems },
+    { label: "Account", items: [profileItem] },
+  ].filter((group) => group.items.length > 0);
+  const navigation = navigationGroups.flatMap((group) => group.items);
   const pageLabel = navigation.find((item) => item.href === activeHref)?.label || "Overview";
   const initials = user.displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "Q";
 
@@ -110,9 +115,10 @@ export function WorkspaceShellClient({
           <button aria-controls="workspace-sidebar" aria-expanded={mobileNavigationOpen} aria-label={mobileNavigationOpen ? "Close navigation" : "Open navigation"} className="workspace-icon-button workspace-mobile-toggle" onClick={() => setMobileNavigationOpen((open) => !open)} type="button">
             {mobileNavigationOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
-          <span className="workspace-header__eyebrow">Workspace</span>
-          <ChevronRight className="workspace-header__divider" size={14} aria-hidden="true" />
-          <span className="workspace-header__page">{pageLabel}</span>
+          <span className="workspace-header__crumbs">
+            <span className="workspace-header__eyebrow">{roleLabels[user.role]} workspace</span>
+            <span className="workspace-header__page">{pageLabel}</span>
+          </span>
         </div>
         <div className="workspace-header__actions">
           <span className="workspace-status"><span aria-hidden="true" />Connected</span>
@@ -123,7 +129,7 @@ export function WorkspaceShellClient({
               <ChevronDown size={15} className="workspace-account__chevron" aria-hidden="true" />
             </summary>
             <div className="workspace-account__menu">
-              <div className="workspace-account__heading"><strong>{user.displayName}</strong><span>{roleLabels[user.role]} workspace</span></div>
+              <div className="workspace-account__heading"><span className="workspace-avatar" aria-hidden="true">{initials}</span><div><strong>{user.displayName}</strong><span>{roleLabels[user.role]} · @{user.loginName}</span></div></div>
               <Link href="/profile"><UserRound size={16} aria-hidden="true" />My profile</Link>
               <form action={logoutAction}><LogoutButton /></form>
             </div>
@@ -132,33 +138,39 @@ export function WorkspaceShellClient({
       </header>
       {mobileNavigationOpen && <button className="workspace-backdrop" aria-label="Close navigation" onClick={() => setMobileNavigationOpen(false)} type="button" />}
       <aside id="workspace-sidebar" className={`workspace-sidebar ${mobileNavigationOpen ? "workspace-sidebar--open" : ""}`}>
-        <Link href="/" className="workspace-brand" aria-label="QTS home" onClick={() => setMobileNavigationOpen(false)}>
-          <span className="workspace-brand__mark"><BriefcaseBusiness size={22} strokeWidth={1.8} aria-hidden="true" /></span>
-          <span className="workspace-brand__text"><strong>QTS<span>Workspace</span></strong><span>Your next opportunity.</span></span>
-        </Link>
-        <div className="workspace-sidebar__section">
-          <span>WORKSPACE</span>
+        <div className="workspace-brand-row">
+          <Link href="/" className="workspace-brand" aria-label="QTS home" onClick={() => setMobileNavigationOpen(false)}>
+            <span className="workspace-brand__mark"><BriefcaseBusiness size={19} strokeWidth={2} aria-hidden="true" /></span>
+            <span className="workspace-brand__text"><strong>QTS</strong><span>Job workspace</span></span>
+          </Link>
           <button type="button" className="workspace-collapse" aria-controls="workspace-sidebar" aria-expanded={!sidebarCollapsed} onClick={toggleSidebar} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
             {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
           </button>
+          <button type="button" className="workspace-drawer-close" aria-label="Close navigation" onClick={() => setMobileNavigationOpen(false)}>
+            <X size={18} />
+          </button>
         </div>
         <nav aria-label="Main navigation" className="workspace-navigation">
-          {navigation.map((item) => {
-            const Icon = item.icon;
-            const active = activeHref === item.href;
-            return (
-              <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} aria-label={item.label} className={`workspace-nav-link ${active ? "workspace-nav-link--active" : ""}`} onClick={() => setMobileNavigationOpen(false)} title={sidebarCollapsed ? item.label : undefined}>
-                <Icon size={19} strokeWidth={1.7} aria-hidden="true" />
-                <span>{item.label}</span>
-                {active && <span className="workspace-nav-link__dot" aria-hidden="true" />}
-              </Link>
-            );
-          })}
+          {navigationGroups.map((group) => (
+            <div className="workspace-nav-group" key={group.label}>
+              <span className="workspace-nav-group__label">{group.label}</span>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const active = activeHref === item.href;
+                return (
+                  <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} aria-label={item.label} className={`workspace-nav-link ${active ? "workspace-nav-link--active" : ""}`} onClick={() => setMobileNavigationOpen(false)} title={sidebarCollapsed ? item.label : undefined}>
+                    <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
-        <div className="workspace-sidebar__footer">
-          <span className="workspace-footer-avatar" aria-hidden="true">{initials}</span>
-          <div><strong>{roleLabels[user.role]} workspace</strong><span>Manage your next move.</span></div>
-        </div>
+        <Link className="workspace-sidebar__footer" href="/profile" onClick={() => setMobileNavigationOpen(false)} title={sidebarCollapsed ? user.displayName : undefined}>
+          <span className="workspace-avatar" aria-hidden="true">{initials}</span>
+          <div><strong>{user.displayName}</strong><span>{roleLabels[user.role]}</span></div>
+        </Link>
       </aside>
       <div className="workspace-body"><div id="workspace-content" tabIndex={-1} className="workspace-content">{children}</div></div>
     </div>

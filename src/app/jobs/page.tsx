@@ -1,5 +1,6 @@
 import { asc, desc, eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
+import { PageHeader } from "@/app/components/page-header";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import {
@@ -54,10 +55,11 @@ export default async function JobsPage() {
   return (
     <WorkspaceShell activeHref="/jobs" user={currentUser}>
       <main className="py-1">
-        <header className="mb-7">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Jobs</h1>
-          <p className="mt-1 text-sm text-slate-500">Jobs saved for your candidate accounts.</p>
-        </header>
+        <PageHeader
+          actions={<span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">{rows.length} saved</span>}
+          description="Jobs saved for your candidate accounts."
+          title="Jobs"
+        />
         <PaginatedTable
           columns={[
             { label: "No", className: "w-[5%]" },

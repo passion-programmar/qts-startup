@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
+import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { managerPromptAssignments, prompts, settings } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -36,14 +37,10 @@ export default async function ManagerPromptsPage() {
     <WorkspaceShell activeHref="/prompts" user={currentUser}>
       <main className="py-1 text-slate-900">
         <div className="mx-auto max-w-4xl">
-          <header className="mb-7">
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              My AI prompt
-            </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              This saved prompt is selected and managed by your Super Admin.
-            </p>
-          </header>
+          <PageHeader
+            description="This saved prompt is selected and managed by your Super Admin."
+            title="My AI prompt"
+          />
 
           {assignedPrompt ? (
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">

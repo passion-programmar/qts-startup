@@ -17,6 +17,7 @@ import {
 } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 
@@ -103,13 +104,11 @@ export default async function SettingsPage() {
     <WorkspaceShell activeHref="/settings" user={currentUser}>
     <main className="py-1 text-slate-900">
       <div className="mx-auto max-w-6xl">
-        <header className="mb-7">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              AI prompt settings
-            </h1>
-          </div>
-        </header>
+        <PageHeader
+          description="Choose the prompt mode, maintain the global prompt library, and assign prompts and Get JD access to Managers."
+          eyebrow="Administration"
+          title="AI prompt settings"
+        />
 
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <h2 className="mb-4 text-sm font-semibold text-slate-800">

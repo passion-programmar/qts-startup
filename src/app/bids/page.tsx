@@ -2,6 +2,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import { ExternalLink } from "lucide-react";
 import { redirect } from "next/navigation";
 import { PaginatedTable } from "@/app/components/paginated-table";
+import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { BidActions } from "@/app/components/record-forms";
 import { bids, categories, profiles, subCategories, users } from "@/db/schema";
@@ -54,10 +55,11 @@ export default async function BidsPage() {
   return (
     <WorkspaceShell activeHref="/bids" user={currentUser}>
       <main className="py-1">
-        <header className="mb-7">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Bids</h1>
-          <p className="mt-1 text-sm text-slate-500">Applications submitted for your candidate accounts.</p>
-        </header>
+        <PageHeader
+          actions={<span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">{rows.length} submitted</span>}
+          description="Applications submitted for your candidate accounts."
+          title="Bids"
+        />
         <PaginatedTable
           columns={[
             { label: "No", className: "w-[3%]" },
@@ -91,7 +93,7 @@ export default async function BidsPage() {
               row.resumeLocalPath,
               row.googleDrivePath ?? "—",
               row.sourceJobId,
-              <a aria-label={`Open ${row.title}`} className="inline-flex size-8 items-center justify-center rounded border border-blue-200 text-blue-600 hover:bg-blue-50" href={row.url} key="link" rel="noreferrer" target="_blank"><ExternalLink className="size-4" /></a>,
+              <a aria-label={`Open ${row.title}`} className="inline-flex size-8 items-center justify-center rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50" href={row.url} key="link" rel="noreferrer" target="_blank"><ExternalLink className="size-4" /></a>,
               row.createdAt.toLocaleString(),
               row.updatedAt.toLocaleString(),
               <BidActions candidates={candidateOptions} key="actions" record={{ id: row.id, candidateId: row.candidateId, title: row.title, company: row.company, location: row.location, url: row.url, employmentType: row.employmentType, workplaceType: row.workplaceType, salary: row.salary, resumeLocalPath: row.resumeLocalPath, googleDrivePath: row.googleDrivePath, appliedAt: toDateTimeLocal(row.appliedAt) }} />,
