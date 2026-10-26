@@ -181,7 +181,17 @@ export async function releaseApplyAttempt(
   browserId: string,
   reason: string,
   skip: boolean,
+  dryRun = false,
 ): Promise<boolean> {
+  // A test-mode run stopped before Submit on purpose: it leaves no trace, so it does not count
+  // against the job's two returns.
+  if (dryRun) {
+    const removed = await db
+      .delete(applyAttempts)
+      .where(and(ownedBy(attemptId, managerId, browserId), eq(applyAttempts.status, "claimed")))
+      .returning({ id: applyAttempts.id });
+    return removed.length > 0;
+  }
   const updated = await db
     .update(applyAttempts)
     .set({

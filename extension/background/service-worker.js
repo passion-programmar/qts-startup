@@ -23,7 +23,11 @@ importScripts(
   '../shared/candidate-matcher.js',
   '../shared/fill-policy.js',
   '../shared/auto-application-pipeline.js',
-  '../shared/chatgpt-composer-handoff.js'
+  '../shared/chatgpt-composer-handoff.js',
+  '../shared/apply-answers.js',
+  '../shared/apply-recipes.js',
+  '../shared/apply-pdf.js',
+  'apply-runner.js'
 );
 
 function isExtractablePageUrl(url) {
@@ -5144,10 +5148,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'apply') {
+        const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
+        if (!token) {
+          sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Apply.' });
+          return;
+        }
+        const currentStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
+          sendResponse({ ok: true, status: 'apply', message: 'Apply is already running.' });
+          return;
+        }
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'generation') {
+          sendResponse({ ok: false, error: 'Generation is running in this Chrome. Stop it first, or run Apply in another Chrome.' });
+          return;
+        }
+        const features = await workerApiRequest('GET', '/api/extension/features/me');
+        if (features.success !== true || features.features?.canUseApply !== true) {
+          sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+          return;
+        }
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'apply' });
+        const dryRun = (await chrome.storage.local.get(self.__qtsApplyRunner.APPLY_DRY_RUN_KEY))[self.__qtsApplyRunner.APPLY_DRY_RUN_KEY] === true;
         sendResponse({
-          ok: false,
-          disabled: true,
-          error: 'Apply is not enabled yet.',
+          ok: true,
+          status: 'apply',
+          message: dryRun
+            ? 'Apply started in test mode: it fills each form and stops before Submit.'
+            : 'Apply started. It applies to Generation-completed jobs, oldest first.',
+        });
+        self.__qtsApplyRunner.processApplyQueue().catch((error) => {
+          console.error('[QTS Apply] Queue worker failed:', error);
         });
         return;
       }
@@ -6328,6 +6358,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes[EXTENSION_STATUS_KEY] || changes[GET_JD_ON_KEY] || changes.authExpiresAt) {
     syncBrowserHeartbeatAlarm().catch(() => {});
+    self.__qtsApplyRunner?.syncApplyQueueAlarm().catch(() => {});
     // A mode change reaches QTS at once instead of on the next heartbeat.
     if (changes[EXTENSION_STATUS_KEY] || changes[GET_JD_ON_KEY]) sendBrowserHeartbeat().catch(() => {});
   }
@@ -6350,6 +6381,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 self.chrome?.runtime?.onStartup?.addListener(() => {
   syncBrowserHeartbeatAlarm().catch(() => {});
+  self.__qtsApplyRunner?.syncApplyQueueAlarm().catch(() => {});
   syncGenerationQueueAlarm().catch((error) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
@@ -6359,6 +6391,10 @@ self.chrome?.runtime?.onStartup?.addListener(() => {
 });
 
 self.chrome?.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm.name === self.__qtsApplyRunner?.APPLY_QUEUE_ALARM) {
+    self.__qtsApplyRunner.processApplyQueue().catch((error) => console.error('[QTS Apply] Queue worker failed:', error));
+    return;
+  }
   if (alarm.name === BROWSER_HEARTBEAT_ALARM) {
     sendBrowserHeartbeat().catch((error) => console.warn('[QTS] Chrome heartbeat failed:', error));
     return;

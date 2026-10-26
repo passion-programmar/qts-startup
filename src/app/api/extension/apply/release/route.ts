@@ -7,7 +7,7 @@ import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
-  const body = await request.json().catch(() => null) as { attemptId?: unknown; reason?: unknown; skip?: unknown } | null;
+  const body = await request.json().catch(() => null) as { attemptId?: unknown; reason?: unknown; skip?: unknown; dryRun?: unknown } | null;
   if (!isUuid(body?.attemptId) || typeof body.reason !== "string" || !body.reason.trim()) {
     return NextResponse.json({ success: false, message: "An attempt ID and a reason are required." }, { status: 400 });
   }
@@ -18,6 +18,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       auth.browser.id,
       body.reason,
       body.skip === true,
+      body.dryRun === true,
     );
     return released
       ? NextResponse.json({ success: true })
