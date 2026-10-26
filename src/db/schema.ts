@@ -490,6 +490,9 @@ export const jobs = pgTable(
       withTimezone: true,
       mode: "date",
     }),
+    // The last Apply runs on this job, newest first (at most 10): when, how each ended, and every
+    // answer with its source (profile, reusable answer, ChatGPT...), for the Jobs page.
+    applyAnswers: jsonb("apply_answers"),
     // The Chrome processing this row's Generation; each Chrome processes one row at a time.
     generationBrowserId: uuid("generation_browser_id").references(
       (): AnyPgColumn => extensionBrowsers.id,

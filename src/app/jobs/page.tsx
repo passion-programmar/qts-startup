@@ -7,6 +7,8 @@ import {
   JobDeleteAction,
   JobEditAction,
   JobGenerationQueueAction,
+  type ApplyStatusLine,
+  type JobTrack,
 } from "@/app/components/record-forms";
 import { GenerationSetup } from "@/app/components/generation-setup";
 import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
@@ -14,6 +16,8 @@ import { jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
+import type { ApplyRun } from "@/server/apply/apply-values";
+import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 
 export const instant = false;
 
@@ -25,7 +29,7 @@ type ApplyAttemptSummary = {
 };
 
 /** One line about a row's latest application, plus where its screenshot is when it has one. */
-function applyStatusLines(attempt: ApplyAttemptSummary | null): { text: string; tone: "info" | "warn" | "error"; detail: string | null }[] {
+function applyStatusLines(attempt: ApplyAttemptSummary | null): ApplyStatusLine[] {
   if (!attempt) return [];
   const where = attempt.browser ? ` on ${attempt.browser}` : "";
   const screenshot = attempt.screenshot ? `Screenshot saved on ${attempt.screenshot}` : null;
@@ -67,6 +71,9 @@ export default async function JobsPage() {
       status: jobs.status,
       failureReason: jobs.failureReason,
       resumeLocalPath: jobs.resumeLocalPath,
+      googleDrivePath: jobs.googleDrivePath,
+      createdAt: jobs.createdAt,
+      applyRuns: sql<ApplyRun[] | null>`${jobs.applyAnswers}`,
       generationStatus: jobs.generationStatus,
       generationAttemptCount: jobs.generationAttemptCount,
       generationError: jobs.generationError,
@@ -146,6 +153,17 @@ export default async function JobsPage() {
               generationAttemptCount: row.generationAttemptCount,
               generationError: row.generationError,
             };
+            const track: JobTrack = {
+              savedAt: row.createdAt.toISOString(),
+              jobReason: row.jobReason,
+              prompt: row.promptName ? `${row.promptName} · v${row.promptVersion}` : null,
+              template: row.pdfTemplate ? (isPdfTemplate(row.pdfTemplate) ? pdfTemplateLabels[row.pdfTemplate] : row.pdfTemplate) : null,
+              resumeLocalPath: row.resumeLocalPath,
+              googleDrivePath: row.googleDrivePath,
+              generationBrowserName: row.generationBrowserName,
+              applyStatus: applyStatusLines(row.applyAttempt),
+              applyRuns: Array.isArray(row.applyRuns) ? row.applyRuns : [],
+            };
             return {
               id: row.id,
               cells: [
@@ -200,7 +218,7 @@ export default async function JobsPage() {
                   promptVersion={row.promptVersion}
                 />,
                 row.date,
-                <JobEditAction candidates={candidateOptions} key="edit" record={editableJob} />,
+                <JobEditAction candidates={candidateOptions} key="edit" record={editableJob} track={track} />,
                 <JobDeleteAction key="delete" record={editableJob} />,
                 <JobGenerationQueueAction key="queue" record={editableJob} />,
               ],

@@ -142,3 +142,32 @@ export function parseReusableAnswer(values: { question: unknown; answer: unknown
   if (!questionKey) return "Enter a question with words in it.";
   return { questionText, questionKey, answer, note: note || null };
 }
+
+export type AppliedAnswer = { question: string; answer: string; source: string };
+// One Apply run as the job row keeps it: when, how it ended, and every answer with its source.
+export type ApplyRun = { at: string; outcome: string; reason: string | null; answers: AppliedAnswer[] };
+
+const ANSWER_SOURCES = new Set(["profile", "reusable", "ai", "documents", "consent", "rule", "saved"]);
+
+/**
+ * The answers a run used, as the extension reports them: question, answer (lists joined, tick boxes
+ * as ticked or not), and where it came from. Anything malformed is left out.
+ */
+export function parseAppliedAnswers(value: unknown): AppliedAnswer[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 200).flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { question, answer, source } = entry as Record<string, unknown>;
+    if (typeof question !== "string" || !question.trim()) return [];
+    const text = Array.isArray(answer)
+      ? answer.map(String).join(" | ")
+      : typeof answer === "boolean"
+        ? (answer ? "Ticked" : "Not ticked")
+        : String(answer ?? "");
+    return [{
+      question: question.replace(/\s+/g, " ").trim().slice(0, 300),
+      answer: text.trim().slice(0, 2000),
+      source: typeof source === "string" && ANSWER_SOURCES.has(source) ? source : "ai",
+    }];
+  });
+}

@@ -7,6 +7,7 @@ import {
   defaultBrowserName,
   normalizeQuestionKey,
   parseApplyResultReport,
+  parseAppliedAnswers,
   parseReusableAnswer,
   parseBrowserHeaders,
 } from "./apply-values";
@@ -91,4 +92,21 @@ test("reusable answers are trimmed, keyed by their question, and refused when em
   assert.equal(typeof parseReusableAnswer({ question: "", answer: "Yes", note: "" }), "string");
   assert.equal(typeof parseReusableAnswer({ question: "Why?", answer: "", note: "" }), "string");
   assert.equal(typeof parseReusableAnswer({ question: "Why?", answer: "x".repeat(4001), note: "" }), "string");
+});
+
+test("a run's answers are kept as question, answer, and source; malformed ones are left out", () => {
+  assert.deepEqual(parseAppliedAnswers([
+    { question: " Desired  Pay ", answer: "5000 EUR per month", source: "reusable" },
+    { question: "Locations", answer: ["Leeds", "Remote"], source: "ai" },
+    { question: "I agree to the privacy policy", answer: true, source: "consent" },
+    { question: "Gender", answer: "Female", source: "made-up" },
+    { question: "", answer: "x" },
+    "not an answer",
+  ]), [
+    { question: "Desired Pay", answer: "5000 EUR per month", source: "reusable" },
+    { question: "Locations", answer: "Leeds | Remote", source: "ai" },
+    { question: "I agree to the privacy policy", answer: "Ticked", source: "consent" },
+    { question: "Gender", answer: "Female", source: "ai" },
+  ]);
+  assert.deepEqual(parseAppliedAnswers(null), []);
 });

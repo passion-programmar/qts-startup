@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { recordApplyResult, saveCandidateAnswers } from "@/server/apply/apply-attempts";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
-import { parseApplyResultReport } from "@/server/apply/apply-values";
+import { parseAppliedAnswers, parseApplyResultReport } from "@/server/apply/apply-values";
 
 const MAX_ANSWERS = 100;
 
@@ -28,7 +28,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     : [];
 
   try {
-    const recorded = await recordApplyResult(body.attemptId, auth.manager.id, auth.browser.id, report);
+    const recorded = await recordApplyResult(
+      body.attemptId,
+      auth.manager.id,
+      auth.browser.id,
+      report,
+      parseAppliedAnswers(body.appliedAnswers),
+    );
     if (!recorded) {
       return NextResponse.json(
         { success: false, message: "This application is not waiting for a result from this Chrome." },

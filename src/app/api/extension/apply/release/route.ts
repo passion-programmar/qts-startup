@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { releaseApplyAttempt } from "@/server/apply/apply-attempts";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
+import { parseAppliedAnswers } from "@/server/apply/apply-values";
 
 // Gives a claimed job back before Submit: to the ready list, or skipped for good (skip=true)
 // when the site is not supported yet or the Manager must handle it.
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
-  const body = await request.json().catch(() => null) as { attemptId?: unknown; reason?: unknown; skip?: unknown; dryRun?: unknown } | null;
+  const body = await request.json().catch(() => null) as { attemptId?: unknown; reason?: unknown; skip?: unknown; dryRun?: unknown; appliedAnswers?: unknown } | null;
   if (!isUuid(body?.attemptId) || typeof body.reason !== "string" || !body.reason.trim()) {
     return NextResponse.json({ success: false, message: "An attempt ID and a reason are required." }, { status: 400 });
   }
@@ -19,6 +20,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       body.reason,
       body.skip === true,
       body.dryRun === true,
+      parseAppliedAnswers(body.appliedAnswers),
     );
     return released
       ? NextResponse.json({ success: true })

@@ -9,7 +9,9 @@ import {
   APPLY_LEASE_SECONDS,
   APPLY_PARALLEL_LIMIT,
   APPLY_SUBMIT_LEASE_SECONDS,
+  type AppliedAnswer,
   type ApplyResultReport,
+  type ApplyRun,
   coverLetterText,
   normalizeQuestionKey,
 } from "./apply-values";
@@ -238,6 +240,28 @@ export async function renewApplyAttempt(attemptId: string, managerId: string, br
 }
 
 /**
+ * Keeps one Apply run on its job row, newest first, at most 10: when, how it ended, and the answers
+ * it used with their sources, for the Jobs page.
+ */
+async function recordApplyRun(jobId: string, outcome: string, reason: string | null, answers: AppliedAnswer[]): Promise<void> {
+  const run: ApplyRun = {
+    at: new Date().toISOString(),
+    outcome,
+    reason: reason ? reason.replace(/\s+/g, " ").trim().slice(0, 500) || null : null,
+    answers,
+  };
+  await db
+    .update(jobs)
+    .set({
+      applyAnswers: sql`jsonb_path_query_array(
+        jsonb_build_array(${JSON.stringify(run)}::jsonb) || coalesce(${jobs.applyAnswers}, '[]'::jsonb),
+        '$[0 to 9]'
+      )`,
+    })
+    .where(eq(jobs.id, jobId));
+}
+
+/**
  * Gives a claimed job back before Submit. skip=true keeps it from being claimed again (a site Apply
  * does not support yet, or one the Manager must handle); otherwise it returns to the ready list.
  */
@@ -248,14 +272,16 @@ export async function releaseApplyAttempt(
   reason: string,
   skip: boolean,
   dryRun = false,
+  answers: AppliedAnswer[] = [],
 ): Promise<boolean> {
-  // A test-mode run stopped before Submit on purpose: it leaves no trace, so it does not count
-  // against the job's two returns.
+  // A test-mode run stopped before Submit on purpose: it leaves no attempt, so it does not count
+  // against the job's two returns; its answers stay on the job row for review.
   if (dryRun) {
     const removed = await db
       .delete(applyAttempts)
       .where(and(ownedBy(attemptId, managerId, browserId), eq(applyAttempts.status, "claimed")))
-      .returning({ id: applyAttempts.id });
+      .returning({ id: applyAttempts.id, jobId: applyAttempts.jobId });
+    if (removed[0]) await recordApplyRun(removed[0].jobId, "test", reason, answers);
     return removed.length > 0;
   }
   const updated = await db
@@ -267,7 +293,8 @@ export async function releaseApplyAttempt(
       updatedAt: new Date(),
     })
     .where(and(ownedBy(attemptId, managerId, browserId), eq(applyAttempts.status, "claimed")))
-    .returning({ id: applyAttempts.id });
+    .returning({ id: applyAttempts.id, jobId: applyAttempts.jobId });
+  if (updated[0]) await recordApplyRun(updated[0].jobId, skip ? "skipped" : "stopped", reason, answers);
   return updated.length > 0;
 }
 
@@ -306,6 +333,7 @@ export async function recordApplyResult(
   managerId: string,
   browserId: string | null,
   report: ApplyResultReport,
+  answers: AppliedAnswer[] = [],
 ): Promise<boolean> {
   const [attempt] = await db
     .select({
@@ -353,6 +381,7 @@ export async function recordApplyResult(
 
   if (report.result === "failed" || !attempt.resumeLocalPath) {
     const [done] = await settled;
+    if (done) await recordApplyRun(attempt.jobId, report.result, report.reason, answers);
     return Boolean(done);
   }
 
@@ -383,6 +412,7 @@ export async function recordApplyResult(
     }).onConflictDoNothing({ target: bids.sourceJobId }),
     markRowsWithBidApplied(managerId, attempt.candidateId),
   ]);
+  if (done) await recordApplyRun(attempt.jobId, report.result, report.reason, answers);
   return Boolean(done);
 }
 

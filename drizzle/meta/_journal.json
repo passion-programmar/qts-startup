@@ -470,6 +470,13 @@
       "when": 1793046164426,
       "tag": "0066_candidate_diversity_answers",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1793046870003,
+      "tag": "0067_job_apply_answers",
+      "breakpoints": true
     }
   ]
 }

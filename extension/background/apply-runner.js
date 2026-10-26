@@ -614,6 +614,15 @@ async function watchApplyResult(tabId, application, keepAlive) {
   return { result: 'not_confirmed', evidence: null, proof };
 }
 
+// The answers one run used, kept on the job row with each run (test, stopped, or submitted).
+function appliedAnswers(answersUsed) {
+  return Object.entries(answersUsed).map(([question, answer]) => ({
+    question: question.slice(0, 300),
+    answer: String(answer.value).slice(0, 2000),
+    source: answer.source || 'ai',
+  }));
+}
+
 async function reportApplyResult(application, report) {
   return workerApiRequest('POST', '/api/extension/apply/result', { attemptId: application.attemptId, ...report });
 }
@@ -627,11 +636,11 @@ async function runApplication(application, recipe) {
   const heartbeat = setInterval(() => keepAlive().catch(() => {}), APPLY_HEARTBEAT_MS);
   let tab = null;
   let submitted = false;
+  const answersUsed = {};
   try {
     tab = await openApplyTab(recipe.formUrl);
     await waitForTabComplete(tab.id, 45 * 1000);
     if (recipe.findStart) tab = await reachApplicationForm(tab, (opened) => { tab = opened; });
-    const answersUsed = {};
     for (let page = 0; page < APPLY_MAX_FORM_PAGES; page += 1) {
       if (!(await isApplyOn())) throw new ApplyStop('Apply was cancelled.', { skip: false, keepTab: false });
       if (lostClaim) throw new ApplyStop('This Chrome lost the application to another one.', { skip: false, keepTab: false });
@@ -663,7 +672,11 @@ async function runApplication(application, recipe) {
     submitted = true;
     const clicked = await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('submit'));
     if (!clicked?.ok) {
-      await reportApplyResult(application, { result: 'failed', reason: 'The Submit button could not be clicked.' });
+      await reportApplyResult(application, {
+        result: 'failed',
+        reason: 'The Submit button could not be clicked.',
+        appliedAnswers: appliedAnswers(answersUsed),
+      });
       return;
     }
     const outcome = await watchApplyResult(tab.id, application, keepAlive);
@@ -691,6 +704,7 @@ async function runApplication(application, recipe) {
       answers: Object.entries(answersUsed)
         .filter(([, answer]) => answer.source === 'ai' || answer.source === 'saved')
         .map(([question, answer]) => ({ question, answer: String(answer.value), source: 'ai' })),
+      appliedAnswers: appliedAnswers(answersUsed),
     });
     if (outcome.result === 'confirmed') await chrome.tabs.remove(tab.id).catch(() => {});
     else await notifyApply(`${application.job.company}: ${outcome.result === 'failed' ? 'the application failed' : 'submitted, but not confirmed'}. A screenshot was saved.`);
@@ -700,6 +714,7 @@ async function runApplication(application, recipe) {
       await reportApplyResult(application, {
         result: 'not_confirmed',
         reason: `Apply stopped after Submit: ${error instanceof Error ? error.message : 'unknown error'}`.slice(0, 480),
+        appliedAnswers: appliedAnswers(answersUsed),
       }).catch(() => {});
       return;
     }
@@ -709,6 +724,7 @@ async function runApplication(application, recipe) {
       reason: stop.message.slice(0, 480),
       skip: stop.skip,
       dryRun: stop.dryRun === true,
+      appliedAnswers: appliedAnswers(answersUsed),
     }).catch(() => {});
     // Test mode deletes the attempt, so the same job would be claimed again at once: one test per click.
     if (stop.dryRun) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
