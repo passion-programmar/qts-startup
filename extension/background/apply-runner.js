@@ -254,7 +254,7 @@ async function realOpen(tabId, field, typed = '') {
 async function readChoicesWithRealClick(tabId, field) {
   try {
     if (!(await realOpen(tabId, field))) return [];
-    const choices = await inForm(tabId, () => globalThis.__qtsApplyForm.shownChoiceTexts()).catch(() => []);
+    const choices = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownChoiceTexts(id), [field.id]).catch(() => []);
     await realEscape(tabId);
     await sleep(200);
     return choices || [];
@@ -269,12 +269,15 @@ async function pickWithRealClick(tabId, field, value) {
   if (!wanted) return { ok: false, error: 'no answer' };
   try {
     // Search lists and suggestion boxes get the answer's first part typed; menus are only opened.
-    const typed = field.kind === 'combobox' || field.kind === 'text' || field.searchable ? wanted.split(',')[0].trim() : '';
+    // Typed up to the first apostrophe, bracket, or slash: "Associate's" may be written "Associate’s".
+    const typed = field.kind === 'combobox' || field.kind === 'text' || field.searchable
+      ? wanted.split(',')[0].split(/['’(/]/)[0].trim().slice(0, 40)
+      : '';
     if (!(await realOpen(tabId, field, typed))) return { ok: false, error: 'the field is not on the screen' };
     // A search list may fetch its results after typing.
     let choice = null;
     for (let waited = 0; waited < 3000 && !choice; waited += 500) {
-      choice = await inForm(tabId, (text) => globalThis.__qtsApplyForm.choiceBox(text), [wanted]).catch(() => null);
+      choice = await inForm(tabId, (text, id) => globalThis.__qtsApplyForm.choiceBox(text, id), [wanted, field.id]).catch(() => null);
       if (!choice) await sleep(500);
     }
     if (!choice) {

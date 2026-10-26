@@ -779,25 +779,34 @@
     return true;
   }
 
-  /** The opened list's choices: those that appeared since markShownChoices, else any popup items. */
-  function openedChoices() {
+  /**
+   * The opened list's choices: inside the list the field names (React Select's own listbox) when it
+   * has one, else those that appeared since markShownChoices, else any popup items.
+   */
+  function openedChoices(id) {
+    const input = id ? findField(id) : null;
+    const ownList = input?.tagName === 'INPUT' ? listFor(input, shownListboxes()) : null;
     const choices = shownChoices();
+    if (ownList) {
+      const inside = choices.filter((element) => ownList.contains(element));
+      if (inside.length) return inside;
+    }
     const fresh = choices.filter((element) => !element.hasAttribute(SEEN_ATTRIBUTE));
     return fresh.length ? fresh : choices.filter((element) => POPUP_ITEM.test(element.getAttribute('role') || ''));
   }
 
-  function shownChoiceTexts() {
+  function shownChoiceTexts(id) {
     // A search list's prompts ("Type to search", "No options") are not choices.
-    return [...new Set(openedChoices().map(itemText).filter(Boolean))]
+    return [...new Set(openedChoices(id).map(itemText).filter(Boolean))]
       .filter((text) => !/^(no options|no results|type to search|start typing|loading|search\.*)$/i.test(text) && !/^type .* to search/i.test(text))
       .slice(0, 300);
   }
 
   /** The opened list's choice matching an answer, with where to click it. */
-  function choiceBox(value) {
+  function choiceBox(value, id) {
     const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9À-ɏ]+/g, '');
     const target = squash(value);
-    const choices = openedChoices();
+    const choices = openedChoices(id);
     // "Warsaw, Poland" also matches the suggestion "Warsaw, Masovian Voivodeship, Poland".
     const parts = String(value).split(',').map(squash).filter(Boolean);
     const choice = choices.find((element) => squash(itemText(element)) === target)
