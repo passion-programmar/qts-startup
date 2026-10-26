@@ -3,6 +3,7 @@
 importScripts(
   '../shared/page-exclusions.js',
   '../shared/job-page-detection.js',
+  '../shared/tab-ownership.js',
   '../shared/runtime-config.js',
   '../shared/application-flow.js',
   '../shared/job-detect.js',
@@ -53,6 +54,13 @@ const capturePanelOpenPromisesByTab = new Map();
 // EXTENSION_STATUS_KEY holds the work slot: 'generation', 'apply', 'cancel' while stopping, or null.
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
 const GET_JD_ON_KEY = 'qtsGetJdOn';
+// Tabs and windows Generation or Apply opened; Get JD never touches them.
+const tabOwnership = self.__qtsTabOwnership.createTabOwnership(chrome.storage.session);
+
+async function isWorkflowTab(tabId, tab = null) {
+  const windowId = tab?.windowId ?? (await getTab(tabId))?.windowId ?? null;
+  return Boolean(await tabOwnership.ownerOf(tabId, windowId));
+}
 const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
 const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
@@ -1342,6 +1350,7 @@ async function isGetJdAutoCloseOn() {
 async function canAutoCloseGetJdTab(tabId, url) {
   const tab = await getTab(tabId);
   if (!tab || tab.url !== url || tab.pinned) return false;
+  if (await isWorkflowTab(tabId, tab)) return false;
   const finished = getJdFinishedPageByTab.get(tabId);
   if (!finished || finished.url !== url || finished.listPage) return false;
   const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
@@ -1412,6 +1421,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
   // Starts when the page HTML is ready; detection itself waits for the content to settle.
   const tab = await getTab(tabId);
   if (!tab?.id || tab.url !== url) return;
+  // Pages Generation or Apply opened are theirs: no check, no Gemini request, no panel or auto-close.
+  if (await isWorkflowTab(tabId, tab)) return;
 
   if (await isPageBlockedForManager(url)) return;
 
@@ -3158,6 +3169,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       pinned: true,
     });
     if (created?.id == null) throw new Error('Could not open a new pinned ChatGPT tab.');
+    await tabOwnership.markTab(created.id, 'generation');
     const existingTabs = await chrome.tabs.query({});
     const otherChatTabs = existingTabs.filter((tab) =>
       tab.id != null &&
@@ -3954,6 +3966,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           try {
             const jobTab = await chrome.tabs.create({ url: queuedJob.jobUrl, active: false });
             if (jobTab?.id != null) {
+              await tabOwnership.markTab(jobTab.id, 'generation');
               jobTabId = jobTab.id;
               await updateGenerationBrowserState({ jobTabId, jobUrl: queuedJob.jobUrl });
             }
@@ -4790,6 +4803,7 @@ async function runDetectForActiveTab(tabId) {
 function maybeTrackAutoOpen(tabId, url) {
   if (!isJobPageCandidateUrl(url)) return;
   (async () => {
+    if (await isWorkflowTab(tabId)) return;
     const autoKey = `${tabId}:${url}`;
     if (lastAutoDetectKeyByTab.get(tabId) === autoKey) return;
     lastAutoDetectKeyByTab.set(tabId, autoKey);
@@ -4927,7 +4941,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'The QTS panel can only load on a web page.' });
       return false;
     }
-    ensureGetJdPanel(tabId)
+    isWorkflowTab(tabId, sender.tab)
+      .then((owned) => {
+        if (owned) throw new Error('This tab belongs to Generation or Apply.');
+        return ensureGetJdPanel(tabId);
+      })
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({
         ok: false,
@@ -6388,7 +6406,23 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   })().catch(() => {});
 });
 
+// Ownership passes to tabs opened from a workflow's tab or in a workflow's window.
+chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
+  tabOwnership.inherit(details.tabId, { sourceTabId: details.sourceTabId }).catch(() => {});
+});
+chrome.tabs.onCreated.addListener((tab) => {
+  if (tab.id == null) return;
+  tabOwnership.inherit(tab.id, { sourceTabId: tab.openerTabId ?? null, windowId: tab.windowId }).catch(() => {});
+});
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  tabOwnership.replaceTab(addedTabId, removedTabId).catch(() => {});
+});
+chrome.windows.onRemoved.addListener((windowId) => {
+  tabOwnership.releaseWindow(windowId).catch(() => {});
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabOwnership.releaseTab(tabId).catch(() => {});
   lastAutoDetectKeyByTab.delete(tabId);
   capturePanelOpenPromisesByTab.delete(tabId);
   lastAutoPipelineKeyByTab.delete(tabId);
