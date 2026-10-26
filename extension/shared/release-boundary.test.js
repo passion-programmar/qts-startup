@@ -78,7 +78,7 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
 
   assert.ok(serviceWorker.includes("'/api/extension/get-jd/check'"));
   assert.equal(serviceWorker.includes('requestGeminiJson'), false);
-  assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'get_jd'"));
+  assert.ok(serviceWorker.includes('[GET_JD_ON_KEY]: true'));
   assert.ok(serviceWorker.includes("message: 'Get JD is on. QTS checks each job page you open.'"));
   assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
   assert.ok(launcher.includes("document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true'"));
@@ -338,7 +338,7 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
 
   assert.ok(launcher.includes("['generation', 'Generation', '▤', 'generation']"));
-  assert.ok(launcher.includes("button.dataset.modeAction = active ? 'cancel_status' : action"));
+  assert.ok(launcher.includes("button.dataset.modeAction = active ? (action === 'get_jd' ? 'cancel_get_jd' : 'cancel_status') : action"));
   assert.ok(serviceWorker.includes("'/api/extension/generation/cancel-all'"));
   assert.ok(serviceWorker.includes("'/api/extension/generation/heartbeat'"));
   assert.equal(serviceWorker.includes("'/api/extension/generation/queue'"), false);
@@ -358,7 +358,7 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(serviceWorker.includes('const CHATGPT_LOAD_TIMEOUT_MS = 30 * 1000;'));
   assert.ok(serviceWorker.includes('const CHATGPT_RELOADS = 2;'));
   const queueSource = serviceWorker.slice(serviceWorker.indexOf('async function processQueuedGenerationJobs'));
-  assert.ok(queueSource.indexOf('await ensureChatGptReady(chatTab.id);') < queueSource.indexOf('url: queuedJob.jobUrl, active: false'));
+  assert.ok(queueSource.indexOf('await ensureChatGptReady(chatTab.id);') < queueSource.indexOf('url: queuedJob.jobUrl,'));
   assert.equal(queueSource.includes('await waitForTabSettled(jobTabId);'), false);
   assert.ok(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'));
   assert.ok(serviceWorker.includes('persistGenerationQueueRun(runId, excludedJobIds)'));
@@ -809,7 +809,7 @@ test('the Get JD panel is injected on demand instead of on every page', () => {
   assert.ok(saveResult.includes('await ensureGetJdPanel(tabId)'));
   assert.ok(worker.includes("msg.type === 'QTS_ENSURE_GET_JD_PANEL'"));
   assert.ok(launcher.includes("type: 'QTS_ENSURE_GET_JD_PANEL'"));
-  assert.ok(launcher.includes("stored.qtsExtensionStatus !== 'get_jd'"));
+  assert.ok(launcher.includes('stored.qtsGetJdOn !== true'));
 });
 
 test('the text highlighter only rescans changed nodes, in batches, and skips ChatGPT', () => {

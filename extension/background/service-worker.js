@@ -3,6 +3,7 @@
 importScripts(
   '../shared/page-exclusions.js',
   '../shared/job-page-detection.js',
+  '../shared/tab-ownership.js',
   '../shared/runtime-config.js',
   '../shared/application-flow.js',
   '../shared/job-detect.js',
@@ -22,7 +23,11 @@ importScripts(
   '../shared/candidate-matcher.js',
   '../shared/fill-policy.js',
   '../shared/auto-application-pipeline.js',
-  '../shared/chatgpt-composer-handoff.js'
+  '../shared/chatgpt-composer-handoff.js',
+  '../shared/apply-answers.js',
+  '../shared/apply-recipes.js',
+  '../shared/apply-pdf.js',
+  'apply-runner.js'
 );
 
 function isExtractablePageUrl(url) {
@@ -49,7 +54,18 @@ function restrictedPageMessage(url) {
 }
 
 const capturePanelOpenPromisesByTab = new Map();
+// Each Chrome has two switches: Get JD on/off, and a work slot for Generation or Apply (never both).
+// EXTENSION_STATUS_KEY holds the work slot: 'generation', 'apply', 'cancel' while stopping, or null.
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
+const GET_JD_ON_KEY = 'qtsGetJdOn';
+const GENERATION_IDLE_NOTICE_KEY = 'qtsGenerationIdleNoticeShown';
+// Tabs and windows Generation or Apply opened; Get JD never touches them.
+const tabOwnership = self.__qtsTabOwnership.createTabOwnership(chrome.storage.session);
+
+async function isWorkflowTab(tabId, tab = null) {
+  const windowId = tab?.windowId ?? (await getTab(tabId))?.windowId ?? null;
+  return Boolean(await tabOwnership.ownerOf(tabId, windowId));
+}
 const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
 const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
@@ -1339,6 +1355,7 @@ async function isGetJdAutoCloseOn() {
 async function canAutoCloseGetJdTab(tabId, url) {
   const tab = await getTab(tabId);
   if (!tab || tab.url !== url || tab.pinned) return false;
+  if (await isWorkflowTab(tabId, tab)) return false;
   const finished = getJdFinishedPageByTab.get(tabId);
   if (!finished || finished.url !== url || finished.listPage) return false;
   const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
@@ -1409,6 +1426,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
   // Starts when the page HTML is ready; detection itself waits for the content to settle.
   const tab = await getTab(tabId);
   if (!tab?.id || tab.url !== url) return;
+  // Pages Generation or Apply opened are theirs: no check, no Gemini request, no panel or auto-close.
+  if (await isWorkflowTab(tabId, tab)) return;
 
   if (await isPageBlockedForManager(url)) return;
 
@@ -1775,8 +1794,8 @@ async function enableGetJdForTab(tabId) {
 }
 
 async function isGetJdActive() {
-  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
-  return stored[EXTENSION_STATUS_KEY] === 'get_jd';
+  const stored = await chrome.storage.local.get([GET_JD_ON_KEY]);
+  return stored[GET_JD_ON_KEY] === true;
 }
 
 async function verifyFormScanScripts(tabId) {
@@ -3148,13 +3167,15 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
+  // Generation works in its own window (pinned ChatGPT tab plus the job pages it opens), opened
+  // without taking focus, so the Manager's browsing window stays theirs.
   async function acquireGenerationChatGptTab() {
-    const created = await chrome.tabs.create({
-      url: 'https://chatgpt.com/',
-      active: true,
-      pinned: true,
-    });
+    const window = await chrome.windows.create({ url: 'https://chatgpt.com/', focused: false, state: 'normal' });
+    const created = window?.tabs?.[0];
     if (created?.id == null) throw new Error('Could not open a new pinned ChatGPT tab.');
+    await tabOwnership.markWindow(window.id, 'generation');
+    await chrome.tabs.update(created.id, { pinned: true }).catch(() => {});
+    await tabOwnership.markTab(created.id, 'generation');
     const existingTabs = await chrome.tabs.query({});
     const otherChatTabs = existingTabs.filter((tab) =>
       tab.id != null &&
@@ -3895,26 +3916,24 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           return;
         }
         if (!claim.job) {
-          const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
-          if (current[EXTENSION_STATUS_KEY] === 'generation') {
-            await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
-          }
-          await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
-          if (claim.processing) {
+          // Several Chromes share the queue, so Generation stays on and checks again on its
+          // 30-second alarm instead of turning itself off; Cancel or Stop all turns it off.
+          if (completedCount || failedCount) {
             await notifyGenerationManager(
-              'Generation is already processing a job in another extension session. This run did not open another ChatGPT tab.',
-            );
-          } else if (completedCount || failedCount) {
-            await notifyGenerationManager(
-              `Generation run finished: ${completedCount} job(s) completed and ${failedCount} job(s) failed. Each failed job was tried twice; use Reset Generation on the Jobs page to try it again.`,
+              `Generation finished ${completedCount} job(s) and ${failedCount} failed job(s). It stays on and takes new jobs as they are saved. Each failed job was tried twice; use Reset Generation on the Jobs page to try it again.`,
             );
           } else {
-            await notifyGenerationManager(
-              'No eligible jobs are available. Jobs need a description, candidate JD-matching notes, and no saved resume path. Reset exhausted failures from the Jobs page.',
-            );
+            const idle = await chrome.storage.local.get(GENERATION_IDLE_NOTICE_KEY);
+            if (!idle[GENERATION_IDLE_NOTICE_KEY]) {
+              await chrome.storage.local.set({ [GENERATION_IDLE_NOTICE_KEY]: true });
+              await notifyGenerationManager(
+                'Generation is on and waiting: no job is ready yet. Jobs need a description, candidate JD-matching notes, and no saved resume path.',
+              );
+            }
           }
           return;
         }
+        await chrome.storage.local.remove(GENERATION_IDLE_NOTICE_KEY);
         const queuedJob = claim.job;
         let jobTabId = null;
         let generationId = '';
@@ -3949,8 +3968,14 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           chatTab.jobs += 1;
           // Then the job page, in the background. The prompt uses the saved job, so it is not waited for.
           try {
-            const jobTab = await chrome.tabs.create({ url: queuedJob.jobUrl, active: false });
+            const chatWindowId = (await getTab(chatTab.id))?.windowId;
+            const jobTab = await chrome.tabs.create({
+              url: queuedJob.jobUrl,
+              active: false,
+              ...(chatWindowId != null ? { windowId: chatWindowId } : {}),
+            });
             if (jobTab?.id != null) {
+              await tabOwnership.markTab(jobTab.id, 'generation');
               jobTabId = jobTab.id;
               await updateGenerationBrowserState({ jobTabId, jobUrl: queuedJob.jobUrl });
             }
@@ -4787,6 +4812,7 @@ async function runDetectForActiveTab(tabId) {
 function maybeTrackAutoOpen(tabId, url) {
   if (!isJobPageCandidateUrl(url)) return;
   (async () => {
+    if (await isWorkflowTab(tabId)) return;
     const autoKey = `${tabId}:${url}`;
     if (lastAutoDetectKeyByTab.get(tabId) === autoKey) return;
     lastAutoDetectKeyByTab.set(tabId, autoKey);
@@ -4924,7 +4950,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'The QTS panel can only load on a web page.' });
       return false;
     }
-    ensureGetJdPanel(tabId)
+    isWorkflowTab(tabId, sender.tab)
+      .then((owned) => {
+        if (owned) throw new Error('This tab belongs to Generation or Apply.');
+        return ensureGetJdPanel(tabId);
+      })
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({
         ok: false,
@@ -5064,13 +5094,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
         }
         await self.__qtsAccountAuth?.clearAuth?.();
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false });
         getJdInFlightTabs.clear();
         getJdLastPageByTab.clear();
         for (const [runningTabId, token] of generationCancellationByTab) {
           generationCancellationByTab.set(runningTabId, token + 1);
         }
         sendResponse({ ok: true, message: 'Signed out.' });
+        return;
+      }
+      // Get JD's switch is separate from the work slot, so it has its own Cancel.
+      if (action === 'cancel_get_jd') {
+        await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
+        getJdInFlightTabs.clear();
+        getJdLastPageByTab.clear();
+        if (tabId != null) {
+          const result = await readGetJdResultForTab(tabId);
+          if (result?.status === 'complete') await cancelGetJdReview(tabId);
+        }
+        sendResponse({ ok: true, status: 'get_jd_off', message: 'Get JD cancelled.' });
         return;
       }
       if (action === 'cancel_status') {
@@ -5088,21 +5130,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             serverCancelError = cancellation.message || 'Could not reach QTS.';
           }
         }
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
-        getJdInFlightTabs.clear();
-        getJdLastPageByTab.clear();
-        if (cancelledStatus === 'generation') {
-          for (const [runningTabId, token] of generationCancellationByTab) {
-            generationCancellationByTab.set(runningTabId, token + 1);
-          }
-        }
-        if (cancelledStatus === 'get_jd' && tabId != null) {
-          const result = await readGetJdResultForTab(tabId);
-          if (result?.status === 'complete') await cancelGetJdReview(tabId);
-        }
-        const cancelledLabel = cancelledStatus === 'get_jd'
-          ? 'Get JD'
-          : cancelledStatus === 'generation'
+        await stopWorkSlotLocally();
+        const cancelledLabel = cancelledStatus === 'generation'
             ? 'Generation'
             : cancelledStatus === 'apply'
               ? 'Apply'
@@ -5119,10 +5148,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'apply') {
+        const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
+        if (!token) {
+          sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Apply.' });
+          return;
+        }
+        const currentStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
+          sendResponse({ ok: true, status: 'apply', message: 'Apply is already running.' });
+          return;
+        }
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'generation') {
+          sendResponse({ ok: false, error: 'Generation is running in this Chrome. Stop it first, or run Apply in another Chrome.' });
+          return;
+        }
+        const features = await workerApiRequest('GET', '/api/extension/features/me');
+        if (features.success !== true || features.features?.canUseApply !== true) {
+          sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+          return;
+        }
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'apply' });
+        const dryRun = (await chrome.storage.local.get(self.__qtsApplyRunner.APPLY_DRY_RUN_KEY))[self.__qtsApplyRunner.APPLY_DRY_RUN_KEY] === true;
         sendResponse({
-          ok: false,
-          disabled: true,
-          error: 'Apply is not enabled yet.',
+          ok: true,
+          status: 'apply',
+          message: dryRun
+            ? 'Apply started in test mode: it fills each form and stops before Submit.'
+            : 'Apply started. It applies to Generation-completed jobs, oldest first.',
+        });
+        self.__qtsApplyRunner.processApplyQueue().catch((error) => {
+          console.error('[QTS Apply] Queue worker failed:', error);
         });
         return;
       }
@@ -5137,7 +5192,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, status: 'generation', message: 'Generation is already running.' });
           return;
         }
-        await chrome.storage.local.remove(GENERATION_NOTICE_KEY);
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
+          sendResponse({ ok: false, error: 'Apply is running in this Chrome. Stop it first, or run Generation in another Chrome.' });
+          return;
+        }
+        await chrome.storage.local.remove([GENERATION_NOTICE_KEY, GENERATION_IDLE_NOTICE_KEY]);
         await chrome.storage.local.set({
           [GENERATION_QUEUE_RUN_KEY]: {
             runId: crypto.randomUUID(),
@@ -5168,7 +5227,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Get JD.' });
         return;
       }
-      await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'get_jd' });
+      await chrome.storage.local.set({ [GET_JD_ON_KEY]: true });
       getJdLastPageByTab.clear();
       enableGetJdForTab(tabId).catch((error) => {
         console.error('[QTS Get JD] Could not start page monitoring:', error);
@@ -5318,7 +5377,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const status = msg.status === 'get_jd' ? 'get_jd' : null;
       if (status === 'get_jd') {
         if (!self.__qtsRuntimeConfig.isFeatureEnabled('geminiEvaluation')) {
-          await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+          await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
           sendResponse({
             ok: false,
             disabled: true,
@@ -5326,7 +5385,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
           return;
         }
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: status });
+        await chrome.storage.local.set({ [GET_JD_ON_KEY]: true });
         enableGetJdForTab(Number.isInteger(msg.tabId) ? msg.tabId : null)
           .catch((error) => {
             console.error('[QTS Get JD] Could not start current-page classification:', error);
@@ -5335,7 +5394,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           chrome.tabs.sendMessage(msg.tabId, { type: 'QTS_CLOSE_CAPTURE_PANEL' }).catch(() => {});
         }
       } else {
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
         getJdLastPageByTab.clear();
       }
       sendResponse({ ok: true, status });
@@ -6198,7 +6257,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.authExpiresAt) {
     if (!changes.authExpiresAt.newValue) {
       disarmJobPageActivity();
-      chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null }).catch(() => {});
+      chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false }).catch(() => {});
       // Reviews contain the previous Manager's candidates and must not survive a session change.
       chrome.storage.local.remove(GET_JD_RESULTS_KEY).catch(() => {});
       getJdInFlightTabs.clear();
@@ -6212,6 +6271,74 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // The queue alarm restarts or recovers a run, so it only ticks while Generation is running or cancelling.
+// Every 30 seconds, while signed in with a mode on, this Chrome tells QTS which modes it runs and
+// learns whether "Stop all" was pressed on the Jobs page, which stops that mode here.
+const BROWSER_HEARTBEAT_ALARM = 'qts-browser-heartbeat';
+const STOP_VERSIONS_KEY = 'qtsStopVersions';
+
+async function browserModes() {
+  const stored = await chrome.storage.local.get([GET_JD_ON_KEY, EXTENSION_STATUS_KEY, 'authExpiresAt']);
+  const status = stored[EXTENSION_STATUS_KEY];
+  return {
+    signedIn: (Number(stored.authExpiresAt) || 0) > Date.now(),
+    getJdOn: stored[GET_JD_ON_KEY] === true,
+    workMode: status === 'generation' || status === 'apply' ? status : 'off',
+  };
+}
+
+async function syncBrowserHeartbeatAlarm() {
+  const modes = await browserModes();
+  if (modes.signedIn && (modes.getJdOn || modes.workMode !== 'off')) {
+    if (!(await chrome.alarms.get(BROWSER_HEARTBEAT_ALARM))) {
+      await chrome.alarms.create(BROWSER_HEARTBEAT_ALARM, { delayInMinutes: 0.5, periodInMinutes: 0.5 });
+    }
+  } else {
+    await chrome.alarms.clear(BROWSER_HEARTBEAT_ALARM);
+  }
+}
+
+/** Stops the work slot in this Chrome only (Cancel, or "Stop all" seen on a heartbeat). */
+async function stopWorkSlotLocally() {
+  await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
+  for (const [runningTabId, token] of generationCancellationByTab) {
+    generationCancellationByTab.set(runningTabId, token + 1);
+  }
+}
+
+async function sendBrowserHeartbeat() {
+  const modes = await browserModes();
+  if (!modes.signedIn) return;
+  const response = await workerApiRequest('POST', '/api/extension/browsers/heartbeat', {
+    getJdOn: modes.getJdOn,
+    workMode: modes.workMode,
+  });
+  if (response.success !== true) return;
+  const stored = await chrome.storage.local.get(STOP_VERSIONS_KEY);
+  const previous = stored[STOP_VERSIONS_KEY];
+  const current = {
+    generation: Number(response.generationStopVersion) || 0,
+    apply: Number(response.applyStopVersion) || 0,
+  };
+  await chrome.storage.local.set({ [STOP_VERSIONS_KEY]: current });
+  if (!previous) return;
+  const stopped = (modes.workMode === 'generation' && current.generation > previous.generation)
+    || (modes.workMode === 'apply' && current.apply > previous.apply);
+  if (stopped) {
+    await stopWorkSlotLocally();
+    const label = modes.workMode === 'generation' ? 'Generation' : 'Apply';
+    await notifyWorkStopped(`${label} was stopped from the Jobs page ("Stop all").`);
+  }
+}
+
+async function notifyWorkStopped(message) {
+  await new Promise((resolve) => {
+    chrome.notifications.create(
+      { type: 'basic', iconUrl: chrome.runtime.getURL('assets/icon128.png'), title: 'QTS', message },
+      () => resolve(),
+    );
+  });
+}
+
 async function syncGenerationQueueAlarm() {
   const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
   const status = stored[EXTENSION_STATUS_KEY];
@@ -6228,13 +6355,24 @@ async function syncGenerationQueueAlarm() {
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || !(changes[EXTENSION_STATUS_KEY] || changes[ACTIVE_GENERATION_JOB_KEY])) return;
+  if (area !== 'local') return;
+  if (changes[EXTENSION_STATUS_KEY] || changes[GET_JD_ON_KEY] || changes.authExpiresAt) {
+    syncBrowserHeartbeatAlarm().catch(() => {});
+    self.__qtsApplyRunner?.syncApplyQueueAlarm().catch(() => {});
+    // A mode change reaches QTS at once instead of on the next heartbeat.
+    if (changes[EXTENSION_STATUS_KEY] || changes[GET_JD_ON_KEY]) sendBrowserHeartbeat().catch(() => {});
+  }
+  if (!(changes[EXTENSION_STATUS_KEY] || changes[ACTIVE_GENERATION_JOB_KEY])) return;
   syncGenerationQueueAlarm().catch((error) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  // After an update both switches start off, so a Chrome never resumes work under new rules by itself.
+  if (details?.reason === 'update') {
+    chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false }).catch(() => {});
+  }
   syncGenerationQueueAlarm().catch((error) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
@@ -6242,6 +6380,8 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 self.chrome?.runtime?.onStartup?.addListener(() => {
+  syncBrowserHeartbeatAlarm().catch(() => {});
+  self.__qtsApplyRunner?.syncApplyQueueAlarm().catch(() => {});
   syncGenerationQueueAlarm().catch((error) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
@@ -6251,6 +6391,14 @@ self.chrome?.runtime?.onStartup?.addListener(() => {
 });
 
 self.chrome?.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm.name === self.__qtsApplyRunner?.APPLY_QUEUE_ALARM) {
+    self.__qtsApplyRunner.processApplyQueue().catch((error) => console.error('[QTS Apply] Queue worker failed:', error));
+    return;
+  }
+  if (alarm.name === BROWSER_HEARTBEAT_ALARM) {
+    sendBrowserHeartbeat().catch((error) => console.warn('[QTS] Chrome heartbeat failed:', error));
+    return;
+  }
   if (alarm.name !== GENERATION_QUEUE_ALARM) return;
   processQueuedGenerationJobs().catch((error) => {
     console.error('[QTS Generation] Queue worker failed:', error);
@@ -6373,7 +6521,23 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   })().catch(() => {});
 });
 
+// Ownership passes to tabs opened from a workflow's tab or in a workflow's window.
+chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
+  tabOwnership.inherit(details.tabId, { sourceTabId: details.sourceTabId }).catch(() => {});
+});
+chrome.tabs.onCreated.addListener((tab) => {
+  if (tab.id == null) return;
+  tabOwnership.inherit(tab.id, { sourceTabId: tab.openerTabId ?? null, windowId: tab.windowId }).catch(() => {});
+});
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  tabOwnership.replaceTab(addedTabId, removedTabId).catch(() => {});
+});
+chrome.windows.onRemoved.addListener((windowId) => {
+  tabOwnership.releaseWindow(windowId).catch(() => {});
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabOwnership.releaseTab(tabId).catch(() => {});
   lastAutoDetectKeyByTab.delete(tabId);
   capturePanelOpenPromisesByTab.delete(tabId);
   lastAutoPipelineKeyByTab.delete(tabId);

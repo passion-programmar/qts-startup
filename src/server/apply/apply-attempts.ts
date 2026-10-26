@@ -54,6 +54,8 @@ export type ClaimedApplication = {
     location: string | null;
     description: string | null;
     generationRunId: string | null;
+    // The résumé and cover letter content Generation delivered, so AI answers match what is uploaded.
+    documentsJson: string | null;
   };
   candidate: Record<string, string | number | boolean | null>;
   savedAnswers: { questionKey: string; questionText: string; answer: string }[];
@@ -81,6 +83,11 @@ export async function claimNextApplication(
       description: jobs.description,
       generationRunId: sql<string | null>`(
         select r.id from generation_runs r
+         where r.job_id = ${jobs.id} and r.status = 'delivered'
+         order by r.created_at desc limit 1
+      )`,
+      documentsJson: sql<string | null>`(
+        select left(r.response_json::text, 20000) from generation_runs r
          where r.job_id = ${jobs.id} and r.status = 'delivered'
          order by r.created_at desc limit 1
       )`,
@@ -126,11 +133,11 @@ export async function claimNextApplication(
     .from(candidateSavedAnswers)
     .where(eq(candidateSavedAnswers.candidateId, row.candidateId));
 
-  const { jobId, url, title, company, location, description, generationRunId, aiMode, ...candidate } = row;
+  const { jobId, url, title, company, location, description, generationRunId, documentsJson, aiMode, ...candidate } = row;
   return {
     attemptId,
     aiMode: aiMode === "gemini" ? "gemini" : "chatgpt",
-    job: { id: jobId, url, title, company, location, description, generationRunId },
+    job: { id: jobId, url, title, company, location, description, generationRunId, documentsJson },
     candidate,
     savedAnswers,
   };
@@ -174,7 +181,17 @@ export async function releaseApplyAttempt(
   browserId: string,
   reason: string,
   skip: boolean,
+  dryRun = false,
 ): Promise<boolean> {
+  // A test-mode run stopped before Submit on purpose: it leaves no trace, so it does not count
+  // against the job's two returns.
+  if (dryRun) {
+    const removed = await db
+      .delete(applyAttempts)
+      .where(and(ownedBy(attemptId, managerId, browserId), eq(applyAttempts.status, "claimed")))
+      .returning({ id: applyAttempts.id });
+    return removed.length > 0;
+  }
   const updated = await db
     .update(applyAttempts)
     .set({
