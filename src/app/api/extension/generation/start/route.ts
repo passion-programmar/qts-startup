@@ -117,6 +117,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           companyName: experiences.companyName,
           jobTitle: experiences.jobTitle,
           location: experiences.location,
+          workMode: experiences.workMode,
           startDate: experiences.startDate,
           endDate: experiences.endDate,
           isCurrent: experiences.isCurrent,

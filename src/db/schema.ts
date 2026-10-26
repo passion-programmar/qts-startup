@@ -569,6 +569,8 @@ export const experiences = pgTable(
     companyName: text("company_name").notNull(),
     jobTitle: text("job_title").notNull(),
     location: text("location"),
+    // Remote, hybrid or onsite; shown next to the location on generated resumes.
+    workMode: text("work_mode"),
     startDate: date("start_date", { mode: "string" }),
     endDate: date("end_date", { mode: "string" }),
     isCurrent: boolean("is_current").default(false).notNull(),
@@ -593,6 +595,10 @@ export const experiences = pgTable(
     check(
       "experiences_end_date_month_precision_check",
       sql`${table.endDate} is null or extract(day from ${table.endDate}) = 1`,
+    ),
+    check(
+      "experiences_work_mode_check",
+      sql`${table.workMode} is null or ${table.workMode} in ('remote', 'hybrid', 'onsite')`,
     ),
     check(
       "experiences_end_after_start_check",

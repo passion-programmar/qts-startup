@@ -1,3 +1,10 @@
+import {
+  orderResumeSections,
+  requiredResumeSectionIds,
+  resumeSectionId,
+} from "@/app/pdf/resume-sections";
+import type { PdfTemplate } from "@/server/pdf/pdf-templates";
+
 export type DocumentSkill = {
   name: string;
   detail?: string;
@@ -31,8 +38,15 @@ export type ResumeDocument = {
     title: string;
     type?: "standard" | "skills";
     items: {
+      // Role, degree, project or certification name.
       heading?: string;
+      // 1-3 key skills; the templates that show them put them next to the heading.
+      focus?: string[];
+      // Company, school or issuer.
       subheading?: string;
+      location?: string;
+      workMode?: WorkMode;
+      // Printed as "Apr 2025 – Present", built from startDate/endDate when the JSON has them.
       dateRange?: string;
       description?: string;
       link?: string;
@@ -40,6 +54,8 @@ export type ResumeDocument = {
     }[];
   }[];
 };
+
+export type WorkMode = "Remote" | "Hybrid" | "Onsite";
 
 export type CoverLetterRecipient = {
   name?: string;
@@ -79,7 +95,16 @@ export type PdfPackage = {
   theme?: DocumentTheme;
 };
 
-export function parsePdfPackage(source: string): PdfPackage {
+/**
+ * Reads the one resume and cover-letter JSON format every template prints from. Sections get
+ * their fixed id (see resume-sections.ts); Languages, Volunteering, unrecognised and empty
+ * sections are dropped. requireCoreSections, for newly generated JSON, also demands the summary
+ * and the Skills, Experience and Education sections; stored packages print without it.
+ */
+export function parsePdfPackage(
+  source: string,
+  { requireCoreSections = false }: { requireCoreSections?: boolean } = {},
+): PdfPackage {
   let value: unknown;
   try {
     value = JSON.parse(source);
@@ -99,34 +124,54 @@ export function parsePdfPackage(source: string): PdfPackage {
   const coverCandidate = rootCandidate ?? candidate(coverLetter.candidate, "coverLetter");
   const targetRole = required(resume.targetRole, "resume.targetRole", 300);
   const sectionsRaw = resume.sections;
-  if (!Array.isArray(sectionsRaw) || sectionsRaw.length === 0 || sectionsRaw.length > 20) {
-    throw new Error("resume.sections must contain 1 to 20 sections.");
+  if (!Array.isArray(sectionsRaw) || sectionsRaw.length > 20) {
+    throw new Error("resume.sections must be a list of no more than 20 sections.");
   }
 
-  const sections = sectionsRaw.map((section, sectionIndex) => {
+  const sections = sectionsRaw.flatMap((section, sectionIndex) => {
     if (!record(section)) throw new Error(`resume.sections[${sectionIndex}] must be an object.`);
-    const itemsRaw = section.items;
-    if (!Array.isArray(itemsRaw) || itemsRaw.length === 0 || itemsRaw.length > 50) {
-      throw new Error(`resume.sections[${sectionIndex}].items must contain 1 to 50 items.`);
+    const title = required(section.title, `resume.sections[${sectionIndex}].title`, 300);
+    const itemsRaw = section.items ?? [];
+    if (!Array.isArray(itemsRaw) || itemsRaw.length > 50) {
+      throw new Error(`resume.sections[${sectionIndex}].items must contain no more than 50 items.`);
     }
+    const id = resumeSectionId(optional(section.id, 120), title);
+    if (!id || itemsRaw.length === 0) return [];
 
-    return {
-      id: optional(section.id, 120),
-      title: required(section.title, `resume.sections[${sectionIndex}].title`, 300),
-      type: parseSectionType(section.type),
+    return [{
+      id,
+      title,
+      type: id === "skills" ? "skills" as const : "standard" as const,
       items: itemsRaw.map((item, itemIndex) => {
         if (!record(item)) throw new Error(`Resume item ${itemIndex + 1} is invalid.`);
         return {
           heading: optional(item.heading, 500),
+          focus: parseFocus(item.focus),
           subheading: optional(item.subheading, 500),
-          dateRange: optional(item.dateRange, 200),
+          location: optional(item.location, 200),
+          workMode: parseWorkMode(item.workMode),
+          dateRange: formatDateRange(item.startDate, item.endDate) ?? optional(item.dateRange, 200),
           description: optional(item.description, 5000),
           link: optional(item.link, 2048),
           bullets: parseBullets(item.bullets),
         };
       }),
-    };
+    }];
   });
+  if (sections.length === 0) {
+    throw new Error("resume.sections must contain at least one section with items.");
+  }
+  if (requireCoreSections) {
+    if (typeof resume.summary !== "string" || !resume.summary.trim()) {
+      throw new Error("resume.summary is required.");
+    }
+    const missing = requiredResumeSectionIds.filter(
+      (sectionId) => !sections.some((section) => section.id === sectionId),
+    );
+    if (missing.length > 0) {
+      throw new Error(`resume.sections must include ${missing.join(", ")}, each with at least one item.`);
+    }
+  }
 
   const paragraphs = coverLetter.bodyParagraphs ?? coverLetter.paragraphs;
   if (
@@ -187,8 +232,13 @@ export function parsePdfPackage(source: string): PdfPackage {
   };
 }
 
-export function toResumeTemplateData(data: PdfPackage, template: string) {
+/**
+ * The template's view of the package: only the sections that template shows, in its order.
+ * Layout (bullets, dates, skills format and the rest) is left to the template's own design.
+ */
+export function toResumeTemplateData(data: PdfPackage, template: PdfTemplate) {
   const candidate = data.resume.candidate;
+  const sections = orderResumeSections(data.resume.sections, template);
   return {
     candidate: candidateForTemplate(candidate),
     resume: {
@@ -196,26 +246,22 @@ export function toResumeTemplateData(data: PdfPackage, template: string) {
       targetCompany: data.resume.targetCompany ?? data.coverLetter.targetCompany,
       targetJobsite: data.resume.targetJobsite,
       summary: data.resume.summary,
-      sections: data.resume.sections
-        .filter((section) => !/\b(?:languages?|volunteering|volunteer\s+experience)\b/i.test(
-          `${section.id ?? ""} ${section.title}`,
-        ))
-        .map((section) => {
-          const isProjectsSection = /\bprojects?\b/i.test(`${section.id ?? ""} ${section.title}`);
-          return {
-            id: section.id,
-            title: section.title,
-            type: section.type,
-            items: section.items.map((item) => ({
-              heading: item.heading,
-              subheading: item.subheading,
-              dateRange: item.dateRange,
-              description: item.description,
-              link: isProjectsSection ? undefined : item.link,
-              bullets: item.bullets ?? [],
-            })),
-          };
-        }),
+      sections: sections.map((section) => ({
+        id: section.id,
+        title: section.title,
+        type: section.type,
+        items: section.items.map((item) => ({
+          heading: item.heading,
+          focus: item.focus ?? [],
+          subheading: item.subheading,
+          location: item.location,
+          workMode: item.workMode,
+          dateRange: item.dateRange,
+          description: item.description,
+          link: section.id === "projects" ? undefined : item.link,
+          bullets: item.bullets ?? [],
+        })),
+      })),
     },
     coverLetter: {
       candidate: candidateForTemplate(data.coverLetter.candidate),
@@ -232,14 +278,9 @@ export function toResumeTemplateData(data: PdfPackage, template: string) {
     theme: {
       ...data.theme,
       template,
-      contentConsistency: "uniform",
-      contactStyle: "inline",
-      bulletStyle: "disc",
-      titleCase: "title",
-      datePosition: "inline",
-      skillsLayout: "rows",
-      skillDetail: "bracket",
-      dateSeparator: "–",
+      // The summary leads; the sections are already in the template's order.
+      sectionOrder: ["summary", ...sections.map((section) => section.id ?? "")],
+      hiddenSections: [],
     },
   };
 }
@@ -290,6 +331,47 @@ function parseBullets(value: unknown): DocumentBullet[] | undefined {
     }
     throw new Error("Resume bullets must be strings or skill objects with a name.");
   });
+}
+
+// Up to three short skills shown next to an entry's heading; anything else is ignored.
+function parseFocus(value: unknown): string[] | undefined {
+  const focus = (Array.isArray(value) ? value : typeof value === "string" ? value.split(/[,|]/) : [])
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry && entry.length <= 60)
+    .slice(0, 3);
+  return focus.length ? focus : undefined;
+}
+
+function parseWorkMode(value: unknown): WorkMode | undefined {
+  const mode = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]/g, "") : "";
+  if (mode === "remote") return "Remote";
+  if (mode === "hybrid") return "Hybrid";
+  if (mode === "onsite") return "Onsite";
+  return undefined;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// "2025-04" -> "Apr 2025"; "2025" -> "2025"; "present" -> "Present".
+function formatMonth(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (/^(present|current|now)$/i.test(raw)) return "Present";
+  const month = /^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/.exec(raw);
+  if (month) {
+    const index = Number(month[2]) - 1;
+    return index >= 0 && index < 12 ? `${MONTHS[index]} ${month[1]}` : undefined;
+  }
+  return /^\d{4}$/.test(raw) ? raw : undefined;
+}
+
+/** Every template prints dates the same way: "Apr 2025 – Present", or one date alone. */
+export function formatDateRange(startDate: unknown, endDate: unknown): string | undefined {
+  const start = formatMonth(startDate);
+  const end = formatMonth(endDate);
+  if (start && end && start !== end) return `${start} – ${end}`;
+  return start ?? end;
 }
 
 function parseRecipient(value: unknown): CoverLetterRecipient | undefined {
@@ -354,11 +436,6 @@ function stringList(value: unknown, path: string): string[] | undefined {
     throw new Error(`${path} must contain no more than 40 short strings.`);
   }
   return value;
-}
-
-function parseSectionType(value: unknown): "standard" | "skills" | undefined {
-  if (value === "standard" || value === "skills") return value;
-  return undefined;
 }
 
 function candidateForTemplate(candidate: DocumentCandidate) {

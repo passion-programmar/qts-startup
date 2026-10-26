@@ -142,13 +142,32 @@
     return { name: text(source.name), detail: text(source.detail) };
   }
 
+  // The same date format as src/app/pdf/document-data.ts: "2025-04" -> "Apr 2025",
+  // "present" -> "Present", joined as "Apr 2025 – Present".
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function monthText(value) {
+    const raw = text(value);
+    if (/^(present|current|now)$/i.test(raw)) return "Present";
+    const match = /^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/.exec(raw);
+    if (match) return MONTHS[Number(match[2]) - 1] ? `${MONTHS[Number(match[2]) - 1]} ${match[1]}` : "";
+    return /^\d{4}$/.test(raw) ? raw : "";
+  }
+  function dateRange(startDate, endDate) {
+    const start = monthText(startDate);
+    const end = monthText(endDate);
+    return start && end && start !== end ? `${start} – ${end}` : start || end;
+  }
+
   function normaliseItem(item) {
     const source = object(item);
     const entries = list(source.bullets);
     return {
       heading: text(source.heading),
+      focus: list(source.focus).map(text).filter(Boolean).slice(0, 3),
       subheading: text(source.subheading),
-      dateRange: text(source.dateRange),
+      location: text(source.location),
+      workMode: text(source.workMode),
+      dateRange: text(source.dateRange) || dateRange(source.startDate, source.endDate),
       description: text(source.description),
       link: safeUrl(source.link),
       // Standard items show bullets as sentences; skills keep name + detail.
@@ -502,9 +521,83 @@
     return section;
   }
 
+  // entryLayout A-G (js/templates.js): the entry's parts arranged in lines. Every
+  // separator is real text, so the extracted text reads "Role | Focus | Company".
+  function entryLines(item, settings) {
+    const role = () => {
+      if (!item.heading) return [];
+      const heading = el("h3", "item-heading", item.heading);
+      if (settings.showFocus === "yes" && item.focus.length) {
+        return [heading, el("span", "item-focus", ` | ${item.focus.join(" | ")}`)];
+      }
+      return [heading];
+    };
+    const company = () => (item.subheading ? [el("span", "item-company", item.subheading)] : []);
+    const detail = (value) => el("span", "entry-detail", value);
+    const dates = (prefix = "", suffix = "") => (item.dateRange ? [el("span", "item-date", `${prefix}${item.dateRange}${suffix}`)] : []);
+    const joined = (parts, separator) => parts.filter(Boolean).join(separator);
+    const place = joined([item.location, item.workMode], " | ");
+
+    switch (settings.entryLayout) {
+      case "A": {
+        const where = joined([item.subheading, item.location], ", ");
+        const tail = where ? ` | ${where}${item.workMode ? ` (${item.workMode})` : ""}` : item.workMode ? ` | ${item.workMode}` : "";
+        return [[[...role(), ...(tail ? [detail(tail)] : [])], dates()]];
+      }
+      case "B": {
+        const second = [...company()];
+        const rest = joined([item.location, item.workMode, item.dateRange], " | ");
+        if (rest) second.push(detail(`${item.subheading ? " - " : ""}${rest}`));
+        return [[role(), []], [second, []]];
+      }
+      case "C": {
+        const where = item.location ? `${item.location}${item.workMode ? ` (${item.workMode})` : ""}` : item.workMode;
+        return [[role(), dates()], [company(), where ? [detail(where)] : []]];
+      }
+      case "D":
+        return [[company(), place ? [detail(place)] : []], [role(), dates()]];
+      case "E": {
+        const first = [...company()];
+        if (place) first.push(detail(`${item.subheading ? " – " : ""}${place}`));
+        return [[first, []], [role(), []], [dates(), []]];
+      }
+      case "F": {
+        const where = joined([item.subheading, item.location, item.workMode], " · ");
+        return [[[...role(), ...dates(" (", ")")], []], [where ? [detail(where)] : [], []]];
+      }
+      default: {
+        const where = joined([item.subheading, item.location, item.workMode], " · ");
+        return [[role(), []], [where ? [detail(where)] : [], []], [dates(), []]];
+      }
+    }
+  }
+
+  function renderEntryHeader(item, settings) {
+    const header = el("div", "item-header");
+    if (!item.heading && !item.subheading && !item.location && !item.dateRange) return null;
+    entryLines(item, settings).forEach(([main, aside]) => {
+      if (!main.length && !aside.length) return;
+      const line = el("div", "entry-line");
+      const start = el("span", "entry-main");
+      start.append(...main);
+      line.append(start);
+      if (aside.length) {
+        // A real space keeps the two parts apart in the extracted text.
+        const end = el("span", "entry-aside");
+        end.append(" ", ...aside);
+        line.append(end);
+      }
+      header.append(line);
+    });
+    return header;
+  }
+
   function renderItem(item, settings) {
     const node = el("div", "item");
-    if (item.heading || item.dateRange) {
+    if (settings.entryLayout) {
+      const header = renderEntryHeader(item, settings);
+      if (header) node.append(header);
+    } else if (item.heading || item.dateRange) {
       const header = el("div", "item-header");
       if (item.heading) header.append(el("h3", "item-heading", item.heading));
       if (item.heading && item.dateRange) header.append(" ");
@@ -514,7 +607,7 @@
       }
       node.append(header);
     }
-    if (item.subheading) node.append(el("p", "item-subheading", item.subheading));
+    if (item.subheading && !settings.entryLayout) node.append(el("p", "item-subheading", item.subheading));
     if (item.link) {
       const value = el("bdi");
       value.append(anchor(item.link, displayUrl(item.link)));
@@ -955,24 +1048,7 @@
     if (url.origin !== location.origin) throw new Error("The data file must be on the same site as this page.");
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Could not load ${source} (HTTP ${response.status}).`);
-    const data = await response.json();
-    if (source === DEFAULT_DATA_URL) {
-      return {
-        ...object(data),
-        theme: {
-          ...object(data.theme),
-          contentConsistency: "uniform",
-          contactStyle: "inline",
-          bulletStyle: "disc",
-          titleCase: "title",
-          datePosition: "inline",
-          skillsLayout: "rows",
-          skillDetail: "bracket",
-          dateSeparator: "–",
-        },
-      };
-    }
-    return data;
+    return response.json();
   }
 
   function showLoadError(error) {

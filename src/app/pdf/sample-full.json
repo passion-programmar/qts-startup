@@ -3,49 +3,65 @@
   "candidate": {
     "fullName": "Sample Candidate",
     "email": "sample.candidate@example.com",
-    "phone": "+00 0000 000 000",
-    "location": "City, Country",
+    "phone": "+40 700 000 000",
+    "location": "Bucharest, Romania",
     "linkedinUrl": "https://www.linkedin.com/in/sample-candidate",
-    "headline": "Operations & Project Coordinator",
+    "headline": "Senior DevOps Engineer",
     "links": [{ "label": "Portfolio", "url": "https://portfolio.example.com" }]
   },
   "resume": {
-    "targetRole": "Project Coordinator",
+    "targetRole": "Senior DevOps Engineer",
     "targetCompany": "Example Employer",
-    "summary": "Sample summary. Two to four sentences that connect the candidate's experience to the target role: years of experience and core strengths such as **project coordination** and **process improvement** first, then the kind of problems they solve, then the value they would bring to the team.",
+    "summary": "DevOps engineer with 8 years of experience building **cloud infrastructure on AWS and GCP**, automating delivery with **Kubernetes and Terraform**, and keeping production services fast and reliable. Known for cutting release times, lowering cloud costs and making on-call calmer for the whole team.",
     "sections": [
       {
         "id": "experience",
         "title": "Experience",
         "items": [
           {
-            "heading": "Project Coordinator",
-            "subheading": "Example Company Ltd. · City, Country",
-            "dateRange": "Jan 2022 – Present",
+            "heading": "Senior DevOps Engineer",
+            "focus": ["Kubernetes", "Terraform", "AWS"],
+            "subheading": "Northwind Cloud",
+            "location": "Bucharest, Romania",
+            "workMode": "Remote",
+            "startDate": "2022-03",
+            "endDate": "present",
             "bullets": [
-              "Sample bullet: start with an action verb, say what was done, and end with a measurable result, for example \"cut report turnaround from **[5] days to [2]**\".",
-              "Coordinated a **cross-functional team** of [n] people across [n] workstreams, keeping delivery on schedule and within budget.",
-              "Introduced a [process or tool] that improved [metric] by **[x%]**; replace with a verified achievement.",
-              "Keep each bullet to one or two lines; three to five bullets per role is usually enough."
+              "Moved 40 services from virtual machines to **Kubernetes on EKS**, cutting deployment time from 45 minutes to 6.",
+              "Wrote the **Terraform** modules every team now uses for networks, databases and queues, ending hand-made cloud changes.",
+              "Lowered the monthly AWS bill by **28%** by rightsizing nodes, adding spot capacity and removing idle resources.",
+              "Built release pipelines in **GitHub Actions** with automatic rollback, raising successful deploys to 99.4%.",
+              "Introduced service-level objectives and alerting in Prometheus and Grafana, halving pages outside working hours.",
+              "Mentored four engineers through their first on-call rotations and wrote the team's incident runbooks."
             ]
           },
           {
-            "heading": "Operations Assistant",
-            "subheading": "Example Organisation · City, Country",
-            "dateRange": "Mar 2019 – Dec 2021",
+            "heading": "DevOps Engineer",
+            "focus": ["Docker", "CI/CD", "GCP"],
+            "subheading": "Blue Harbor Analytics",
+            "location": "Cluj-Napoca, Romania",
+            "workMode": "Hybrid",
+            "startDate": "2019-06",
+            "endDate": "2022-02",
             "bullets": [
-              "Maintained [type of] records for [n] accounts with [x%] accuracy, supporting monthly reporting.",
-              "Streamlined the [name] workflow by documenting each step and removing duplicate approvals.",
-              "Trained [n] new team members on internal tools and procedures."
+              "Containerised the data platform with **Docker** and moved it to GKE, removing three days of manual setup per release.",
+              "Set up **GitLab CI** pipelines with tests, image scanning and staged rollouts for 25 repositories.",
+              "Automated database backups and restore drills, bringing recovery time for the main database under 20 minutes.",
+              "Replaced ad-hoc scripts with **Ansible** roles for 120 servers, keeping configuration consistent across environments."
             ]
           },
           {
-            "heading": "Customer Service Representative",
-            "subheading": "Example Retail Group · City, Country",
-            "dateRange": "Jun 2017 – Feb 2019",
+            "heading": "Systems Administrator",
+            "focus": ["Linux", "Networking"],
+            "subheading": "Danube Retail Group",
+            "location": "Bucharest, Romania",
+            "workMode": "Onsite",
+            "startDate": "2016-09",
+            "endDate": "2019-05",
             "bullets": [
-              "Resolved an average of [n] customer enquiries per day across phone, email and chat.",
-              "Proposed an FAQ update on [topic] that reduced repeat enquiries."
+              "Ran the Linux and VMware estate for 60 stores and the head office with 99.9% availability.",
+              "Introduced monitoring with Zabbix, catching disk and network faults before they reached the stores.",
+              "Scripted user and access management in Bash and Python, cutting new-starter setup from a day to an hour."
             ]
           }
         ]
@@ -55,13 +71,25 @@
         "title": "Projects",
         "items": [
           {
-            "heading": "Operations Dashboard (sample project)",
+            "heading": "Open-source Kubernetes cost reporter",
+            "focus": ["Go", "Kubernetes"],
             "subheading": "Personal project",
-            "dateRange": "2023",
-            "link": "https://portfolio.example.com/dashboard",
-            "description": "One sentence on what the project is and who it helps.",
+            "startDate": "2023-01",
+            "endDate": "2023-08",
+            "link": "https://portfolio.example.com/cost-reporter",
             "bullets": [
-              "Built with [tools]; describe your role and the measurable outcome, such as **[n] hours saved** per month."
+              "Built a small Go service that reports cost per namespace from cluster usage and cloud prices.",
+              "Used by three companies; reached 900 stars on GitHub."
+            ]
+          },
+          {
+            "heading": "Home-lab GitOps platform",
+            "focus": ["Argo CD", "Helm"],
+            "subheading": "Personal project",
+            "startDate": "2021-04",
+            "endDate": "2021-09",
+            "bullets": [
+              "Ran a self-hosted cluster managed entirely through Git with Argo CD and Helm charts, as a test bed for new tools."
             ]
           }
         ]
@@ -71,10 +99,12 @@
         "title": "Education",
         "items": [
           {
-            "heading": "Bachelor of Science in [Field of Study]",
-            "subheading": "Example University · City, Country",
-            "dateRange": "Sep 2013 – Jun 2017",
-            "bullets": ["Relevant coursework, thesis title or capstone project (optional)."]
+            "heading": "BSc in Computer Science",
+            "subheading": "Politehnica University of Bucharest",
+            "location": "Bucharest, Romania",
+            "startDate": "2012-10",
+            "endDate": "2016-07",
+            "bullets": ["Thesis: automated deployment of web applications on virtual machines."]
           }
         ]
       },
@@ -84,25 +114,28 @@
         "type": "skills",
         "items": [
           {
-            "heading": "Project management",
+            "heading": "Cloud",
             "bullets": [
-              { "name": "Planning", "detail": "Advanced" },
-              { "name": "Scheduling", "detail": "Advanced" },
-              "Risk tracking",
-              "Stakeholder updates"
+              { "name": "AWS", "detail": "6 years" },
+              { "name": "GCP", "detail": "3 years" },
+              "Azure basics"
             ]
           },
           {
-            "heading": "Tools",
-            "bullets": [
-              { "name": "Spreadsheets", "detail": "5 years" },
-              "Project tracking software",
-              "Presentation software"
-            ]
+            "heading": "Containers and orchestration",
+            "bullets": ["Kubernetes", "Docker", "Helm", "Argo CD"]
           },
           {
-            "heading": "Data",
-            "bullets": ["Reporting", "Data validation", "Basic dashboards"]
+            "heading": "Infrastructure as code",
+            "bullets": ["Terraform", "Ansible", "CloudFormation"]
+          },
+          {
+            "heading": "CI/CD and monitoring",
+            "bullets": ["GitHub Actions", "GitLab CI", "Prometheus", "Grafana"]
+          },
+          {
+            "heading": "Languages",
+            "bullets": ["Python", "Go", "Bash"]
           }
         ]
       },
@@ -110,32 +143,23 @@
         "id": "certifications",
         "title": "Certifications",
         "items": [
-          { "heading": "[Certification Name]", "subheading": "Issuing Organisation", "dateRange": "2023" },
-          { "heading": "[Certification Name]", "subheading": "Issuing Organisation", "dateRange": "2021" }
+          { "heading": "Certified Kubernetes Administrator (CKA)", "subheading": "The Linux Foundation", "startDate": "2023-05" },
+          { "heading": "AWS Certified Solutions Architect – Associate", "subheading": "Amazon Web Services", "startDate": "2021-11" }
         ]
       },
       {
-        "id": "languages",
-        "title": "Languages",
-        "type": "skills",
+        "id": "career_highlights",
+        "title": "Career Highlights",
         "items": [
           {
             "bullets": [
-              { "name": "Language A", "detail": "Native" },
-              { "name": "Language B", "detail": "Professional" },
-              { "name": "Language C", "detail": "Basic" }
+              "Cut deployment time from **45 minutes to 6** by moving 40 services to Kubernetes.",
+              "Saved **28% of the monthly AWS bill** through rightsizing and spot capacity.",
+              "Raised successful deploys to **99.4%** with automatic rollback in every pipeline.",
+              "Halved out-of-hours pages by introducing service-level objectives and better alerts.",
+              "Brought main database recovery time **under 20 minutes** with automated restore drills.",
+              "Mentored four engineers into confident on-call responders."
             ]
-          }
-        ]
-      },
-      {
-        "id": "volunteering",
-        "title": "Volunteer Experience",
-        "items": [
-          {
-            "heading": "Volunteer Coordinator",
-            "subheading": "Example Community Group · City, Country",
-            "bullets": ["Organised [n] community events with teams of up to [n] volunteers."]
           }
         ]
       }
@@ -143,21 +167,18 @@
   },
   "coverLetter": {
     "recipient": {
-      "name": "[Recipient Name]",
-      "title": "Hiring Manager",
+      "name": "Hiring Manager",
       "company": "Example Employer",
-      "address": ["[Street Address]", "City, Country"]
+      "address": ["Example Street 10", "Bucharest, Romania"]
     },
     "paragraphs": [
-      "Sample opening paragraph. Name the role, **Project Coordinator**, and say in one or two sentences why this company and this role interest you.",
-      "Sample middle paragraph. Connect two or three achievements from the resume to the job description, for example how you **coordinated a team of [n] people** or **cut turnaround time by [x%]**. Keep it specific and measurable, and avoid repeating the resume word for word.",
-      "Sample closing paragraph. Restate your interest, mention your availability for an interview, and thank the reader for their time. The whole letter should fit on one page."
+      "I am applying for the **Senior DevOps Engineer** role at Example Employer. Your focus on reliable, well-automated cloud platforms matches the work I enjoy most and have done for the last eight years.",
+      "At Northwind Cloud I moved 40 services to **Kubernetes**, cut deployment time from 45 minutes to 6 and lowered the AWS bill by **28%**. Before that I containerised a data platform and built CI pipelines for 25 repositories. I would bring the same habits to your team: infrastructure as code, clear alerts and calm on-call.",
+      "Thank you for your time. I would welcome the chance to discuss how I can help your platform team, and I am available for an interview at your convenience."
     ]
   },
   "theme": {
     "template": "qts-standard",
-    "sectionOrder": ["summary", "experience", "skills", "projects", "education", "certifications", "languages", "volunteering"],
-    "hiddenSections": [],
     "density": "auto",
     "paper": "A4",
     "language": "en",

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
+import { templateSectionOrders } from "@/app/pdf/resume-sections";
 import sampleFull from "@/app/pdf/sample-full.json";
+import { pdfTemplateValues } from "@/server/pdf/pdf-templates";
 
 const validPackage = {
   resume: {
@@ -17,65 +19,118 @@ const validPackage = {
   },
 };
 
+const generatedPackage = {
+  ...validPackage,
+  resume: {
+    ...validPackage.resume,
+    summary: "Engineer with five years of experience.",
+    sections: [
+      { id: "experience", title: "Professional Experience", items: [{ heading: "Engineer", bullets: ["Built systems"] }] },
+      { id: "skills", title: "Skills", items: [{ heading: "Cloud", bullets: ["AWS"] }] },
+      { id: "education", title: "Education", items: [{ heading: "BSc" }] },
+      { id: "projects", title: "Projects", items: [] },
+      { id: "career_highlights", title: "Career Highlights", items: [{ bullets: ["Cut costs by 20%."] }] },
+      { title: "Languages", items: [{ bullets: ["English"] }] },
+      { title: "Volunteer Experience", items: [{ heading: "Helper" }] },
+    ],
+  },
+};
+
 test("PDF document data accepts one resume and cover-letter JSON object", () => {
   const parsed = parsePdfPackage(JSON.stringify(validPackage));
   assert.equal(parsed.resume.targetRole, "Engineer");
+  assert.equal(parsed.resume.sections[0].id, "experience");
   assert.equal(parsed.coverLetter.targetCompany, "Example");
 });
 
-test("validated QTS data adapts to the HTML template contract without losing document fields", () => {
-  const adapted = toResumeTemplateData(
-    parsePdfPackage(JSON.stringify(validPackage)),
-    "qts-standard",
+test("sections get their fixed ids; languages, volunteering and empty sections are dropped", () => {
+  const parsed = parsePdfPackage(JSON.stringify(generatedPackage), { requireCoreSections: true });
+  assert.deepEqual(
+    parsed.resume.sections.map((section) => section.id),
+    ["experience", "skills", "education", "career_highlights"],
   );
-  assert.equal(adapted.candidate.fullName, "Test Candidate");
-  assert.equal(adapted.resume.sections[0].items[0].bullets[0], "Built systems");
-  assert.equal(adapted.coverLetter.paragraphs[0], "I am applying for this role.");
-  assert.equal(adapted.coverLetter.candidate.email, "test@example.com");
-  assert.deepEqual(adapted.theme, {
-    template: "qts-standard",
-    contentConsistency: "uniform",
-    contactStyle: "inline",
-    bulletStyle: "disc",
-    titleCase: "title",
-    datePosition: "inline",
-    skillsLayout: "rows",
-    skillDetail: "bracket",
-    dateSeparator: "–",
-  });
+  assert.equal(parsed.resume.sections[1].type, "skills");
+  assert.equal(parsed.resume.sections[3].type, "standard");
 });
 
-test("the supplied full template sample parses and retains its content and theme", () => {
-  const parsed = parsePdfPackage(JSON.stringify(sampleFull));
-  assert.equal(parsed.resume.sections.length, 7);
+test("generated JSON must have the summary and the skills, experience and education sections", () => {
+  const withoutEducation = {
+    ...generatedPackage,
+    resume: {
+      ...generatedPackage.resume,
+      sections: generatedPackage.resume.sections.filter((section) => section.id !== "education"),
+    },
+  };
+  assert.throws(
+    () => parsePdfPackage(JSON.stringify(withoutEducation), { requireCoreSections: true }),
+    /must include education/,
+  );
+  const withoutSummary = { ...generatedPackage, resume: { ...generatedPackage.resume, summary: "" } };
+  assert.throws(
+    () => parsePdfPackage(JSON.stringify(withoutSummary), { requireCoreSections: true }),
+    /resume.summary is required/,
+  );
+  // Stored packages still print without the generation-time requirement.
+  assert.doesNotThrow(() => parsePdfPackage(JSON.stringify(withoutEducation)));
+});
+
+test("each template shows its own sections in its own order, with its own layout", () => {
+  const parsed = parsePdfPackage(JSON.stringify(generatedPackage));
+  const technical = toResumeTemplateData(parsed, "technical");
+  // Technical shows Projects (empty here, so hidden) and never Career Highlights.
+  assert.deepEqual(
+    technical.resume.sections.map((section) => section.id),
+    ["skills", "experience", "education"],
+  );
+  assert.deepEqual(technical.theme.sectionOrder, ["summary", "skills", "experience", "education"]);
+  const executive = toResumeTemplateData(parsed, "executive");
+  assert.deepEqual(
+    executive.resume.sections.map((section) => section.id),
+    ["career_highlights", "experience", "skills", "education"],
+  );
+  // Layout options are no longer forced; the template's own design applies.
+  assert.equal("skillsLayout" in executive.theme, false);
+  assert.equal("bulletStyle" in executive.theme, false);
+});
+
+test("every template has a distinct order with the core sections and one of projects or highlights", () => {
+  const orders = pdfTemplateValues.map((template) => templateSectionOrders[template]);
+  assert.equal(new Set(orders.map((order) => order.join(","))).size, pdfTemplateValues.length);
+  for (const order of orders) {
+    for (const required of ["skills", "experience", "education", "certifications"] as const) {
+      assert.ok(order.includes(required));
+    }
+    assert.equal(Number(order.includes("projects")) + Number(order.includes("career_highlights")), 1);
+  }
+});
+
+test("the supplied full template sample parses and retains its content", () => {
+  const parsed = parsePdfPackage(JSON.stringify(sampleFull), { requireCoreSections: true });
+  assert.deepEqual(
+    parsed.resume.sections.map((section) => section.id),
+    ["experience", "projects", "education", "skills", "certifications", "career_highlights"],
+  );
   assert.deepEqual(parsed.resume.sections[3].items[0].bullets?.[0], {
-    name: "Planning",
-    detail: "Advanced",
+    name: "AWS",
+    detail: "6 years",
   });
-  assert.deepEqual(parsed.coverLetter.recipient?.address, ["[Street Address]", "City, Country"]);
+  // Dates come from startDate/endDate in one format; focus and work mode are kept.
+  const job = parsed.resume.sections[0].items[0];
+  assert.equal(job.dateRange, "Mar 2022 – Present");
+  assert.deepEqual(job.focus, ["Kubernetes", "Terraform", "AWS"]);
+  assert.equal(job.workMode, "Remote");
+  assert.equal(parsed.resume.sections[4].items[0].dateRange, "May 2023");
+  assert.deepEqual(parsed.coverLetter.recipient?.address, ["Example Street 10", "Bucharest, Romania"]);
   assert.equal(parsed.coverLetter.bodyParagraphs.length, 3);
-  assert.deepEqual(parsed.theme?.sectionOrder?.slice(0, 3), [
-    "summary",
-    "experience",
-    "skills",
-  ]);
 
   const adapted = toResumeTemplateData(parsed, "classic");
   assert.equal(adapted.theme.template, "classic");
   assert.deepEqual(adapted.candidate.links, []);
   assert.deepEqual(
     adapted.resume.sections.map((section) => section.title),
-    ["Experience", "Projects", "Education", "Skills", "Certifications"],
+    ["Career Highlights", "Experience", "Education", "Skills", "Certifications"],
   );
   assert.equal(adapted.resume.sections[3].type, "skills");
-  assert.deepEqual(adapted.resume.sections[3].items[0].bullets[0], {
-    name: "Planning",
-    detail: "Advanced",
-  });
-  assert.equal(
-    adapted.resume.sections.find((section) => section.id === "projects")?.items[0].link,
-    undefined,
-  );
   assert.equal(adapted.coverLetter.recipient?.company, "Example Employer");
 });
 
@@ -128,11 +183,12 @@ test("the template adapter removes links from project sections but preserves oth
 
   const adapted = toResumeTemplateData(
     parsePdfPackage(JSON.stringify(packageWithProjectLink)),
-    "classic",
+    "qts-standard",
   );
+  const section = (id: string) => adapted.resume.sections.find((entry) => entry.id === id);
 
-  assert.equal(adapted.resume.sections[0].items[0].link, undefined);
-  assert.equal(adapted.resume.sections[1].items[0].link, "https://example.com/experience");
+  assert.equal(section("projects")?.items[0].link, undefined);
+  assert.equal(section("experience")?.items[0].link, "https://example.com/experience");
 });
 
 test("PDF document data rejects missing document sections", () => {

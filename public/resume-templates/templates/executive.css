@@ -1,30 +1,13 @@
-/* Executive: Georgia headings over Arial text, burgundy accent, a header
-   framed by a heavy top rule and a fine bottom rule, uppercase name.
-   Layout defaults: labelled contacts, short accent bars under titles,
-   divided entries, quoted summary, skills grid with dashed details.
-   Fonts: Georgia + Arial. Best for: senior and leadership roles. */
-
+/* QTS Template 8 (executive): design tokens. Layout options are in js/templates.js. */
 :root {
-  --font-heading: var(--font-georgia);
-  --color-accent: #6b1d2a;
-  --color-keyword: var(--color-accent);
-  --text-name: 23pt;
-  --text-section: 11pt;
-  --date-separator: "\00B7";
-  --space-header: 14pt;
-}
-
-.resume-header {
-  padding-block: 9pt;
-  border-top: 2.5pt solid var(--color-accent);
-  border-bottom: 0.75pt solid var(--color-rule);
-}
-
-.candidate-name {
-  text-transform: uppercase;
-}
-
-.candidate-headline {
-  font-family: var(--font-heading);
-  font-style: italic;
+  --font-body: var(--font-georgia);
+  --font-heading: var(--font-arial);
+  --color-accent: #4f5b1a;
+  --text-name: 24pt;
+  --text-headline: 12.5pt;
+  --text-contact: 11pt;
+  --text-section: 13pt;
+  --text-item: 12pt;
+  --text-body: 12pt;
+  --text-meta: 11pt;
 }

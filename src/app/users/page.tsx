@@ -360,6 +360,7 @@ export default async function UsersPage() {
                               companyName: entry.companyName,
                               jobTitle: entry.jobTitle,
                               location: entry.location,
+                              workMode: entry.workMode,
                               startDate: entry.startDate?.slice(0, 7) ?? null,
                               endDate: entry.endDate?.slice(0, 7) ?? null,
                               isCurrent: entry.isCurrent,

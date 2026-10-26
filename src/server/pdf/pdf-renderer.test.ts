@@ -56,16 +56,10 @@ test("every one-column template renders a valid resume and cover letter PDF", as
   }
 });
 
-test("template selector contains the supplied template names and excludes retired IDs", () => {
+test("templates are numbered QTS Template 1 to 24 in rotation order and exclude retired IDs", () => {
   assert.deepEqual(
     pdfTemplateValues.map((template) => pdfTemplateLabels[template]),
-    [
-      "QTS Standard", "Classic", "Harvard", "Executive", "Minimal", "Swiss",
-      "Corporate", "Technical", "Timeline", "Banded", "Elegant", "Bold",
-      "Creative", "Compact", "Academic", "Nordic", "Slate", "Ledger",
-      "Startup", "Professional", "Centered", "High Contrast", "Modern Serif",
-      "Graphite",
-    ],
+    Array.from({ length: 24 }, (_, index) => `QTS Template ${index + 1}`),
   );
   assert.equal(isPdfTemplate("qts-standard"), true);
   assert.equal(isPdfTemplate("flowcv"), false);

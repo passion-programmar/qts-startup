@@ -1,24 +1,13 @@
-/* Startup: a modern sans with a purple accent and the headline as a tag.
-   Layout defaults: pill-shaped section titles, boxed summary, tinted skill
-   tags with colon details.
-   Fonts: Arial. Best for: startups, growth, tech. */
-
+/* QTS Template 1 (startup): design tokens. Layout options are in js/templates.js. */
 :root {
-  --color-accent: #6d28d9;
-  --color-keyword: var(--color-accent);
-  --color-marker: var(--color-accent);
-  --text-name: 24pt;
-  --subheading-style: normal;
-  --date-separator: "\00B7";
-  --space-title: 6pt;
-}
-
-.candidate-headline {
-  display: inline-block;
-  margin-top: 5pt;
-  padding: 1.5pt 9pt;
-  border-radius: 9pt;
-  background: var(--color-tint);
-  font-weight: 700;
-  color: var(--color-accent);
+  --font-body: var(--font-arial);
+  --font-heading: var(--font-arial);
+  --color-accent: #1f3a5f;
+  --text-name: 25pt;
+  --text-headline: 12pt;
+  --text-contact: 10.5pt;
+  --text-section: 12.5pt;
+  --text-item: 11.5pt;
+  --text-body: 11.5pt;
+  --text-meta: 10.5pt;
 }

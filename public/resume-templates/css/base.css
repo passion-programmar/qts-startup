@@ -16,8 +16,9 @@
      Each option below works with every template.
 
    ATS rules every template follows (verified by extracting PDF text):
-   - One column in reading order. Dates stay inline with their entry or on the
-     next line; there is no right-aligned date column, sidebar or table.
+   - One column in reading order. An entry's dates or location may sit at the
+     end of the same line (pushed right on that line, never a separate column),
+     so text is extracted in reading order; there is no sidebar or table.
    - No letter-spacing anywhere: extractors split tracked capitals into
      single letters ("E D U C A T I O N").
    - No ligatures and no automatic hyphenation.
@@ -77,14 +78,14 @@
   --font-scale: 1;
 
   /* Type scale (every size is multiplied by --font-scale) */
-  --text-name: 22pt;
-  --text-headline: 11.5pt;
-  --text-contact: 9.5pt;
-  --text-section: 10.5pt;
-  --text-item: 10.5pt;
-  --text-body: 10.5pt;
-  --text-meta: 9.5pt;
-  --leading-body: 1.35;
+  --text-name: 24pt;
+  --text-headline: 12pt;
+  --text-contact: 10.5pt;
+  --text-section: 12.5pt;
+  --text-item: 11.5pt;
+  --text-body: 11.5pt;
+  --text-meta: 10.5pt;
+  --leading-body: 1.32;
   --leading-tight: 1.2;
   --leading-letter: 1.45;
   --weight-name: 700;
@@ -99,7 +100,8 @@
   --color-rule: #b4bec8;
   --color-name: var(--color-accent);
   --color-section: var(--color-accent);
-  --color-marker: var(--color-muted);
+  /* Bullet markers and **bold** words are always the body text colour. */
+  --color-marker: var(--color-ink);
   --color-keyword: var(--color-ink);
   --color-tint: color-mix(in srgb, var(--color-accent) 9%, #ffffff);
 
@@ -127,10 +129,10 @@
   --pill-color: var(--color-ink);
 
   /* Vertical rhythm */
-  --space-header: 12pt;
-  --space-section: 12pt;
-  --space-title: 5pt;
-  --space-item: 7pt;
+  --space-header: 10pt;
+  --space-section: 10pt;
+  --space-title: 4pt;
+  --space-item: 6pt;
   --space-bullet: 1.5pt;
   --indent-bullet: 10pt;
 }
@@ -287,6 +289,32 @@ a {
   font-weight: 700;
 }
 
+/* headerStyle: how the name and contact block is set off from the page. */
+.doc[data-header-style="plain-rule"] .resume-header {
+  padding-bottom: 8pt;
+  border-bottom: 1pt solid var(--color-rule);
+}
+
+.doc[data-header-style="accent-top"] .resume-header {
+  padding-top: 8pt;
+  border-top: 3pt solid var(--color-accent);
+}
+
+.doc[data-header-style="band"] .resume-header {
+  padding: 10pt 12pt;
+  background: var(--color-tint);
+}
+
+.doc[data-header-style="side-bar"] .resume-header {
+  padding-inline-start: 12pt;
+  border-inline-start: 4pt solid var(--color-accent);
+}
+
+.doc[data-header-style="centered-rules"] .resume-header {
+  padding-block: 8pt;
+  border-block: 0.75pt solid var(--color-accent);
+}
+
 
 /* 5. Sections and items ------------------------------------------------------ */
 
@@ -349,7 +377,7 @@ a {
 
 /* datePosition: inline = "Role | Jan 2022 – Present", below = own line,
    parentheses = "Role (Jan 2022 – Present)" (brackets are real text). */
-.doc[data-date-position="inline"] .item-heading + .item-date::before {
+.doc[data-date-position="inline"]:not([data-entry-layout]) .item-heading + .item-date::before {
   content: var(--date-separator);
   margin-inline: 3pt 6pt;
   font-style: normal;
@@ -357,7 +385,7 @@ a {
   color: var(--color-rule);
 }
 
-.doc[data-date-position="below"] .item-date {
+.doc[data-date-position="below"]:not([data-entry-layout]) .item-date {
   display: block;
   margin-top: 1pt;
 }
@@ -366,6 +394,75 @@ a {
   margin-top: 1pt;
   font-style: var(--subheading-style);
   color: var(--subheading-color);
+}
+
+/* entryLayout A-G: an entry's role, focus skills, company, location, work mode
+   and dates, arranged in one to three lines (render.js writes the separators
+   as real text). A line may push its last part (dates or location) to the end
+   of the same line; the text still reads in order. */
+.entry-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  column-gap: 12pt;
+}
+
+.entry-line + .entry-line {
+  margin-top: 1.5pt;
+}
+
+.entry-aside {
+  margin-inline-start: auto;
+  text-align: end;
+}
+
+.entry-detail {
+  font-family: var(--font-meta);
+  font-size: calc(var(--text-meta) * var(--font-scale));
+  color: var(--color-muted);
+}
+
+.item-focus {
+  font-family: var(--font-item);
+  font-size: calc(var(--text-item) * var(--font-scale));
+  font-weight: var(--weight-item);
+}
+
+.item-company {
+  color: var(--color-ink);
+}
+
+/* The entry's dates use .item-date; on the role line of layout A they are bold. */
+.doc[data-entry-layout] .item-date {
+  display: inline;
+}
+
+.doc[data-entry-layout="A"] .entry-line:first-child .item-date {
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.doc[data-entry-layout="B"] .item-company {
+  text-transform: uppercase;
+}
+
+.doc:is([data-entry-layout="C"], [data-entry-layout="D"]) .item-company {
+  font-weight: 700;
+}
+
+.doc[data-entry-layout="E"] .item-company {
+  font-family: var(--font-item);
+  font-size: calc((var(--text-item) + 1pt) * var(--font-scale));
+  font-weight: 700;
+}
+
+.doc[data-entry-layout="E"] .entry-line:first-child .entry-detail {
+  font-style: italic;
+}
+
+.doc:is([data-entry-layout="F"], [data-entry-layout="G"]) .entry-line:nth-child(2) {
+  font-style: var(--subheading-style);
 }
 
 .item-link {
@@ -671,13 +768,20 @@ a {
   border-inline-start: var(--item-accent);
 }
 
-/* timeline: a line down the start edge with a marker per entry. Padding, not
-   margin, between entries keeps the line unbroken. */
+/* timeline: a line down the start edge with a marker per entry. Both are
+   backgrounds, not positioned boxes: Chromium writes positioned boxes into the
+   PDF after the rest of the page, so their text would reach an ATS out of
+   order. Padding, not margin, between entries keeps the line unbroken. */
 .doc[data-item-style="timeline"] .item {
-  position: relative;
-  padding-inline-start: 13pt;
+  padding-inline-start: 15pt;
   padding-bottom: var(--space-item);
-  border-inline-start: 1.25pt solid var(--color-rule);
+  background:
+    radial-gradient(circle at 4.5pt 7pt, #ffffff 2.2pt, var(--color-accent) 2.4pt, var(--color-accent) 3.8pt, transparent 4pt) no-repeat,
+    linear-gradient(var(--color-rule), var(--color-rule)) 3.9pt 0 / 1.25pt 100% no-repeat;
+}
+
+.doc[data-item-style="timeline"] .item:dir(rtl) {
+  background-position: calc(100% - 0.5pt) 0, calc(100% - 3.9pt) 0;
 }
 
 .doc[data-item-style="timeline"] .item + .item {
@@ -687,25 +791,6 @@ a {
 /* The line ends with a section's last entry, so a page can end right there. */
 .doc[data-item-style="timeline"] .item:last-child {
   padding-bottom: 0;
-}
-
-.doc[data-item-style="timeline"] .item::before {
-  content: "";
-  position: absolute;
-  top: 2.5pt;
-  inset-inline-start: -4.6pt;
-  width: 8pt;
-  height: 8pt;
-  border: 1.5pt solid var(--color-accent);
-  border-radius: 50%;
-  background: #ffffff;
-}
-
-/* Right to left, the marker would overhang the page area on the right, which
-   Chromium prints by shrinking the whole page; inset the entries by the
-   marker's offset instead. */
-.doc[data-item-style="timeline"] .item:dir(rtl) {
-  margin-inline-start: 4.6pt;
 }
 
 .doc[data-summary-style="boxed"] .summary {
@@ -726,6 +811,7 @@ a {
 
 .resume-header,
 .section--summary,
+.section-title,
 .item-header,
 .item-bullets li,
 .doc:not([data-skills-layout="compact"]) .skill-group,

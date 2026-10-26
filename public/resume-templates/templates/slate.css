@@ -1,26 +1,13 @@
-/* Slate: Tahoma with a thick slate accent bar beside the header.
-   Layout defaults: labelled contacts, uppercase titles over dotted rules,
-   divided entries, skills grid with bracketed details.
-   Fonts: Tahoma (Verdana fallback). Best for: engineering, construction, public sector. */
-
+/* QTS Template 18 (slate): design tokens. Layout options are in js/templates.js. */
 :root {
-  --font-body: var(--font-tahoma);
-  --color-accent: #334155;
-  --title-rule: 1pt dotted var(--color-accent);
-  --text-contact: 9pt;
-  --text-section: 10.5pt;
-  --text-item: 10pt;
-  --text-body: 10pt;
-  --text-meta: 9pt;
-}
-
-.resume-header {
-  padding-block: 2pt;
-  padding-inline-start: 11pt;
-  border-inline-start: 5pt solid var(--color-accent);
-}
-
-.doc[data-header-align="center"] .resume-header {
-  padding-inline: 11pt;
-  border-inline-end: 5pt solid var(--color-accent);
+  --font-body: var(--font-trebuchet);
+  --font-heading: var(--font-arial-black);
+  --color-accent: #0b6e4f;
+  --text-name: 24pt;
+  --text-headline: 12pt;
+  --text-contact: 10.5pt;
+  --text-section: 12.5pt;
+  --text-item: 11.5pt;
+  --text-body: 11.5pt;
+  --text-meta: 10.5pt;
 }

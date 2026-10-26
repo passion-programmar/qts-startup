@@ -1,0 +1,2 @@
+ALTER TABLE "experiences" ADD COLUMN "work_mode" text;--> statement-breakpoint
+ALTER TABLE "experiences" ADD CONSTRAINT "experiences_work_mode_check" CHECK ("experiences"."work_mode" is null or "experiences"."work_mode" in ('remote', 'hybrid', 'onsite'));

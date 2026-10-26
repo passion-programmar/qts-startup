@@ -1,25 +1,13 @@
-/* Nordic: light and airy with a regular-weight name, soft blue-grey accent and
-   pale hairlines.
-   Layout defaults: hairline above each section, regular-weight title-case
-   titles, em-dash dates, dash bullets, skills grid with dashed details.
-   Fonts: Arial. Best for: UX, product, sustainability. */
-
+/* QTS Template 15 (nordic): design tokens. Layout options are in js/templates.js. */
 :root {
-  --color-accent: #4f6d8a;
-  --color-keyword: var(--color-accent);
-  --color-name: var(--color-ink);
-  --color-muted: #5a6470;
-  --color-rule: #d3d9df;
-  --topline: 0.5pt solid var(--color-rule);
-  --text-name: 24pt;
-  --weight-name: 400;
-  --text-section: 12pt;
-  --weight-section: 400;
-  --subheading-style: normal;
-  --date-separator: "\2014";
-  --space-section: 13pt;
-}
-
-.candidate-headline {
-  color: var(--color-accent);
+  --font-body: var(--font-verdana);
+  --font-heading: var(--font-verdana);
+  --color-accent: #34495e;
+  --text-name: 25pt;
+  --text-headline: 12pt;
+  --text-contact: 10.5pt;
+  --text-section: 12.5pt;
+  --text-item: 11.5pt;
+  --text-body: 11.5pt;
+  --text-meta: 10.5pt;
 }

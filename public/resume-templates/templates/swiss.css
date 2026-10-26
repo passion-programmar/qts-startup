@@ -1,28 +1,13 @@
-/* Swiss: an oversized name, strong black type and a bold red headline.
-   Layout defaults: a red rule opening each section, slash dates, a
-   four-column skills grid with colon details.
-   Fonts: Arial. Best for: marketing, product, communications. */
-
+/* QTS Template 17 (swiss): design tokens. Layout options are in js/templates.js. */
 :root {
-  --color-accent: #c8102e;
-  --color-keyword: var(--color-accent);
-  --color-name: var(--color-ink);
-  --color-section: var(--color-ink);
-  --text-name: 30pt;
+  --font-body: var(--font-verdana);
+  --font-heading: var(--font-verdana);
+  --color-accent: #23408e;
+  --text-name: 24pt;
+  --text-headline: 12pt;
+  --text-contact: 10.5pt;
   --text-section: 12.5pt;
-  --subheading-style: normal;
-  --date-separator: "/";
-  --topline: 2pt solid var(--color-accent);
-  --skill-columns: 4;
-  --space-header: 14pt;
-}
-
-.candidate-name {
-  line-height: 1.05;
-}
-
-.candidate-headline {
-  margin-top: 4pt;
-  font-weight: 700;
-  color: var(--color-accent);
+  --text-item: 11.5pt;
+  --text-body: 11.5pt;
+  --text-meta: 10.5pt;
 }

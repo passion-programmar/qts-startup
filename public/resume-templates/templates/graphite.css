@@ -1,21 +1,13 @@
-/* Graphite: a dark grey palette with a bold uppercase headline.
-   Layout defaults: uppercase titles underlined beneath the words, slash
-   dates, chevron bullets, grey skill tags with dashed details,
-   modified-block letter.
-   Fonts: Arial. Best for: engineering, architecture, analytics. */
-
+/* QTS Template 10 (graphite): design tokens. Layout options are in js/templates.js. */
 :root {
-  --color-accent: #374151;
-  --color-name: #111827;
-  --title-accent: 2pt;
+  --font-body: var(--font-georgia);
+  --font-heading: var(--font-arial);
+  --color-accent: #2e3a87;
   --text-name: 24pt;
-  --text-headline: 10.5pt;
-  --date-separator: "/";
-}
-
-.candidate-headline {
-  margin-top: 3pt;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--color-accent);
+  --text-headline: 12.5pt;
+  --text-contact: 11pt;
+  --text-section: 13pt;
+  --text-item: 12pt;
+  --text-body: 12pt;
+  --text-meta: 11pt;
 }

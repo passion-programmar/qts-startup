@@ -428,6 +428,13 @@
       "when": 1792951721739,
       "tag": "0060_manager_prompts_default_category",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1792988212906,
+      "tag": "0061_experience_work_mode",
+      "breakpoints": true
     }
   ]
 }

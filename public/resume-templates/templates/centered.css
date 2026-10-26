@@ -1,18 +1,13 @@
-/* Centered: symmetrical, teal-accented sans with centred section titles.
-   Layout defaults: centred header, ruled uppercase titles, compact skills
-   with bracketed details.
-   Fonts: Arial. Best for: general professional use. */
-
+/* QTS Template 2 (centered): design tokens. Layout options are in js/templates.js. */
 :root {
-  --color-accent: #155e75;
-  --color-keyword: var(--color-accent);
-  --title-align: center;
-  --title-margin-inline: auto;
-  --text-name: 24pt;
-  --date-separator: "\00B7";
-}
-
-.resume-header {
-  padding-bottom: 9pt;
-  border-bottom: 0.75pt solid var(--color-rule);
+  --font-body: var(--font-georgia);
+  --font-heading: var(--font-arial);
+  --color-accent: #7a1f2b;
+  --text-name: 25pt;
+  --text-headline: 12.5pt;
+  --text-contact: 11pt;
+  --text-section: 13pt;
+  --text-item: 12pt;
+  --text-body: 12pt;
+  --text-meta: 11pt;
 }

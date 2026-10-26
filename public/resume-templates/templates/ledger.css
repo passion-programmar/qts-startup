@@ -1,20 +1,13 @@
-/* Ledger: Georgia headings over Arial text with a forest-green accent, like a
-   well-kept ledger.
-   Layout defaults: title-case titles over green rules, hairlines between
-   entries, skill rows with dashed details.
-   Fonts: Georgia + Arial. Best for: accounting, audit, finance. */
-
+/* QTS Template 4 (ledger): design tokens. Layout options are in js/templates.js. */
 :root {
-  --font-heading: var(--font-georgia);
-  --font-item: var(--font-georgia);
-  --color-accent: #166534;
-  --color-keyword: var(--color-accent);
-  --title-rule: 1pt solid var(--color-accent);
-  --text-section: 12pt;
-  --date-separator: "\00B7";
-}
-
-.resume-header {
-  padding-bottom: 8pt;
-  border-bottom: 1.5pt solid var(--color-accent);
+  --font-body: var(--font-times);
+  --font-heading: var(--font-times);
+  --color-accent: #0f5e63;
+  --text-name: 24pt;
+  --text-headline: 12.5pt;
+  --text-contact: 11pt;
+  --text-section: 13pt;
+  --text-item: 12pt;
+  --text-body: 12pt;
+  --text-meta: 11pt;
 }

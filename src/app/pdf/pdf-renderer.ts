@@ -4,6 +4,7 @@ import type {
   PdfPackage,
   ResumeDocument,
 } from "@/app/pdf/document-data";
+import { orderResumeSections } from "@/app/pdf/resume-sections";
 import {
   pdfTemplateDesigns,
   type PdfTemplate,
@@ -46,8 +47,13 @@ export async function renderPdfPackage(
   data: PdfPackage,
   template: PdfTemplate,
 ): Promise<{ resume: Uint8Array; coverLetter: Uint8Array }> {
+  // The same sections, in the same order, as the HTML template would print.
+  const resumeForTemplate = {
+    ...data.resume,
+    sections: orderResumeSections(data.resume.sections, template),
+  };
   const [resume, coverLetter] = await Promise.all([
-    renderResumePdf(data.resume, template),
+    renderResumePdf(resumeForTemplate, template),
     renderCoverLetterPdf(data.coverLetter, template),
   ]);
   return { resume, coverLetter };
@@ -82,7 +88,7 @@ async function renderResumePdf(
     pdf.paragraph(document.summary);
   }
   for (const section of document.sections) {
-    const skillsSection = /^(skills|technical skills|core skills|core technical skills|languages)$/i.test(section.title);
+    const skillsSection = section.type === "skills";
     pdf.section(
       section.title,
       skillsSection ? pdf.skillsHeight(section.items) : 42,
@@ -93,9 +99,9 @@ async function renderResumePdf(
     }
     section.items.forEach((item, index) => {
       pdf.entry(
-        item.heading ?? "",
+        [item.heading, ...(item.focus ?? [])].filter(Boolean).join(" | "),
         item.dateRange,
-        item.subheading,
+        [item.subheading, item.location, item.workMode].filter(Boolean).join(" · ") || undefined,
         (item.bullets ?? []).map(pdfBulletText),
         index < section.items.length - 1,
       );

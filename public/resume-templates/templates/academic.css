@@ -1,18 +1,13 @@
-/* Academic: CV style in Cambria with a dark blue headline and italic dates.
-   Layout defaults: centred header, titles between two blue rules, dates
-   below titles, skill rows with bracketed details, modified-block letter.
-   Fonts: Cambria (Caladea on Linux). Best for: research, teaching, publications. */
-
+/* QTS Template 16 (academic): design tokens. Layout options are in js/templates.js. */
 :root {
   --font-body: var(--font-cambria);
-  --color-accent: #1e3a8a;
-  --color-name: var(--color-ink);
-  --title-rule: 0.75pt solid var(--color-accent);
-  --text-name: 21pt;
-  --text-section: 10.5pt;
-  --date-style: italic;
-}
-
-.candidate-headline {
-  color: var(--color-accent);
+  --font-heading: var(--font-cambria);
+  --color-accent: #800020;
+  --text-name: 25pt;
+  --text-headline: 12.5pt;
+  --text-contact: 11pt;
+  --text-section: 13pt;
+  --text-item: 12pt;
+  --text-body: 12pt;
+  --text-meta: 11pt;
 }

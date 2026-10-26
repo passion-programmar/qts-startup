@@ -1,31 +1,13 @@
-/* Creative: friendly Trebuchet, a raspberry accent and a short accent bar
-   under the name.
-   Layout defaults: square markers before titles, boxed summary, tinted
-   skill tags with bracketed details.
-   Fonts: Trebuchet MS (Arial fallback). Best for: creative and customer-facing roles. */
-
+/* QTS Template 23 (creative): design tokens. Layout options are in js/templates.js. */
 :root {
-  --font-body: var(--font-trebuchet);
-  --color-accent: #be185d;
-  --color-keyword: var(--color-accent);
-  --color-marker: var(--color-accent);
+  --font-body: var(--font-arial);
+  --font-heading: var(--font-arial-black);
+  --color-accent: #8b4513;
   --text-name: 24pt;
-  --text-section: 12pt;
-  --text-body: 10pt;
-  --subheading-style: normal;
-  --date-separator: "\00B7";
-}
-
-.candidate-name::after {
-  content: "";
-  display: block;
-  width: 36pt;
-  height: 3pt;
-  margin-block: 6pt 1pt;
-  border-radius: 2pt;
-  background: var(--color-accent);
-}
-
-.doc[data-header-align="center"] .candidate-name::after {
-  margin-inline: auto;
+  --text-headline: 12pt;
+  --text-contact: 10.5pt;
+  --text-section: 12.5pt;
+  --text-item: 11.5pt;
+  --text-body: 11.5pt;
+  --text-meta: 10.5pt;
 }

@@ -38,7 +38,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   let parsedPackage: ReturnType<typeof parsePdfPackage> | null = null;
   if (responseJson) {
     try {
-      parsedPackage = parsePdfPackage(JSON.stringify(responseJson));
+      parsedPackage = parsePdfPackage(JSON.stringify(responseJson), { requireCoreSections: true });
       validPackage = true;
     } catch (error) {
       // The extension sends this reason back to ChatGPT so it can correct its answer.

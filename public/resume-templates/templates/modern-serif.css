@@ -1,19 +1,13 @@
-/* Modern Serif: a large Cambria name and headings over Calibri text, teal accent.
-   Layout defaults: short teal bar above each title, entries with a soft
-   accent border, quoted summary, skills grid with bracketed details.
-   Fonts: Cambria + Calibri (Caladea + Carlito on Linux). Best for: consulting, policy, communications. */
-
+/* QTS Template 11 (modern-serif): design tokens. Layout options are in js/templates.js. */
 :root {
-  --font-body: var(--font-calibri);
-  --font-heading: var(--font-cambria);
-  --color-accent: #0e7490;
-  --color-keyword: var(--color-accent);
-  --title-accent: 2.5pt;
-  --item-accent: 1.5pt solid color-mix(in srgb, var(--color-accent) 40%, #ffffff);
-  --text-name: 26pt;
-  --text-contact: 10pt;
-  --text-section: 13pt;
-  --text-item: 11pt;
-  --text-body: 11pt;
-  --text-meta: 10pt;
+  --font-body: var(--font-verdana);
+  --font-heading: var(--font-verdana);
+  --color-accent: #6b1e3e;
+  --text-name: 24pt;
+  --text-headline: 12pt;
+  --text-contact: 10.5pt;
+  --text-section: 12.5pt;
+  --text-item: 11.5pt;
+  --text-body: 11.5pt;
+  --text-meta: 10.5pt;
 }

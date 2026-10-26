@@ -2,25 +2,32 @@
    Template registry and layout options, shared by render.js and the gallery.
 
    A template is two things:
-     1. templates/<id>.css: fonts, colours, sizes and header decoration
+     1. templates/<id>.css: fonts, sizes and accent colour (design tokens only)
      2. defaults (below): how each part of the resume and letter is laid out
    Every default can be overridden per resume from the JSON (theme.<option>)
    or, for previews, a URL parameter with the same name.
 
-   To add a template: create the CSS file, add an entry here, and add the id
-   to theme.template in data/resume.schema.json.
+   The 24 templates are listed by number ("QTS Template 1" ... "24"), which is
+   also the order Generation rotates through them. Each one's section order is
+   in src/app/pdf/resume-sections.ts.
    ========================================================================== */
 (() => {
   const FONTS = ["arial", "georgia", "times", "calibri", "cambria", "palatino", "verdana", "tahoma", "trebuchet", "mono"];
 
   window.RESUME_OPTIONS = {
     headerAlign: { label: "Header alignment", values: ["start", "center"] },
+    headerStyle: {
+      label: "Header",
+      values: ["plain-rule", "accent-top", "band", "side-bar", "centered-rules", "centered-plain"],
+    },
     contactStyle: { label: "Contact line", values: ["inline", "labeled"] },
     titleStyle: {
       label: "Section titles",
       values: ["rule", "plain", "band", "bar", "pill", "flanked", "topline", "double", "overbar", "underbar", "marker", "underline"],
     },
     titleCase: { label: "Title case", values: ["upper", "title", "lower"] },
+    entryLayout: { label: "Entry layout", values: ["A", "B", "C", "D", "E", "F", "G"] },
+    showFocus: { label: "Focus skills next to the role", values: ["yes", "no"] },
     datePosition: { label: "Dates", values: ["inline", "below", "parentheses"] },
     bulletStyle: { label: "Bullets", values: ["disc", "dash", "chevron"] },
     itemStyle: { label: "Entries", values: ["plain", "divided", "timeline", "bordered"] },
@@ -33,176 +40,128 @@
     density: { label: "Density", values: ["auto", "normal", "compact"] },
   };
 
-  const template = (id, name, description, fonts, bestFor, defaults) => ({ id, name, description, fonts, bestFor, defaults });
+  const template = (id, name, description, fonts, defaults) => ({ id, name, description, fonts, defaults });
 
   window.RESUME_TEMPLATES = [
-    template("qts-standard", "QTS Standard",
-      "Navy accent rule, ruled uppercase titles, skill rows with bracketed details. The default.",
-      "Arial", "Any role", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
+    template("startup", "QTS Template 1",
+      "Skills first · role (dates), then company · grid skills",
+      "Arimo", {
+        entryLayout: "F", showFocus: "no", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "underline", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "grid", skillDetail: "bracket", letterLayout: "block",
       }),
-    template("classic", "Classic",
-      "Black serif, double rule, dates in parentheses, skills as one flowing paragraph.",
-      "Georgia", "Law, finance, administration", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "title",
-        datePosition: "parentheses", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "compact", skillDetail: "bracket", letterLayout: "modified",
+    template("centered", "QTS Template 2",
+      "Education first · role line, then company and dates · compact skills",
+      "Gelasio + Arimo", {
+        entryLayout: "B", showFocus: "yes", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "dash", itemStyle: "bordered", summaryStyle: "quote", skillsLayout: "compact", skillDetail: "dash", letterLayout: "modified",
       }),
-    template("harvard", "Harvard",
-      "Monochrome Times with a centred header, em-dash dates and skill rows with dashed details.",
-      "Times New Roman", "Graduates, consulting, banking", {
-        headerAlign: "center", contactStyle: "inline", titleStyle: "rule", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
+    template("corporate", "QTS Template 3",
+      "Career Highlights first · company and location, then role and dates · rows skills",
+      "Fira Sans", {
+        entryLayout: "D", showFocus: "yes", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "underbar", titleCase: "upper", bulletStyle: "chevron", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
       }),
-    template("executive", "Executive",
-      "Burgundy accent bars, labelled contacts, divided entries, a quoted summary and a skills grid.",
-      "Georgia + Arial", "Senior and leadership roles", {
-        headerAlign: "start", contactStyle: "labeled", titleStyle: "underbar", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "dash", itemStyle: "divided", summaryStyle: "quote",
-        skillsLayout: "grid", skillDetail: "dash", letterLayout: "modified",
+    template("ledger", "QTS Template 4",
+      "Experience first · role and dates, then company and location · rows skills",
+      "Tinos", {
+        entryLayout: "C", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "underbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
       }),
-    template("minimal", "Minimal",
-      "No rules, wide margins, quiet grey titles, dates on their own line and compact skills.",
-      "Arial", "Design-aware and research roles", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "plain", titleCase: "upper",
-        datePosition: "below", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
+    template("bold", "QTS Template 5",
+      "Projects first · company first, then role, then dates · tags skills",
+      "Arimo + Archivo Black", {
+        entryLayout: "E", showFocus: "yes", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "double", titleCase: "upper", bulletStyle: "dash", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "colon", letterLayout: "block",
       }),
-    template("swiss", "Swiss",
-      "Oversized name, a red rule opening every section and a four-column skills grid.",
-      "Arial", "Marketing, product, communications", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "topline", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "grid", skillDetail: "colon", letterLayout: "block",
+    template("technical", "QTS Template 6",
+      "Skills first · role (dates), then company · compact skills",
+      "Carlito + Caladea", {
+        entryLayout: "F", showFocus: "no", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "topline", titleCase: "lower", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "bracket", letterLayout: "modified",
       }),
-    template("corporate", "Corporate",
-      "Tinted header panel, labelled contacts, accent bars on titles and a boxed summary.",
-      "Calibri", "Corporate, sales, operations", {
-        headerAlign: "start", contactStyle: "labeled", titleStyle: "bar", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "boxed",
-        skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
+    template("professional", "QTS Template 7",
+      "Education first · one line, dates right · compact skills",
+      "Tinos", {
+        entryLayout: "A", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "rule", titleCase: "upper", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
       }),
-    template("technical", "Technical",
-      "Monospaced lowercase titles, dashed rules, chevron bullets and outlined skill tags.",
-      "Arial + Consolas", "Software, data, IT", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "lower",
-        datePosition: "inline", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
+    template("executive", "QTS Template 8",
+      "Career Highlights first · company and location, then role and dates · rows skills",
+      "Gelasio + Arimo", {
+        entryLayout: "D", showFocus: "yes", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "plain", titleCase: "title", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
       }),
-    template("timeline", "Timeline",
-      "A vertical line with markers links each entry; accent dates below titles; skill tags.",
-      "Trebuchet MS", "Career progression stories", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "plain", titleCase: "upper",
-        datePosition: "below", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "plain",
-        skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "block",
+    template("timeline", "QTS Template 9",
+      "Experience first · role line, then company and dates · tags skills",
+      "Gelasio", {
+        entryLayout: "B", showFocus: "yes", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "pill", titleCase: "upper", bulletStyle: "chevron", itemStyle: "timeline", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "block",
       }),
-    template("banded", "Banded",
-      "Section titles on tinted bands for fast scanning, with skill rows.",
-      "Arial", "Operations, logistics, healthcare", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "band", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
+    template("graphite", "QTS Template 10",
+      "Skills first · company and location, then role and dates · grid skills",
+      "Gelasio + Arimo", {
+        entryLayout: "D", showFocus: "yes", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "labeled", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "grid", skillDetail: "bracket", letterLayout: "modified",
       }),
-    template("elegant", "Elegant",
-      "Palatino, a centred header, titles between hairlines and dash bullets.",
-      "Palatino", "Hospitality, arts, education", {
-        headerAlign: "center", contactStyle: "inline", titleStyle: "flanked", titleCase: "title",
-        datePosition: "inline", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "compact", skillDetail: "bracket", letterLayout: "modified",
+    template("modern-serif", "QTS Template 11",
+      "Projects first · role and dates, then company and location · tags skills",
+      "DejaVu Sans", {
+        entryLayout: "C", showFocus: "yes", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "flanked", titleCase: "upper", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "block",
       }),
-    template("bold", "Bold",
-      "Heavy name, thick orange bar, large titles, accent-bordered entries and skill tags.",
-      "Arial Black + Arial", "Sales, startups, creative leads", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "plain", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain",
-        skillsLayout: "bubbles", skillDetail: "colon", letterLayout: "block",
+    template("compact", "QTS Template 12",
+      "Experience first · role, then company, then dates · compact skills",
+      "Fira Sans + Archivo Black", {
+        entryLayout: "G", showFocus: "no", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "underline", titleCase: "title", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
       }),
-    template("creative", "Creative",
-      "Raspberry accent bar under the name, square title markers, a boxed summary and skill tags.",
-      "Trebuchet MS", "Creative and customer-facing roles", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "marker", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "boxed",
-        skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
+    template("minimal", "QTS Template 13",
+      "Skills first · role and dates, then company and location · compact skills",
+      "Carlito", {
+        entryLayout: "C", showFocus: "yes", headerStyle: "accent-top", headerAlign: "start", contactStyle: "labeled", titleStyle: "bar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
       }),
-    template("compact", "Compact",
-      "Tight spacing and margins for long careers, at a readable 10pt, with compact skills.",
-      "Arial", "Experienced candidates with long histories", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
+    template("harvard", "QTS Template 14",
+      "Education first · role (dates), then company · compact skills",
+      "Tinos", {
+        entryLayout: "F", showFocus: "no", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "overbar", titleCase: "title", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "colon", letterLayout: "modified",
       }),
-    template("academic", "Academic",
-      "CV style in Cambria: centred header, titles between two rules, italic dates below titles.",
-      "Cambria", "Research, teaching, publications", {
-        headerAlign: "center", contactStyle: "inline", titleStyle: "double", titleCase: "upper",
-        datePosition: "below", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "rows", skillDetail: "bracket", letterLayout: "modified",
+    template("nordic", "QTS Template 15",
+      "Skills first · one line, dates right · rows skills",
+      "DejaVu Sans", {
+        entryLayout: "A", showFocus: "yes", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "marker", titleCase: "upper", bulletStyle: "chevron", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
       }),
-    template("nordic", "Nordic",
-      "Airy hairlines above sections, regular-weight titles, dash bullets and a skills grid.",
-      "Arial", "UX, product, sustainability", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "topline", titleCase: "title",
-        datePosition: "inline", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "grid", skillDetail: "dash", letterLayout: "block",
+    template("academic", "QTS Template 16",
+      "Education first · company first, then role, then dates · rows skills",
+      "Caladea", {
+        entryLayout: "E", showFocus: "yes", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "topline", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
       }),
-    template("slate", "Slate",
-      "Slate bar beside the header, labelled contacts, dotted rules and divided entries.",
-      "Tahoma", "Engineering, construction, public sector", {
-        headerAlign: "start", contactStyle: "labeled", titleStyle: "rule", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain",
-        skillsLayout: "grid", skillDetail: "bracket", letterLayout: "block",
+    template("swiss", "QTS Template 17",
+      "Projects first · role, then company, then dates · tags skills",
+      "DejaVu Sans", {
+        entryLayout: "G", showFocus: "no", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "marker", titleCase: "upper", bulletStyle: "dash", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
       }),
-    template("ledger", "Ledger",
-      "Georgia headings, green rules and hairlines between entries, with skill rows.",
-      "Georgia + Arial", "Accounting, audit, finance", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain",
-        skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
+    template("slate", "QTS Template 18",
+      "Career Highlights first · one line, dates right · tags skills",
+      "Fira Sans + Archivo Black", {
+        entryLayout: "A", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "inline", titleStyle: "pill", titleCase: "lower", bulletStyle: "chevron", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "modified",
       }),
-    template("startup", "Startup",
-      "Purple pill titles, a pill headline, a boxed summary and tinted skill tags.",
-      "Arial", "Startups, growth, tech", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "pill", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "boxed",
-        skillsLayout: "bubbles", skillDetail: "colon", letterLayout: "block",
+    template("high-contrast", "QTS Template 19",
+      "Experience first · company first, then role, then dates · tags skills",
+      "Caladea", {
+        entryLayout: "E", showFocus: "yes", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "plain", titleCase: "upper", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
       }),
-    template("professional", "Professional",
-      "Calibri with title-case headings over a blue underline and a three-column skills grid.",
-      "Calibri", "Business and management", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "grid", skillDetail: "colon", letterLayout: "modified",
+    template("classic", "QTS Template 20",
+      "Career Highlights first · role and dates, then company and location · rows skills",
+      "Carlito + Caladea", {
+        entryLayout: "C", showFocus: "yes", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "flanked", titleCase: "title", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
       }),
-    template("centered", "Centered",
-      "Symmetrical header and centred, ruled section titles with compact skills.",
-      "Arial", "General professional use", {
-        headerAlign: "center", contactStyle: "inline", titleStyle: "rule", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "compact", skillDetail: "bracket", letterLayout: "block",
+    template("qts-standard", "QTS Template 21",
+      "Experience first · role line, then company and dates · grid skills",
+      "Arimo + Gelasio", {
+        entryLayout: "B", showFocus: "yes", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "double", titleCase: "upper", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "grid", skillDetail: "colon", letterLayout: "block",
       }),
-    template("high-contrast", "High Contrast",
-      "Accessibility first: Verdana, pure black, labelled contacts and underlined titles.",
-      "Verdana", "Maximum readability, public sector", {
-        headerAlign: "start", contactStyle: "labeled", titleStyle: "underline", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
+    template("elegant", "QTS Template 22",
+      "Education first · one line, dates right · grid skills",
+      "Caladea", {
+        entryLayout: "A", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "overbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "grid", skillDetail: "dash", letterLayout: "modified",
       }),
-    template("modern-serif", "Modern Serif",
-      "Cambria titles under short teal bars, accent-bordered entries, a quoted summary and a skills grid.",
-      "Cambria + Calibri", "Consulting, policy, communications", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "overbar", titleCase: "title",
-        datePosition: "inline", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "quote",
-        skillsLayout: "grid", skillDetail: "bracket", letterLayout: "block",
+    template("creative", "QTS Template 23",
+      "Projects first · role, then company, then dates · grid skills",
+      "Arimo + Archivo Black", {
+        entryLayout: "G", showFocus: "no", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "upper", bulletStyle: "dash", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "grid", skillDetail: "colon", letterLayout: "block",
       }),
-    template("graphite", "Graphite",
-      "Dark grey, titles underlined beneath the words, chevron bullets and grey skill tags.",
-      "Arial", "Engineering, architecture, analytics", {
-        headerAlign: "start", contactStyle: "inline", titleStyle: "underline", titleCase: "upper",
-        datePosition: "inline", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "plain",
-        skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "modified",
+    template("banded", "QTS Template 24",
+      "Experience first · role line, then company and dates · grid skills",
+      "Carlito + Caladea", {
+        entryLayout: "B", showFocus: "yes", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "bar", titleCase: "title", bulletStyle: "chevron", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "grid", skillDetail: "bracket", letterLayout: "block",
       }),
   ];
 })();

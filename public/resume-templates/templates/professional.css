@@ -1,26 +1,13 @@
-/* Professional: Calibri with a blue accent name and generous 11pt text.
-   Layout defaults: title-case titles over a thick blue rule, three-column
-   skills grid with colon details, modified-block letter.
-   Fonts: Calibri (Carlito on Linux). Best for: business and management. */
-
+/* QTS Template 7 (professional): design tokens. Layout options are in js/templates.js. */
 :root {
-  --font-body: var(--font-calibri);
-  --color-accent: #1d4ed8;
-  --color-keyword: var(--color-accent);
-  --title-rule: 1.5pt solid var(--color-accent);
+  --font-body: var(--font-times);
+  --font-heading: var(--font-times);
+  --color-accent: #8a3b12;
   --text-name: 24pt;
-  --text-contact: 10pt;
-  --text-section: 12.5pt;
-  --text-item: 11pt;
-  --text-body: 11pt;
-  --text-meta: 10pt;
-}
-
-.resume-header {
-  padding-bottom: 4pt;
-}
-
-.candidate-headline {
-  font-weight: 700;
-  color: var(--color-ink);
+  --text-headline: 12.5pt;
+  --text-contact: 11pt;
+  --text-section: 13pt;
+  --text-item: 12pt;
+  --text-body: 12pt;
+  --text-meta: 11pt;
 }

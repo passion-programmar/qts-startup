@@ -282,6 +282,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                   maxLength={160}
                   name="experienceLocation"
                 />
+                <WorkModeField id={`experienceWorkMode-${rowId}`} />
                 <TextField
                   autoComplete="off"
                   id={`experienceStartDate-${rowId}`}
@@ -455,6 +456,7 @@ export type CandidateProfileValues = {
     companyName: string;
     jobTitle: string;
     location: string | null;
+    workMode: string | null;
     startDate: string | null;
     endDate: string | null;
     isCurrent: boolean;
@@ -669,6 +671,7 @@ export function EditCandidateProfileForm({
                   <TextField autoComplete="organization" defaultValue={entry?.companyName ?? ""} id={fieldId(`experienceCompanyName-${rowId}`)} label="Employer" maxLength={160} name="experienceCompanyName" />
                   <TextField autoComplete="organization-title" defaultValue={entry?.jobTitle ?? ""} id={fieldId(`experienceJobTitle-${rowId}`)} label="Job title" maxLength={160} name="experienceJobTitle" />
                   <TextField autoComplete="off" defaultValue={entry?.location ?? ""} id={fieldId(`experienceLocation-${rowId}`)} label="Location (optional)" maxLength={160} name="experienceLocation" />
+                  <WorkModeField defaultValue={entry?.workMode ?? ""} id={fieldId(`experienceWorkMode-${rowId}`)} />
                   <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`experienceStartDate-${rowId}`)} label="Start month (MM/YYYY)" maxLength={7} name="experienceStartDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
                   <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`experienceEndDate-${rowId}`)} label="End month (MM/YYYY)" maxLength={7} name="experienceEndDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
                   <CurrentStatusCheckbox defaultChecked={entry?.isCurrent ?? false} id={fieldId(`experienceIsCurrent-${rowId}`)} label="Currently working here?" name="experienceIsCurrent" />
@@ -1168,6 +1171,31 @@ function HistorySection({
         </fieldset>
       ))}
     </section>
+  );
+}
+
+// How the candidate worked in this job; shown next to the location on generated resumes.
+function WorkModeField({ id, defaultValue = "" }: { id: string; defaultValue?: string }) {
+  return (
+    <div>
+      <label
+        className="mb-2 block text-xs font-semibold text-slate-700"
+        htmlFor={id}
+      >
+        Work mode (optional)
+      </label>
+      <select
+        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+        defaultValue={defaultValue}
+        id={id}
+        name="experienceWorkMode"
+      >
+        <option value="">Not set</option>
+        <option value="remote">Remote</option>
+        <option value="hybrid">Hybrid</option>
+        <option value="onsite">Onsite</option>
+      </select>
+    </div>
   );
 }
 

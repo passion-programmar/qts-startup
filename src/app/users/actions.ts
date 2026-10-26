@@ -68,6 +68,7 @@ export async function createUserAction(
     companyName: 160,
     jobTitle: 160,
     location: 160,
+    workMode: 10,
     startDate: 7,
     endDate: 7,
     isCurrent: 5,
@@ -169,6 +170,7 @@ export async function createUserAction(
           company_name: row.companyName,
           job_title: row.jobTitle,
           location: row.location || null,
+          work_mode: row.workMode || null,
           start_date: toDatabaseMonth(row.startDate),
           end_date: toDatabaseMonth(row.endDate),
           is_current: row.isCurrent === "true",
@@ -217,16 +219,16 @@ export async function createUserAction(
         ),
         inserted_experiences as (
           insert into experiences (
-            profile_user_id, company_name, job_title, location, start_date,
+            profile_user_id, company_name, job_title, location, work_mode, start_date,
             end_date, is_current, description, sort_order
           )
           select new_profile.user_id, entry.company_name, entry.job_title,
-            entry.location, entry.start_date, entry.end_date, entry.is_current,
+            entry.location, entry.work_mode, entry.start_date, entry.end_date, entry.is_current,
             entry.description, entry.sort_order
           from new_profile
           cross join jsonb_to_recordset(${JSON.stringify(experienceEntries)}::jsonb)
             as entry(
-              company_name text, job_title text, location text, start_date date,
+              company_name text, job_title text, location text, work_mode text, start_date date,
               end_date date, is_current boolean, description text, sort_order integer
             )
           returning id
@@ -335,6 +337,7 @@ export async function updateCandidateProfileAction(
     companyName: 160,
     jobTitle: 160,
     location: 160,
+    workMode: 10,
     startDate: 7,
     endDate: 7,
     isCurrent: 5,
@@ -418,6 +421,7 @@ export async function updateCandidateProfileAction(
         company_name: row.companyName,
         job_title: row.jobTitle,
         location: row.location || null,
+        work_mode: row.workMode || null,
         start_date: toDatabaseMonth(row.startDate),
         end_date: toDatabaseMonth(row.endDate),
         is_current: row.isCurrent === "true",
@@ -474,14 +478,14 @@ export async function updateCandidateProfileAction(
       `,
       tx`
         insert into experiences (
-          profile_user_id, company_name, job_title, location, start_date,
+          profile_user_id, company_name, job_title, location, work_mode, start_date,
           end_date, is_current, description, sort_order
         )
         select users.id, entry.company_name, entry.job_title, entry.location,
-          entry.start_date, entry.end_date, entry.is_current, entry.description, entry.sort_order
+          entry.work_mode, entry.start_date, entry.end_date, entry.is_current, entry.description, entry.sort_order
         from users
         cross join jsonb_to_recordset(${JSON.stringify(experienceEntries)}::jsonb)
-          as entry(company_name text, job_title text, location text, start_date date,
+          as entry(company_name text, job_title text, location text, work_mode text, start_date date,
             end_date date, is_current boolean, description text, sort_order integer)
         where users.id = ${userId}::uuid and users.role = 'account'
           and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
@@ -856,6 +860,9 @@ function validateExperienceRows(rows: Record<string, string>[]): string | null {
     if (!hasDetails && row.isCurrent !== "true") continue;
     if (!row.companyName || !row.jobTitle) {
       return `Enter both an employer and job title for experience entry ${index + 1}.`;
+    }
+    if (row.workMode && !["remote", "hybrid", "onsite"].includes(row.workMode)) {
+      return `Choose Remote, Hybrid or Onsite as the work mode for experience entry ${index + 1}.`;
     }
     const dateError = validateHistoryDates(row, index, "experience");
     if (dateError) return dateError;

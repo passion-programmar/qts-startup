@@ -1,28 +1,13 @@
-/* High Contrast: accessibility first. Verdana, pure black, generous line
-   spacing and a heavy rule under the header.
-   Layout defaults: labelled contacts, titles underlined beneath the words,
-   em-dash dates, skill rows with dashed details.
-   Fonts: Verdana. Best for: maximum readability, public sector. */
-
+/* QTS Template 19 (high-contrast): design tokens. Layout options are in js/templates.js. */
 :root {
-  --font-body: var(--font-verdana);
-  --color-accent: #000000;
-  --color-ink: #000000;
-  --color-muted: #2b2b2b;
-  --color-rule: #000000;
-  --title-accent: 1.5pt;
-  --text-name: 21pt;
-  --text-section: 11.5pt;
-  --text-item: 10.5pt;
-  --text-body: 10pt;
-  --text-meta: 9.5pt;
-  --leading-body: 1.45;
-  --leading-letter: 1.5;
-  --subheading-style: normal;
-  --date-separator: "\2014";
-}
-
-.resume-header {
-  padding-bottom: 8pt;
-  border-bottom: 2pt solid var(--color-ink);
+  --font-body: var(--font-cambria);
+  --font-heading: var(--font-cambria);
+  --color-accent: #3a3f44;
+  --text-name: 25pt;
+  --text-headline: 12.5pt;
+  --text-contact: 11pt;
+  --text-section: 13pt;
+  --text-item: 12pt;
+  --text-body: 12pt;
+  --text-meta: 11pt;
 }
