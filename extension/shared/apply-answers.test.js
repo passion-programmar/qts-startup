@@ -111,3 +111,16 @@ test('the AI prompt carries the job, the facts, and only the open questions', ()
   assert.match(prompt, /"maxLength":500/);
   assert.match(prompt, /never invent/);
 });
+
+test('questions about someone else never take the candidate\'s facts', () => {
+  const { answers: resolved, open } = answers.resolveFields([
+    field('If you have discussed this role with a current employee, please share their full name', { required: false }),
+    field('What is your Legal first and last name?'),
+    field('City'),
+    field('Autofill from resume', { kind: 'file', required: false }),
+  ], { ...candidate, city: 'Warsaw' }, []);
+  assert.equal(resolved['What is your Legal first and last name?'].value, 'Anna Kowalska');
+  assert.equal(resolved.City.value, 'Warsaw');
+  assert.equal(resolved['Autofill from resume'], undefined);
+  assert.deepEqual(open.map((entry) => entry.id), ['If you have discussed this role with a current employee, please share their full name']);
+});

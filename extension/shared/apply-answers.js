@@ -4,7 +4,7 @@
 
 (function initApplyAnswers(global) {
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
-  const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit|hispanic|latin[oa]|sexual orientation|pronoun|transgender)\b/i;
+  const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
   const CONSENT = /\b(agree|consent|acknowledge|privacy|terms|certify|confirm that|i have read|accurate|true and complete|data processing|gdpr)\b/i;
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
@@ -20,7 +20,12 @@
   }
 
   function labelOf(field) {
-    return String(field.label || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return String(field.label || '')
+      .replace(/[*✱]/g, ' ')
+      .replace(/\(\s*(optional|required)\s*\)/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
   }
 
   function hasOptions(field) {
@@ -52,19 +57,21 @@
 
   // Each rule: the question it recognizes, and the candidate fact that answers it (or the missing fact's name).
   const RULES = [
-    { test: /\b(first|given) name\b/, fact: (c) => c.firstName, name: 'first name' },
+    { test: /first and last name|full name|legal name|^(your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name' },
+    { test: /\b(first|given|preferred) name\b|preferred first/, fact: (c) => c.firstName, name: 'first name' },
     { test: /\b(last|family) name\b|\bsurname\b/, fact: (c) => c.lastName, name: 'last name' },
-    { test: /^(full |legal |your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name' },
     { test: /e-?mail/, fact: (c) => c.email, name: 'email' },
     { test: /\b(phone|mobile|telephone|cell)\b/, fact: (c) => c.phone, name: 'phone' },
     { test: /linkedin/, fact: (c) => c.linkedinUrl, name: 'LinkedIn profile', optionalIfMissing: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true },
-    { test: /^(current )?(city|location)$|where are you (located|based)|current location|city of residence/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location' },
+    { test: /^(current )?city$|city of residence|^town( or city)?$/, fact: (c) => c.city, name: 'city' },
+    { test: /^(current )?location$|where are you (located|based)|current location|^location of residence/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location' },
     { test: /^country( of residence)?$/, fact: (c) => c.country, name: 'country' },
-    { test: /postal|zip/, fact: (c) => c.postalCode, name: 'postal code' },
-    { test: /^(street )?address( line 1)?$/, fact: (c) => c.addressLine1, name: 'address' },
-    { test: /^(state|province|region)$/, fact: (c) => c.province, name: 'state or province' },
+    { test: /postal|post ?code|zip/, fact: (c) => c.postalCode, name: 'postal code' },
+    { test: /second line of (your )?address|address line 2|apartment|suite/, fact: () => null, name: 'address line 2', optionalIfMissing: true },
+    { test: /^(street )?address( line 1)?$|first line of (your )?address/, fact: (c) => c.addressLine1, name: 'address' },
+    { test: /^(state|province|region)(\s*\/\s*(state|province|region))?$/, fact: (c) => c.province, name: 'state or province' },
     { test: /sponsor/, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
     { test: /relocat/, yesNo: (c) => c.willingToRelocate, name: 'relocation' },
     { test: /notice period|when can you start|earliest start|availability to start/, fact: (c) => c.noticePeriod, name: 'notice period', textOnly: true },
@@ -79,18 +86,21 @@
   function resolveField(field, candidate, savedAnswers) {
     const label = labelOf(field);
     if (field.kind === 'file') {
+      // "Autofill from resume" parses the file and overwrites the answers already filled.
+      if (/autofill/.test(label)) return { skip: 'The site\'s autofill-from-résumé upload.' };
       if (/cover/.test(label)) return { file: 'coverLetter', source: 'documents' };
       if (/resume|résumé|\bcv\b|curriculum/.test(label) || field.required) return { file: 'resume', source: 'documents' };
       return { skip: 'An optional upload that is not a résumé or cover letter.' };
     }
+    // Required consent and certification boxes are ticked; optional ones (marketing, future jobs) are left.
     if (field.kind === 'checkbox' && !hasOptions(field) && CONSENT.test(label)) {
-      return { value: true, source: 'consent' };
+      return field.required ? { value: true, source: 'consent' } : { skip: 'Optional consent box.' };
     }
     if (EEO.test(label)) {
       if (candidate.eeoPreference === 'prefer_not_to_say') {
         const option = pickOption(field, DECLINE);
         if (option) return { value: option, source: 'profile' };
-        return field.required ? null : { skip: 'Diversity question without a decline option.' };
+        return field.required ? null : { skip: 'Optional diversity question left unanswered.' };
       }
       return null;
     }
@@ -100,6 +110,8 @@
       if (!hasOptions(field)) return { value: 'LinkedIn', source: 'rule' };
       return null;
     }
+    // Questions about someone else (a referrer, an employee you spoke to) never take the candidate's facts.
+    if (/\b(employee|referr\w*|recruiter|their|someone|who referred|hiring manager)\b/.test(label)) return null;
     const saved = savedAnswers?.get(normalizeQuestionKey(field.label));
     if (saved) {
       if (!hasOptions(field) || field.options.includes(saved)) return { value: saved, source: 'saved' };
