@@ -3067,7 +3067,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             '[data-testid="copy-turn-action-button"], button[aria-label="Copy"], button[aria-label="Copy message"], button[aria-label="Copy response"]',
           ),
         );
-        const errorPattern = /something went wrong|an error occurred|error generating|you['’]ve (?:reached|hit) (?:your|the)|usage (?:cap|limit)|rate limit|too many requests|network error|unusual activity|try again later|cloudflare_challenge|couldn['’]t load your account|browser check couldn['’]t finish/i;
+        const errorPattern = /something went wrong|an error occurred|error generating|you['’]ve (?:reached|hit) (?:your|the)|usage (?:cap|limit)|rate limit|too many requests|network error|unusual activity|try again later|cloudflare_challenge|couldn['’]t load your account|response couldn['’]t load|browser check couldn['’]t finish/i;
         const errorNode = [...document.querySelectorAll(
           '[role="alert"], [data-testid*="error" i], .text-token-text-error, [class*="text-red"]',
         )].find((node) => errorPattern.test(node.innerText || ''));
@@ -3466,30 +3466,35 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     throw new Error(`ChatGPT did not finish the answer within ${GENERATION_ANSWER_MAX_WAIT_MS / 60_000} minutes.`);
   }
 
-  // Sends one prompt and returns ChatGPT's finished answer. If ChatGPT shows an error, the tab is
-  // refreshed once and the prompt sent again.
-  async function askGenerationChatGpt(chatTabId, prompt, generationId, active) {
+  // Sends one prompt and returns ChatGPT's finished answer. If ChatGPT shows an error ("This response
+  // couldn't load"), its tab is closed and the prompt sent once more in a fresh pinned tab; chatTab
+  // is the queue's own record, so the queue goes on with (and later closes) the new tab.
+  async function askGenerationChatGpt(chatTab, prompt, generationId, active) {
     for (let attempt = 0; ; attempt += 1) {
       try {
         await updateGenerationBrowserState({ phase: 'sending_prompt' });
-        await sendGenerationPromptWithRecovery(chatTabId, prompt);
+        await sendGenerationPromptWithRecovery(chatTab.id, prompt);
         await updateGenerationBrowserState({ phase: 'waiting_for_response' });
-        return await waitForGenerationAnswer(chatTabId, generationId, active);
+        return await waitForGenerationAnswer(chatTab.id, generationId, active);
       } catch (error) {
         if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;
-        await showGenerationChatGptStep(chatTabId, '4/6 · ChatGPT showed an error', `${error.message} Refreshing the tab and sending again...`, 'warn');
+        await showGenerationChatGptStep(chatTab.id, '4/6 · ChatGPT showed an error', `${error.message} Opening a new ChatGPT tab and sending again...`, 'warn');
         await sleep(1500);
-        await chrome.tabs.reload(chatTabId);
-        await sleep(1500);
+        active.local();
+        await chrome.tabs.remove(chatTab.id).catch(() => {});
+        chatTab.id = (await acquireGenerationChatGptTab()).id;
+        await updateGenerationBrowserState({ chatTabId: chatTab.id, phase: 'opening_chatgpt' });
+        await ensureChatGptReady(chatTab.id);
       }
     }
   }
 
-  async function runGenerationForTab(jobTabId, queuedJob = null, pinnedChatTabId = null) {
+  // pinnedChatTab is the queue's { id, jobs } record; a ChatGPT error can swap in a fresh tab id.
+  async function runGenerationForTab(jobTabId, queuedJob = null, pinnedChatTab = null) {
     if (!queuedJob?.id) {
       throw new Error('Generation requires a saved candidate Job. Run Get JD and save candidates first.');
     }
-    if (!Number.isInteger(pinnedChatTabId)) throw new Error('Generation needs the pinned ChatGPT tab.');
+    if (!Number.isInteger(pinnedChatTab?.id)) throw new Error('Generation needs the pinned ChatGPT tab.');
     const cancellationKey = jobTabId ?? queuedJob.id;
     if (generationInFlightTabs.has(cancellationKey)) {
       throw new Error('Generation is already running for this job.');
@@ -3499,7 +3504,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     generationCancellationByTab.set(cancellationKey, cancellationToken);
     let generationId = '';
     const jobDescription = String(queuedJob.description || '').trim();
-    let chatTabId = null;
+    let chatTab = null;
     try {
       await updateGenerationBrowserState({
         phase: 'preparing_prompt',
@@ -3548,18 +3553,17 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       await updateGenerationBrowserState({
         phase: 'opening_chatgpt',
         generationId,
-        chatTabId: pinnedChatTabId,
+        chatTabId: pinnedChatTab.id,
       });
       // The queue opened the pinned ChatGPT tab (and a new chat in it) before the job page.
-      chatTabId = pinnedChatTabId;
-      const chatTab = { id: chatTabId };
+      chatTab = pinnedChatTab;
       ensureGenerationIsActive(cancellationKey, cancellationToken);
       const active = {
         local: () => ensureGenerationIsActive(cancellationKey, cancellationToken),
         server: () => ensureQueuedGenerationIsActive(queuedJob.id),
       };
       await showGenerationPageStatus(jobTabId, 'ChatGPT is generating the résumé and cover letter...');
-      let responseText = await askGenerationChatGpt(chatTab.id, generationPrompt, generationId, active);
+      let responseText = await askGenerationChatGpt(chatTab, generationPrompt, generationId, active);
 
       // An answer QTS cannot use gets one follow-up in the same chat that says why.
       for (let followUps = 0; ; followUps += 1) {
@@ -3594,19 +3598,19 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           + 'Reply again with only the complete, valid JSON object in the required structure, with no other text before or after it.',
           generationId,
         );
-        responseText = await askGenerationChatGpt(chatTab.id, followUp, generationId, active);
+        responseText = await askGenerationChatGpt(chatTab, followUp, generationId, active);
       }
       await updateGenerationBrowserState({ phase: 'response_saved' });
       await showGenerationChatGptStep(chatTab.id, '6/6 · Answer saved', 'Making the résumé and cover-letter PDFs and downloading them...', 'success');
       const message = 'Generation completed and saved with the JD.';
       await showGenerationPageStatus(jobTabId, message, 'success');
-      return { ok: true, status: 'generation', message, generationId, parsed: true, chatTabId };
+      return { ok: true, status: 'generation', message, generationId, parsed: true, chatTabId: chatTab.id };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Generation failed.';
-      if (Number.isInteger(chatTabId)) {
+      if (Number.isInteger(chatTab?.id)) {
         // Leave the reason on screen for a moment before the tab closes.
         await showGenerationChatGptStep(
-          chatTabId,
+          chatTab.id,
           isGenerationCancelled(error) ? 'Cancelled' : 'Stopped',
           message,
           isGenerationCancelled(error) ? 'info' : 'error',
@@ -3982,7 +3986,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           } catch (error) {
             console.warn('[QTS Generation] Could not open the job page; continuing with saved job data:', error);
           }
-          const result = await runGenerationForTab(jobTabId, queuedJob, chatTab.id);
+          const result = await runGenerationForTab(jobTabId, queuedJob, chatTab);
           generationId = result.generationId;
           await updateGenerationBrowserState({ phase: 'downloading' });
           await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds);
