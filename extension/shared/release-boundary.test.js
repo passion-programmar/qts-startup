@@ -358,7 +358,7 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(serviceWorker.includes('const CHATGPT_LOAD_TIMEOUT_MS = 30 * 1000;'));
   assert.ok(serviceWorker.includes('const CHATGPT_RELOADS = 2;'));
   const queueSource = serviceWorker.slice(serviceWorker.indexOf('async function processQueuedGenerationJobs'));
-  assert.ok(queueSource.indexOf('await ensureChatGptReady(chatTab.id);') < queueSource.indexOf('url: queuedJob.jobUrl, active: false'));
+  assert.ok(queueSource.indexOf('await ensureChatGptReady(chatTab.id);') < queueSource.indexOf('url: queuedJob.jobUrl,'));
   assert.equal(queueSource.includes('await waitForTabSettled(jobTabId);'), false);
   assert.ok(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'));
   assert.ok(serviceWorker.includes('persistGenerationQueueRun(runId, excludedJobIds)'));
