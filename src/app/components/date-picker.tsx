@@ -379,6 +379,7 @@ export function MonthPicker({
         <div
           aria-label={`${label} calendar`}
           className="absolute left-0 top-full z-50 mt-2 w-[17rem] max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+          data-changes-form
           id={calendarId}
           role="dialog"
         >
