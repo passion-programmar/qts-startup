@@ -19,6 +19,7 @@
   const FORM_FRAME = /greenhouse\.io\/(embed\/)?job_app|boards(\.eu)?\.greenhouse\.io|jobs(\.eu)?\.lever\.co|jobs\.ashbyhq\.com|apply\.workable\.com|smartrecruiters\.com|recruitee\.com|teamtailor\.com|personio\.(de|com)|bamboohr\.com|jobvite\.com|breezy\.hr|comeet\.(co|com)|pinpointhq\.com|join\.com|homerun\.co|applytojob\.com/i;
   const DROP_TEXT = /\b(drag|drop)\b[^.]{0,40}\b(files?|here|cv|resume|résumé|document)\b|\bclick to upload\b|\bbrowse (files|computer)\b|\bchoose (a )?file\b/i;
   const MENU_ITEMS = '[role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="menuitem"]';
+  const POPUP_ITEM = /^(option|menuitem|menuitemcheckbox|menuitemradio)$/;
   const CONFIRMED_TEXT = /thank(s| you) for (applying|your application|your interest|submitting)|application (has been |was )?(received|submitted|sent)|we['’]?ve received your application|we have received your application|successfully (applied|submitted)|your application (is|was|has been) (complete|submitted|received)|application submitted/i;
   const PLACEHOLDER_OPTION = /^(select|choose|please select|--|—|select\.\.\.|select one|pick one)/i;
 
@@ -158,6 +159,37 @@
     return cleanText(item.getAttribute('data-search-text') || textOf(item));
   }
 
+  /**
+   * A styled dropdown button (Radix and shadcn: role="combobox") whose real choices sit in the
+   * hidden native select next to it, which the page keeps for its form.
+   */
+  function listboxChoices(button) {
+    const isListbox = button.getAttribute('role') === 'combobox' || /^listbox$/i.test(button.getAttribute('aria-haspopup') || '');
+    if (!isListbox || button.tagName === 'INPUT') return null;
+    const select = button.parentElement?.querySelector('select');
+    const options = select ? [...select.options].map(optionText).filter((text) => text && !PLACEHOLDER_OPTION.test(text)) : [];
+    return options.length >= 2 ? options : null;
+  }
+
+  /**
+   * A press as a mouse makes it, at the element's centre: Radix opens and picks on pointer events,
+   * and ignores a pick where the pointer has not moved since the list opened.
+   */
+  function press(element) {
+    element.scrollIntoView?.({ block: 'nearest' });
+    const box = element.getBoundingClientRect();
+    const init = {
+      bubbles: true, cancelable: true, composed: true, button: 0, pointerType: 'mouse', isPrimary: true,
+      clientX: box.left + box.width / 2, clientY: box.top + box.height / 2,
+    };
+    element.dispatchEvent(new PointerEvent('pointermove', init));
+    element.dispatchEvent(new PointerEvent('pointerdown', init));
+    element.dispatchEvent(new MouseEvent('mousedown', init));
+    element.dispatchEvent(new PointerEvent('pointerup', init));
+    element.dispatchEvent(new MouseEvent('mouseup', init));
+    element.click();
+  }
+
   function optionText(option) {
     return cleanText(option.label || option.textContent);
   }
@@ -194,6 +226,53 @@
           options: menuChoices(control).map(itemText).filter(Boolean),
           hidden: !isShown(control),
           disabled: control.disabled,
+        });
+        continue;
+      }
+      // A menu whose choices exist only while it is open (Radix DropdownMenu): read by opening it.
+      // A menu button beside an input (a phone number's country flag) belongs to that input.
+      if ((tag === 'BUTTON' || control.getAttribute('role') === 'button') && control.closest('form, fieldset')
+        && /^(menu|listbox|true)$/i.test(control.getAttribute('aria-haspopup') || '') && !listboxChoices(control)
+        && !blockQuestion(control).block?.querySelector('input:not([type="hidden"]):not([aria-hidden="true"]), textarea')) {
+        const label = labelFor(control);
+        control.setAttribute(MENU_ATTRIBUTE, 'lazy');
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'menu',
+          lazy: true,
+          required: isRequired(control, label),
+          options: [],
+          hidden: !isShown(control),
+          disabled: control.disabled,
+        });
+        continue;
+      }
+      if (tag !== 'INPUT' && listboxChoices(control)) {
+        const label = labelFor(control);
+        control.setAttribute(MENU_ATTRIBUTE, 'listbox');
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'menu',
+          required: isRequired(control, label),
+          options: listboxChoices(control),
+          hidden: !isShown(control),
+          disabled: control.disabled,
+        });
+        continue;
+      }
+      // A styled tick box (role="checkbox" on a button) is one yes/no box.
+      if (tag !== 'INPUT' && control.getAttribute('role') === 'checkbox') {
+        // Its own words sit next to it ("I agree to the terms"); a far-off heading would be another question.
+        const label = cleanText(control.getAttribute('aria-label')) || questionAround(control) || labelFor(control);
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'checkbox',
+          required: isRequired(control, label),
+          hidden: !isShown(control),
+          disabled: control.disabled || control.getAttribute('aria-disabled') === 'true',
         });
         continue;
       }
@@ -319,6 +398,21 @@
     return options.slice(0, 300);
   }
 
+  /** A menu's choices, read by opening it and closing it again (they exist only while it is open). */
+  async function readMenuOptions(id) {
+    const button = findField(id);
+    if (!button) return [];
+    press(button);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const options = allElements().filter((element) => POPUP_ITEM.test(element.getAttribute('role') || '') && isShown(element))
+      .map(itemText).filter(Boolean);
+    for (const target of [document.activeElement, button]) {
+      target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return [...new Set(options)].slice(0, 300);
+  }
+
   function setNativeValue(element, value) {
     const prototype = element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype
       : element.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
@@ -355,6 +449,11 @@
     if (!element) return { ok: false, error: 'The field is no longer on the page.' };
     if (element.hasAttribute(DROP_ATTRIBUTE)) return dropFile(element, file);
     if (element.hasAttribute(MENU_ATTRIBUTE)) return pickMenuChoice(element, value);
+    if (element.tagName !== 'INPUT' && element.getAttribute('role') === 'checkbox') {
+      if ((element.getAttribute('aria-checked') === 'true') !== Boolean(value)) element.click();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return { ok: (element.getAttribute('aria-checked') === 'true') === Boolean(value), value: element.getAttribute('aria-checked') === 'true' };
+    }
     const type = (element.getAttribute('type') || '').toLowerCase();
     if (type === 'file') {
       if (!file) return { ok: false, error: 'No file to attach.' };
@@ -463,6 +562,30 @@
 
   async function pickMenuChoice(button, value) {
     const wanted = cleanText(value).toLowerCase();
+    if (['listbox', 'lazy'].includes(button.getAttribute(MENU_ATTRIBUTE))) {
+      // The choices appear in a popup (often outside the form) only once the button is pressed.
+      if (button.getAttribute('aria-expanded') !== 'true') press(button);
+      // The popup may word an option differently from the hidden list ("EUR Euro" for "EUREuro").
+      const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const target = squash(wanted);
+      let option = null;
+      for (let waited = 0; waited < 3000 && !option; waited += 250) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const shown = allElements().filter((element) => POPUP_ITEM.test(element.getAttribute('role') || '') && isShown(element));
+        option = shown.find((element) => squash(itemText(element)) === target)
+          || shown.find((element) => squash(itemText(element)) && (target.includes(squash(itemText(element))) || squash(itemText(element)).includes(target)))
+          || null;
+      }
+      if (!option) {
+        if (button.getAttribute('aria-expanded') === 'true') button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        return { ok: false, error: `"${value}" is not an option.` };
+      }
+      const picked = itemText(option);
+      press(option);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const shownNow = squash(textOf(button));
+      return { ok: Boolean(shownNow) && (squash(picked).includes(shownNow) || shownNow.includes(squash(picked))), value: textOf(button) };
+    }
     const items = menuChoices(button) || [];
     const item = items.find((entry) => itemText(entry).toLowerCase() === wanted);
     if (!item) return { ok: false, error: `"${value}" is not an option.` };
@@ -511,10 +634,11 @@
     const challenge = allElements().find((element) => element.tagName === 'IFRAME' && isShown(element) && (
       (/recaptcha\/(api2|enterprise)\/bframe|hcaptcha\.com\/.*(challenge|frame=challenge)|challenges\.cloudflare\.com/i.test(element.src || '')
         && element.getBoundingClientRect().height > 100)
-      || (/recaptcha\/(api2|enterprise)\/anchor|hcaptcha\.com\/.*frame=checkbox/i.test(element.src || '')
+      || (/recaptcha\/(api2|enterprise)\/anchor|hcaptcha\.com\/.*frame=checkbox|challenges\.cloudflare\.com/i.test(element.src || '')
         && element.getBoundingClientRect().height > 40 && !/size=invisible/i.test(element.src || ''))
     ));
-    if (challenge) blockers.push('captcha');
+    // Cloudflare's "Just a moment..." page checks the browser before showing the site.
+    if (challenge || /^just a moment/i.test(document.title)) blockers.push('captcha');
     const password = allElements().find((element) => element.tagName === 'INPUT' && element.type === 'password' && isShown(element));
     // A sign-in page without a password field yet (an email-first or magic-link login).
     const signInPage = /\/(auth\/)?(sign-?in|log-?in|register|sign-?up|create-account)(\/|$)/i.test(location.pathname);
@@ -554,6 +678,12 @@
       && SUBMIT_TEXT.test(buttonText(element))
     ));
     return { submit: Boolean(findButton('submit')), next: Boolean(findButton('next')), submitDisabled };
+  }
+
+  /** The words saying the job takes no more applications ("This job has expired"), or ''. */
+  function jobClosed() {
+    const text = cleanText(document.body?.innerText || '');
+    return text.match(/this (job|position|vacancy|role) (has )?(expired|closed|been filled)|(job|position|vacancy|posting) (is )?no longer (available|open|active|accepting applications)|no longer (available for application|accepting applications)|(applications|vacancy) (are |is )?(now )?closed|not accepting applications/i)?.[0] || '';
   }
 
   /** Closes a cookie banner the way a person would, declining what is optional; true when clicked. */
@@ -624,6 +754,7 @@
   global.__qtsApplyForm = {
     scanForm,
     readComboboxOptions,
+    readMenuOptions,
     fillField,
     fieldErrors,
     detectBlockers,
@@ -631,6 +762,7 @@
     clickButton,
     clickStart,
     declineCookies,
+    jobClosed,
     pageOutcome,
     pageText: () => cleanText(document.body?.innerText || '').slice(0, 20000),
   };

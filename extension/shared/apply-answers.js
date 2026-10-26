@@ -6,6 +6,8 @@
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
   const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
   const CONSENT = /\b(agree|consent|acknowledge|privacy|terms|certify|confirm that|i have read|accurate|true and complete|data processing|gdpr)\b/i;
+  // Opt-ins a person may refuse without losing the application.
+  const OPT_IN = /\b(marketing|newsletters?|future (jobs|roles|opportunities|vacancies|positions)|other (jobs|roles|opportunities|positions)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?)\b/i;
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
 
@@ -74,6 +76,9 @@
     for (const [code] of source.matchAll(/\b[A-Z]{3}\b/g)) {
       if (codes.has(code)) return code;
     }
+    // An option that runs the code into the name ("EUREuro", "USDUS Dollar").
+    const lead = source.match(/^([A-Z]{3})(?=[A-Z][a-z]|[^A-Za-z]|$)/)?.[1];
+    if (lead && codes.has(lead)) return lead;
     for (const [symbol, code] of CURRENCY_SYMBOLS) {
       if (source.includes(symbol)) return code;
     }
@@ -139,7 +144,7 @@
     if (hasOptions(field)) {
       const numbered = field.options.filter((option) => /\d/.test(String(option)));
       // A separate period or currency choice takes the candidate's own, so the amount field keeps their figure.
-      if (!numbered.length && field.options.every((option) => periodIn(option))) {
+      if (!numbered.length && field.options.filter((option) => periodIn(option)).length >= 2) {
         const option = field.options.find((entry) => periodIn(entry) === ownPeriod);
         return option ? { value: option, source: 'profile' } : null;
       }
@@ -250,8 +255,8 @@
     { test: /sponsor/, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
     { test: /relocat/, yesNo: (c) => c.willingToRelocate, name: 'relocation' },
     { test: /notice period|when can you start|earliest start|availability to start|available to start|start date|date (you are |you're )?available/, notice: true, name: 'notice period' },
-    { test: /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|\bcurrency\b/, salary: true, name: 'salary expectation' },
-    { test: /^(total )?(years of (professional |work |relevant )?experience|how many years of experience( do you have)?)$/, fact: (c) => (c.yearsOfExperience ?? null), name: 'years of experience' },
+    { test: /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b/, salary: true, name: 'salary expectation' },
+    { test: /^(total )?(years of (professional |work |relevant )?experience|how many years of (professional |work )?experience( do you have)?)\??$/, fact: (c) => (c.yearsOfExperience ?? null), years: true, name: 'years of experience' },
   ];
 
   /**
@@ -268,8 +273,10 @@
       return { skip: 'An optional upload that is not a résumé or cover letter.' };
     }
     // Required consent and certification boxes are ticked; optional ones (marketing, future jobs) are left.
+    // Agreeing to the terms or privacy policy is needed to apply even when the box is not marked required.
     if (field.kind === 'checkbox' && !hasOptions(field) && CONSENT.test(label)) {
-      return field.required ? { value: true, source: 'consent' } : { skip: 'Optional consent box.' };
+      const neededToApply = field.required || (/\b(terms|privacy|data processing|gdpr)\b/.test(label) && !OPT_IN.test(label));
+      return neededToApply ? { value: true, source: 'consent' } : { skip: 'Optional consent box.' };
     }
     // A single choice that acknowledges a statement ("I acknowledge this statement") is the answer.
     if (hasOptions(field) && field.options.length === 1 && CONSENT.test(String(field.options[0]))) {
@@ -321,7 +328,16 @@
       }
       if (hasOptions(field)) {
         const option = field.options.find((entry) => String(entry).toLowerCase() === String(fact).toLowerCase());
-        return option ? { value: option, source: 'profile' } : null;
+        if (option) return { value: option, source: 'profile' };
+        // Years as choices ("No experience", "1+ year", "5-7 years"): the highest one the candidate reaches.
+        if (rule.years) {
+          const reached = field.options
+            .map((entry) => ({ entry, from: /^\s*(no|none|less than|under|<)/i.test(String(entry)) ? 0 : Number(String(entry).match(/\d+/)?.[0]) }))
+            .filter(({ from }) => Number.isFinite(from) && from <= Number(fact))
+            .sort((a, b) => b.from - a.from)[0];
+          return reached ? { value: reached.entry, source: 'profile' } : null;
+        }
+        return null;
       }
       return { value: String(fact), source: 'profile' };
     }

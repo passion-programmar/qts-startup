@@ -254,3 +254,40 @@ test('a tick box takes only yes/no facts, and a non-yes/no list goes to the AI i
   assert.deepEqual(missing, []);
   assert.deepEqual(open.map((entry) => entry.id), ['visa']);
 });
+
+test('a currency and a frequency dropdown next to the salary take the candidate\'s own', () => {
+  const { answers: resolved } = answers.resolveFields([
+    field('Salary', { required: false }),
+    field('Currency', { kind: 'menu', options: ['Euro', 'US Dollar', 'Thai Baht'] }),
+    field('Frequency', { kind: 'menu', options: ['Hourly', 'Daily', 'Weekly', 'Monthly', 'Annually'] }),
+  ], { ...candidate, salaryExpectationAmount: 5000, salaryExpectationPeriod: 'month' }, []);
+  assert.equal(resolved.Currency.value, 'Euro');
+  assert.equal(resolved.Frequency.value, 'Monthly');
+});
+
+test('an unmarked terms box is ticked, marketing and talent-pool boxes are not', () => {
+  const { answers: resolved } = answers.resolveFields([
+    field('I agree to the terms and conditions & privacy policy', { kind: 'checkbox', required: false }),
+    field('I agree to receive marketing emails and newsletters', { id: 'marketing', kind: 'checkbox', required: false }),
+    field('I consent to being kept in the talent pool for future opportunities under the privacy policy', { id: 'pool', kind: 'checkbox', required: false }),
+  ], candidate, []);
+  assert.equal(resolved['I agree to the terms and conditions & privacy policy'].value, true);
+  assert.equal(resolved.marketing, undefined);
+  assert.equal(resolved.pool, undefined);
+});
+
+test('a currency list that runs the code into the name picks the candidate\'s currency', () => {
+  const { answers: resolved } = answers.resolveFields([
+    field('Currency', { kind: 'menu', options: ['EUREuro', 'USDUS Dollar', 'THBThai Baht'] }),
+  ], candidate, []);
+  assert.equal(resolved.Currency.value, 'EUREuro');
+});
+
+test('years of experience as choices take the highest one the candidate reaches', () => {
+  const { answers: resolved } = answers.resolveFields([
+    field('How many years of experience do you have?', { kind: 'menu', options: ['No experience', '1+ year', '5+ year', '8+ year', '10+ year'] }),
+    field('Years of experience', { id: 'ranges', kind: 'select', options: ['Less than 2', '2-4 years', '5-7 years', '8-10 years', '10+ years'] }),
+  ], candidate, []);
+  assert.equal(resolved['How many years of experience do you have?'].value, '8+ year');
+  assert.equal(resolved.ranges.value, '8-10 years');
+});

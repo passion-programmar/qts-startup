@@ -187,13 +187,21 @@ async function reachApplicationForm(tab, onTab) {
     }
   }
   if (await applicationFormShown(tab.id)) return tab;
+  const closed = await inForm(tab.id, () => globalThis.__qtsApplyForm.jobClosed()).catch(() => '');
+  if (closed) throw new ApplyStop(`The job is closed on the site ("${closed}").`);
+  const blockers = await inForm(tab.id, () => globalThis.__qtsApplyForm.detectBlockers()).catch(() => []);
+  if (blockers?.includes('captcha')) throw new ApplyStop('The site shows a security check (CAPTCHA) before the job page; open it in the Apply window and apply by hand.');
   throw new ApplyStop('No application form or Apply button was found on the job page; apply by hand.');
 }
 
 async function readComboboxOptions(tabId, fields) {
   for (const field of fields) {
-    if (field.kind !== 'combobox' || field.hidden || field.disabled || field.options?.length) continue;
-    field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readComboboxOptions(id), [field.id]).catch(() => []);
+    if (field.hidden || field.disabled || field.options?.length) continue;
+    if (field.kind === 'combobox') {
+      field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readComboboxOptions(id), [field.id]).catch(() => []);
+    } else if (field.kind === 'menu' && field.lazy) {
+      field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readMenuOptions(id), [field.id]).catch(() => []);
+    }
   }
 }
 
