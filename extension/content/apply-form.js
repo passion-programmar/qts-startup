@@ -233,7 +233,9 @@
       // A menu button beside an input (a phone number's country flag) belongs to that input.
       if ((tag === 'BUTTON' || control.getAttribute('role') === 'button') && control.closest('form, fieldset')
         && /^(menu|listbox|true)$/i.test(control.getAttribute('aria-haspopup') || '') && !listboxChoices(control)
-        && !blockQuestion(control).block?.querySelector('input:not([type="hidden"]):not([aria-hidden="true"]), textarea')) {
+        && !blockQuestion(control).block?.querySelector('input:not([type="hidden"]):not([aria-hidden="true"]), textarea')
+        // "Import resume from…" and autofill pickers are not questions.
+        && !/import|autofill|upload|attach|apply with|\bresume\b|\bcv\b|svg/i.test(`${textOf(control)} ${labelFor(control)}`)) {
         const label = labelFor(control);
         control.setAttribute(MENU_ATTRIBUTE, 'lazy');
         fields.push({

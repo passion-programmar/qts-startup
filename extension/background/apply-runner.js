@@ -201,6 +201,8 @@ async function readComboboxOptions(tabId, fields) {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readComboboxOptions(id), [field.id]).catch(() => []);
     } else if (field.kind === 'menu' && field.lazy) {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readMenuOptions(id), [field.id]).catch(() => []);
+      // A menu that shows no choices is left alone rather than typed into.
+      if (!field.options.length) field.hidden = true;
     }
   }
 }
@@ -255,6 +257,7 @@ async function fillFormPage(tabId, application, keepAlive) {
   const helpers = self.__qtsApplyAnswers;
   const used = {};
   const seen = new Set();
+  const uploaded = new Set();
   let documents = null;
   for (let round = 0; round < APPLY_FILL_ROUNDS; round += 1) {
     const fields = round === 0
@@ -292,7 +295,22 @@ async function fillFormPage(tabId, application, keepAlive) {
       if (!answer) continue;
       const file = answer.file ? { ...documents[answer.file], mimeType: 'application/pdf' } : null;
       if (answer.file && !file?.base64) continue;
-      const result = await inForm(tabId, (fieldId, value, upload) => globalThis.__qtsApplyForm.fillField(fieldId, value, upload), [field.id, answer.value ?? null, file]);
+      // Each document goes up once per page; a site may redraw its upload field after taking it.
+      if (answer.file && uploaded.has(answer.file)) continue;
+      const fill = (fieldId) => inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file]);
+      let result = await fill(field.id);
+      // The page may rebuild a field after another answer (BambooHR); find it again by its question.
+      if (result?.error === 'The field is no longer on the page.') {
+        const again = (await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()) || [])
+          .find((entry) => entry.label === field.label && entry.kind === field.kind && !entry.hidden);
+        if (again) {
+          seen.add(again.id);
+          result = await fill(again.id);
+        } else {
+          continue;
+        }
+      }
+      if (answer.file && result?.ok) uploaded.add(answer.file);
       if (!result?.ok && field.required) failures.push(field.label);
       if (!answer.file) used[field.label || field.id] = answer;
     }
@@ -398,7 +416,12 @@ async function runApplication(application, recipe) {
       if (!(await isApplyOn())) throw new ApplyStop('Apply was cancelled.', { skip: false, keepTab: false });
       if (lostClaim) throw new ApplyStop('This Chrome lost the application to another one.', { skip: false, keepTab: false });
       Object.assign(answersUsed, await fillFormPage(tab.id, application, keepAlive));
-      const buttons = await inForm(tab.id, () => globalThis.__qtsApplyForm.buttons());
+      let buttons = await inForm(tab.id, () => globalThis.__qtsApplyForm.buttons());
+      // Sites keep Submit disabled while an upload finishes; give it a moment before judging.
+      for (let waited = 0; waited < 15000 && !buttons?.submit && buttons?.submitDisabled; waited += 1000) {
+        await sleep(1000);
+        buttons = await inForm(tab.id, () => globalThis.__qtsApplyForm.buttons());
+      }
       if (buttons?.submit) break;
       if (!buttons?.next) {
         throw new ApplyStop(buttons?.submitDisabled
