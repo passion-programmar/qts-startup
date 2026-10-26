@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { DatePicker, MonthPicker } from "@/app/components/date-picker";
+import { ConfirmButton } from "@/app/components/confirm-button";
 import { FormCard, openCardOfInvalidField } from "@/app/components/form-card";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
@@ -52,9 +53,21 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
   const [isOpen, setIsOpen] = useState(false);
   const closeModal = useCallback(() => setIsOpen(false), []);
   const [state, formAction, isPending] = useActionState(
-    createUserAction,
+    async (previous: UserActionState, formData: FormData) => {
+      const result = await createUserAction(previous, formData);
+      // A saved account closes the window; its row appears in the list, and the next opening is empty.
+      if (result.success) {
+        setIsOpen(false);
+        setEducationRows([0]);
+        setExperienceRows([0]);
+      }
+      return result;
+    },
     initialState,
   );
+  // Messages belong to this opening, not to an earlier save or error.
+  const [openedWith, setOpenedWith] = useState(state);
+  const message = state === openedWith ? initialState : state;
   const isAccount = role === "account";
   const roleLabel = isAccount
     ? "Candidate account"
@@ -66,7 +79,10 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
     <>
       <button
         className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus-visible:outline-indigo-600"
-        onClick={() => setIsOpen(true)}
+        onClick={() => {
+          setOpenedWith(state);
+          setIsOpen(true);
+        }}
         type="button"
       >
         <UserPlus aria-hidden="true" className="size-4" />
@@ -74,7 +90,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
       </button>
       <Modal
         confirmOnDismiss={isAccount}
-        dismissQuestion="Do you want to continue creating this Account?"
+        dismissQuestion="Discard this new account?"
         onClose={closeModal}
         open={isOpen}
         subtitle={
@@ -330,10 +346,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
           </div>
         )}
 
-        {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
-        {state.success && (
-          <FormMessage variant="success">{state.success}</FormMessage>
-        )}
+        {message.error && <FormMessage variant="error">{message.error}</FormMessage>}
           <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
             <button
               className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
@@ -488,9 +501,17 @@ export function EditCandidateProfileForm({
   const nextExperienceRowId = useRef(Math.max(1, candidate.experience.length));
   const closeModal = useCallback(() => setIsOpen(false), []);
   const [state, formAction, isPending] = useActionState(
-    updateCandidateProfileAction,
+    async (previous: UserActionState, formData: FormData) => {
+      const result = await updateCandidateProfileAction(previous, formData);
+      // A saved profile closes the window; the list shows the change.
+      if (result.success) setIsOpen(false);
+      return result;
+    },
     initialState,
   );
+  // Messages belong to this opening, not to an earlier save or error.
+  const [openedWith, setOpenedWith] = useState(state);
+  const message = state === openedWith ? initialState : state;
   const fieldId = (field: string) => `${field}-${candidate.userId}`;
   // Each opening starts from the saved history, newest first as the page loads it, so rows never
   // keep an earlier order or point at another entry after a save.
@@ -499,6 +520,7 @@ export function EditCandidateProfileForm({
     setExperienceRows(candidate.experience.length ? candidate.experience.map((_, index) => index) : [0]);
     nextEducationRowId.current = Math.max(1, candidate.education.length);
     nextExperienceRowId.current = Math.max(1, candidate.experience.length);
+    setOpenedWith(state);
     setIsOpen(true);
   };
 
@@ -515,7 +537,7 @@ export function EditCandidateProfileForm({
       </button>
       <Modal
         confirmOnDismiss
-        dismissQuestion="Do you want to continue editing this Profile?"
+        dismissQuestion="Discard unsaved changes?"
         onClose={closeModal}
         open={isOpen}
         subtitle="Update the candidate's contact information and profile details."
@@ -702,10 +724,7 @@ export function EditCandidateProfileForm({
               );
             }}
           </HistorySection>
-          {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
-          {state.success && (
-            <FormMessage variant="success">{state.success}</FormMessage>
-          )}
+          {message.error && <FormMessage variant="error">{message.error}</FormMessage>}
           <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
             <button
               className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
@@ -742,28 +761,19 @@ export function DeleteCandidateAccountForm({
   );
 
   return (
-    <form
-      action={formAction}
-      onSubmit={(event) => {
-        if (
-          !window.confirm(
-            `Permanently delete ${candidateName}? Their profile, Jobs, Bids, education, and experience records will also be deleted.`,
-          )
-        ) {
-          event.preventDefault();
-        }
-      }}
-    >
+    <form action={formAction}>
       <input name="userId" type="hidden" value={userId} />
-      <button
-        aria-label={`Delete ${candidateName}`}
+      <ConfirmButton
+        ariaLabel={`Delete ${candidateName}`}
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
+        confirmLabel="Delete candidate"
+        description={<>Permanently delete {candidateName}? Their profile, Jobs, Bids, education, and experience records are deleted too. This cannot be undone.</>}
         disabled={isPending}
-        type="submit"
+        title="Delete this candidate?"
       >
         {isPending ? <LoadingIcon className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />}
         {isPending ? "Deleting..." : "Delete"}
-      </button>
+      </ConfirmButton>
       {state.error && (
         <span className="mt-1 block max-w-36 text-[10px] leading-tight text-rose-700" role="alert">
           {state.error}
@@ -830,6 +840,8 @@ function Modal({
   const leaveConfirmationRef = useRef<HTMLDivElement>(null);
   const showLeaveConfirmationRef = useRef(false);
   const [showLeaveConfirmation, setShowLeaveConfirmation] = useState(false);
+  // Whether anything in the form was changed since the window opened; only then does closing ask.
+  const changedRef = useRef(false);
   const titleId = useId();
   const subtitleId = useId();
 
@@ -838,7 +850,7 @@ function Modal({
     setShowLeaveConfirmation(show);
   }, []);
   const requestClose = useCallback(() => {
-    if (confirmOnDismiss) {
+    if (confirmOnDismiss && changedRef.current) {
       updateLeaveConfirmation(true);
     } else {
       onClose();
@@ -858,6 +870,7 @@ function Modal({
   useEffect(() => {
     if (!open) return;
 
+    changedRef.current = false;
     const previousFocus = document.activeElement;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -910,8 +923,9 @@ function Modal({
 
   useEffect(() => {
     if (showLeaveConfirmation) {
+      // "Keep editing" has the focus, so Enter never throws work away.
       leaveConfirmationRef.current
-        ?.querySelector<HTMLButtonElement>("button")
+        ?.querySelector<HTMLButtonElement>("button[data-keep-editing]")
         ?.focus();
     }
   }, [showLeaveConfirmation]);
@@ -961,6 +975,16 @@ function Modal({
         <div
           className="overflow-y-auto px-5 py-5 sm:px-7 sm:py-6"
           inert={showLeaveConfirmation}
+          onChangeCapture={() => {
+            changedRef.current = true;
+          }}
+          onClickCapture={(event) => {
+            // Calendars and "Add" buttons change the form without typing.
+            if ((event.target as HTMLElement).closest("[data-changes-form]")) changedRef.current = true;
+          }}
+          onInputCapture={() => {
+            changedRef.current = true;
+          }}
         >
           {children}
         </div>
@@ -984,23 +1008,23 @@ function Modal({
                 className="mt-2 text-sm leading-6 text-slate-600"
                 id={`${titleId}-leave-description`}
               >
-                Choose Yes to keep this form open. Choose No to close it
-                and discard unsaved changes.
+                You changed this form but have not saved it. Discarding closes it and loses those changes.
               </p>
               <div className="mt-5 flex justify-end gap-2">
                 <button
-                  className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                  className="min-h-10 rounded-lg border border-rose-200 px-4 text-sm font-medium text-rose-700 transition hover:bg-rose-50"
                   onClick={cancelAndClose}
                   type="button"
                 >
-                  No
+                  Discard changes
                 </button>
                 <button
                   className="min-h-10 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700"
+                  data-keep-editing
                   onClick={continueEditing}
                   type="button"
                 >
-                  Yes
+                  Keep editing
                 </button>
               </div>
             </div>
@@ -1078,21 +1102,7 @@ export function DeleteStaffUserForm({
   const noReplacementAvailable = hasReports && replacementUsers.length === 0;
 
   return (
-    <form
-      action={formAction}
-      className="mt-2"
-      onSubmit={(event) => {
-        if (
-          !window.confirm(
-            hasReports
-              ? `Permanently delete this staff account and reassign ${reportsCount} direct report(s) to the selected peer? This also deletes their login history.`
-              : "Permanently delete this staff account? This also deletes their login history.",
-          )
-        ) {
-          event.preventDefault();
-        }
-      }}
-    >
+    <form action={formAction} className="mt-2">
       <input name="userId" type="hidden" value={userId} />
       {hasReports && replacementUsers.length > 0 && (
         <div className="mb-3">
@@ -1131,14 +1141,18 @@ export function DeleteStaffUserForm({
       {state.success && (
         <FormMessage variant="success">{state.success}</FormMessage>
       )}
-      <button
+      <ConfirmButton
         className="inline-flex h-8 items-center gap-2 rounded-md border border-rose-200 px-3 text-[10px] font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
+        confirmLabel="Delete account"
+        description={hasReports
+          ? `Permanently delete this staff account and reassign ${reportsCount} direct report(s) to the selected peer? Their login history is deleted too. This cannot be undone.`
+          : "Permanently delete this staff account? Their login history is deleted too. This cannot be undone."}
         disabled={isPending || noReplacementAvailable}
-        type="submit"
+        title="Delete this account?"
       >
         {isPending && <LoadingIcon className="size-3.5" />}
         {isPending ? "Deleting..." : "Delete account"}
-      </button>
+      </ConfirmButton>
     </form>
   );
 }
@@ -1156,11 +1170,14 @@ function HistorySection({
   onRemove: (rowId: number) => void;
   children: (rowId: number) => React.ReactNode;
 }) {
+  // A removal is confirmed in a dialog outside the form, so it reports the change through this marker.
+  const changedMarker = useRef<HTMLSpanElement>(null);
   return (
     <FormCard
       actions={
         <button
           className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 px-3 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+          data-changes-form
           disabled={rowIds.length >= 20}
           onClick={addRow}
           type="button"
@@ -1174,6 +1191,7 @@ function HistorySection({
       summary={`${rowIds.length} ${rowIds.length === 1 ? "entry" : "entries"} · newest first`}
       title={title}
     >
+      <span hidden ref={changedMarker} />
       {rowIds.map((rowId, index) => (
         <fieldset
           className="grid gap-4 rounded-lg bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-3"
@@ -1183,15 +1201,20 @@ function HistorySection({
             {title} entry {index + 1}
           </legend>
           {children(rowId)}
-          <button
-            aria-label={`Remove ${title.toLowerCase()} entry ${index + 1}`}
+          <ConfirmButton
+            ariaLabel={`Remove ${title.toLowerCase()} entry ${index + 1}`}
             className="inline-flex h-9 items-center justify-center gap-2 justify-self-start rounded-lg px-3 text-[11px] font-medium text-rose-700 transition hover:bg-rose-50"
-            onClick={() => onRemove(rowId)}
-            type="button"
+            confirmLabel="Remove entry"
+            description={`Remove ${title.toLowerCase()} entry ${index + 1} from this form? It is removed from the profile when you save.`}
+            onConfirm={() => {
+              onRemove(rowId);
+              changedMarker.current?.dispatchEvent(new Event("input", { bubbles: true }));
+            }}
+            title={`Remove this ${title.toLowerCase()} entry?`}
           >
             <Trash2 className="size-3.5" />
             Remove entry
-          </button>
+          </ConfirmButton>
         </fieldset>
       ))}
     </FormCard>

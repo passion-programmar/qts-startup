@@ -1,5 +1,6 @@
 "use client";
 
+import { ConfirmButton } from "@/app/components/confirm-button";
 import { useActionState } from "react";
 import { Check, Plus, Trash2 } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
@@ -67,24 +68,18 @@ export function ManagerPromptForm({
 export function DeleteManagerPromptForm({ promptGroupId, name }: { promptGroupId: string; name: string }) {
   const [state, formAction, isPending] = useActionState(deleteManagerPromptAction, initialState);
   return (
-    <form
-      action={formAction}
-      className="space-y-2"
-      onSubmit={(event) => {
-        if (!window.confirm(`Delete "${name}"? It leaves your rotation; jobs and bids that used it still show it.`)) {
-          event.preventDefault();
-        }
-      }}
-    >
+    <form action={formAction} className="space-y-2">
       <input name="promptGroupId" type="hidden" value={promptGroupId} />
-      <button
+      <ConfirmButton
         className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-200 px-3 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+        confirmLabel="Delete prompt"
+        description={<>Delete “{name}”? It leaves your rotation; jobs and bids that used it still show it.</>}
         disabled={isPending}
-        type="submit"
+        title="Delete this prompt?"
       >
         {isPending ? <LoadingIcon className="size-3.5" /> : <Trash2 className="size-3.5" />}
         {isPending ? "Deleting..." : "Delete"}
-      </button>
+      </ConfirmButton>
       <ActionFeedback state={state} />
     </form>
   );

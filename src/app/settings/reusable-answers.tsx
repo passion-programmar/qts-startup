@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { Check, Plus, Trash2 } from "lucide-react";
+import { ConfirmButton } from "@/app/components/confirm-button";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import {
   deleteReusableAnswerAction,
@@ -83,14 +84,16 @@ export function ReusableAnswerForm({ answer }: { answer?: ReusableAnswer }) {
         <form action={deleteAction}>
           <input name="answerId" type="hidden" value={answer.id} />
           <ActionFeedback state={deleteState} />
-          <button
+          <ConfirmButton
             className="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:border-rose-300 hover:text-rose-700 disabled:opacity-60"
+            confirmLabel="Delete answer"
+            description={<>Delete the reusable answer for “{answer.questionText}”? Apply stops using it for every candidate; ChatGPT answers this question instead.</>}
             disabled={isDeleting}
-            type="submit"
+            title="Delete this reusable answer?"
           >
             {isDeleting ? <LoadingIcon className="size-3.5" /> : <Trash2 className="size-3.5" />}
             {isDeleting ? "Deleting..." : "Delete"}
-          </button>
+          </ConfirmButton>
         </form>
       )}
     </div>

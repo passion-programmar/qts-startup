@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { stopAllAction } from "@/app/jobs/actions";
+import { ConfirmButton } from "@/app/components/confirm-button";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { initialRecordState } from "@/app/record-action-state";
 
@@ -12,17 +13,18 @@ function StopAllButton({ mode, label }: { mode: "generation" | "apply"; label: s
   return (
     <form action={action} className="flex items-center gap-2">
       <input name="mode" type="hidden" value={mode} />
-      <button
+      <ConfirmButton
         className="inline-flex h-8 items-center rounded-lg border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
+        confirmLabel={label}
+        description={mode === "generation"
+          ? "Generation stops in every Chrome of yours; jobs being generated go back to the queue."
+          : "Apply stops in every Chrome of yours; applications not yet submitted go back to the list. A Submit already sent is not undone."}
         disabled={pending}
-        onClick={(event) => {
-          if (!window.confirm(`${label} in every Chrome?`)) event.preventDefault();
-        }}
-        type="submit"
+        title={`${label} in every Chrome?`}
       >
         {pending && <LoadingIcon className="mr-1 size-3.5" />}
         {label}
-      </button>
+      </ConfirmButton>
       {message && (
         <span className={`max-w-xs text-[11px] ${state.error ? "text-rose-700" : "text-slate-500"}`} role="status">
           {message}

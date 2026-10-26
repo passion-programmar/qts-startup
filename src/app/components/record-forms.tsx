@@ -1,14 +1,14 @@
 "use client";
 
 import { ListPlus, Pencil, RotateCcw, Trash2, X } from "lucide-react";
-import { useActionState, useId, useState } from "react";
+import { useActionState, useId, useRef, useState } from "react";
 import { deleteBidAction, updateBidAction } from "@/app/bids/actions";
 import {
   deleteJobAction,
   setJobGenerationQueueAction,
   updateJobAction,
 } from "@/app/jobs/actions";
-import { initialRecordState } from "@/app/record-action-state";
+import { initialRecordState, type RecordActionState } from "@/app/record-action-state";
 import { DatePicker } from "@/app/components/date-picker";
 import { LoadingIcon } from "@/app/components/loading-icon";
 
@@ -97,12 +97,34 @@ function RecordActions({
   const deleteDialogId = useId();
   const updateAction = kind === "job" ? updateJobAction : updateBidAction;
   const deleteAction = kind === "job" ? deleteJobAction : deleteBidAction;
-  const [updateState, updateFormAction, updating] = useActionState(updateAction, initialRecordState);
+  const [updateState, updateFormAction, updating] = useActionState(
+    async (previous: RecordActionState, formData: FormData) => {
+      const result = await updateAction(previous, formData);
+      // A saved record closes the window; the list shows the change.
+      if (result.success) setOpen(false);
+      return result;
+    },
+    initialRecordState,
+  );
+  // Closing asks only when something was changed since the window opened; messages belong to this opening.
+  const changedRef = useRef(false);
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const [openedWith, setOpenedWith] = useState(updateState);
+  const updateMessage = updateState === openedWith ? initialRecordState : updateState;
+  const openEditor = () => {
+    changedRef.current = false;
+    setOpenedWith(updateState);
+    setOpen(true);
+  };
+  const requestClose = () => {
+    if (changedRef.current) setConfirmingClose(true);
+    else setOpen(false);
+  };
   const [deleteState, deleteFormAction, deleting] = useActionState(deleteAction, initialRecordState);
 
   return (
     <div className="flex min-w-0 items-start gap-2">
-      {showEdit && <button aria-label={`Edit ${record.title}`} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setOpen(true)} title={`Edit ${record.title}`} type="button"><Pencil aria-hidden="true" className="size-4" /></button>}
+      {showEdit && <button aria-label={`Edit ${record.title}`} className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={openEditor} title={`Edit ${record.title}`} type="button"><Pencil aria-hidden="true" className="size-4" /></button>}
       {showDelete && (
         <form action={deleteFormAction}>
           <input name="id" type="hidden" value={record.id} />
@@ -192,13 +214,28 @@ function RecordActions({
         </form>
       )}
       {open && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true">
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !confirmingClose) requestClose();
+          }}
+          role="dialog"
+        >
           <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
             <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
               <div><h2 className="font-semibold text-slate-900">Edit {kind}</h2><p className="text-xs text-slate-500">Update the complete stored record.</p></div>
-              <button aria-label="Close edit form" className="flex size-9 items-center justify-center rounded-lg hover:bg-slate-100" onClick={() => setOpen(false)} type="button"><X className="size-4" /></button>
+              <button aria-label="Close edit form" className="flex size-9 items-center justify-center rounded-lg hover:bg-slate-100" onClick={requestClose} type="button"><X className="size-4" /></button>
             </header>
-            <form action={updateFormAction} className="grid gap-4 p-5 sm:grid-cols-2">
+            <form
+              action={updateFormAction}
+              className="grid gap-4 p-5 sm:grid-cols-2"
+              onChangeCapture={() => { changedRef.current = true; }}
+              onClickCapture={(event) => {
+                if ((event.target as HTMLElement).closest("[data-changes-form]")) changedRef.current = true;
+              }}
+              onInputCapture={() => { changedRef.current = true; }}
+            >
               <input name="id" type="hidden" value={record.id} />
               <Field label="Candidate"><select className={inputClass} defaultValue={record.candidateId} name="candidateId" required>{candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></Field>
               <Field label="Job URL"><input className={inputClass} defaultValue={record.url} maxLength={2048} name="jobUrl" required type="url" /></Field>
@@ -206,14 +243,41 @@ function RecordActions({
               <Field label="Company"><input className={inputClass} defaultValue={record.company} maxLength={500} name="company" required /></Field>
               <Field label="Location"><input className={inputClass} defaultValue={record.location ?? ""} maxLength={500} name="location" /></Field>
               {kind === "job" ? <JobFields record={record} /> : <BidFields record={record} />}
-              {updateState.error && <p className="text-sm text-rose-700 sm:col-span-2" role="alert">{updateState.error}</p>}
-              {updateState.success && <p className="text-sm text-emerald-700 sm:col-span-2" role="status">{updateState.success}</p>}
+              {updateMessage.error && <p className="text-sm text-rose-700 sm:col-span-2" role="alert">{updateMessage.error}</p>}
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 sm:col-span-2">
-                <button className="rounded-lg border border-slate-200 px-4 py-2 text-sm" onClick={() => setOpen(false)} type="button">Cancel</button>
+                <button className="rounded-lg border border-slate-200 px-4 py-2 text-sm" onClick={requestClose} type="button">Cancel</button>
                 <button className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={updating} type="submit">{updating && <LoadingIcon className="size-4" />}{updating ? "Saving..." : "Save changes"}</button>
               </div>
             </form>
           </div>
+          {confirmingClose && (
+            <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/35 p-4">
+              <div aria-modal="true" className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl" role="alertdialog">
+                <h2 className="text-lg font-semibold text-slate-900">Discard unsaved changes?</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">You changed this {kind} but have not saved it. Discarding closes the window and loses those changes.</p>
+                <div className="mt-6 flex justify-end gap-3">
+                  <button
+                    className="min-h-10 rounded-lg border border-rose-200 px-4 text-sm font-medium text-rose-700 hover:bg-rose-50"
+                    onClick={() => {
+                      setConfirmingClose(false);
+                      setOpen(false);
+                    }}
+                    type="button"
+                  >
+                    Discard changes
+                  </button>
+                  <button
+                    autoFocus
+                    className="min-h-10 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700"
+                    onClick={() => setConfirmingClose(false)}
+                    type="button"
+                  >
+                    Keep editing
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

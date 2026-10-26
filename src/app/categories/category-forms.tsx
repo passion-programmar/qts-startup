@@ -1,5 +1,6 @@
 "use client";
 
+import { ConfirmButton } from "@/app/components/confirm-button";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { LoadingIcon } from "@/app/components/loading-icon";
@@ -46,17 +47,19 @@ export function EditCategoryForm({ id, name }: { id: string; name: string }) {
 }
 
 export function DeleteCategoryForm({ id, name }: { id: string; name: string }) {
-  const [state, formAction] = useActionState(deleteCategoryAction, initialState);
+  const [state, formAction, isPending] = useActionState(deleteCategoryAction, initialState);
   return (
-    <form
-      action={formAction}
-      className="flex flex-wrap items-center gap-2"
-      onSubmit={(event) => {
-        if (!window.confirm(`Delete category "${name}"? Its candidates move to the default category.`)) event.preventDefault();
-      }}
-    >
+    <form action={formAction} className="flex flex-wrap items-center gap-2">
       <input name="categoryId" type="hidden" value={id} />
-      <SubmitButton destructive idleText="Delete" pendingText="Deleting…" />
+      <ConfirmButton
+        className="h-9 rounded-lg border border-rose-200 px-3 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
+        confirmLabel="Delete category"
+        description={<>Delete the category “{name}”? Its candidates move to the default category.</>}
+        disabled={isPending}
+        title="Delete this category?"
+      >
+        {isPending ? "Deleting…" : "Delete"}
+      </ConfirmButton>
       <ActionMessage state={state} />
     </form>
   );
