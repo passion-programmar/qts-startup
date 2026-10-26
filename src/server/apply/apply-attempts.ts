@@ -10,6 +10,7 @@ import {
   APPLY_PARALLEL_LIMIT,
   APPLY_SUBMIT_LEASE_SECONDS,
   type ApplyResultReport,
+  coverLetterText,
   normalizeQuestionKey,
 } from "./apply-values";
 import { type ExchangeRates, loadExchangeRates } from "./exchange-rates";
@@ -57,6 +58,8 @@ export type ClaimedApplication = {
     generationRunId: string | null;
     // The résumé and cover letter content Generation delivered, so AI answers match what is uploaded.
     documentsJson: string | null;
+    // The same cover letter as plain text, for forms that ask for it in a text box.
+    coverLetterText: string | null;
   };
   candidate: Record<string, string | number | boolean | null>;
   savedAnswers: { questionKey: string; questionText: string; answer: string }[];
@@ -91,6 +94,11 @@ export async function claimNextApplication(
       )`,
       documentsJson: sql<string | null>`(
         select left(r.response_json::text, 20000) from generation_runs r
+         where r.job_id = ${jobs.id} and r.status = 'delivered'
+         order by r.created_at desc limit 1
+      )`,
+      coverLetter: sql<unknown>`(
+        select r.response_json -> 'coverLetter' from generation_runs r
          where r.job_id = ${jobs.id} and r.status = 'delivered'
          order by r.created_at desc limit 1
       )`,
@@ -136,11 +144,21 @@ export async function claimNextApplication(
     .from(candidateSavedAnswers)
     .where(eq(candidateSavedAnswers.candidateId, row.candidateId));
 
-  const { jobId, url, title, company, location, description, generationRunId, documentsJson, aiMode, ...candidate } = row;
+  const { jobId, url, title, company, location, description, generationRunId, documentsJson, coverLetter, aiMode, ...candidate } = row;
   return {
     attemptId,
     aiMode: aiMode === "gemini" ? "gemini" : "chatgpt",
-    job: { id: jobId, url, title, company, location, description, generationRunId, documentsJson },
+    job: {
+      id: jobId,
+      url,
+      title,
+      company,
+      location,
+      description,
+      generationRunId,
+      documentsJson,
+      coverLetterText: coverLetterText(coverLetter),
+    },
     candidate,
     savedAnswers,
     exchangeRates: candidate.salaryExpectationAmount ? await loadExchangeRates() : null,

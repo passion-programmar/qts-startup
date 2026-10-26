@@ -108,3 +108,19 @@ export function parseApplyResultReport(body: unknown): ApplyResultReport | strin
     evidence: evidence as Record<string, unknown> | null,
   };
 }
+
+/**
+ * The delivered cover letter as plain text, for forms that ask for it in a text box: greeting,
+ * paragraphs without the PDF's bold marks, closing, and name. Null without paragraphs.
+ */
+export function coverLetterText(coverLetter: unknown): string | null {
+  if (!coverLetter || typeof coverLetter !== "object") return null;
+  const letter = coverLetter as Record<string, unknown>;
+  const clean = (value: unknown) =>
+    typeof value === "string" ? value.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\s+/g, " ").trim() : "";
+  const body = Array.isArray(letter.bodyParagraphs) ? letter.bodyParagraphs : letter.paragraphs;
+  const paragraphs = (Array.isArray(body) ? body : []).map(clean).filter(Boolean);
+  if (!paragraphs.length) return null;
+  const signOff = [clean(letter.closing), clean(letter.signatureName ?? letter.signature)].filter(Boolean).join("\n");
+  return [clean(letter.salutation ?? letter.greeting), ...paragraphs, signOff].filter(Boolean).join("\n\n").slice(0, 8000);
+}

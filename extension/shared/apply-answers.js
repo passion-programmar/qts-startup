@@ -212,6 +212,16 @@
       const shortest = [...choices].sort((a, b) => a.days - b.days)[0];
       return { value: (fitting ?? shortest).option, source: 'profile' };
     }
+    // A number or slider counts in its unit (Teamtailor: weeks); 1 week in months rounds up to 1.
+    if (field.kind === 'range' || field.kind === 'number') {
+      const unit = `${field.unit || ''} ${label}`;
+      const unitDays = /\bdays?\b/.test(unit) ? 1 : /\bweeks?\b/.test(unit) ? 7 : /\bmonths?\b/.test(unit) ? 30 : null;
+      if (!unitDays) return days ? null : { value: '0', source: 'profile' };
+      let count = days ? Math.max(1, Math.ceil(days / unitDays)) : 0;
+      if (Number.isFinite(field.min)) count = Math.max(count, field.min);
+      if (Number.isFinite(field.max)) count = Math.min(count, field.max);
+      return { value: String(count), source: 'profile' };
+    }
     if (field.kind === 'date' || /\bdate\b/.test(label)) {
       const date = startDate(candidate, today);
       return { value: field.kind === 'date' ? formatDate(date) : formatDate(date, field.placeholder), source: 'profile' };
@@ -261,6 +271,16 @@
     if (field.kind === 'checkbox' && !hasOptions(field) && CONSENT.test(label)) {
       return field.required ? { value: true, source: 'consent' } : { skip: 'Optional consent box.' };
     }
+    // A single choice that acknowledges a statement ("I acknowledge this statement") is the answer.
+    if (hasOptions(field) && field.options.length === 1 && CONSENT.test(String(field.options[0]))) {
+      return { value: field.options[0], source: 'consent' };
+    }
+    // A cover letter typed into the form is the one Generation wrote; a shorter one comes from the AI.
+    if (!hasOptions(field) && ['textarea', 'text'].includes(field.kind) && /cover letter|motivation(al)? letter|letter of motivation/.test(label)) {
+      const letter = context.coverLetterText;
+      if (letter && (!field.maxLength || letter.length <= field.maxLength)) return { value: letter, source: 'documents' };
+      return null;
+    }
     if (EEO.test(label)) {
       if (candidate.eeoPreference === 'prefer_not_to_say') {
         const option = pickOption(field, DECLINE);
@@ -283,10 +303,14 @@
     }
     for (const rule of RULES) {
       if (!rule.test.test(label)) continue;
+      // A tick box takes only a yes/no fact ("SMS to my phone number" is not the phone number).
+      if (field.kind === 'checkbox' && !rule.yesNo) continue;
       if (rule.yesNo) {
-        const value = yesNoAnswer(field, rule.yesNo(candidate));
-        if (value !== null) return { value, source: 'profile' };
-        return { missing: rule.name };
+        const fact = rule.yesNo(candidate);
+        if (fact === null || fact === undefined) return { missing: rule.name };
+        const value = yesNoAnswer(field, fact);
+        // Choices that are not yes/no (a list of visa types) are left to the AI with the facts.
+        return value !== null ? { value, source: 'profile' } : null;
       }
       if (rule.salary) return resolveSalary(field, label, candidate, context.exchangeRates);
       if (rule.notice) return resolveNotice(field, label, candidate, context.today);
@@ -389,7 +413,7 @@
     if (field.maxLength && text.length > field.maxLength) {
       return { ok: false, reason: `longer than ${field.maxLength} characters` };
     }
-    if (field.kind === 'number' && !/^-?\d+(\.\d+)?$/.test(text)) return { ok: false, reason: 'not a number' };
+    if ((field.kind === 'number' || field.kind === 'range') && !/^-?\d+(\.\d+)?$/.test(text)) return { ok: false, reason: 'not a number' };
     if (field.kind === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text)) return { ok: false, reason: 'not an email address' };
     return { ok: true, value: text };
   }

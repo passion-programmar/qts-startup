@@ -19,6 +19,12 @@ const APPLY_FORM_WAIT_MS = 25 * 1000;
 const APPLY_RESULT_WAIT_MS = 2 * 60 * 1000;
 const APPLY_APPLICATIONS_PER_CHAT_TAB = 10;
 const APPLY_MAX_FORM_PAGES = 5;
+// Questions a page shows only after earlier answers (Teamtailor unlocks its form after the requirement
+// questions) are filled in further rounds, until no new question appears.
+const APPLY_FILL_ROUNDS = 5;
+// Clicks to reach the form from a job page: "Apply for this job", then perhaps "Apply manually".
+const APPLY_START_STEPS = 3;
+const APPLY_START_WAIT_MS = 15 * 1000;
 let applyLoopRunning = false;
 
 class ApplyStop extends Error {
@@ -129,6 +135,61 @@ async function waitForFormFields(tabId) {
   throw new ApplyStop('The application form did not appear on the page.');
 }
 
+/** An application form is showing: an email field next to a name field or an upload. */
+async function applicationFormShown(tabId) {
+  const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()).catch(() => null);
+  const visible = (fields || []).filter((field) => !field.hidden && !field.disabled);
+  return visible.some((field) => field.kind === 'email' || /e-?mail/i.test(field.label))
+    && visible.some((field) => field.kind === 'file' || /\bname\b/i.test(field.label));
+}
+
+/**
+ * From a job page to its application form, the way a person gets there: click "Apply" (and a
+ * following "Apply manually"), follow a new tab or page, or open an embedded job-site form.
+ * onTab hears about a new tab so the caller keeps the right one. Returns the tab with the form.
+ */
+async function reachApplicationForm(tab, onTab) {
+  const clicked = [];
+  for (let step = 0; step < APPLY_START_STEPS; step += 1) {
+    await inForm(tab.id, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
+    // Pages often build their content after loading; give the form a few seconds to appear.
+    for (let waited = 0; waited < 6000; waited += 1000) {
+      if (await applicationFormShown(tab.id)) return tab;
+      await sleep(1000);
+    }
+    const blockers = await inForm(tab.id, () => globalThis.__qtsApplyForm.detectBlockers()).catch(() => []);
+    if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
+    const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
+    const start = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip), [clicked]).catch(() => null);
+    if (start?.email) throw new ApplyStop('This job takes applications by email; apply by hand.');
+    if (!start?.ok) break;
+    if (start.frameUrl) {
+      await chrome.tabs.update(tab.id, { url: start.frameUrl });
+      await sleep(500);
+      await waitForTabComplete(tab.id, 45 * 1000);
+      continue;
+    }
+    clicked.push(start.text);
+    // The button may open a new tab, load another page, or show the form on this one.
+    for (let waited = 0; waited < APPLY_START_WAIT_MS; waited += 1000) {
+      await sleep(1000);
+      const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && entry.openerTabId === tab.id);
+      if (opened) {
+        const jobPage = tab;
+        tab = opened;
+        onTab(tab);
+        await tabOwnership.markTab(tab.id, 'apply');
+        chrome.tabs.remove(jobPage.id).catch(() => {});
+        await waitForTabComplete(tab.id, 45 * 1000);
+        break;
+      }
+      if (await applicationFormShown(tab.id)) return tab;
+    }
+  }
+  if (await applicationFormShown(tab.id)) return tab;
+  throw new ApplyStop('No application form or Apply button was found on the job page; apply by hand.');
+}
+
 async function readComboboxOptions(tabId, fields) {
   for (const field of fields) {
     if (field.kind !== 'combobox' || field.hidden || field.disabled || field.options?.length) continue;
@@ -178,44 +239,62 @@ async function fetchApplyDocuments(attemptId) {
   throw new ApplyStop('The résumé could not be printed right now; the job goes back to the list.', { skip: false });
 }
 
-/** Fills one page; returns the answers used, for the evidence and saved answers. */
+/**
+ * Fills one page in rounds: each round answers the questions not seen before, in page order, then
+ * looks again for questions those answers revealed. Returns the answers used, for the evidence.
+ */
 async function fillFormPage(tabId, application, keepAlive) {
   const helpers = self.__qtsApplyAnswers;
-  const fields = await waitForFormFields(tabId);
-  const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
-  if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
-  await readComboboxOptions(tabId, fields);
-  const visible = fields.filter((field) => !field.hidden && !field.disabled);
-  const { answers, open, missing } = helpers.resolveFields(visible, application.candidate, application.savedAnswers, {
-    exchangeRates: application.exchangeRates,
-    today: new Date(),
-  });
-  if (missing.length) {
-    throw new ApplyStop(`Missing candidate facts: ${[...new Set(missing.map((entry) => entry.fact))].join(', ')}. Add them on the candidate's profile.`);
-  }
-  if (open.length) {
-    if (application.aiMode !== 'chatgpt') throw new ApplyStop('Gemini answers for Apply come in a later release; ask your Super Admin to use ChatGPT mode.');
-    Object.assign(answers, await askChatGptForAnswers(application, open, keepAlive));
-  }
-  const needsFiles = Object.values(answers).some((answer) => answer.file);
-  const documents = needsFiles ? await fetchApplyDocuments(application.attemptId) : null;
-  if (documents) application.documentsFolder = documents.folder;
+  const used = {};
+  const seen = new Set();
+  let documents = null;
+  for (let round = 0; round < APPLY_FILL_ROUNDS; round += 1) {
+    const fields = round === 0
+      ? await waitForFormFields(tabId)
+      : await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm());
+    if (round === 0) {
+      await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
+      const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
+      if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
+    }
+    const fresh = (fields || []).filter((field) => !field.hidden && !field.disabled && !seen.has(field.id));
+    if (!fresh.length) break;
+    await readComboboxOptions(tabId, fresh);
+    const { answers, open, missing } = helpers.resolveFields(fresh, application.candidate, application.savedAnswers, {
+      exchangeRates: application.exchangeRates,
+      today: new Date(),
+      coverLetterText: application.job.coverLetterText,
+    });
+    if (missing.length) {
+      throw new ApplyStop(`Missing candidate facts: ${[...new Set(missing.map((entry) => entry.fact))].join(', ')}. Add them on the candidate's profile.`);
+    }
+    if (open.length) {
+      if (application.aiMode !== 'chatgpt') throw new ApplyStop('Gemini answers for Apply come in a later release; ask your Super Admin to use ChatGPT mode.');
+      Object.assign(answers, await askChatGptForAnswers(application, open, keepAlive));
+    }
+    if (!documents && Object.values(answers).some((answer) => answer.file)) {
+      documents = await fetchApplyDocuments(application.attemptId);
+      application.documentsFolder = documents.folder;
+    }
 
-  const failures = [];
-  for (const [id, answer] of Object.entries(answers)) {
-    const file = answer.file ? { ...documents[answer.file], mimeType: 'application/pdf' } : null;
-    if (answer.file && !file?.base64) continue;
-    const result = await inForm(tabId, (fieldId, value, upload) => globalThis.__qtsApplyForm.fillField(fieldId, value, upload), [id, answer.value ?? null, file]);
-    const field = visible.find((entry) => entry.id === id);
-    if (!result?.ok && field?.required) failures.push(field.label);
+    const failures = [];
+    for (const field of fresh) {
+      seen.add(field.id);
+      const answer = answers[field.id];
+      if (!answer) continue;
+      const file = answer.file ? { ...documents[answer.file], mimeType: 'application/pdf' } : null;
+      if (answer.file && !file?.base64) continue;
+      const result = await inForm(tabId, (fieldId, value, upload) => globalThis.__qtsApplyForm.fillField(fieldId, value, upload), [field.id, answer.value ?? null, file]);
+      if (!result?.ok && field.required) failures.push(field.label);
+      if (!answer.file) used[field.label || field.id] = answer;
+    }
+    if (failures.length) throw new ApplyStop(`Could not fill: ${failures.join('; ')}`.slice(0, 480));
+    // Let the page show the questions these answers unlock before looking again.
+    await sleep(1000);
   }
-  if (failures.length) throw new ApplyStop(`Could not fill: ${failures.join('; ')}`.slice(0, 480));
-  await sleep(500);
   const errors = await inForm(tabId, () => globalThis.__qtsApplyForm.fieldErrors());
   if (errors?.length) throw new ApplyStop(`The form shows errors: ${errors.join('; ')}`.slice(0, 480));
-  return Object.fromEntries(Object.entries(answers)
-    .filter(([, answer]) => !answer.file)
-    .map(([id, answer]) => [visible.find((field) => field.id === id)?.label || id, answer]));
+  return used;
 }
 
 /** The application page as proof: a screenshot when possible, the page's text otherwise. */
@@ -305,6 +384,7 @@ async function runApplication(application, recipe) {
   try {
     tab = await openApplyTab(recipe.formUrl);
     await waitForTabComplete(tab.id, 45 * 1000);
+    if (recipe.findStart) tab = await reachApplicationForm(tab, (opened) => { tab = opened; });
     const answersUsed = {};
     for (let page = 0; page < APPLY_MAX_FORM_PAGES; page += 1) {
       if (!(await isApplyOn())) throw new ApplyStop('Apply was cancelled.', { skip: false, keepTab: false });
@@ -312,7 +392,11 @@ async function runApplication(application, recipe) {
       Object.assign(answersUsed, await fillFormPage(tab.id, application, keepAlive));
       const buttons = await inForm(tab.id, () => globalThis.__qtsApplyForm.buttons());
       if (buttons?.submit) break;
-      if (!buttons?.next) throw new ApplyStop('Neither a single Submit nor a Next button was found.');
+      if (!buttons?.next) {
+        throw new ApplyStop(buttons?.submitDisabled
+          ? 'The Submit button stays disabled: the candidate may not meet a requirement question, or a required answer was not accepted.'
+          : 'Neither a single Submit nor a Next button was found.');
+      }
       await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
       await sleep(2500);
     }

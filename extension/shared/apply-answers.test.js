@@ -212,3 +212,45 @@ test('questions about someone else never take the candidate\'s facts', () => {
   assert.equal(resolved['Autofill from resume'], undefined);
   assert.deepEqual(open.map((entry) => entry.id), ['If you have discussed this role with a current employee, please share their full name']);
 });
+
+test('a notice slider counts in its unit, a typed cover letter is Generation\'s, a lone acknowledgement is ticked', () => {
+  const coverLetterText = 'Dear Hiring Manager,\n\nI am applying for the role.';
+  const { answers: resolved, open } = answers.resolveFields([
+    field('What is your current notice period? * Required', { id: 'weeks', kind: 'range', unit: 'weeks', min: 0, max: 25 }),
+    field('Notice period in months', { id: 'months', kind: 'number' }),
+    field('Cover letter', { kind: 'textarea', required: false }),
+    field('Short cover letter', { id: 'short', kind: 'textarea', maxLength: 20 }),
+    field('Our Hybrid & Remote Working Models * Required', { kind: 'radio', options: ['I acknowledge this statement'] }),
+  ], candidate, [], { coverLetterText });
+  assert.equal(resolved.weeks.value, '1');
+  assert.equal(resolved.months.value, '1');
+  assert.equal(resolved['Cover letter'].value, coverLetterText);
+  assert.equal(resolved['Our Hybrid & Remote Working Models * Required'].value, 'I acknowledge this statement');
+  assert.deepEqual(open.map((entry) => entry.id), ['short']);
+
+  const { answers: now } = answers.resolveFields([
+    field('What is your current notice period?', { id: 'weeks', kind: 'range', unit: 'weeks', min: 0, max: 25 }),
+  ], { ...candidate, noticePeriod: 'immediately' }, []);
+  assert.equal(now.weeks.value, '0');
+});
+
+test('Teamtailor\'s menu dropdown and drag-and-drop CV are answered like any choice and upload', () => {
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Please select what right to work you hold: * Required', { kind: 'menu', options: ['British Passport', 'Skilled Worker Visa (formerly Tier 2)'] }),
+    field('Upload CV * Required', { kind: 'file', drop: true }),
+    field('Additional files', { kind: 'file', drop: true, required: false }),
+  ], candidate, []);
+  assert.equal(resolved['Upload CV * Required'].file, 'resume');
+  assert.equal(resolved['Additional files'], undefined);
+  assert.deepEqual(open.map((entry) => entry.id), ['Please select what right to work you hold: * Required']);
+});
+
+test('a tick box takes only yes/no facts, and a non-yes/no list goes to the AI instead of stopping', () => {
+  const { answers: resolved, open, missing } = answers.resolveFields([
+    field('Arden University can use my phone number for recruiting-related communication via SMS.', { kind: 'checkbox', required: false }),
+    field('Please select what right to work you hold: Some roles may not meet the requirement for a sponsored visa.', { id: 'visa', kind: 'menu', options: ['British Passport', 'Skilled Worker Visa'] }),
+  ], candidate, []);
+  assert.deepEqual(resolved, {});
+  assert.deepEqual(missing, []);
+  assert.deepEqual(open.map((entry) => entry.id), ['visa']);
+});

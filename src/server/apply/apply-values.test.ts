@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   canTakeWork,
   compareExtensionVersions,
+  coverLetterText,
   defaultBrowserName,
   normalizeQuestionKey,
   parseApplyResultReport,
@@ -63,4 +64,18 @@ test("result reports are checked", () => {
   });
   assert.equal(typeof notConfirmed, "object");
   assert.equal((notConfirmed as { reason: string }).reason, "No confirmation on the page or by email within 2 minutes.");
+});
+
+test("the cover letter becomes plain text for text boxes", () => {
+  assert.equal(
+    coverLetterText({
+      greeting: "Dear Hiring Manager,",
+      paragraphs: ["I am applying for the **Cloud Platform Engineer** role.", "  I moved 40 services to Kubernetes. "],
+      closing: "Kind regards,",
+      signatureName: "Anna Kowalska",
+    }),
+    "Dear Hiring Manager,\n\nI am applying for the Cloud Platform Engineer role.\n\nI moved 40 services to Kubernetes.\n\nKind regards,\nAnna Kowalska",
+  );
+  assert.equal(coverLetterText({ paragraphs: [] }), null);
+  assert.equal(coverLetterText(null), null);
 });

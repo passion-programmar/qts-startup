@@ -1,13 +1,14 @@
-// Where each job site keeps its application form, and which sites Apply supports in this release
-// (Ashby, Greenhouse, and Lever). Other sites are skipped with a reason, so the Manager applies by hand.
+// Where Apply starts for a job link. Ashby, Greenhouse, and Lever have known form addresses; every
+// other site opens at the job page, where Apply finds the button that starts the application. Sites
+// that need a candidate account and login are skipped with a reason, so the Manager applies by hand.
 
 (function initApplyRecipes(global) {
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
   const ACCOUNT_SITES = /(^|\.)(myworkdayjobs\.com|myworkdaysite\.com|oraclecloud\.com|taleo\.net|successfactors\.(com|eu)|icims\.com)$/i;
 
   /**
-   * { site, formUrl } for a supported job link, or { site, unsupported: reason } for one Apply
-   * does not handle yet.
+   * { site, formUrl } for a known form, { site: 'other', formUrl, findStart: true } for a job page
+   * whose Apply button must be found, or { site, unsupported: reason } for one Apply does not handle.
    */
   function recipeFor(jobUrl) {
     let url;
@@ -31,10 +32,17 @@
       const match = path.match(new RegExp(`^(/[^/]+/${UUID})(/apply)?$`, 'i'));
       if (match) return { site: 'lever', formUrl: `${url.origin}${match[1]}/apply` };
     }
-    if (ACCOUNT_SITES.test(host)) {
+    // A company page that embeds Greenhouse names the job in gh_jid; Greenhouse opens its form from that.
+    const greenhouseJob = url.searchParams.get('gh_jid');
+    if (greenhouseJob && /^\d+$/.test(greenhouseJob)) {
+      return { site: 'greenhouse', formUrl: `https://boards.greenhouse.io/embed/job_app?token=${greenhouseJob}` };
+    }
+    // Oracle's candidate sites also run under company domains (explore-jobs.ciklum.com).
+    if (ACCOUNT_SITES.test(host) || /\/hcmUI\/CandidateExperience\/|\/sites\/[^/]+\/job\/\d+/i.test(path)) {
       return { site: 'account', unsupported: 'This site needs a candidate account and login; Apply supports it in a later release.' };
     }
-    return { site: 'other', unsupported: 'Apply does not support this job site yet; apply by hand.' };
+    if (!/^https?:$/.test(url.protocol)) return { site: 'unknown', unsupported: 'The job link is not a web page.' };
+    return { site: 'other', formUrl: url.href, findStart: true };
   }
 
   const api = { recipeFor };

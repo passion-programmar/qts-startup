@@ -2,12 +2,23 @@
 // hidden, inside open and closed shadow roots), fills them the way a person would so React forms
 // accept the values, attaches files, and reports CAPTCHAs, login walls, field errors, and the page's
 // result after Submit. It never clicks Submit by itself: the service worker calls clickButton('submit')
-// only after the server grants Submit permission.
+// only after the server grants Submit permission. On a job page without a form it finds the button
+// that starts the application (clickStart), the way a person would.
 
 (function initQtsApplyForm(global) {
   const FIELD_ATTRIBUTE = 'data-qts-apply-field';
-  const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send)$/i;
-  const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed)$/i;
+  const DROP_ATTRIBUTE = 'data-qts-apply-drop';
+  const MENU_ATTRIBUTE = 'data-qts-apply-menu';
+  // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
+  const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
+  const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
+  const START_TEXT = /^(apply|apply now|apply (for|to) (this|the) (job|position|role|vacancy|opening)|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?)$/i;
+  const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|enter (your )?(details|information) manually|continue (manually|without .{1,30}))$/i;
+  const NOT_START = /linkedin|indeed|seek|xing|glassdoor|easy apply|with (google|facebook|apple|github|resume|cv)|later|save|share|refer|alert|similar|sign ?in|log ?in|register|autofill/i;
+  // Job-site systems whose form a company page embeds in a frame; opening the frame shows the form.
+  const FORM_FRAME = /greenhouse\.io\/(embed\/)?job_app|boards(\.eu)?\.greenhouse\.io|jobs(\.eu)?\.lever\.co|jobs\.ashbyhq\.com|apply\.workable\.com|smartrecruiters\.com|recruitee\.com|teamtailor\.com|personio\.(de|com)|bamboohr\.com|jobvite\.com|breezy\.hr|comeet\.(co|com)|pinpointhq\.com|join\.com|homerun\.co|applytojob\.com/i;
+  const DROP_TEXT = /\b(drag|drop)\b[^.]{0,40}\b(files?|here|cv|resume|résumé|document)\b|\bclick to upload\b|\bbrowse (files|computer)\b|\bchoose (a )?file\b/i;
+  const MENU_ITEMS = '[role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="menuitem"]';
   const CONFIRMED_TEXT = /thank(s| you) for (applying|your application|your interest|submitting)|application (has been |was )?(received|submitted|sent)|we['’]?ve received your application|we have received your application|successfully (applied|submitted)|your application (is|was|has been) (complete|submitted|received)|application submitted/i;
   const PLACEHOLDER_OPTION = /^(select|choose|please select|--|—|select\.\.\.|select one|pick one)/i;
 
@@ -95,16 +106,67 @@
   function isRequired(control, label) {
     return control.required
       || control.getAttribute('aria-required') === 'true'
-      || /[*✱]\s*$|[*✱]\s|\(required\)|^[*✱]/.test(label);
+      || /[*✱]\s*$|[*✱]\s|\(required\)|^[*✱]|^required\b/i.test(label);
+  }
+
+  /** The unit a number or slider counts in (Teamtailor's notice slider says data-unit="Weeks"). */
+  function unitOf(control, label) {
+    for (let node = control, depth = 0; node && depth < 4; node = node.parentElement, depth += 1) {
+      const unit = node.getAttribute?.('data-unit') || node.querySelector?.('[data-unit]')?.getAttribute('data-unit');
+      if (unit) return cleanText(unit).toLowerCase();
+    }
+    return String(label).toLowerCase().match(/\b(days?|weeks?|months?)\b/)?.[1] ?? null;
+  }
+
+  /** The question a block's control belongs to: its block's label or legend, else the block's text. */
+  function blockQuestion(element) {
+    for (let node = element.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth += 1) {
+      const heading = node.querySelector('label, legend, h3, h4, [class*="label" i]');
+      if (heading && !heading.contains(element) && textOf(heading)) return { text: textOf(heading).slice(0, 300), block: node };
+    }
+    return { text: questionAround(element), block: element.parentElement };
+  }
+
+  /**
+   * Upload areas without a file field of their own (Dropzone keeps its input outside the page's
+   * form): the innermost element that says "drop your file", unless its block has a file input.
+   */
+  function dropZones() {
+    const zones = [];
+    for (const element of allElements()) {
+      if (!['DIV', 'LABEL', 'BUTTON', 'SPAN', 'SECTION', 'P'].includes(element.tagName) || !isShown(element)) continue;
+      const text = textOf(element);
+      if (!text || text.length > 160 || !DROP_TEXT.test(text)) continue;
+      if ([...element.children].some((child) => DROP_TEXT.test(textOf(child)))) continue;
+      const { text: question, block } = blockQuestion(element);
+      if (block?.querySelector('input[type="file"]')) continue;
+      zones.push({ element, question });
+    }
+    return zones;
+  }
+
+  /** A button that opens a menu of choices (Teamtailor's "Select an option"), with its choices. */
+  function menuChoices(button) {
+    const listId = button.getAttribute('aria-controls');
+    if (!listId || !/^(menu|listbox|true)$/i.test(button.getAttribute('aria-haspopup') || '')) return null;
+    const list = button.getRootNode().getElementById?.(listId);
+    const items = list ? [...list.querySelectorAll(MENU_ITEMS)] : [];
+    return items.length >= 2 ? items : null;
+  }
+
+  function itemText(item) {
+    return cleanText(item.getAttribute('data-search-text') || textOf(item));
   }
 
   function optionText(option) {
     return cleanText(option.label || option.textContent);
   }
 
+  // This file is injected again for every call; the prefix keeps new ids from repeating earlier ones.
+  const idPrefix = Math.random().toString(36).slice(2, 6);
   let nextFieldNumber = 1;
   function fieldId(element) {
-    if (!element.getAttribute(FIELD_ATTRIBUTE)) element.setAttribute(FIELD_ATTRIBUTE, `f${nextFieldNumber++}`);
+    if (!element.getAttribute(FIELD_ATTRIBUTE)) element.setAttribute(FIELD_ATTRIBUTE, `f${idPrefix}${nextFieldNumber++}`);
     return element.getAttribute(FIELD_ATTRIBUTE);
   }
 
@@ -120,6 +182,21 @@
     for (const control of allElements()) {
       const tag = control.tagName;
       const type = (control.getAttribute('type') || '').toLowerCase();
+      // Menus count only inside the form (a "Share page" menu is not a question).
+      if ((tag === 'BUTTON' || control.getAttribute('role') === 'button') && control.closest('form, fieldset') && menuChoices(control)) {
+        const label = labelFor(control);
+        control.setAttribute(MENU_ATTRIBUTE, '1');
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'menu',
+          required: isRequired(control, label),
+          options: menuChoices(control).map(itemText).filter(Boolean),
+          hidden: !isShown(control),
+          disabled: control.disabled,
+        });
+        continue;
+      }
       if (tag === 'INPUT' && ['hidden', 'submit', 'button', 'image', 'reset', 'search', 'password'].includes(type)) continue;
       const isCombobox = control.getAttribute('role') === 'combobox' && tag === 'INPUT';
       if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && !isCombobox) continue;
@@ -127,8 +204,7 @@
       const shown = type === 'file' ? isShown(control.closest('div, label, section') || control) : isShown(control);
       if ((type === 'radio' || type === 'checkbox') && control.name) {
         const key = `${type}:${control.name}`;
-        const ownLabel = textOf(control.closest('label')) || textOf(control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`));
-        const option = ownLabel || control.value;
+        const option = choiceText(control);
         if (!groups.has(key)) {
           const field = {
             id: fieldId(control),
@@ -149,8 +225,11 @@
         continue;
       }
       // A styled upload's input has no useful label of its own ("Attach"); its block names it.
+      const blockLabel = type === 'file' ? blockQuestion(control).text : '';
       const fieldLabel = type === 'file'
-        ? cleanText(`${questionAround(control)} ${control.id || control.name || ''}`)
+        ? (/resume|résumé|\bcv\b|cover|letter|file|attach|upload|document|portfolio/i.test(blockLabel)
+          ? blockLabel
+          : cleanText(`${questionAround(control)} ${control.id || control.name || ''}`))
         : label;
       const field = {
         id: fieldId(control),
@@ -158,7 +237,7 @@
         kind: tag === 'TEXTAREA' ? 'textarea'
           : tag === 'SELECT' ? 'select'
             : isCombobox ? 'combobox'
-              : ['email', 'tel', 'url', 'number', 'date', 'file', 'checkbox'].includes(type) ? type : 'text',
+              : ['email', 'tel', 'url', 'number', 'date', 'file', 'checkbox', 'range'].includes(type) ? type : 'text',
         required: isRequired(control, fieldLabel),
         hidden: !shown,
         disabled: control.disabled || control.readOnly,
@@ -166,10 +245,28 @@
         // Date fields typed as text show their format here (DD/MM/YYYY).
         ...(control.placeholder ? { placeholder: String(control.placeholder).slice(0, 40) } : {}),
       };
+      if (type === 'number' || type === 'range') {
+        const unit = unitOf(control, fieldLabel);
+        if (unit) field.unit = unit;
+        if (control.min !== '' && Number.isFinite(Number(control.min))) field.min = Number(control.min);
+        if (control.max !== '' && Number.isFinite(Number(control.max))) field.max = Number(control.max);
+      }
       if (tag === 'SELECT') {
         field.options = [...control.options].map(optionText).filter((text) => text && !PLACEHOLDER_OPTION.test(text));
       }
       fields.push(field);
+    }
+    for (const zone of dropZones()) {
+      zone.element.setAttribute(DROP_ATTRIBUTE, '1');
+      fields.push({
+        id: fieldId(zone.element),
+        label: zone.question,
+        kind: 'file',
+        drop: true,
+        required: isRequired(zone.element, zone.question),
+        hidden: false,
+        disabled: false,
+      });
     }
     for (const field of fields) {
       const control = firstControls.get(field.id);
@@ -232,9 +329,17 @@
     element.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  /** A radio's or checkbox's own text: its wrapping label or label[for], else its value. */
+  function choiceText(control) {
+    return textOf(control.closest('label'))
+      || textOf(control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
+      || control.value;
+  }
+
+  // Same type only: Rails pairs a checkbox with a hidden input of the same name.
   function controlsOfGroup(first) {
     const root = first.getRootNode();
-    return [...root.querySelectorAll(`input[name="${CSS.escape(first.name)}"]`)];
+    return [...root.querySelectorAll(`input[type="${first.type}"][name="${CSS.escape(first.name)}"]`)];
   }
 
   function base64ToFile(base64, filename, mimeType) {
@@ -248,6 +353,8 @@
   async function fillField(id, value, file = null) {
     const element = findField(id);
     if (!element) return { ok: false, error: 'The field is no longer on the page.' };
+    if (element.hasAttribute(DROP_ATTRIBUTE)) return dropFile(element, file);
+    if (element.hasAttribute(MENU_ATTRIBUTE)) return pickMenuChoice(element, value);
     const type = (element.getAttribute('type') || '').toLowerCase();
     if (type === 'file') {
       if (!file) return { ok: false, error: 'No file to attach.' };
@@ -261,12 +368,10 @@
     if (type === 'radio' || (type === 'checkbox' && element.name && controlsOfGroup(element).length > 1)) {
       const wanted = [].concat(value).map((entry) => cleanText(entry).toLowerCase());
       for (const control of controlsOfGroup(element)) {
-        const text = (textOf(control.closest('label')) || control.value).toLowerCase();
-        const shouldBeChecked = wanted.includes(text);
+        const shouldBeChecked = wanted.includes(choiceText(control).toLowerCase());
         if (control.checked !== shouldBeChecked && (type === 'radio' ? shouldBeChecked : true)) control.click();
       }
-      const checked = controlsOfGroup(element).filter((control) => control.checked)
-        .map((control) => textOf(control.closest('label')) || control.value);
+      const checked = controlsOfGroup(element).filter((control) => control.checked).map(choiceText);
       return { ok: checked.length > 0, value: checked.join(', ') };
     }
     if (type === 'checkbox') {
@@ -311,7 +416,64 @@
     }
     element.blur();
     await new Promise((resolve) => setTimeout(resolve, 100));
-    return { ok: Boolean(element.value) && (suggestion ? true : element.value === String(value)), value: element.value };
+    // Sites reformat numbers: "5000" shows as "5,000", and a country picker keeps "600 100 200" of "+48 600 100 200".
+    const digits = (text) => String(text).replace(/\D/g, '');
+    const reformatted = digits(element.value).length >= 4 && digits(String(value)).endsWith(digits(element.value));
+    return { ok: Boolean(element.value) && (suggestion || element.value === String(value) || reformatted), value: element.value };
+  }
+
+  /**
+   * Drops the file on an upload area as a person dragging it there would, then waits for the site
+   * to show it. A Dropzone that ignores the drop gets it through its own hidden file input instead.
+   */
+  async function dropFile(zone, file) {
+    if (!file) return { ok: false, error: 'No file to attach.' };
+    const { block } = blockQuestion(zone);
+    const inputValues = () => [...(block?.querySelectorAll('input:not([type="file"])') || [])].map((input) => input.value).join('|');
+    const before = textOf(block);
+    const valuesBefore = inputValues();
+    const shown = () => {
+      const text = textOf(block);
+      const name = file.filename.replace(/\.[a-z0-9]+$/i, '').slice(0, 12).toLowerCase();
+      return text.toLowerCase().includes(name)
+        || inputValues() !== valuesBefore
+        || (text !== before && /\b(kb|mb|uploaded|100 ?%)\b/i.test(text));
+    };
+    const waitShown = async () => {
+      for (let waited = 0; waited < 10000; waited += 500) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (shown()) return true;
+      }
+      return false;
+    };
+    const transfer = new DataTransfer();
+    transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      zone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    }
+    if (await waitShown()) return { ok: true, value: file.filename };
+    const hiddenInput = [...document.querySelectorAll('input.dz-hidden-input, body > input[type="file"]')][0];
+    if (hiddenInput) {
+      hiddenInput.files = transfer.files;
+      hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+      if (await waitShown()) return { ok: true, value: file.filename };
+    }
+    return { ok: false, error: 'The site did not take the dropped file.' };
+  }
+
+  async function pickMenuChoice(button, value) {
+    const wanted = cleanText(value).toLowerCase();
+    const items = menuChoices(button) || [];
+    const item = items.find((entry) => itemText(entry).toLowerCase() === wanted);
+    if (!item) return { ok: false, error: `"${value}" is not an option.` };
+    if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    item.click();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const picked = item.getAttribute('aria-checked') === 'true' || item.getAttribute('aria-selected') === 'true'
+      || textOf(button).toLowerCase().includes(wanted.slice(0, 20));
+    if (button.getAttribute('aria-expanded') === 'true') button.click();
+    return { ok: picked, value: itemText(item) };
   }
 
   /** A suggestion list that appeared after typing: the entry that matches what was typed. */
@@ -354,7 +516,9 @@
     ));
     if (challenge) blockers.push('captcha');
     const password = allElements().find((element) => element.tagName === 'INPUT' && element.type === 'password' && isShown(element));
-    if (password) blockers.push('login');
+    // A sign-in page without a password field yet (an email-first or magic-link login).
+    const signInPage = /\/(auth\/)?(sign-?in|log-?in|register|sign-?up|create-account)(\/|$)/i.test(location.pathname);
+    if (password || signInPage) blockers.push('login');
     return blockers;
   }
 
@@ -383,7 +547,59 @@
   }
 
   function buttons() {
-    return { submit: Boolean(findButton('submit')), next: Boolean(findButton('next')) };
+    // A Submit that stays disabled usually means a requirement question was not met.
+    const submitDisabled = allElements().some((element) => (
+      (element.tagName === 'BUTTON' || (element.tagName === 'INPUT' && element.type === 'submit'))
+      && isShown(element) && (element.disabled || element.getAttribute('aria-disabled') === 'true')
+      && SUBMIT_TEXT.test(buttonText(element))
+    ));
+    return { submit: Boolean(findButton('submit')), next: Boolean(findButton('next')), submitDisabled };
+  }
+
+  /** Closes a cookie banner the way a person would, declining what is optional; true when clicked. */
+  function declineCookies() {
+    const button = allElements().find((element) => clickable(element)
+      && /^(decline|reject|refuse)( all)?( non-?necessary| optional| additional)?( cookies)?$|^(use |allow )?(only )?(necessary|essential|required)( cookies)?( only)?$/i.test(startText(element)));
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+
+  function clickable(element) {
+    return (element.tagName === 'A' || element.tagName === 'BUTTON' || element.getAttribute('role') === 'button'
+      || (element.tagName === 'INPUT' && ['submit', 'button'].includes(element.type)))
+      && isShown(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
+  }
+
+  function startText(element) {
+    return buttonText(element).replace(/[→›»↗➔>]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * On a job page without a form: clicks what starts the application ("Apply for this job"; on a
+   * second screen "Apply manually"), skipping buttons already tried. Without one, a form embedded
+   * in a frame is reported so the tab can open it. { ok, text } | { ok, frameUrl } | { email } | { ok: false }.
+   */
+  function clickStart(alreadyClicked = []) {
+    const tried = new Set(alreadyClicked);
+    const candidates = allElements().filter((element) => clickable(element) && !tried.has(startText(element)));
+    const manual = candidates.find((element) => MANUAL_TEXT.test(startText(element)) && !/linkedin|indeed/i.test(startText(element)));
+    const starts = candidates
+      .filter((element) => START_TEXT.test(startText(element)) && !NOT_START.test(startText(element)))
+      .sort((a, b) => {
+        const area = (element) => element.getBoundingClientRect().width * element.getBoundingClientRect().height;
+        return area(b) - area(a);
+      });
+    const button = manual || starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || null;
+    if (button) {
+      button.scrollIntoView({ block: 'center' });
+      button.click();
+      return { ok: true, text: startText(button) };
+    }
+    if (starts.length) return { ok: false, email: true };
+    const frame = allElements().find((element) => element.tagName === 'IFRAME' && isShown(element)
+      && /^https?:/i.test(element.src || '') && FORM_FRAME.test(element.src));
+    return frame ? { ok: true, frameUrl: frame.src } : { ok: false };
   }
 
   function clickButton(kind) {
@@ -413,6 +629,8 @@
     detectBlockers,
     buttons,
     clickButton,
+    clickStart,
+    declineCookies,
     pageOutcome,
     pageText: () => cleanText(document.body?.innerText || '').slice(0, 20000),
   };
