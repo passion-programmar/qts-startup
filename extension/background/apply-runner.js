@@ -201,8 +201,9 @@ async function readComboboxOptions(tabId, fields) {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readComboboxOptions(id), [field.id]).catch(() => []);
     } else if (field.kind === 'menu' && field.lazy) {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readMenuOptions(id), [field.id]).catch(() => []);
-      // A menu that shows no choices is left alone rather than typed into.
-      if (!field.options.length) field.hidden = true;
+      // An optional menu that shows no choices is left alone. A required one stays, so a choice it
+      // cannot take stops the application rather than sending what it already shows.
+      if (!field.options.length && !field.required) field.hidden = true;
     }
   }
 }
@@ -292,7 +293,13 @@ async function fillFormPage(tabId, application, keepAlive) {
     for (const field of fresh) {
       seen.add(field.id);
       const answer = answers[field.id];
-      if (!answer) continue;
+      if (!answer) {
+        // Text left from someone else is emptied; a referral or source code the site filled stays.
+        if (field.filled && !/referr|source|\bcode\b|token|utm/i.test(field.label)) {
+          await inForm(tabId, (id) => globalThis.__qtsApplyForm.clearField(id), [field.id]).catch(() => false);
+        }
+        continue;
+      }
       const file = answer.file ? { ...documents[answer.file], mimeType: 'application/pdf' } : null;
       if (answer.file && !file?.base64) continue;
       // Each document goes up once per page; a site may redraw its upload field after taking it.

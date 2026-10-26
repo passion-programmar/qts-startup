@@ -155,6 +155,17 @@
     return items.length >= 2 ? items : null;
   }
 
+  /**
+   * A dropdown button's question: its block's label ("Country"), never its accessible name, which
+   * often adds the current choice ("Country United States").
+   */
+  function menuLabel(control) {
+    const own = textOf(control);
+    let label = blockQuestion(control).text || labelFor(control);
+    if (own && label.endsWith(own)) label = label.slice(0, -own.length).trim();
+    return label;
+  }
+
   function itemText(item) {
     return cleanText(item.getAttribute('data-search-text') || textOf(item));
   }
@@ -236,7 +247,7 @@
         && !blockQuestion(control).block?.querySelector('input:not([type="hidden"]):not([aria-hidden="true"]), textarea')
         // "Import resume from…" and autofill pickers are not questions.
         && !/import|autofill|upload|attach|apply with|\bresume\b|\bcv\b|svg/i.test(`${textOf(control)} ${labelFor(control)}`)) {
-        const label = labelFor(control);
+        const label = menuLabel(control);
         control.setAttribute(MENU_ATTRIBUTE, 'lazy');
         fields.push({
           id: fieldId(control),
@@ -251,7 +262,7 @@
         continue;
       }
       if (tag !== 'INPUT' && listboxChoices(control)) {
-        const label = labelFor(control);
+        const label = menuLabel(control);
         control.setAttribute(MENU_ATTRIBUTE, 'listbox');
         fields.push({
           id: fieldId(control),
@@ -325,6 +336,8 @@
         ...(control.maxLength > 0 ? { maxLength: control.maxLength } : {}),
         // Date fields typed as text show their format here (DD/MM/YYYY).
         ...(control.placeholder ? { placeholder: String(control.placeholder).slice(0, 40) } : {}),
+        // Text already in the box (a site may remember the previous applicant).
+        ...(['TEXTAREA', 'INPUT'].includes(tag) && !['file', 'checkbox', 'radio', 'range'].includes(type) && control.value ? { filled: true } : {}),
       };
       if (type === 'number' || type === 'range') {
         const unit = unitOf(control, fieldLabel);
@@ -601,6 +614,15 @@
     return { ok: picked, value: itemText(item) };
   }
 
+  /** Empties a text box Apply does not answer, so nothing someone else typed there is sent. */
+  function clearField(id) {
+    const element = findField(id);
+    if (!element || element.readOnly || element.disabled || !element.value) return false;
+    setNativeValue(element, '');
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    return !element.value;
+  }
+
   /** A suggestion list that appeared after typing: the entry that matches what was typed. */
   function pickSuggestion(typed) {
     const wanted = typed.toLowerCase().split(',')[0].trim();
@@ -758,6 +780,7 @@
     readComboboxOptions,
     readMenuOptions,
     fillField,
+    clearField,
     fieldErrors,
     detectBlockers,
     buttons,
