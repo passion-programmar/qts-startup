@@ -144,6 +144,13 @@ export async function claimNextApplication(
       portfolioUrl: profiles.portfolioUrl,
       nationality: profiles.nationality,
       languages: profiles.languages,
+      // The candidate's own diversity answers (keys from src/lib/diversity-options.ts).
+      gender: profiles.gender,
+      ethnicity: profiles.ethnicity,
+      veteranStatus: profiles.veteranStatus,
+      disabilityStatus: profiles.disabilityStatus,
+      sexualOrientation: profiles.sexualOrientation,
+      pronouns: profiles.pronouns,
       aiMode: users.applyAiMode,
     })
     .from(applyAttempts)

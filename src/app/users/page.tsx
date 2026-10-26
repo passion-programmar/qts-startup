@@ -81,6 +81,12 @@ type UserRow = {
   work_hours: string | null;
   work_mode: string | null;
   application_notes: string | null;
+  gender: string | null;
+  ethnicity: string | null;
+  veteran_status: string | null;
+  disability_status: string | null;
+  sexual_orientation: string | null;
+  pronouns: string | null;
 };
 
 function userName(user: UserRow): string {
@@ -154,6 +160,12 @@ export default async function UsersPage() {
       profiles.work_hours,
       profiles.work_mode,
       profiles.application_notes,
+      profiles.gender,
+      profiles.ethnicity,
+      profiles.veteran_status,
+      profiles.disability_status,
+      profiles.sexual_orientation,
+      profiles.pronouns,
       categories.name as category_name
     from visible_users
     left join profiles on profiles.user_id = visible_users.id
@@ -401,6 +413,12 @@ export default async function UsersPage() {
                           workHours: candidate.work_hours,
                           workMode: candidate.work_mode,
                           applicationNotes: candidate.application_notes,
+                          gender: candidate.gender,
+                          ethnicity: candidate.ethnicity,
+                          veteranStatus: candidate.veteran_status,
+                          disabilityStatus: candidate.disability_status,
+                          sexualOrientation: candidate.sexual_orientation,
+                          pronouns: candidate.pronouns,
                           education: (educationByCandidate.get(candidate.id) ?? []).map(
                             (entry) => ({
                               institution: entry.institution,

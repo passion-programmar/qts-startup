@@ -25,6 +25,7 @@ import { LoadingIcon } from "@/app/components/loading-icon";
 import { DatePicker, MonthPicker } from "@/app/components/date-picker";
 import { ConfirmButton } from "@/app/components/confirm-button";
 import { FormCard, openCardOfInvalidField } from "@/app/components/form-card";
+import { DIVERSITY_FIELDS } from "@/lib/diversity-options";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
@@ -462,6 +463,12 @@ export type CandidateProfileValues = {
   workHours: string | null;
   workMode: string | null;
   applicationNotes: string | null;
+  gender: string | null;
+  ethnicity: string | null;
+  veteranStatus: string | null;
+  disabilityStatus: string | null;
+  sexualOrientation: string | null;
+  pronouns: string | null;
   education: {
     institution: string;
     degree: string | null;
@@ -1277,7 +1284,7 @@ function ApplicationFactsSection({
     >
       <input name="applicationFacts" type="hidden" value="1" />
       <p className="text-xs text-slate-500">
-        Static facts about this candidate. Salary, notice, sponsorship, right to work, relocation, job preferences, and diversity questions are the same for every candidate: Super Admin keeps them as reusable answers in Settings.
+        Static facts about this candidate, including their own answers to diversity questions. Salary, notice, sponsorship, right to work, relocation, and job preferences are the same for every candidate: Super Admin keeps them as reusable answers in Settings.
       </p>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <TextField
@@ -1324,6 +1331,34 @@ function ApplicationFactsSection({
           maxLength={2048}
           name="portfolioUrl"
         />
+      </div>
+      <div className="space-y-3 border-t border-slate-100 pt-4">
+        <div>
+          <p className="text-xs font-semibold text-slate-800">Diversity answers</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Used for gender, race, veteran, disability, orientation, and pronoun questions. Not set: Apply picks the form&apos;s decline option.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {DIVERSITY_FIELDS.map((field) => (
+            <div key={field.name}>
+              <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor={fieldId(field.name)}>
+                {field.label}
+              </label>
+              <select
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+                defaultValue={candidate[field.name] ?? ""}
+                id={fieldId(field.name)}
+                name={field.name}
+              >
+                <option value="">Not set</option>
+                {field.options.map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
       </div>
     </FormCard>
   );

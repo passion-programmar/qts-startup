@@ -314,6 +314,78 @@
     return REUSABLE_TOPICS.find((entry) => entry.test.test(label))?.topic ?? null;
   }
 
+  // The candidate's own diversity answers (profile keys from src/lib/diversity-options.ts): the
+  // profile field for each topic, the label ChatGPT reads, and the words a form's matching choice uses.
+  const DIVERSITY = {
+    gender: { field: 'gender', answers: {
+      man: ['Male', /\b(male|man|men)\b/i],
+      woman: ['Female', /\b(female|woman|women)\b/i],
+      non_binary: ['Non-binary', /non[\s-]?binary|genderqueer|gender non/i],
+    } },
+    'race or ethnicity': { field: 'ethnicity', answers: {
+      hispanic_or_latino: ['Hispanic or Latino', /hispanic|latin[oax]/i],
+      white: ['White', /\bwhite\b|caucasian/i],
+      black: ['Black or African American', /\bblack\b|african/i],
+      asian: ['Asian', /\basian\b/i],
+      pacific_islander: ['Native Hawaiian or Other Pacific Islander', /pacific islander|hawaiian/i],
+      american_indian: ['American Indian or Alaska Native', /american indian|alaska native|native american|indigenous/i],
+      two_or_more: ['Two or More Races', /two or more|multiracial|mixed/i],
+    } },
+    veteran: { field: 'veteranStatus', answers: {
+      not_veteran: ['I am not a protected veteran', /\bnot\b[^.]*veteran|^no\b/i],
+      protected_veteran: ['I identify as a protected veteran', /^(?!.*\bnot\b).*(identify as|am a|protected veteran)|^yes\b/i],
+    } },
+    disability: { field: 'disabilityStatus', answers: {
+      no: ['No disability', /^no\b|do not have a disability|don['’]?t have a disability|not relevant/i],
+      yes: ['Has a disability', /^yes\b|^(?!.*\b(do not|don['’]?t)\b).*have a disability/i],
+    } },
+    'sexual orientation': { field: 'sexualOrientation', answers: {
+      heterosexual: ['Heterosexual / Straight', /heterosexual|straight/i],
+      gay_or_lesbian: ['Gay or Lesbian', /\bgay\b|lesbian/i],
+      bisexual: ['Bisexual', /bisexual/i],
+      queer: ['Queer', /\bqueer\b/i],
+      asexual: ['Asexual', /asexual/i],
+    } },
+    pronouns: { field: 'pronouns', answers: {
+      he_him: ['He / him', /\bhe\b/i],
+      she_her: ['She / her', /\bshe\b/i],
+      they_them: ['They / them', /\bthey\b/i],
+    } },
+  };
+
+  function diversityLabelOf(topic, value) {
+    if (value === 'prefer_not_to_say') return 'Prefer not to say';
+    return DIVERSITY[topic]?.answers[value]?.[0] ?? null;
+  }
+
+  /**
+   * A diversity question answered from the candidate's own profile: the form's choice that says the
+   * same ("Female", "Decline to self-identify"), the words themselves in a text box, or the AI with the
+   * profile's answer as a hint when no choice says it. Null when the profile has no answer.
+   */
+  function diversityFromProfile(field, label, topic, candidate) {
+    const entry = DIVERSITY[topic];
+    const value = entry ? candidate[entry.field] : null;
+    if (!value) return null;
+    const words = diversityLabelOf(topic, value);
+    if (!words) return null;
+    if (!hasOptions(field)) return { value: words, source: 'profile' };
+    // "Are you Hispanic or Latino?" with Yes / No.
+    if (topic === 'race or ethnicity' && /hispanic|latin/.test(label) && value !== 'prefer_not_to_say') {
+      const yesNo = yesNoAnswer(field, value === 'hispanic_or_latino');
+      if (yesNo !== null) return { value: yesNo, source: 'profile' };
+    }
+    const option = value === 'prefer_not_to_say'
+      ? pickOption(field, DECLINE)
+      : field.options.find((choice) => entry.answers[value][1].test(String(choice)) && !DECLINE.test(String(choice)));
+    if (option) return { value: option, source: 'profile' };
+    return {
+      ask: words,
+      from: 'profile',
+      note: 'Choose the option that says the same; if none does, the declining or most neutral one. Never infer it from the name, photo, or résumé.',
+    };
+  }
+
   /** The reusable answer for a topic: the one saved for the same question, else any on the topic. */
   function topicAnswer(field, topic, savedRows) {
     const rows = (savedRows || []).filter((row) => topicOf(row.questionText) === topic);
@@ -396,6 +468,9 @@
     if (EEO.test(label)) {
       const key = normalizeQuestionKey(field.label);
       const topic = topicOf(field.label);
+      // The candidate's own answer on their profile comes first.
+      const own = diversityFromProfile(field, label, topic, candidate);
+      if (own) return own;
       const row = (savedAnswers || []).find((entry) => entry.questionKey === key)
         ?? (topic ? topicAnswer(field, topic, savedAnswers) : null);
       const neutral = 'Choose the option that declines or is most neutral; never infer it from the name, photo, or résumé.';
@@ -557,9 +632,10 @@
         continue;
       }
       if (resolved.ask) {
+        const note = resolved.note ? ` (note: ${resolved.note})` : '';
         const hint = resolved.from === 'reusable'
-          ? `The reusable answer for this question is "${resolved.ask}"${resolved.note ? ` (note: ${resolved.note})` : ''}; give it in a form this field takes.`
-          : `The candidate's profile says "${resolved.ask}"; give it in a form this field takes.`;
+          ? `The reusable answer for this question is "${resolved.ask}"${note}; give it in a form this field takes.`
+          : `The candidate's profile says "${resolved.ask}"${note}; give it in a form this field takes.`;
         open.push({ ...field, hint });
         continue;
       }
@@ -635,6 +711,11 @@
       yearsOfExperience: candidate.yearsOfExperience,
       notes: candidate.applicationNotes,
     };
+    // The candidate's own diversity answers, as words.
+    const diversity = Object.fromEntries(Object.entries(DIVERSITY)
+      .map(([topic, entry]) => [topic, diversityLabelOf(topic, candidate[entry.field])])
+      .filter(([, words]) => words));
+    if (Object.keys(diversity).length) facts.diversityAnswers = diversity;
     if (candidate.salaryExpectationAmount) {
       const asked = [job.description, ...fields.map((field) => `${field.label} ${(field.options || []).join(' ')}`)]
         .map((text) => currencyIn(text, exchangeRates));

@@ -194,6 +194,13 @@ export const profiles = pgTable(
     workMode: text("work_mode"),
     // Anything else ChatGPT should know when answering application questions.
     applicationNotes: text("application_notes"),
+    // The candidate's own answers to diversity (EEO) questions; keys from src/lib/diversity-options.ts.
+    gender: text("gender"),
+    ethnicity: text("ethnicity"),
+    veteranStatus: text("veteran_status"),
+    disabilityStatus: text("disability_status"),
+    sexualOrientation: text("sexual_orientation"),
+    pronouns: text("pronouns"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),

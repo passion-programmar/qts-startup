@@ -466,3 +466,27 @@ test('diversity questions take Super Admin\'s reusable answers by topic, else de
   assert.deepEqual(open.map((entry) => entry.id), ['no-decline']);
   assert.match(open[0].hint, /"Prefer not to say".*never infer it from the name/);
 });
+
+test('diversity questions take the candidate\'s own profile answers, in each form\'s wording', () => {
+  const own = { firstName: 'Anna', lastName: 'Kowalska', gender: 'woman', ethnicity: 'white', veteranStatus: 'not_veteran', disabilityStatus: 'no', sexualOrientation: 'prefer_not_to_say' };
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Gender', { kind: 'select', options: ['Male', 'Female', 'Decline to self-identify'] }),
+    field('Race / Ethnicity', { kind: 'select', options: ['Asian', 'White (Not Hispanic or Latino)', 'Decline to self-identify'] }),
+    field('Are you Hispanic or Latino?', { id: 'hispanic', kind: 'radio', options: ['Yes', 'No', 'Decline to self-identify'] }),
+    field('Protected veteran status', { kind: 'radio', options: ['I identify as one or more of the classifications of protected veteran', 'I am not a protected veteran', "I don't wish to answer"] }),
+    field('Disability Confident', { kind: 'radio', options: ['Yes, I would like to be considered under this scheme', "No, this isn't relevant"] }),
+    field('Sexual orientation', { kind: 'select', options: ['Heterosexual', 'Gay', 'I prefer not to say'] }),
+    field('Gender identity', { id: 'woman-text' }),
+    field('Gender', { id: 'two-choices', kind: 'radio', options: ['Man', 'Lady'] }),
+  ], own, [{ questionKey: 'gender', questionText: 'Gender', answer: 'Prefer not to say' }]);
+  assert.equal(resolved.Gender.value, 'Female');
+  assert.equal(resolved['Race / Ethnicity'].value, 'White (Not Hispanic or Latino)');
+  assert.equal(resolved.hispanic.value, 'No');
+  assert.equal(resolved['Protected veteran status'].value, 'I am not a protected veteran');
+  assert.equal(resolved['Disability Confident'].value, "No, this isn't relevant");
+  assert.equal(resolved['Sexual orientation'].value, 'I prefer not to say');
+  assert.equal(resolved['woman-text'].value, 'Female');
+  // No choice says "Female": the AI gets the profile's answer, told never to guess.
+  assert.deepEqual(open.map((entry) => entry.id), ['two-choices']);
+  assert.match(open[0].hint, /profile says "Female".*never infer/i);
+});

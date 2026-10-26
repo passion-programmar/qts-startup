@@ -499,7 +499,13 @@ export async function updateCandidateProfileAction(
         set nationality = ${applicationFacts.nationality},
           languages = ${applicationFacts.languages},
           github_url = ${applicationFacts.githubUrl},
-          portfolio_url = ${applicationFacts.portfolioUrl}
+          portfolio_url = ${applicationFacts.portfolioUrl},
+          gender = ${applicationFacts.gender},
+          ethnicity = ${applicationFacts.ethnicity},
+          veteran_status = ${applicationFacts.veteranStatus},
+          disability_status = ${applicationFacts.disabilityStatus},
+          sexual_orientation = ${applicationFacts.sexualOrientation},
+          pronouns = ${applicationFacts.pronouns}
         where profiles.user_id = ${userId}::uuid
           and exists (
             select 1 from users

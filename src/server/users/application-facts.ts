@@ -1,15 +1,17 @@
 // The candidate's static facts application forms ask for (profiles columns from migrations 0062 and
 // 0064). Years of experience is calculated from the experience history. Salary, notice,
-// sponsorship, right to work, relocation, job preferences, and diversity answers are the same for
-// every candidate and live in Super Admin's reusable answers; their old profile columns are kept but
-// no longer edited or used. Pure, so it is testable.
+// sponsorship, right to work, relocation, and job preferences are the same for every candidate and
+// live in Super Admin's reusable answers; their old profile columns are kept but no longer edited or
+// used. Diversity answers are the candidate's own. Pure, so it is testable.
+
+import { DIVERSITY_FIELDS, type DiversityFieldName } from "@/lib/diversity-options";
 
 export type ApplicationFacts = {
   nationality: string | null;
   languages: string | null;
   githubUrl: string | null;
   portfolioUrl: string | null;
-};
+} & Record<DiversityFieldName, string | null>;
 
 /** The form section's marker; a form opened before the section existed leaves the facts unchanged. */
 export const APPLICATION_FACTS_MARKER = "applicationFacts";
@@ -47,5 +49,12 @@ export function readApplicationFacts(formData: FormData): ApplicationFacts | str
   if (languages === undefined) return "Languages are too long (300 characters at most).";
   if (githubUrl === undefined) return "Enter a valid GitHub address.";
   if (portfolioUrl === undefined) return "Enter a valid portfolio or website address.";
-  return { nationality, languages, githubUrl, portfolioUrl };
+  // The candidate's diversity answers: one of each field's listed choices, or not set.
+  const diversity = {} as Record<DiversityFieldName, string | null>;
+  for (const field of DIVERSITY_FIELDS) {
+    const value = text(formData, field.name, 40);
+    if (value && !field.options.some(([key]) => key === value)) return `Choose a listed answer for ${field.label}.`;
+    diversity[field.name] = value || null;
+  }
+  return { nationality, languages, githubUrl, portfolioUrl, ...diversity };
 }
