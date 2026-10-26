@@ -424,3 +424,21 @@ test('without reusable answers on those topics, the profile facts still answer t
   assert.equal(resolved['Desired Pay'].source, 'profile');
   assert.equal(resolved['Will you require visa sponsorship?'].value, 'No');
 });
+
+test('with static facts only, relocation and notice come from reusable answers, and nothing is assumed without them', () => {
+  const staticProfile = { firstName: 'Anna', lastName: 'Kowalska', email: 'anna@example.com', nationality: 'Polish', languages: 'English C1', yearsOfExperience: 8, eeoPreference: 'prefer_not_to_say' };
+  const row = (questionText, answer) => ({ questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
+  const { answers: resolved } = answers.resolveFields([
+    field('Are you willing to relocate?', { kind: 'radio', options: ['Yes', 'No'] }),
+    field('Notice period'),
+  ], staticProfile, [row('Would you relocate for this role?', 'No'), row('What is your notice period?', '1 month')]);
+  assert.equal(resolved['Are you willing to relocate?'].value, 'No');
+  assert.equal(resolved['Notice period'].value, '1 month');
+
+  const { open, missing } = answers.resolveFields([
+    field('Notice period'),
+    field('Will you require visa sponsorship?', { kind: 'radio', options: ['Yes', 'No'] }),
+  ], staticProfile, []);
+  assert.deepEqual(missing.map((entry) => entry.fact), ['notice period', 'visa sponsorship']);
+  assert.deepEqual(open.map((entry) => entry.id), ['Notice period', 'Will you require visa sponsorship?']);
+});

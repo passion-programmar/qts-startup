@@ -496,25 +496,12 @@ export async function updateCandidateProfileAction(
       // Facts that application forms ask for; a form opened before this section existed leaves them as they are.
       ...(applicationFacts ? [tx`
         update profiles
-        set work_authorization = ${applicationFacts.workAuthorization},
-          needs_sponsorship = ${applicationFacts.needsSponsorship},
-          notice_period = ${applicationFacts.noticePeriod},
-          salary_expectation_amount = ${applicationFacts.salaryExpectationAmount},
-          salary_expectation_currency = ${applicationFacts.salaryExpectationCurrency},
-          salary_expectation_period = ${applicationFacts.salaryExpectationPeriod},
+        set nationality = ${applicationFacts.nationality},
+          languages = ${applicationFacts.languages},
           years_of_experience = ${applicationFacts.yearsOfExperience},
-          willing_to_relocate = ${applicationFacts.willingToRelocate},
           github_url = ${applicationFacts.githubUrl},
           portfolio_url = ${applicationFacts.portfolioUrl},
-          eeo_preference = ${applicationFacts.eeoPreference},
-          nationality = ${applicationFacts.nationality},
-          work_countries = ${applicationFacts.workCountries},
-          work_permit_expiry = ${applicationFacts.workPermitExpiry}::date,
-          languages = ${applicationFacts.languages},
-          contract_type = ${applicationFacts.contractType},
-          work_hours = ${applicationFacts.workHours},
-          work_mode = ${applicationFacts.workMode},
-          application_notes = ${applicationFacts.applicationNotes}
+          eeo_preference = ${applicationFacts.eeoPreference}
         where profiles.user_id = ${userId}::uuid
           and exists (
             select 1 from users

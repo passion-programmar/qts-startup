@@ -12,64 +12,28 @@ test("a form without the facts section leaves the facts unchanged", () => {
   assert.equal(readApplicationFacts(form({ firstName: "Anna" })), null);
 });
 
-test("facts are parsed and normalized", () => {
+test("the static facts are parsed and normalized", () => {
   assert.deepEqual(readApplicationFacts(form({
     applicationFacts: "1",
-    workAuthorization: " EU citizen ",
-    needsSponsorship: "no",
-    noticePeriod: "1_week",
-    salaryExpectationAmount: "70000",
-    salaryExpectationCurrency: "eur",
-    salaryExpectationPeriod: "day",
+    nationality: " Polish ",
+    languages: "English C1,  Polish C2",
     yearsOfExperience: "8",
-    willingToRelocate: "",
     githubUrl: "github.com/anna",
     portfolioUrl: "",
     eeoPreference: "prefer_not_to_say",
-    nationality: " Polish ",
-    workCountries: "EU, UK",
-    workPermitExpiry: "",
-    languages: "English C1, Polish C2",
-    contractType: "b2b",
-    workHours: "full_time",
-    workMode: "",
-    applicationNotes: "Prefers B2B.\r\n\r\n\r\nAvailable for interviews  on weekdays.",
   })), {
-    workAuthorization: "EU citizen",
-    needsSponsorship: false,
-    noticePeriod: "1_week",
-    salaryExpectationAmount: 70000,
-    salaryExpectationCurrency: "EUR",
-    salaryExpectationPeriod: "day",
+    nationality: "Polish",
+    languages: "English C1, Polish C2",
     yearsOfExperience: 8,
-    willingToRelocate: null,
     githubUrl: "https://github.com/anna",
     portfolioUrl: null,
     eeoPreference: "prefer_not_to_say",
-    nationality: "Polish",
-    workCountries: "EU, UK",
-    workPermitExpiry: null,
-    languages: "English C1, Polish C2",
-    contractType: "b2b",
-    workHours: "full_time",
-    workMode: null,
-    applicationNotes: "Prefers B2B.\n\nAvailable for interviews on weekdays.",
   });
 });
 
 test("invalid facts are refused with a reason", () => {
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", yearsOfExperience: "eight" })), "string");
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", salaryExpectationAmount: "70000" })), "string");
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", salaryExpectationCurrency: "euro" })), "string");
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", needsSponsorship: "maybe" })), "string");
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", workPermitExpiry: "2027-02-30" })), "string");
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", contractType: "freelance" })), "string");
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", workMode: "anywhere" })), "string");
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", noticePeriod: "1 month" })), "string");
-});
-
-test("an unset notice period means immediately", () => {
-  const facts = readApplicationFacts(form({ applicationFacts: "1" }));
-  assert.ok(facts && typeof facts === "object");
-  assert.equal(facts.noticePeriod, "immediately");
+  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", githubUrl: "not a url at all" })), "string");
+  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", eeoPreference: "maybe" })), "string");
+  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", nationality: "x".repeat(101) })), "string");
 });

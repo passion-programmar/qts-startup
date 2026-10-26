@@ -18,7 +18,8 @@ import {
   X,
 } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
-import { DatePicker } from "@/app/components/date-picker";
+import { DatePicker, MonthPicker } from "@/app/components/date-picker";
+import { FormCard, openCardOfInvalidField } from "@/app/components/form-card";
 import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
@@ -79,9 +80,10 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
         }
         title={`Create ${roleLabel}`}
       >
-        <form action={formAction} className="space-y-6">
+        <form action={formAction} className={isAccount ? "space-y-3" : "space-y-6"} onInvalidCapture={openCardOfInvalidField}>
         {isAccount ? (
           <>
+          <FormCard summary="Name, contacts, address, category" title="Basic information">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <TextField
               autoComplete="given-name"
@@ -185,6 +187,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               options={categories}
             />
           </div>
+          </FormCard>
           <HistorySection
             addRow={() =>
               setEducationRows((rows) => [Math.max(-1, ...rows) + 1, ...rows])
@@ -218,25 +221,15 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                   maxLength={120}
                   name="educationFieldOfStudy"
                 />
-                <TextField
-                  autoComplete="off"
+                <MonthPicker
                   id={`educationStartDate-${rowId}`}
-                  label="Start month (MM/YYYY)"
-                  maxLength={7}
+                  label="Start month"
                   name="educationStartDate"
-                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
-                  placeholder="MM/YYYY"
-                  inputMode="numeric"
                 />
-                <TextField
-                  autoComplete="off"
+                <MonthPicker
                   id={`educationEndDate-${rowId}`}
-                  label="End month (MM/YYYY)"
-                  maxLength={7}
+                  label="End month"
                   name="educationEndDate"
-                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
-                  placeholder="MM/YYYY"
-                  inputMode="numeric"
                 />
                 <input name="educationIsCurrent" type="hidden" value="false" />
                 <TextAreaField
@@ -283,25 +276,15 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
                   name="experienceLocation"
                 />
                 <WorkModeField id={`experienceWorkMode-${rowId}`} />
-                <TextField
-                  autoComplete="off"
+                <MonthPicker
                   id={`experienceStartDate-${rowId}`}
-                  label="Start month (MM/YYYY)"
-                  maxLength={7}
+                  label="Start month"
                   name="experienceStartDate"
-                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
-                  placeholder="MM/YYYY"
-                  inputMode="numeric"
                 />
-                <TextField
-                  autoComplete="off"
+                <MonthPicker
                   id={`experienceEndDate-${rowId}`}
-                  label="End month (MM/YYYY)"
-                  maxLength={7}
+                  label="End month"
                   name="experienceEndDate"
-                  pattern="(0[1-9]|1[0-2])/[0-9]{4}"
-                  placeholder="MM/YYYY"
-                  inputMode="numeric"
                 />
                 <CurrentStatusCheckbox
                   id={`experienceIsCurrent-${rowId}`}
@@ -525,8 +508,12 @@ export function EditCandidateProfileForm({
         subtitle="Update the candidate's contact information and profile details."
         title="Edit candidate profile"
       >
-        <form action={formAction} className="space-y-6">
+        <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField}>
           <input name="userId" type="hidden" value={candidate.userId} />
+          <FormCard
+            summary={[[candidate.firstName, candidate.lastName].filter(Boolean).join(" "), candidate.candidateEmail, candidate.city].filter(Boolean).join(" · ") || "Name, contacts, address, category"}
+            title="Basic information"
+          >
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <TextField
             autoComplete="given-name"
@@ -648,6 +635,7 @@ export function EditCandidateProfileForm({
             options={categories}
           />
           </div>
+          </FormCard>
           <ApplicationFactsSection candidate={candidate} fieldId={fieldId} />
           <HistorySection
             addRow={() =>
@@ -666,8 +654,8 @@ export function EditCandidateProfileForm({
                   <TextField autoComplete="off" defaultValue={entry?.institution ?? ""} id={fieldId(`educationInstitution-${rowId}`)} label="Institution" maxLength={120} name="educationInstitution" />
                   <TextField autoComplete="off" defaultValue={entry?.degree ?? ""} id={fieldId(`educationDegree-${rowId}`)} label="Degree / credential" maxLength={120} name="educationDegree" />
                   <TextField autoComplete="off" defaultValue={entry?.fieldOfStudy ?? ""} id={fieldId(`educationFieldOfStudy-${rowId}`)} label="Field of study" maxLength={120} name="educationFieldOfStudy" />
-                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`educationStartDate-${rowId}`)} label="Start month (MM/YYYY)" maxLength={7} name="educationStartDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
-                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`educationEndDate-${rowId}`)} label="End month (MM/YYYY)" maxLength={7} name="educationEndDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
+                  <MonthPicker defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`educationStartDate-${rowId}`)} label="Start month" name="educationStartDate" />
+                  <MonthPicker defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`educationEndDate-${rowId}`)} label="End month" name="educationEndDate" />
                   <input name="educationIsCurrent" type="hidden" value="false" />
                   <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`educationDescription-${rowId}`)} label="Description (optional)" maxLength={5000} name="educationDescription" />
                 </>
@@ -692,8 +680,8 @@ export function EditCandidateProfileForm({
                   <TextField autoComplete="organization-title" defaultValue={entry?.jobTitle ?? ""} id={fieldId(`experienceJobTitle-${rowId}`)} label="Job title" maxLength={160} name="experienceJobTitle" />
                   <TextField autoComplete="off" defaultValue={entry?.location ?? ""} id={fieldId(`experienceLocation-${rowId}`)} label="Location (optional)" maxLength={160} name="experienceLocation" />
                   <WorkModeField defaultValue={entry?.workMode ?? ""} id={fieldId(`experienceWorkMode-${rowId}`)} />
-                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`experienceStartDate-${rowId}`)} label="Start month (MM/YYYY)" maxLength={7} name="experienceStartDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
-                  <TextField autoComplete="off" defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`experienceEndDate-${rowId}`)} label="End month (MM/YYYY)" maxLength={7} name="experienceEndDate" pattern="(0[1-9]|1[0-2])/[0-9]{4}" placeholder="MM/YYYY" inputMode="numeric" />
+                  <MonthPicker defaultValue={formatProfileMonth(entry?.startDate ?? null)} id={fieldId(`experienceStartDate-${rowId}`)} label="Start month" name="experienceStartDate" />
+                  <MonthPicker defaultValue={formatProfileMonth(entry?.endDate ?? null)} id={fieldId(`experienceEndDate-${rowId}`)} label="End month" name="experienceEndDate" />
                   <CurrentStatusCheckbox defaultChecked={entry?.isCurrent ?? false} id={fieldId(`experienceIsCurrent-${rowId}`)} label="Currently working here?" name="experienceIsCurrent" />
                   <TextAreaField className="sm:col-span-2 xl:col-span-3" defaultValue={entry?.description ?? ""} id={fieldId(`experienceDescription-${rowId}`)} label="Responsibilities / achievements (optional)" maxLength={5000} name="experienceDescription" />
                 </>
@@ -1155,21 +1143,22 @@ function HistorySection({
   children: (rowId: number) => React.ReactNode;
 }) {
   return (
-    <section className="space-y-4 rounded-xl border border-slate-200 p-4 sm:col-span-2 sm:p-5 xl:col-span-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-        </div>
+    <FormCard
+      actions={
         <button
-        className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 px-3 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={rowIds.length >= 20}
-        onClick={addRow}
-        type="button"
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-indigo-200 px-3 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={rowIds.length >= 20}
+          onClick={addRow}
+          type="button"
         >
           <Plus className="size-3.5" />
           Add {title.toLowerCase()}
         </button>
-      </div>
+      }
+      className="sm:col-span-2 xl:col-span-3"
+      summary={`${rowIds.length} ${rowIds.length === 1 ? "entry" : "entries"}`}
+      title={title}
+    >
       {rowIds.map((rowId, index) => (
         <fieldset
           className="grid gap-4 rounded-lg bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-3"
@@ -1190,7 +1179,7 @@ function HistorySection({
           </button>
         </fieldset>
       ))}
-    </section>
+    </FormCard>
   );
 }
 
@@ -1219,17 +1208,7 @@ function WorkModeField({ id, defaultValue = "" }: { id: string; defaultValue?: s
   );
 }
 
-function yesNoValue(value: boolean | null): string {
-  return value === null ? "" : value ? "yes" : "no";
-}
-
-const YES_NO_OPTIONS = [
-  { value: "", label: "Not set" },
-  { value: "no", label: "No" },
-  { value: "yes", label: "Yes" },
-];
-
-// Facts application forms ask for. Apply fills them only from here and stops when one is missing.
+// The candidate's static facts application forms ask for; Apply fills them exactly.
 function ApplicationFactsSection({
   candidate,
   fieldId,
@@ -1238,42 +1217,32 @@ function ApplicationFactsSection({
   fieldId: (field: string) => string;
 }) {
   return (
-    <section className="space-y-3">
+    <FormCard
+      summary={[candidate.nationality, candidate.languages, candidate.yearsOfExperience === null ? null : `${candidate.yearsOfExperience} years`].filter(Boolean).join(" · ") || "Nationality, languages, experience, links"}
+      title="Application facts"
+    >
       <input name="applicationFacts" type="hidden" value="1" />
-      <div>
-        <h3 className="text-sm font-semibold text-slate-800">Application facts</h3>
-        <p className="mt-1 text-xs text-slate-500">
-          Apply fills form questions from these facts exactly; ChatGPT answers every other question from them, the résumé, and the job.
-        </p>
-      </div>
+      <p className="text-xs text-slate-500">
+        Static facts about this candidate. Salary, notice, sponsorship, right to work, relocation, and job preferences are the same for every candidate: Super Admin keeps them as reusable answers in Settings.
+      </p>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="sm:col-span-2 lg:col-span-3">
-          <TextField
-            autoComplete="off"
-            defaultValue={candidate.workAuthorization ?? ""}
-            id={fieldId("workAuthorization")}
-            label="Work authorization"
-            maxLength={300}
-            name="workAuthorization"
-            placeholder="EU citizen; UK right to work"
-          />
-        </div>
-        <ChoiceField
-          defaultValue={yesNoValue(candidate.needsSponsorship)}
-          id={fieldId("needsSponsorship")}
-          label="Needs visa sponsorship"
-          name="needsSponsorship"
-          options={YES_NO_OPTIONS}
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.nationality ?? ""}
+          id={fieldId("nationality")}
+          label="Nationality"
+          maxLength={100}
+          name="nationality"
+          placeholder="Polish"
         />
-        <ChoiceField
-          defaultValue={candidate.noticePeriod === "1_week" ? "1_week" : "immediately"}
-          id={fieldId("noticePeriod")}
-          label="Notice period"
-          name="noticePeriod"
-          options={[
-            { value: "immediately", label: "Immediately" },
-            { value: "1_week", label: "1 week" },
-          ]}
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.languages ?? ""}
+          id={fieldId("languages")}
+          label="Languages and levels"
+          maxLength={300}
+          name="languages"
+          placeholder="English C1, Polish C2"
         />
         <TextField
           autoComplete="off"
@@ -1284,56 +1253,6 @@ function ApplicationFactsSection({
           maxLength={2}
           name="yearsOfExperience"
           pattern="[0-9]{1,2}"
-        />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.salaryExpectationAmount === null ? "" : String(candidate.salaryExpectationAmount)}
-          id={fieldId("salaryExpectationAmount")}
-          inputMode="numeric"
-          label="Salary expectation"
-          maxLength={12}
-          name="salaryExpectationAmount"
-          pattern="[0-9]+"
-          placeholder="70000"
-        />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.salaryExpectationCurrency ?? ""}
-          id={fieldId("salaryExpectationCurrency")}
-          label="Salary currency"
-          maxLength={3}
-          name="salaryExpectationCurrency"
-          placeholder="EUR"
-        />
-        <ChoiceField
-          defaultValue={candidate.salaryExpectationPeriod ?? ""}
-          id={fieldId("salaryExpectationPeriod")}
-          label="Salary period"
-          name="salaryExpectationPeriod"
-          options={[
-            { value: "", label: "Not set" },
-            { value: "year", label: "Per year" },
-            { value: "month", label: "Per month" },
-            { value: "day", label: "Per day" },
-            { value: "hour", label: "Per hour" },
-          ]}
-        />
-        <ChoiceField
-          defaultValue={yesNoValue(candidate.willingToRelocate)}
-          id={fieldId("willingToRelocate")}
-          label="Willing to relocate"
-          name="willingToRelocate"
-          options={YES_NO_OPTIONS}
-        />
-        <ChoiceField
-          defaultValue={candidate.eeoPreference}
-          id={fieldId("eeoPreference")}
-          label="Diversity (EEO) questions"
-          name="eeoPreference"
-          options={[
-            { value: "prefer_not_to_say", label: "Prefer not to say" },
-            { value: "answer_from_profile", label: "Answer from the profile" },
-          ]}
         />
         <TextField
           autoComplete="url"
@@ -1352,89 +1271,18 @@ function ApplicationFactsSection({
           maxLength={2048}
           name="portfolioUrl"
         />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.nationality ?? ""}
-          id={fieldId("nationality")}
-          label="Nationality"
-          maxLength={100}
-          name="nationality"
-          placeholder="Polish"
-        />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.workCountries ?? ""}
-          id={fieldId("workCountries")}
-          label="May work without sponsorship in"
-          maxLength={300}
-          name="workCountries"
-          placeholder="EU, UK"
-        />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.workPermitExpiry ?? ""}
-          id={fieldId("workPermitExpiry")}
-          label="Work permit expires (optional)"
-          maxLength={10}
-          name="workPermitExpiry"
-          type="date"
-        />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.languages ?? ""}
-          id={fieldId("languages")}
-          label="Languages and levels"
-          maxLength={300}
-          name="languages"
-          placeholder="English C1, Polish C2"
-        />
         <ChoiceField
-          defaultValue={candidate.contractType ?? ""}
-          id={fieldId("contractType")}
-          label="Contract type"
-          name="contractType"
+          defaultValue={candidate.eeoPreference}
+          id={fieldId("eeoPreference")}
+          label="Diversity (EEO) questions"
+          name="eeoPreference"
           options={[
-            { value: "", label: "Not set" },
-            { value: "employment", label: "Employment contract" },
-            { value: "b2b", label: "B2B / contractor" },
-            { value: "either", label: "Either" },
+            { value: "prefer_not_to_say", label: "Prefer not to say" },
+            { value: "answer_from_profile", label: "Answer from the profile" },
           ]}
-        />
-        <ChoiceField
-          defaultValue={candidate.workHours ?? ""}
-          id={fieldId("workHours")}
-          label="Working hours"
-          name="workHours"
-          options={[
-            { value: "", label: "Not set" },
-            { value: "full_time", label: "Full-time" },
-            { value: "part_time", label: "Part-time" },
-            { value: "either", label: "Either" },
-          ]}
-        />
-        <ChoiceField
-          defaultValue={candidate.workMode ?? ""}
-          id={fieldId("workMode")}
-          label="Work mode"
-          name="workMode"
-          options={[
-            { value: "", label: "Not set" },
-            { value: "remote", label: "Remote" },
-            { value: "hybrid", label: "Hybrid" },
-            { value: "onsite", label: "On-site" },
-            { value: "any", label: "Any" },
-          ]}
-        />
-        <TextAreaField
-          className="sm:col-span-2 lg:col-span-3"
-          defaultValue={candidate.applicationNotes ?? ""}
-          id={fieldId("applicationNotes")}
-          label="Notes for application answers (ChatGPT reads these)"
-          maxLength={2000}
-          name="applicationNotes"
         />
       </div>
-    </section>
+    </FormCard>
   );
 }
 

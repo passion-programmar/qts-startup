@@ -19,6 +19,7 @@ import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { JobRecordTimeZoneForm } from "@/app/settings/job-record-time-zone-form";
 import { ReusableAnswerForm } from "@/app/settings/reusable-answers";
+import { SettingsCard } from "@/app/settings/settings-card";
 import { getJobRecordTimeZone } from "@/server/jobs/job-record-time-zone";
 
 export const instant = false;
@@ -158,43 +159,52 @@ export default async function SettingsPage() {
           title="AI prompt settings"
         />
 
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="text-sm font-semibold text-slate-800">
-            Job record time zone
-          </h2>
-          <p className="mb-4 mt-1 text-xs text-slate-500">
+        <SettingsCard summary={jobRecordTimeZone} title="Job record time zone">
+          <p className="mb-4 text-xs text-slate-500">
             The date saved on new jobs follows this time zone. Existing jobs keep their dates.
           </p>
           <JobRecordTimeZoneForm timeZone={jobRecordTimeZone} />
-        </section>
+        </SettingsCard>
 
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mb-5">
-            <h2 className="text-sm font-semibold text-slate-800">
-              Global prompt library
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Managers write their own ChatGPT prompts. One without any uses the ChatGPT prompt marked Global default.
-            </p>
-          </div>
-          <div className="space-y-7">
+        <SettingsCard
+          summary={`${activePrompts.length} prompts across ${promptGroups.length} tasks`}
+          title="Global prompt library"
+        >
+          <p className="mb-4 text-xs text-slate-500">
+            Managers write their own ChatGPT prompts. One without any uses the ChatGPT prompt marked Global default.
+          </p>
+          <div className="space-y-3">
             {promptGroups.map((group) => {
               const groupPrompts = promptsByPurpose(
                 group.provider,
                 group.purpose,
               );
               return (
-                <div className="border-t border-slate-100 pt-5" key={`${group.provider}-${group.purpose}`}>
-                  <h3 className="mb-4 text-xs font-semibold text-slate-700">
-                    {group.heading}
-                  </h3>
+                <SettingsCard
+                  item
+                  key={`${group.provider}-${group.purpose}`}
+                  summary={groupPrompts.length
+                    ? groupPrompts.map((prompt) => `${prompt.name} · v${prompt.version}${prompt.isDefault ? " · default" : ""}`).join(" | ")
+                    : "No active prompt"}
+                  title={group.heading}
+                >
                   {"note" in group && (
-                    <p className="-mt-2 mb-4 text-xs leading-5 text-slate-500">{group.note}</p>
+                    <p className="mb-3 text-xs leading-5 text-slate-500">{group.note}</p>
                   )}
-                  {groupPrompts.length > 0 ? (
-                    <div className="space-y-5">
-                      {groupPrompts.map((prompt) => (
-                        <div className="space-y-3" key={prompt.id}>
+                  <div className="space-y-3">
+                    {groupPrompts.length === 0 && (
+                      <p className="text-xs text-amber-700">
+                        No active prompt exists for this task. Create one below.
+                      </p>
+                    )}
+                    {groupPrompts.map((prompt) => (
+                      <SettingsCard
+                        item
+                        key={prompt.id}
+                        summary={`Version ${prompt.version}${prompt.isDefault ? " · Global default" : ""}`}
+                        title={prompt.name}
+                      >
+                        <div className="space-y-3">
                           <GlobalPromptForm
                             isDefault={prompt.isDefault}
                             name={prompt.name}
@@ -210,54 +220,41 @@ export default async function SettingsPage() {
                             />
                           )}
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-amber-700">
-                      No active prompt exists for this task. Create one below.
-                    </p>
-                  )}
-                  <details className="mt-5 rounded-lg border border-dashed border-slate-300 p-4">
-                    <summary className="cursor-pointer text-xs font-semibold text-indigo-700">
-                      Create another prompt group
-                    </summary>
-                    <div className="mt-4">
+                      </SettingsCard>
+                    ))}
+                    <SettingsCard item summary="A new prompt for this task" title="Create another prompt group">
                       <GlobalPromptForm
                         name=""
                         promptTemplate=""
                         provider={group.provider}
                         purpose={group.purpose}
                       />
-                    </div>
-                  </details>
-                </div>
+                    </SettingsCard>
+                  </div>
+                </SettingsCard>
               );
             })}
           </div>
-        </section>
+        </SettingsCard>
 
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mb-5">
-            <h2 className="text-sm font-semibold text-slate-800">Reusable answers</h2>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              Answers to application questions every candidate may meet. Apply fills the candidate&apos;s profile facts first, then a matching answer here when it fits the field; when it does not fit, ChatGPT gets it as a hint and answers in the form the field takes.
-            </p>
-          </div>
-          <div className="grid gap-4 lg:grid-cols-2">
+        <SettingsCard summary={`${reusableAnswerRows.length} answers`} title="Reusable answers">
+          <p className="mb-4 text-xs leading-5 text-slate-500">
+            Answers to application questions, the same for every candidate. Salary, notice, sponsorship, relocation, right to work, and job preferences come from here; the candidate&apos;s static profile facts (name, contacts, nationality, languages) come first for everything else. An answer that does not fit a field goes to ChatGPT as a hint.
+          </p>
+          <div className="space-y-3">
             {reusableAnswerRows.map((answer) => (
-              <ReusableAnswerForm answer={answer} key={answer.id} />
+              <SettingsCard item key={answer.id} summary={answer.answer} title={answer.questionText}>
+                <ReusableAnswerForm answer={answer} />
+              </SettingsCard>
             ))}
             {/* A new key after each added answer empties the form for the next one. */}
-            <ReusableAnswerForm key={`new-${reusableAnswerRows.length}`} />
+            <SettingsCard item key={`new-${reusableAnswerRows.length}`} summary="A question and its answer" title="Add an answer">
+              <ReusableAnswerForm />
+            </SettingsCard>
           </div>
-        </section>
+        </SettingsCard>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mb-5">
-            <h2 className="text-sm font-semibold text-slate-800">
-              Managers
-            </h2>
-          </div>
+        <SettingsCard summary={`${managerRows.length} active Managers`} title="Managers">
           <PaginatedTable
             columns={[
               { label: "Manager", className: "w-[12%]" },
@@ -326,7 +323,7 @@ export default async function SettingsPage() {
               };
             })}
           />
-        </section>
+        </SettingsCard>
       </div>
     </main>
     </WorkspaceShell>

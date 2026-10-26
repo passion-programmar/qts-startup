@@ -181,10 +181,13 @@
     return { value: field.kind === 'number' ? String(amount) : `${amount} ${currency} ${PERIOD_WORDS[period]}`, source: 'profile' };
   }
 
-  // The notice in days: a reusable answer's ("2 weeks") when one applies, else the profile's choice.
+  // The notice in days from Super Admin's reusable answer ("2 weeks"), else the profile's old
+  // choice when a claim still carries one; null when neither says, so nothing is assumed.
   function noticeDays(candidate) {
     if (Number.isFinite(candidate.noticeDays)) return candidate.noticeDays;
-    return candidate.noticePeriod === '1_week' ? 7 : 0;
+    if (candidate.noticePeriod === '1_week') return 7;
+    if (candidate.noticePeriod === 'immediately') return 0;
+    return null;
   }
 
   /** Days in words: 0 "Immediately", 7 "1 week", 14 "2 weeks", 30 "1 month", 10 "10 days". */
@@ -286,13 +289,16 @@
     { topic: 'salary', test: SALARY_QUESTION },
     { topic: 'notice', test: NOTICE_QUESTION },
     { topic: 'sponsorship', test: SPONSORSHIP_QUESTION },
+    { topic: 'relocation', test: /relocat/ },
     { topic: 'work authorization', test: /authori[sz](ed|ation) to work|right to (live and )?work|eligib(le|ility) to work|work (permit|authori[sz]ation)|permission to work|(legally|lawfully) (allowed|entitled|able|permitted) to work|unrestricted right/ },
     { topic: 'employment type', test: /employment type|type of employment|(contract|employment) (type|form)|type of contract|model wsp[oó]łpracy|forma (zatrudnienia|wsp[oó]łpracy)/ },
     { topic: 'open to opportunities', test: /open to (new )?(opportunit|roles|offers)/ },
     { topic: 'area of interest', test: /areas? of interest|fields? of interest|area (you are|you're) interested/ },
     { topic: 'preferred location', test: /regional cent(re|er)|preferred (office|location|cent(re|er)|site|campus|city)/ },
   ];
-  const FACT_TOPICS = new Set(['salary', 'notice', 'sponsorship']);
+  const FACT_TOPICS = new Set(['salary', 'notice', 'sponsorship', 'relocation']);
+  // Yes/no reusable answers that stand in for these profile facts.
+  const YES_NO_FACTS = { sponsorship: 'needsSponsorship', relocation: 'willingToRelocate' };
 
   function topicOf(question) {
     const label = labelOf({ label: question });
@@ -333,10 +339,11 @@
         const days = optionDays(row.answer);
         if (days === null) continue;
         effective.noticeDays = days;
-      } else if (YES.test(String(row.answer).trim().split(/[\s,.]/)[0]) || NO.test(String(row.answer).trim().split(/[\s,.]/)[0])) {
-        effective.needsSponsorship = YES.test(String(row.answer).trim().split(/[\s,.]/)[0]);
       } else {
-        continue;
+        // Sponsorship or relocation: "No", "Yes, ..." – the first word says it.
+        const word = String(row.answer).trim().split(/[\s,.]/)[0];
+        if (!YES.test(word) && !NO.test(word)) continue;
+        effective[YES_NO_FACTS[topic]] = YES.test(word);
       }
       effective.reusableTopics.add(topic);
       effective.factRows.add(row);
@@ -431,6 +438,7 @@
         return resolveSalary(field, label, candidate, context.exchangeRates) ?? { ask: salaryText(candidate) };
       }
       if (rule.notice) {
+        if (noticeDays(candidate) === null) return { missing: rule.name };
         return resolveNotice(field, label, candidate, context.today)
           ?? { ask: `notice period ${noticeWords(noticeDays(candidate)).toLowerCase()}, can start ${formatDate(startDate(candidate, context.today))}` };
       }
@@ -602,8 +610,8 @@
       contractType: { employment: 'employment contract', b2b: 'B2B or contractor', either: 'employment or B2B' }[candidate.contractType],
       workHours: { full_time: 'full-time', part_time: 'part-time', either: 'full-time or part-time' }[candidate.workHours],
       workMode: { remote: 'remote', hybrid: 'hybrid', onsite: 'on-site', any: 'remote, hybrid, or on-site' }[candidate.workMode],
-      noticePeriod: noticeWords(noticeDays(candidate)),
-      earliestStartDate: formatDate(startDate(candidate, today)),
+      noticePeriod: noticeDays(candidate) === null ? null : noticeWords(noticeDays(candidate)),
+      earliestStartDate: noticeDays(candidate) === null ? null : formatDate(startDate(candidate, today)),
       yearsOfExperience: candidate.yearsOfExperience,
       notes: candidate.applicationNotes,
     };

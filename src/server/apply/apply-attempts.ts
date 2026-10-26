@@ -64,7 +64,7 @@ export type ClaimedApplication = {
   candidate: Record<string, string | number | boolean | null>;
   // The candidate's own saved answers first, then Super Admin's reusable answers for everyone.
   savedAnswers: { questionKey: string; questionText: string; answer: string; note: string | null; scope: "candidate" | "everyone" }[];
-  // For salary questions in another currency; null when the candidate has no salary or the ECB is unreachable.
+  // For salary questions in another currency; null when the ECB is unreachable.
   exchangeRates: ExchangeRates | null;
   // Super Admin's default ChatGPT prompt for application answers; null means Apply's built-in one.
   answerPrompt: { id: string; template: string } | null;
@@ -134,25 +134,12 @@ export async function claimNextApplication(
       province: profiles.province,
       addressLine1: profiles.addressLine1,
       postalCode: profiles.postalCode,
-      workAuthorization: profiles.workAuthorization,
-      needsSponsorship: profiles.needsSponsorship,
-      noticePeriod: profiles.noticePeriod,
-      salaryExpectationAmount: profiles.salaryExpectationAmount,
-      salaryExpectationCurrency: profiles.salaryExpectationCurrency,
-      salaryExpectationPeriod: profiles.salaryExpectationPeriod,
       yearsOfExperience: profiles.yearsOfExperience,
-      willingToRelocate: profiles.willingToRelocate,
       githubUrl: profiles.githubUrl,
       portfolioUrl: profiles.portfolioUrl,
       eeoPreference: profiles.eeoPreference,
       nationality: profiles.nationality,
-      workCountries: profiles.workCountries,
-      workPermitExpiry: profiles.workPermitExpiry,
       languages: profiles.languages,
-      contractType: profiles.contractType,
-      workHours: profiles.workHours,
-      workMode: profiles.workMode,
-      applicationNotes: profiles.applicationNotes,
       aiMode: users.applyAiMode,
     })
     .from(applyAttempts)
@@ -205,7 +192,8 @@ export async function claimNextApplication(
     },
     candidate,
     savedAnswers,
-    exchangeRates: candidate.salaryExpectationAmount ? await loadExchangeRates() : null,
+    // A reusable salary answer may need converting to another currency.
+    exchangeRates: await loadExchangeRates(),
     answerPrompt: await defaultAnswerPrompt(),
   };
 }

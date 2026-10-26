@@ -30,7 +30,7 @@ export function ReusableAnswerForm({ answer }: { answer?: ReusableAnswer }) {
   const key = answer?.id ?? "new";
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+    <div className="space-y-2">
       <form action={formAction} className="space-y-2">
         {answer && <input name="answerId" type="hidden" value={answer.id} />}
         <label className="block text-[11px] font-semibold text-slate-600" htmlFor={`question-${key}`}>
