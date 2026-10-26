@@ -718,6 +718,30 @@ export const reusableAnswers = pgTable(
   (table) => [uniqueIndex("reusable_answers_question_key_unique").on(table.questionKey)],
 );
 
+// A Manager's own library of prompts kept for special cases; Generation and Apply never use them.
+// Every save adds a version: one prompt's versions share prompt_key, the highest is current.
+export const usefulPrompts = pgTable(
+  "useful_prompts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    promptKey: uuid("prompt_key").notNull(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("useful_prompts_key_version_unique").on(table.promptKey, table.version),
+    index("useful_prompts_manager_index").on(table.managerId),
+    check("useful_prompts_version_positive", sql`${table.version} >= 1`),
+  ],
+);
+
 // Get JD's "being checked" mark: while one Chrome evaluates a job link, others wait for its
 // verdict instead of calling Gemini again; the verdict is replayed until expires_at.
 export const getJdPageChecks = pgTable(

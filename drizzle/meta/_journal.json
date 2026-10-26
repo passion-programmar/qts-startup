@@ -477,6 +477,13 @@
       "when": 1793046870003,
       "tag": "0067_job_apply_answers",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1793048947926,
+      "tag": "0068_useful_prompts",
+      "breakpoints": true
     }
   ]
 }

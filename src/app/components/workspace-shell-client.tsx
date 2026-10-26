@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
@@ -82,7 +83,10 @@ export function WorkspaceShellClient({
           { label: "Gemini usage", href: "/settings/gemini-usage", icon: Activity },
         ]
       : user.role === "manager"
-        ? [{ label: "My AI prompts", href: "/prompts", icon: Sparkles }]
+        ? [
+            { label: "My AI prompts", href: "/prompts", icon: Sparkles },
+            { label: "Useful prompts", href: "/useful-prompts", icon: NotebookPen },
+          ]
         : [];
   const navigationGroups = [
     { label: "Workspace", items: workspaceItems },
