@@ -127,7 +127,7 @@ test('expired token is removed from local extension storage', async () => {
   const tokenStore = createTokenStore(createToken(Math.floor(now / 1000) - 1));
 
   assert.equal(await loadAuthStorage(storage, now, tokenStore).hydratePopupAuth(), false);
-  assert.deepEqual(storage.data, { qtsExtensionStatus: null });
+  assert.deepEqual(storage.data, { qtsExtensionStatus: null, qtsGetJdOn: false });
   assert.equal(tokenStore.token, '');
 });
 

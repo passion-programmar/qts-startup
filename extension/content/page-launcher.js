@@ -633,7 +633,7 @@ async function initializeQtsPageLauncher() {
       setOpen(false);
       preview.hidden = true;
       if (expiresAt > 0) {
-        chrome.storage.local.set({ qtsExtensionStatus: null }).catch((error) => {
+        chrome.storage.local.set({ qtsExtensionStatus: null, qtsGetJdOn: false }).catch((error) => {
           console.error('[QTS extension] Could not clear expired extension status:', error);
         });
       }
@@ -641,21 +641,24 @@ async function initializeQtsPageLauncher() {
     return signedIn;
   }
 
+  // Two switches per Chrome: Get JD on/off (qtsGetJdOn) and the work slot (qtsExtensionStatus:
+  // generation or apply). Each running mode turns its own button into its own Cancel.
   async function syncModeActions() {
-    const stored = await chrome.storage.local.get(['qtsExtensionStatus']);
-    const activeStatus = stored.qtsExtensionStatus;
+    const stored = await chrome.storage.local.get(['qtsExtensionStatus', 'qtsGetJdOn']);
+    const workStatus = stored.qtsExtensionStatus;
+    const getJdOn = stored.qtsGetJdOn === true;
     const labels = {
       get_jd: 'Get JD',
       generation: 'Generation',
       apply: 'Apply',
     };
-    launcher.classList.toggle('busy', Object.hasOwn(labels, activeStatus || ''));
+    launcher.classList.toggle('busy', getJdOn || workStatus === 'generation' || workStatus === 'apply');
     for (const [action, defaultLabel] of Object.entries(labels)) {
       const button = launcher.querySelector(`[data-action="${action}"]`);
       if (!button) continue;
-      const active = activeStatus === action;
+      const active = action === 'get_jd' ? getJdOn : workStatus === action;
       button.classList.toggle('running', active);
-      button.dataset.modeAction = active ? 'cancel_status' : action;
+      button.dataset.modeAction = active ? (action === 'get_jd' ? 'cancel_get_jd' : 'cancel_status') : action;
       button.setAttribute('aria-label', active ? `Cancel ${defaultLabel}` : defaultLabel);
       const icon = button.querySelector('.action-icon');
       const label = button.querySelector('.action-icon + span');
@@ -697,9 +700,9 @@ async function initializeQtsPageLauncher() {
         hideSignInForm();
         globalThis.__qtsPageToast?.clear();
         await syncSessionAction();
-      } else if (resolvedAction === 'get_jd' || resolvedAction === 'generation' || resolvedAction === 'cancel_status') {
+      } else if (['get_jd', 'generation', 'apply', 'cancel_status', 'cancel_get_jd'].includes(resolvedAction)) {
         showToast(
-          response.message || (resolvedAction === 'cancel_status' ? 'Cancelled.' : 'Started.'),
+          response.message || (resolvedAction.startsWith('cancel_') ? 'Cancelled.' : 'Started.'),
           response.warning ? 'warn' : 'info',
         );
         await syncModeActions();
@@ -735,7 +738,7 @@ async function initializeQtsPageLauncher() {
         showToast('Signed in. QTS actions are ready.', 'success');
       }
     }
-    if (changes.qtsExtensionStatus) syncModeActions().catch(() => {});
+    if (changes.qtsExtensionStatus || changes.qtsGetJdOn) syncModeActions().catch(() => {});
   };
   let notJobPageTimer = null;
   const onRuntimeMessage = (message) => {
@@ -774,10 +777,10 @@ async function initializeQtsPageLauncher() {
 
   syncSessionAction().catch(() => {});
   syncModeActions().catch(() => {});
-  chrome.storage.local.get(['qtsExtensionStatus', 'authExpiresAt'])
+  chrome.storage.local.get(['qtsGetJdOn', 'authExpiresAt'])
     .then((stored) => {
       // Restore a saved review after reloads while Get JD is active.
-      if (stored.qtsExtensionStatus !== 'get_jd' || !((Number(stored.authExpiresAt) || 0) > Date.now())) return;
+      if (stored.qtsGetJdOn !== true || !((Number(stored.authExpiresAt) || 0) > Date.now())) return;
       return ensureGetJdPanel();
     })
     .catch((error) => console.warn('[QTS Get JD] Could not restore the review panel:', error));

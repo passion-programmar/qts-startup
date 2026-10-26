@@ -1391,9 +1391,10 @@ async function initializeGetJdReviewOnce() {
     renderCurrentResult();
   }
 
+  // Get JD has its own switch (qtsGetJdOn), separate from the Generation/Apply work slot.
   async function syncExtensionStatus() {
-    const stored = await chrome.storage.local.get(['qtsExtensionStatus']);
-    extensionStatus = stored.qtsExtensionStatus || null;
+    const stored = await chrome.storage.local.get(['qtsGetJdOn']);
+    extensionStatus = stored.qtsGetJdOn === true ? 'get_jd' : null;
     renderCurrentResult();
   }
 
@@ -1467,7 +1468,7 @@ async function initializeGetJdReviewOnce() {
         console.error('[QTS Get JD] Could not sync the manager session:', error);
       });
     }
-    if (changes.qtsExtensionStatus) {
+    if (changes.qtsGetJdOn) {
       syncExtensionStatus().catch((error) => {
         console.error('[QTS Get JD] Could not sync Get JD status:', error);
       });

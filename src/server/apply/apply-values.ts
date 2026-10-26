@@ -37,7 +37,14 @@ export function parseBrowserHeaders(headers: Headers): BrowserHeaders | null {
   const browserKey = headers.get("x-qts-browser-key")?.trim() ?? "";
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(browserKey)) return null;
   const version = headers.get("x-qts-extension-version")?.trim() ?? "";
-  const name = headers.get("x-qts-browser-name")?.replace(/\s+/g, " ").trim() ?? "";
+  // The extension sends the name URI-encoded, since header values cannot carry every character.
+  let name = headers.get("x-qts-browser-name") ?? "";
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    name = "";
+  }
+  name = name.replace(/\s+/g, " ").trim();
   return {
     browserKey,
     extensionVersion: /^\d+(\.\d+){0,3}$/.test(version) ? version : null,

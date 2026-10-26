@@ -27,7 +27,7 @@ test("browser headers need a well-formed key", () => {
   const headers = new Headers({
     "x-qts-browser-key": "a1B2c3D4e5F6g7H8",
     "x-qts-extension-version": "1.33.0",
-    "x-qts-browser-name": "  Office   PC ",
+    "x-qts-browser-name": encodeURIComponent("  Office   PC "),
   });
   assert.deepEqual(parseBrowserHeaders(headers), {
     browserKey: "a1B2c3D4e5F6g7H8",

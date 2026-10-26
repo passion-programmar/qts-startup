@@ -32,6 +32,8 @@ function workerSupportedApiPath(path) {
     || /^\/api\/extension\/page-exclusions\/[0-9a-f-]+$/i.test(path)
     || /^\/api\/extension\/job-detection-url-rules\/[0-9a-f-]+$/i.test(path)
     || path.startsWith('/api/extension/generation/')
+    || path.startsWith('/api/extension/apply/')
+    || path === '/api/extension/browsers/heartbeat'
     || path.startsWith('/api/extension/auth/');
 }
 
@@ -42,6 +44,52 @@ async function workerReadAuth() {
     token,
     serverUrl: await qtsRoot.__qtsRuntimeConfig.getServerUrl(),
   };
+}
+
+// This Chrome's identity, sent with every request so the server can tell Chromes apart: a random
+// key kept in this Chrome's storage, the extension version, and the name the Manager gave it.
+const BROWSER_KEY_STORAGE_KEY = 'qtsBrowserKey';
+const BROWSER_NAME_STORAGE_KEY = 'qtsBrowserName';
+let browserKeyPromise = null;
+
+function createBrowserKey() {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function workerBrowserKey() {
+  if (!browserKeyPromise) {
+    browserKeyPromise = chrome.storage.local.get([BROWSER_KEY_STORAGE_KEY]).then(async (stored) => {
+      const existing = stored[BROWSER_KEY_STORAGE_KEY];
+      if (typeof existing === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(existing)) return existing;
+      const key = createBrowserKey();
+      await chrome.storage.local.set({ [BROWSER_KEY_STORAGE_KEY]: key });
+      return key;
+    }).catch((error) => {
+      browserKeyPromise = null;
+      throw error;
+    });
+  }
+  return browserKeyPromise;
+}
+
+async function workerBrowserHeaders() {
+  try {
+    const [key, stored] = await Promise.all([
+      workerBrowserKey(),
+      chrome.storage.local.get([BROWSER_NAME_STORAGE_KEY]),
+    ]);
+    // Encoded, because a header value cannot carry every character a name may have.
+    const name = String(stored[BROWSER_NAME_STORAGE_KEY] || '').trim().slice(0, 60);
+    return {
+      'X-QTS-Browser-Key': key,
+      'X-QTS-Extension-Version': chrome.runtime.getManifest().version,
+      ...(name ? { 'X-QTS-Browser-Name': encodeURIComponent(name) } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 async function workerApiRequest(method, path, body) {
@@ -58,6 +106,7 @@ async function workerApiRequest(method, path, body) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        ...await workerBrowserHeaders(),
       },
       body: body != null ? JSON.stringify(body) : undefined,
     });
@@ -321,6 +370,7 @@ async function workerBuildFileUploadFields(applicationId, fields) {
 if (typeof self !== 'undefined') {
   self.__qtsApiWorker = {
     workerApiRequest,
+    workerBrowserKey,
     workerFetchDocumentBase64,
     workerFetchAccountResumeBase64,
     workerFetchGptTaskDocumentBase64,

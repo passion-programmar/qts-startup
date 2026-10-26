@@ -49,7 +49,10 @@ function restrictedPageMessage(url) {
 }
 
 const capturePanelOpenPromisesByTab = new Map();
+// Each Chrome has two switches: Get JD on/off, and a work slot for Generation or Apply (never both).
+// EXTENSION_STATUS_KEY holds the work slot: 'generation', 'apply', 'cancel' while stopping, or null.
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
+const GET_JD_ON_KEY = 'qtsGetJdOn';
 const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
 const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
@@ -1775,8 +1778,8 @@ async function enableGetJdForTab(tabId) {
 }
 
 async function isGetJdActive() {
-  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY]);
-  return stored[EXTENSION_STATUS_KEY] === 'get_jd';
+  const stored = await chrome.storage.local.get([GET_JD_ON_KEY]);
+  return stored[GET_JD_ON_KEY] === true;
 }
 
 async function verifyFormScanScripts(tabId) {
@@ -5064,13 +5067,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
         }
         await self.__qtsAccountAuth?.clearAuth?.();
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false });
         getJdInFlightTabs.clear();
         getJdLastPageByTab.clear();
         for (const [runningTabId, token] of generationCancellationByTab) {
           generationCancellationByTab.set(runningTabId, token + 1);
         }
         sendResponse({ ok: true, message: 'Signed out.' });
+        return;
+      }
+      // Get JD's switch is separate from the work slot, so it has its own Cancel.
+      if (action === 'cancel_get_jd') {
+        await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
+        getJdInFlightTabs.clear();
+        getJdLastPageByTab.clear();
+        if (tabId != null) {
+          const result = await readGetJdResultForTab(tabId);
+          if (result?.status === 'complete') await cancelGetJdReview(tabId);
+        }
+        sendResponse({ ok: true, status: 'get_jd_off', message: 'Get JD cancelled.' });
         return;
       }
       if (action === 'cancel_status') {
@@ -5089,20 +5104,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
         }
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
-        getJdInFlightTabs.clear();
-        getJdLastPageByTab.clear();
         if (cancelledStatus === 'generation') {
           for (const [runningTabId, token] of generationCancellationByTab) {
             generationCancellationByTab.set(runningTabId, token + 1);
           }
         }
-        if (cancelledStatus === 'get_jd' && tabId != null) {
-          const result = await readGetJdResultForTab(tabId);
-          if (result?.status === 'complete') await cancelGetJdReview(tabId);
-        }
-        const cancelledLabel = cancelledStatus === 'get_jd'
-          ? 'Get JD'
-          : cancelledStatus === 'generation'
+        const cancelledLabel = cancelledStatus === 'generation'
             ? 'Generation'
             : cancelledStatus === 'apply'
               ? 'Apply'
@@ -5137,6 +5144,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, status: 'generation', message: 'Generation is already running.' });
           return;
         }
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
+          sendResponse({ ok: false, error: 'Apply is running in this Chrome. Stop it first, or run Generation in another Chrome.' });
+          return;
+        }
         await chrome.storage.local.remove(GENERATION_NOTICE_KEY);
         await chrome.storage.local.set({
           [GENERATION_QUEUE_RUN_KEY]: {
@@ -5168,7 +5179,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Get JD.' });
         return;
       }
-      await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'get_jd' });
+      await chrome.storage.local.set({ [GET_JD_ON_KEY]: true });
       getJdLastPageByTab.clear();
       enableGetJdForTab(tabId).catch((error) => {
         console.error('[QTS Get JD] Could not start page monitoring:', error);
@@ -5318,7 +5329,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const status = msg.status === 'get_jd' ? 'get_jd' : null;
       if (status === 'get_jd') {
         if (!self.__qtsRuntimeConfig.isFeatureEnabled('geminiEvaluation')) {
-          await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+          await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
           sendResponse({
             ok: false,
             disabled: true,
@@ -5326,7 +5337,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
           return;
         }
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: status });
+        await chrome.storage.local.set({ [GET_JD_ON_KEY]: true });
         enableGetJdForTab(Number.isInteger(msg.tabId) ? msg.tabId : null)
           .catch((error) => {
             console.error('[QTS Get JD] Could not start current-page classification:', error);
@@ -5335,7 +5346,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           chrome.tabs.sendMessage(msg.tabId, { type: 'QTS_CLOSE_CAPTURE_PANEL' }).catch(() => {});
         }
       } else {
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
         getJdLastPageByTab.clear();
       }
       sendResponse({ ok: true, status });
@@ -6198,7 +6209,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.authExpiresAt) {
     if (!changes.authExpiresAt.newValue) {
       disarmJobPageActivity();
-      chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null }).catch(() => {});
+      chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false }).catch(() => {});
       // Reviews contain the previous Manager's candidates and must not survive a session change.
       chrome.storage.local.remove(GET_JD_RESULTS_KEY).catch(() => {});
       getJdInFlightTabs.clear();
@@ -6234,7 +6245,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
   });
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  // After an update both switches start off, so a Chrome never resumes work under new rules by itself.
+  if (details?.reason === 'update') {
+    chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false }).catch(() => {});
+  }
   syncGenerationQueueAlarm().catch((error) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
