@@ -397,16 +397,33 @@
     return '';
   }
 
+  function shownListboxes() {
+    return allElements().filter((element) => element.getAttribute('role') === 'listbox' && isShown(element));
+  }
+
+  /**
+   * The list a search box opened: the one it names (aria-controls), else one that appeared when it
+   * opened. Never another field's list that happens to be open (a phone number's country list).
+   */
+  function listFor(input, before) {
+    const listId = input.getAttribute('aria-controls') || input.getAttribute('aria-owns');
+    const root = input.getRootNode();
+    // React Select names its list after the input ("react-select-<input id>-listbox").
+    const named = (listId && root.getElementById?.(listId)) || (input.id && root.getElementById?.(`react-select-${input.id}-listbox`));
+    if (named) return named;
+    return shownListboxes().find((list) => !before.includes(list)) || null;
+  }
+
   /** Comboboxes (React Select and similar) show their options only when opened; opening reads them. */
   async function readComboboxOptions(id) {
     const input = findField(id);
     if (!input) return [];
+    const before = shownListboxes();
     input.focus();
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     input.click?.();
     await new Promise((resolve) => setTimeout(resolve, 400));
-    const listId = input.getAttribute('aria-controls') || input.getAttribute('aria-owns');
-    const list = (listId && input.getRootNode().getElementById?.(listId)) || document.querySelector('[role="listbox"]');
+    const list = listFor(input, before);
     const options = list ? [...list.querySelectorAll('[role="option"]')].map(textOf).filter(Boolean) : [];
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     input.blur();
@@ -502,13 +519,13 @@
       // Searchable lists match on what is typed, so "Warsaw, Poland" searches "Warsaw" and then
       // picks the option that matches the whole answer best.
       const answer = cleanText(value).toLowerCase();
+      const before = shownListboxes();
       element.focus();
       setNativeValue(element, String(value).split(',')[0].trim());
       let options = [];
       for (let waited = 0; waited < 3000 && !options.length; waited += 300) {
         await new Promise((resolve) => setTimeout(resolve, 300));
-        const listId = element.getAttribute('aria-controls') || element.getAttribute('aria-owns');
-        const list = (listId && element.getRootNode().getElementById?.(listId)) || document.querySelector('[role="listbox"]');
+        const list = listFor(element, before);
         options = list ? [...list.querySelectorAll('[role="option"]')] : [];
       }
       const match = options.find((option) => textOf(option).toLowerCase() === answer)

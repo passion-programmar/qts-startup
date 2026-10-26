@@ -291,3 +291,10 @@ test('years of experience as choices take the highest one the candidate reaches'
   assert.equal(resolved['How many years of experience do you have?'].value, '8+ year');
   assert.equal(resolved.ranges.value, '8-10 years');
 });
+
+test('a box about future job opportunities stays unticked even when it mentions privacy', () => {
+  const { answers: resolved } = answers.resolveFields([
+    field('Yes, XTB can contact me about future job opportunities for up to 1 year, in line with the privacy notice', { kind: 'checkbox', required: false }),
+  ], candidate, []);
+  assert.deepEqual(resolved, {});
+});

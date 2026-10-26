@@ -7,7 +7,7 @@
   const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
   const CONSENT = /\b(agree|consent|acknowledge|privacy|terms|certify|confirm that|i have read|accurate|true and complete|data processing|gdpr)\b/i;
   // Opt-ins a person may refuse without losing the application.
-  const OPT_IN = /\b(marketing|newsletters?|future (jobs|roles|opportunities|vacancies|positions)|other (jobs|roles|opportunities|positions)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?)\b/i;
+  const OPT_IN = /\b(marketing|newsletters?|(future|other|new) (jobs?|roles?|opportunit\w*|vacanc\w*|positions?|openings?)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?|contact me about)\b/i;
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
 
