@@ -6,6 +6,11 @@
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
   const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
   const CONSENT = /\b(agree|consent|acknowledge|privacy|terms|certify|confirm that|i have read|accurate|true and complete|data processing|gdpr)\b/i;
+  // Questions about salary, notice or start date, and sponsorship, for the profile rules and for
+  // Super Admin's reusable answers on the same topics.
+  const SALARY_QUESTION = /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b|stawk|wynagrodzeni/;
+  const NOTICE_QUESTION = /notice period|when can you start|earliest start|availability to start|available to start|start date|date (you are |you're )?available|okres wypowiedzenia|od kiedy mo[zż]esz/;
+  const SPONSORSHIP_QUESTION = /sponsor|\bvisa\b/;
   // Opt-ins a person may refuse without losing the application.
   const OPT_IN = /\b(marketing|newsletters?|(future|other|new) (jobs?|roles?|opportunit\w*|vacanc\w*|positions?|openings?)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?|contact me about)\b/i;
   const YES = /^(yes|y|true)$/i;
@@ -176,8 +181,17 @@
     return { value: field.kind === 'number' ? String(amount) : `${amount} ${currency} ${PERIOD_WORDS[period]}`, source: 'profile' };
   }
 
+  // The notice in days: a reusable answer's ("2 weeks") when one applies, else the profile's choice.
   function noticeDays(candidate) {
+    if (Number.isFinite(candidate.noticeDays)) return candidate.noticeDays;
     return candidate.noticePeriod === '1_week' ? 7 : 0;
+  }
+
+  /** Days in words: 0 "Immediately", 7 "1 week", 14 "2 weeks", 30 "1 month", 10 "10 days". */
+  function noticeWords(days) {
+    if (!days) return 'Immediately';
+    const [count, unit] = days % 30 === 0 ? [days / 30, 'month'] : days % 7 === 0 ? [days / 7, 'week'] : [days, 'day'];
+    return `${count} ${unit}${count === 1 ? '' : 's'}`;
   }
 
   function startDate(candidate, today) {
@@ -207,32 +221,32 @@
     return count * { day: 1, week: 7, month: 30 }[match[2]];
   }
 
-  /** Notice and start questions: immediately or in 1 week, as a choice, a date, or words. */
-  function resolveNotice(field, label, candidate, today) {
+  /** Notice and start questions: the notice as a choice, a date, a number in the field's unit, or words. */
+  function resolveNotice(field, label, candidate, today, source = 'profile') {
     const days = noticeDays(candidate);
     if (hasOptions(field)) {
       const choices = field.options.map((option) => ({ option, days: optionDays(option) })).filter((entry) => entry.days !== null);
       if (!choices.length) return null;
       const fitting = choices.filter((entry) => entry.days <= days).sort((a, b) => b.days - a.days)[0];
       const shortest = [...choices].sort((a, b) => a.days - b.days)[0];
-      return { value: (fitting ?? shortest).option, source: 'profile' };
+      return { value: (fitting ?? shortest).option, source };
     }
     // A number or slider counts in its unit (Teamtailor: weeks); 1 week in months rounds up to 1.
     if (field.kind === 'range' || field.kind === 'number') {
       const unit = `${field.unit || ''} ${label}`;
       const unitDays = /\bdays?\b/.test(unit) ? 1 : /\bweeks?\b/.test(unit) ? 7 : /\bmonths?\b/.test(unit) ? 30 : null;
-      if (!unitDays) return days ? null : { value: '0', source: 'profile' };
+      if (!unitDays) return days ? null : { value: '0', source };
       let count = days ? Math.max(1, Math.ceil(days / unitDays)) : 0;
       if (Number.isFinite(field.min)) count = Math.max(count, field.min);
       if (Number.isFinite(field.max)) count = Math.min(count, field.max);
-      return { value: String(count), source: 'profile' };
+      return { value: String(count), source };
     }
     if (field.kind === 'date' || /\bdate\b/.test(label)) {
       const date = startDate(candidate, today);
-      return { value: field.kind === 'date' ? formatDate(date) : formatDate(date, field.placeholder), source: 'profile' };
+      return { value: field.kind === 'date' ? formatDate(date) : formatDate(date, field.placeholder), source };
     }
-    if (!days) return { value: 'Immediately', source: 'profile' };
-    return { value: /notice/.test(label) ? '1 week' : 'In 1 week', source: 'profile' };
+    if (!days) return { value: 'Immediately', source };
+    return { value: /notice/.test(label) ? noticeWords(days) : `In ${noticeWords(days)}`, source };
   }
 
   // Each rule: the question it recognizes, and the candidate fact that answers it (or the missing fact's name).
@@ -254,12 +268,81 @@
     { test: /^(street )?address( line 1)?$|first line of (your )?address/, fact: (c) => c.addressLine1, name: 'address' },
     { test: /^(state|province|region)(\s*\/\s*(state|province|region))?$/, fact: (c) => c.province, name: 'state or province' },
     { test: /nationalit|citizenship/, fact: (c) => c.nationality, name: 'nationality' },
-    { test: /sponsor/, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
+    { test: SPONSORSHIP_QUESTION, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
     { test: /relocat/, yesNo: (c) => c.willingToRelocate, name: 'relocation' },
-    { test: /notice period|when can you start|earliest start|availability to start|available to start|start date|date (you are |you're )?available/, notice: true, name: 'notice period' },
-    { test: /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b/, salary: true, name: 'salary expectation' },
+    { test: NOTICE_QUESTION, notice: true, name: 'notice period' },
+    { test: SALARY_QUESTION, salary: true, name: 'salary expectation' },
     { test: /^(total )?(years of (professional |work |relevant )?experience|how many years of (professional |work )?experience( do you have)?)\??$/, fact: (c) => (c.yearsOfExperience ?? null), years: true, name: 'years of experience' },
   ];
+
+  /**
+   * Topics Super Admin answers once for every candidate with reusable answers, ahead of the
+   * profile, matched by topic so "Desired pay" finds an answer saved as "Salary expectation".
+   * Salary, notice, and sponsorship answers stand in for the profile's facts, so they are still
+   * converted to each field (per hour, another currency, a date, a choice); the others are used
+   * as written when they fit the field, else given to the AI as a hint.
+   */
+  const REUSABLE_TOPICS = [
+    { topic: 'salary', test: SALARY_QUESTION },
+    { topic: 'notice', test: NOTICE_QUESTION },
+    { topic: 'sponsorship', test: SPONSORSHIP_QUESTION },
+    { topic: 'work authorization', test: /authori[sz](ed|ation) to work|right to (live and )?work|eligib(le|ility) to work|work (permit|authori[sz]ation)|permission to work|(legally|lawfully) (allowed|entitled|able|permitted) to work|unrestricted right/ },
+    { topic: 'employment type', test: /employment type|type of employment|(contract|employment) (type|form)|type of contract|model wsp[oó]łpracy|forma (zatrudnienia|wsp[oó]łpracy)/ },
+    { topic: 'open to opportunities', test: /open to (new )?(opportunit|roles|offers)/ },
+    { topic: 'area of interest', test: /areas? of interest|fields? of interest|area (you are|you're) interested/ },
+    { topic: 'preferred location', test: /regional cent(re|er)|preferred (office|location|cent(re|er)|site|campus|city)/ },
+  ];
+  const FACT_TOPICS = new Set(['salary', 'notice', 'sponsorship']);
+
+  function topicOf(question) {
+    const label = labelOf({ label: question });
+    return REUSABLE_TOPICS.find((entry) => entry.test.test(label))?.topic ?? null;
+  }
+
+  /** The reusable answer for a topic: the one saved for the same question, else any on the topic. */
+  function topicAnswer(field, topic, savedRows) {
+    const rows = (savedRows || []).filter((row) => topicOf(row.questionText) === topic);
+    return matchSavedAnswer(field, rows) ?? rows[0] ?? null;
+  }
+
+  /** "5000 EUR per month", "€70,000 per year", "25 USD/hour": { amount, currency, period } or null. */
+  function parseSalaryAnswer(text, exchangeRates) {
+    const number = String(text).replace(/(\d)[,\s](?=\d{3}\b)/g, '$1').match(/(\d+(?:\.\d+)?)\s*(k)?\b/i);
+    const currency = currencyIn(text, exchangeRates);
+    const period = periodIn(text);
+    if (!number || !currency || !period) return null;
+    const amount = Number(number[1]) * (number[2] ? 1000 : 1);
+    return amount > 0 ? { amount: Math.round(amount), currency, period } : null;
+  }
+
+  /**
+   * The candidate as Apply answers for them: Super Admin's reusable salary, notice, and sponsorship
+   * answers in place of the profile's, so every form gets them, converted to what each field takes.
+   */
+  function withReusableFacts(candidate, savedRows, exchangeRates) {
+    const effective = { ...candidate, reusableTopics: new Set(), factRows: new Set() };
+    for (const row of savedRows || []) {
+      const topic = topicOf(row.questionText);
+      if (!FACT_TOPICS.has(topic) || effective.reusableTopics.has(topic)) continue;
+      // "Does the advertised salary align…?" is about salary but holds no figure; it stays a plain answer.
+      if (topic === 'salary') {
+        const salary = parseSalaryAnswer(row.answer, exchangeRates);
+        if (!salary) continue;
+        Object.assign(effective, { salaryExpectationAmount: salary.amount, salaryExpectationCurrency: salary.currency, salaryExpectationPeriod: salary.period });
+      } else if (topic === 'notice') {
+        const days = optionDays(row.answer);
+        if (days === null) continue;
+        effective.noticeDays = days;
+      } else if (YES.test(String(row.answer).trim().split(/[\s,.]/)[0]) || NO.test(String(row.answer).trim().split(/[\s,.]/)[0])) {
+        effective.needsSponsorship = YES.test(String(row.answer).trim().split(/[\s,.]/)[0]);
+      } else {
+        continue;
+      }
+      effective.reusableTopics.add(topic);
+      effective.factRows.add(row);
+    }
+    return effective;
+  }
 
   /**
    * One field's answer: { value, source } from the profile or saved answers, { skip } for fields
@@ -301,10 +384,23 @@
     }
     // Questions about someone else (a referrer, an employee you spoke to) never take the candidate's facts.
     const aboutSomeoneElse = /\b(employee|referr\w*|recruiter|their|someone|who referred|hiring manager)\b/.test(label);
-    // 1. The candidate's profile facts; a reusable answer never overrides them.
+    // 0. A reusable answer saved for exactly this question ("Does the advertised salary align with
+    //    your expectations?" → Yes), unless it is the one standing in for a profile fact.
+    const exactRow = aboutSomeoneElse ? null : (savedAnswers || []).find((row) => row.questionKey === normalizeQuestionKey(field.label));
+    if (exactRow && !candidate.factRows?.has(exactRow)) return reusableAnswer(field, exactRow);
+    // 1. Super Admin's reusable answers for their topics (right to work, employment type, ...);
+    //    salary, notice, and sponsorship answers already stand in for the profile's facts.
+    const topic = aboutSomeoneElse ? null : topicOf(field.label);
+    if (topic && !FACT_TOPICS.has(topic)) {
+      const row = topicAnswer(field, topic, savedAnswers);
+      if (row) return reusableAnswer(field, row);
+    }
+    // 2. The candidate's profile facts; other reusable answers never override them.
     const fromProfile = aboutSomeoneElse ? undefined : profileAnswer(field, label, candidate, context);
-    if (fromProfile && !fromProfile.missing) return fromProfile;
-    // 2. Super Admin's reusable answer for a matching question: used when it fits the field, else a hint.
+    if (fromProfile && !fromProfile.missing) {
+      return fromProfile.value !== undefined && candidate.reusableTopics?.has(topic) ? { ...fromProfile, source: 'reusable' } : fromProfile;
+    }
+    // 3. Super Admin's reusable answer for a matching question: used when it fits the field, else a hint.
     const reusable = matchSavedAnswer(field, savedAnswers);
     if (reusable) return reusableAnswer(field, reusable);
     if (fromProfile) return fromProfile;
@@ -314,7 +410,7 @@
       if (!hasOptions(field)) return { value: 'LinkedIn', source: 'rule' };
       return null;
     }
-    // 3. Everything else goes to the AI.
+    // 4. Everything else goes to the AI.
     return null;
   }
 
@@ -336,7 +432,7 @@
       }
       if (rule.notice) {
         return resolveNotice(field, label, candidate, context.today)
-          ?? { ask: `notice period ${noticeDays(candidate) ? '1 week' : 'immediately'}, can start ${formatDate(startDate(candidate, context.today))}` };
+          ?? { ask: `notice period ${noticeWords(noticeDays(candidate)).toLowerCase()}, can start ${formatDate(startDate(candidate, context.today))}` };
       }
       const fact = rule.fact(candidate);
       if (fact === null || fact === undefined || fact === '') {
@@ -414,8 +510,9 @@
    * the AI, with the profile's value or the reusable answer as a hint when one did not fit.
    * Nothing stops the application here.
    */
-  function resolveFields(fields, candidate, savedAnswerRows, context = {}) {
+  function resolveFields(fields, profile, savedAnswerRows, context = {}) {
     const savedAnswers = savedAnswerRows || [];
+    const candidate = withReusableFacts(profile, savedAnswers, context.exchangeRates);
     const answers = {};
     const open = [];
     const missing = [];
@@ -505,7 +602,7 @@
       contractType: { employment: 'employment contract', b2b: 'B2B or contractor', either: 'employment or B2B' }[candidate.contractType],
       workHours: { full_time: 'full-time', part_time: 'part-time', either: 'full-time or part-time' }[candidate.workHours],
       workMode: { remote: 'remote', hybrid: 'hybrid', onsite: 'on-site', any: 'remote, hybrid, or on-site' }[candidate.workMode],
-      noticePeriod: noticeDays(candidate) ? '1 week' : 'Immediately',
+      noticePeriod: noticeWords(noticeDays(candidate)),
       earliestStartDate: formatDate(startDate(candidate, today)),
       yearsOfExperience: candidate.yearsOfExperience,
       notes: candidate.applicationNotes,
@@ -539,7 +636,9 @@
    * The AI request for a page's open questions: Super Admin's prompt (or the default) with its
    * placeholders filled, then the fixed reply format. One message, answered as strict JSON.
    */
-  function buildAnswerPrompt({ template, job, candidate, documentsJson, fields, exchangeRates, today, savedAnswers }) {
+  function buildAnswerPrompt({ template, job, candidate: profile, documentsJson, fields, exchangeRates, today, savedAnswers }) {
+    // ChatGPT sees the salary, notice, and sponsorship Apply uses: Super Admin's reusable ones first.
+    const candidate = withReusableFacts(profile, savedAnswers, exchangeRates);
     const questions = JSON.stringify(questionList(fields));
     const saved = (savedAnswers || [])
       .map((row) => `${row.questionText}: ${row.answer}${row.note ? ` (note: ${row.note})` : ''}`)

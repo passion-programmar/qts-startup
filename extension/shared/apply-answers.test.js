@@ -381,3 +381,46 @@ test('every reusable answer reaches the AI as context, with its note', () => {
   });
   assert.match(prompt, /How did you hear about us\?: LinkedIn job post \(note: Pick the closest choice\.\)/);
 });
+
+test('reusable salary, notice, sponsorship, right-to-work, and employment-type answers come before the profile, by topic', () => {
+  const row = (questionText, answer) => ({ questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
+  const reusable = [
+    row('What is your salary expectation?', '5000 EUR per month'),
+    row('What is your notice period?', '2 weeks'),
+    row('Will you require visa sponsorship?', 'No'),
+    row('Are you legally authorized to work in the EU?', 'Yes'),
+    row('What employment type are you interested in?', 'Permanent'),
+    row('Does the advertised salary align with your expectations?', 'Yes'),
+  ];
+  const profile = { ...candidate, needsSponsorship: true, salaryExpectationAmount: 70000, salaryExpectationPeriod: 'year' };
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Desired Pay'),
+    field('Expected hourly rate', { kind: 'number' }),
+    field('Date Available', { kind: 'date' }),
+    field('What is your notice period?', { id: 'notice', kind: 'select', options: ['Immediately', '2 weeks', '1 month'] }),
+    field("Will you require Elastic's sponsorship to continue or extend your work authorization?", { id: 'sponsor', kind: 'select', options: ['Yes', 'No'] }),
+    field('Are you legally authorized to work in Poland?', { id: 'poland', kind: 'radio', options: ['Yes', 'No'] }),
+    field('What employment type are you interested in?', { id: 'type', kind: 'checkbox-group', options: ['Permanent', 'Temporary', 'Secondments'] }),
+    field('Does the advertised salary align with your expectations?', { id: 'align', kind: 'radio', options: ['Yes', 'No'] }),
+  ], profile, reusable, { today: new Date(2026, 9, 26) });
+  assert.deepEqual(open, []);
+  assert.equal(resolved['Desired Pay'].value, '5000 EUR per month');
+  assert.equal(resolved['Desired Pay'].source, 'reusable');
+  assert.equal(resolved['Expected hourly rate'].value, '28.85');
+  assert.equal(resolved['Date Available'].value, '2026-11-09');
+  assert.equal(resolved.notice.value, '2 weeks');
+  assert.equal(resolved.sponsor.value, 'No');
+  assert.equal(resolved.poland.value, 'Yes');
+  assert.deepEqual(resolved.type.value, ['Permanent']);
+  assert.equal(resolved.align.value, 'Yes');
+});
+
+test('without reusable answers on those topics, the profile facts still answer them', () => {
+  const { answers: resolved } = answers.resolveFields([
+    field('Desired Pay'),
+    field('Will you require visa sponsorship?', { kind: 'radio', options: ['Yes', 'No'] }),
+  ], candidate, []);
+  assert.equal(resolved['Desired Pay'].value, '70000 EUR per year');
+  assert.equal(resolved['Desired Pay'].source, 'profile');
+  assert.equal(resolved['Will you require visa sponsorship?'].value, 'No');
+});
