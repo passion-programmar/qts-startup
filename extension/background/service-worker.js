@@ -65,7 +65,7 @@ const generationHeartbeatOkAt = new Map();
 // The server lease lasts 20 minutes, so brief heartbeat outages are safe to ride out.
 const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
 // ChatGPT has this long from sending a prompt to finishing its answer.
-const GENERATION_ANSWER_MAX_WAIT_MS = 60 * 1000;
+const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;
 // Without ChatGPT's copy button, an answer that stopped changing this long counts as finished.
 const GENERATION_ANSWER_QUIET_MS = 3000;
 // One pinned ChatGPT tab serves this many jobs (a new chat each), then a fresh tab takes over.
@@ -3442,7 +3442,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         return snapshot.text;
       }
     }
-    throw new Error('ChatGPT did not finish the answer within 1 minute.');
+    throw new Error(`ChatGPT did not finish the answer within ${GENERATION_ANSWER_MAX_WAIT_MS / 60_000} minutes.`);
   }
 
   // Sends one prompt and returns ChatGPT's finished answer. If ChatGPT shows an error, the tab is

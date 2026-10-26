@@ -347,7 +347,7 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(serviceWorker.includes('pinned: true'));
   // ChatGPT gets one minute per answer; an error refreshes the tab and resends once; an unusable
   // answer gets one follow-up; a failed job is tried once more in the run.
-  assert.ok(serviceWorker.includes('const GENERATION_ANSWER_MAX_WAIT_MS = 60 * 1000;'));
+  assert.ok(serviceWorker.includes('const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;'));
   assert.ok(serviceWorker.includes('while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS)'));
   assert.ok(serviceWorker.includes("if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;"));
   assert.ok(serviceWorker.includes('if (!unusable || followUps > 0)'));
