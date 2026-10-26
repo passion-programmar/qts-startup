@@ -238,10 +238,11 @@
   // Each rule: the question it recognizes, and the candidate fact that answers it (or the missing fact's name).
   const RULES = [
     { test: /first and last name|full name|legal name|^(your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name' },
-    { test: /\b(first|given|preferred) name\b|preferred first/, fact: (c) => c.firstName, name: 'first name' },
-    { test: /\b(last|family) name\b|\bsurname\b/, fact: (c) => c.lastName, name: 'last name' },
+    // English, then the Polish, German, French, and Spanish words forms use.
+    { test: /\b(first|given|preferred) name\b|preferred first|^imi[eę]$|^vorname$|^pr[ée]nom$|^nombre$/, fact: (c) => c.firstName, name: 'first name' },
+    { test: /\b(last|family) name\b|\bsurname\b|^nazwisko$|^nachname$|^nom( de famille)?$|^apellidos?$/, fact: (c) => c.lastName, name: 'last name' },
     { test: /e-?mail/, fact: (c) => c.email, name: 'email' },
-    { test: /\b(phone|mobile|telephone|cell)\b/, fact: (c) => c.phone, name: 'phone' },
+    { test: /\b(phone|mobile|telephone|cell)\b|^telefon( kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone' },
     { test: /linkedin/, fact: (c) => c.linkedinUrl, name: 'LinkedIn profile', optionalIfMissing: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true },

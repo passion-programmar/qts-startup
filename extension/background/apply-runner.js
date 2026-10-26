@@ -230,6 +230,9 @@ async function realEscape(tabId) {
 async function realOpen(tabId, field, typed = '') {
   const box = await inForm(tabId, (id) => globalThis.__qtsApplyForm.boxOf(id), [field.id]).catch(() => null);
   if (!box) return false;
+  // A list an earlier attempt left open would count as "already showing" and be ignored: close it first.
+  await realEscape(tabId);
+  await sleep(200);
   await inForm(tabId, () => globalThis.__qtsApplyForm.markShownChoices()).catch(() => false);
   await realClick(tabId, box);
   await sleep(500);
@@ -265,9 +268,15 @@ async function pickWithRealClick(tabId, field, value) {
   const wanted = String([].concat(value)[0] ?? '').trim();
   if (!wanted) return { ok: false, error: 'no answer' };
   try {
-    const typed = field.kind === 'combobox' ? wanted.split(',')[0].trim() : '';
+    // Search lists and suggestion boxes get the answer's first part typed; menus are only opened.
+    const typed = field.kind === 'combobox' || field.kind === 'text' || field.searchable ? wanted.split(',')[0].trim() : '';
     if (!(await realOpen(tabId, field, typed))) return { ok: false, error: 'the field is not on the screen' };
-    const choice = await inForm(tabId, (text) => globalThis.__qtsApplyForm.choiceBox(text), [wanted]).catch(() => null);
+    // A search list may fetch its results after typing.
+    let choice = null;
+    for (let waited = 0; waited < 3000 && !choice; waited += 500) {
+      choice = await inForm(tabId, (text) => globalThis.__qtsApplyForm.choiceBox(text), [wanted]).catch(() => null);
+      if (!choice) await sleep(500);
+    }
     if (!choice) {
       await realEscape(tabId);
       return { ok: false, error: `the list has no "${wanted}"` };
@@ -281,6 +290,25 @@ async function pickWithRealClick(tabId, field, value) {
     return now && (now.includes(picked) || (now.length >= 2 && picked.includes(now)))
       ? { ok: true }
       : { ok: false, error: `it shows "${String(shown).slice(0, 80)}"` };
+  } catch (error) {
+    return { ok: false, error: `real clicks failed: ${error instanceof Error ? error.message : error}` };
+  }
+}
+
+/** Ticks radio or tick-box options with real clicks on their labels; { ok } or { ok: false, error }. */
+async function checkWithRealClick(tabId, field, value) {
+  try {
+    for (const wanted of [].concat(value).map((entry) => String(entry))) {
+      if (await inForm(tabId, (id, text) => globalThis.__qtsApplyForm.optionChecked(id, text), [field.id, wanted])) continue;
+      const box = await inForm(tabId, (id, text) => globalThis.__qtsApplyForm.optionBox(id, text), [field.id, wanted]).catch(() => null);
+      if (!box) return { ok: false, error: `no option "${wanted}" on the screen` };
+      await realClick(tabId, box);
+      await sleep(300);
+      if (!(await inForm(tabId, (id, text) => globalThis.__qtsApplyForm.optionChecked(id, text), [field.id, wanted]))) {
+        return { ok: false, error: `"${wanted}" stayed unticked` };
+      }
+    }
+    return { ok: true };
   } catch (error) {
     return { ok: false, error: `real clicks failed: ${error instanceof Error ? error.message : error}` };
   }
@@ -375,9 +403,16 @@ async function fillAndCheck(tabId, field, answer, file, seen) {
     fieldId = again.id;
     result = await fill(fieldId);
   }
-  // A dropdown that ignored simulated events gets real clicks.
-  if (!result?.ok && ['menu', 'combobox'].includes(field.kind) && !file) {
+  // A dropdown that ignored simulated events gets real clicks, and so does a text box that ended up
+  // empty: it keeps a value only when one of its suggestions is clicked (Lever's location).
+  const emptied = field.kind === 'text' && !String(result?.value ?? '').trim();
+  if (!result?.ok && (['menu', 'combobox'].includes(field.kind) || emptied) && !file) {
     const real = await pickWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
+    result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
+  }
+  // Radio and tick-box options a site ignores simulated clicks on get real clicks on their labels.
+  if (!result?.ok && ['radio', 'checkbox-group'].includes(field.kind)) {
+    const real = await checkWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
   }
   if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"` };
@@ -398,7 +433,8 @@ async function fillFormPage(tabId, application, keepAlive) {
   const seen = new Set();
   const uploaded = new Set();
   let documents = null;
-  for (let round = 0; round < APPLY_FILL_ROUNDS; round += 1) {
+  let rechecked = false;
+  for (let round = 0; round < APPLY_FILL_ROUNDS + 1; round += 1) {
     const fields = round === 0
       ? await waitForFormFields(tabId)
       : await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm());
@@ -408,7 +444,16 @@ async function fillFormPage(tabId, application, keepAlive) {
       if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
     }
     const fresh = (fields || []).filter((field) => !field.hidden && !field.disabled && !seen.has(field.id));
-    if (!fresh.length) break;
+    if (!fresh.length) {
+      // Complete before Submit: a required question still empty (an answer the site dropped, or
+      // one asked before it was ready) gets one more round, as if new.
+      if (rechecked) break;
+      rechecked = true;
+      const empty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
+      if (!empty?.length) break;
+      for (const entry of empty) seen.delete(entry.id);
+      continue;
+    }
     for (const field of fresh) seen.add(field.id);
     await readComboboxOptions(tabId, fresh);
     const { answers, open } = helpers.resolveFields(fresh, application.candidate, application.savedAnswers, {
@@ -481,6 +526,10 @@ async function fillFormPage(tabId, application, keepAlive) {
     if (failures.length) throw new ApplyStop(`Could not fill: ${failures.join('; ')}`.slice(0, 480));
     // Let the page show the questions these answers unlock before looking again.
     await sleep(1000);
+  }
+  const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
+  if (stillEmpty?.length) {
+    throw new ApplyStop(`Required questions are still unanswered: ${stillEmpty.map((entry) => entry.label).join('; ')}`.slice(0, 480));
   }
   const errors = await inForm(tabId, () => globalThis.__qtsApplyForm.fieldErrors());
   if (errors?.length) throw new ApplyStop(`The form shows errors: ${errors.join('; ')}`.slice(0, 480));

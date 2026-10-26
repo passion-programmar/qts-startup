@@ -10,6 +10,7 @@
   const DROP_ATTRIBUTE = 'data-qts-apply-drop';
   const MENU_ATTRIBUTE = 'data-qts-apply-menu';
   const SEEN_ATTRIBUTE = 'data-qts-apply-seen';
+  const RADIO_GROUP_ATTRIBUTE = 'data-qts-apply-radiogroup';
   // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
@@ -206,6 +207,17 @@
     return cleanText(option.label || option.textContent);
   }
 
+  /**
+   * A select's answerable choices: not its placeholder, whether it says "Select…" or asks the
+   * question itself ("Do you need a visa…?"), which has no value or cannot be chosen.
+   */
+  function realOptions(select) {
+    return [...select.options]
+      .filter((option) => option.value !== '' && !option.disabled)
+      .map(optionText)
+      .filter((text) => text && !PLACEHOLDER_OPTION.test(text));
+  }
+
   // This file is injected again for every call; the prefix keeps new ids from repeating earlier ones.
   const idPrefix = Math.random().toString(36).slice(2, 6);
   let nextFieldNumber = 1;
@@ -290,11 +302,60 @@
         });
         continue;
       }
+      // A styled radio group (role="radiogroup" around role="radio" buttons) is one question.
+      if (control.getAttribute('role') === 'radiogroup' && !control.querySelector('input[type="radio"]')) {
+        const items = [...control.querySelectorAll('[role="radio"]')];
+        if (items.length >= 2) {
+          const label = cleanText(control.getAttribute('aria-label')) || labelForGroup(items[0]) || labelFor(control);
+          control.setAttribute(RADIO_GROUP_ATTRIBUTE, '1');
+          fields.push({
+            id: fieldId(control),
+            label,
+            kind: 'radio',
+            required: control.getAttribute('aria-required') === 'true' || isRequired(control, label),
+            options: items.map(itemText).filter(Boolean),
+            hidden: !isShown(control),
+            disabled: control.getAttribute('aria-disabled') === 'true',
+          });
+        }
+        continue;
+      }
+      // Selectize keeps the real choices in the hidden select it replaced (Traffit's lists).
+      const selectize = tag === 'INPUT' && control.closest('.selectize-control');
+      if (selectize) {
+        // The replaced select keeps the input's id without "-selectized", usually just before the control.
+        const byId = control.id && control.getRootNode().getElementById?.(control.id.replace(/-selectized$/, ''));
+        const original = byId?.tagName === 'SELECT' ? byId
+          : selectize.previousElementSibling?.tagName === 'SELECT' ? selectize.previousElementSibling : null;
+        const options = original ? realOptions(original) : [];
+        // Selectize may move the choices out of that select; then they are read by opening the list.
+        // The visible input's own label; the hidden select's would be its fieldset's section heading.
+        const label = labelFor(control) || blockQuestion(selectize).text;
+        control.setAttribute(MENU_ATTRIBUTE, options.length ? 'listbox' : 'lazy');
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'menu',
+          // Typing opens and filters a Selectize list; a click does not reopen a focused one.
+          searchable: true,
+          ...(options.length ? {} : { lazy: true }),
+          required: Boolean(original?.required) || isRequired(control, label),
+          options,
+          hidden: !isShown(control),
+          disabled: control.disabled,
+        });
+        continue;
+      }
       if (tag === 'INPUT' && ['hidden', 'submit', 'button', 'image', 'reset', 'search', 'password'].includes(type)) continue;
       const isCombobox = control.getAttribute('role') === 'combobox' && tag === 'INPUT';
       if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && !isCombobox) continue;
       const label = labelFor(control);
-      const shown = type === 'file' ? isShown(control.closest('div, label, section') || control) : isShown(control);
+      // A styled radio or tick box hides its input and shows its label instead.
+      const ownLabel = (type === 'radio' || type === 'checkbox')
+        ? control.closest('label') || (control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
+        : null;
+      const shown = type === 'file' ? isShown(control.closest('div, label, section') || control)
+        : isShown(control) || Boolean(ownLabel && isShown(ownLabel));
       if ((type === 'radio' || type === 'checkbox') && control.name) {
         const key = `${type}:${control.name}`;
         const option = choiceText(control);
@@ -347,7 +408,7 @@
         if (control.max !== '' && Number.isFinite(Number(control.max))) field.max = Number(control.max);
       }
       if (tag === 'SELECT') {
-        field.options = [...control.options].map(optionText).filter((text) => text && !PLACEHOLDER_OPTION.test(text));
+        field.options = realOptions(control);
       }
       fields.push(field);
     }
@@ -437,8 +498,7 @@
     if (!button) return [];
     press(button);
     await new Promise((resolve) => setTimeout(resolve, 600));
-    const options = allElements().filter((element) => POPUP_ITEM.test(element.getAttribute('role') || '') && isShown(element))
-      .map(itemText).filter(Boolean);
+    const options = shownChoices().map(itemText).filter(Boolean);
     for (const target of [document.activeElement, button]) {
       target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
     }
@@ -482,6 +542,14 @@
     if (!element) return { ok: false, error: 'The field is no longer on the page.' };
     if (element.hasAttribute(DROP_ATTRIBUTE)) return dropFile(element, file);
     if (element.hasAttribute(MENU_ATTRIBUTE)) return pickMenuChoice(element, value);
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
+      const wanted = cleanText(value).toLowerCase();
+      const item = [...element.querySelectorAll('[role="radio"]')].find((entry) => itemText(entry).toLowerCase() === wanted);
+      if (!item) return { ok: false, error: `"${value}" is not an option.` };
+      if (item.getAttribute('aria-checked') !== 'true') press(item);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return { ok: item.getAttribute('aria-checked') === 'true', value: itemText(item) };
+    }
     if (element.tagName !== 'INPUT' && element.getAttribute('role') === 'checkbox') {
       if ((element.getAttribute('aria-checked') === 'true') !== Boolean(value)) element.click();
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -604,7 +672,7 @@
       let option = null;
       for (let waited = 0; waited < 3000 && !option; waited += 250) {
         await new Promise((resolve) => setTimeout(resolve, 250));
-        const shown = allElements().filter((element) => POPUP_ITEM.test(element.getAttribute('role') || '') && isShown(element));
+        const shown = shownChoices();
         option = shown.find((element) => squash(itemText(element)) === target)
           || shown.find((element) => squash(itemText(element)) && (target.includes(squash(itemText(element))) || squash(itemText(element)).includes(target)))
           || null;
@@ -616,8 +684,10 @@
       const picked = itemText(option);
       press(option);
       await new Promise((resolve) => setTimeout(resolve, 300));
-      const shownNow = squash(textOf(button));
-      return { ok: Boolean(shownNow) && (squash(picked).includes(shownNow) || shownNow.includes(squash(picked))), value: textOf(button) };
+      // A Selectize input is empty; its box shows the choice.
+      const display = button.tagName === 'INPUT' ? textOf(button.closest('[class*="control" i]') || button.parentElement) : textOf(button);
+      const shownNow = squash(display);
+      return { ok: Boolean(shownNow) && (squash(picked).includes(shownNow) || shownNow.includes(squash(picked))), value: display };
     }
     const items = menuChoices(button) || [];
     const item = items.find((entry) => itemText(entry).toLowerCase() === wanted);
@@ -699,7 +769,7 @@
     return allElements().filter((element) => isShown(element) && textOf(element) && (
       POPUP_ITEM.test(element.getAttribute('role') || '')
       || (element.tagName === 'LI' && element.closest('[role="listbox"], [role="menu"]'))
-      || /(^|[\s_-])(option|menu-?item|dropdown-?item|select-?item)([\s_-]|$)/i.test(String(element.className || ''))
+      || /(^|[\s_-])(option|menu-?item|dropdown-?item|select-?item)([\s_-]|$)|(^|\s)(pac-item|dropdown-location|location-result|autocomplete-item|suggestion)/i.test(String(element.className || ''))
     )).filter((element, index, all) => !all.some((other, otherIndex) => otherIndex !== index && element.contains(other) && textOf(other) === textOf(element)));
   }
 
@@ -728,12 +798,67 @@
     const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9À-ɏ]+/g, '');
     const target = squash(value);
     const choices = openedChoices();
+    // "Warsaw, Poland" also matches the suggestion "Warsaw, Masovian Voivodeship, Poland".
+    const parts = String(value).split(',').map(squash).filter(Boolean);
     const choice = choices.find((element) => squash(itemText(element)) === target)
       || choices.find((element) => squash(itemText(element)).startsWith(target))
-      || choices.find((element) => squash(itemText(element)).includes(target));
+      || choices.find((element) => squash(itemText(element)).includes(target))
+      || choices.find((element) => parts.length > 1 && parts.every((part) => squash(itemText(element)).includes(part)))
+      || choices.find((element) => parts[0] && squash(itemText(element)).startsWith(parts[0]));
     if (!choice) return null;
     const centre = centreOf(choice);
     return centre ? { ...centre, text: itemText(choice) } : null;
+  }
+
+  /**
+   * Where to click one option of a radio or tick-box group (its label, or a styled role="radio"),
+   * and whether it is now checked. For a real click when the site ignores simulated ones.
+   */
+  function optionOf(id, value) {
+    const element = findField(id);
+    if (!element) return null;
+    const wanted = cleanText(value).toLowerCase();
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
+      return [...element.querySelectorAll('[role="radio"]')].find((entry) => itemText(entry).toLowerCase() === wanted) || null;
+    }
+    const control = element.name ? controlsOfGroup(element).find((entry) => choiceText(entry).toLowerCase() === wanted) : null;
+    if (!control) return null;
+    // The label is what a person clicks; a styled radio hides the input itself.
+    return control.closest('label') || (control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`)) || control;
+  }
+
+  function optionBox(id, value) {
+    const option = optionOf(id, value);
+    return option ? centreOf(option) : null;
+  }
+
+  function optionChecked(id, value) {
+    const element = findField(id);
+    if (!element) return false;
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return optionOf(id, value)?.getAttribute('aria-checked') === 'true';
+    const wanted = cleanText(value).toLowerCase();
+    return controlsOfGroup(element).some((entry) => entry.checked && choiceText(entry).toLowerCase() === wanted);
+  }
+
+  /**
+   * Required questions on the page that still have no answer, whatever kind they are: the check
+   * that an application is complete before Submit. Uploads are left to the site's own check.
+   */
+  function emptyRequired() {
+    const placeholder = /^(|-+|–?\s*select\s*–?|select( an option| one)?\.*|choose.*|please select.*|kliknij.*|wybierz.*)$/i;
+    return scanForm().filter((field) => field.required && !field.hidden && !field.disabled && field.kind !== 'file').filter((field) => {
+      const element = findField(field.id);
+      if (!element) return false;
+      if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return !element.querySelector('[role="radio"][aria-checked="true"]');
+      if (field.kind === 'radio' || field.kind === 'checkbox-group') return !controlsOfGroup(element).some((control) => control.checked);
+      if (field.kind === 'checkbox') return element.tagName === 'INPUT' ? !element.checked : element.getAttribute('aria-checked') !== 'true';
+      if (field.kind === 'select') return !element.value || placeholder.test(optionText(element.selectedOptions?.[0] || {}));
+      if (field.kind === 'menu' || field.kind === 'combobox') {
+        const shown = shownValue(field.id).replace(/[×✕]/g, '').trim();
+        return placeholder.test(shown);
+      }
+      return !String(element.value || '').trim();
+    }).map((field) => ({ id: field.id, label: field.label }));
   }
 
   /** What a field shows now: a button's text, or an input's value with the text of its box. */
@@ -898,6 +1023,9 @@
     shownChoiceTexts,
     choiceBox,
     shownValue,
+    optionBox,
+    optionChecked,
+    emptyRequired,
     fieldErrors,
     detectBlockers,
     buttons,
