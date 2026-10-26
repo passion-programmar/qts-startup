@@ -9,6 +9,7 @@
   const FIELD_ATTRIBUTE = 'data-qts-apply-field';
   const DROP_ATTRIBUTE = 'data-qts-apply-drop';
   const MENU_ATTRIBUTE = 'data-qts-apply-menu';
+  const SEEN_ATTRIBUTE = 'data-qts-apply-seen';
   // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
@@ -667,6 +668,84 @@
     return element.getAttribute('aria-invalid') === 'true' ? 'The site marks this answer as invalid.' : '';
   }
 
+  // For real clicks (the service worker's debugger input), which some dropdowns require: Greenhouse's
+  // React Select and BambooHR's menus ignore simulated events.
+
+  function centreOf(element) {
+    // Instant: a page with smooth scrolling would still be moving when the position is measured.
+    element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    const box = element.getBoundingClientRect();
+    if (!box.width || !box.height) return null;
+    const x = Math.round(box.left + box.width / 2);
+    const y = Math.round(box.top + box.height / 2);
+    // A real click lands where the screen shows it; off the screen it would hit something else.
+    if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return null;
+    return { x, y };
+  }
+
+  /** Where to click to open a field: its centre on screen after scrolling it into view. */
+  function boxOf(id) {
+    const element = findField(id);
+    if (!element) return null;
+    // React Select's input is a sliver inside its box; the box is what a person clicks.
+    const target = element.tagName === 'INPUT' && element.getAttribute('role') === 'combobox'
+      ? element.closest('[class*="control" i]') || element
+      : element;
+    return centreOf(target);
+  }
+
+  /** The choices an open list shows, by role or by the class names list libraries use. */
+  function shownChoices() {
+    return allElements().filter((element) => isShown(element) && textOf(element) && (
+      POPUP_ITEM.test(element.getAttribute('role') || '')
+      || (element.tagName === 'LI' && element.closest('[role="listbox"], [role="menu"]'))
+      || /(^|[\s_-])(option|menu-?item|dropdown-?item|select-?item)([\s_-]|$)/i.test(String(element.className || ''))
+    )).filter((element, index, all) => !all.some((other, otherIndex) => otherIndex !== index && element.contains(other) && textOf(other) === textOf(element)));
+  }
+
+  /** Marks the choices showing before a list is opened, so only the list's own are used after. */
+  function markShownChoices() {
+    for (const element of shownChoices()) element.setAttribute(SEEN_ATTRIBUTE, '1');
+    return true;
+  }
+
+  /** The opened list's choices: those that appeared since markShownChoices, else any popup items. */
+  function openedChoices() {
+    const choices = shownChoices();
+    const fresh = choices.filter((element) => !element.hasAttribute(SEEN_ATTRIBUTE));
+    return fresh.length ? fresh : choices.filter((element) => POPUP_ITEM.test(element.getAttribute('role') || ''));
+  }
+
+  function shownChoiceTexts() {
+    // A search list's prompts ("Type to search", "No options") are not choices.
+    return [...new Set(openedChoices().map(itemText).filter(Boolean))]
+      .filter((text) => !/^(no options|no results|type to search|start typing|loading|search\.*)$/i.test(text) && !/^type .* to search/i.test(text))
+      .slice(0, 300);
+  }
+
+  /** The opened list's choice matching an answer, with where to click it. */
+  function choiceBox(value) {
+    const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9À-ɏ]+/g, '');
+    const target = squash(value);
+    const choices = openedChoices();
+    const choice = choices.find((element) => squash(itemText(element)) === target)
+      || choices.find((element) => squash(itemText(element)).startsWith(target))
+      || choices.find((element) => squash(itemText(element)).includes(target));
+    if (!choice) return null;
+    const centre = centreOf(choice);
+    return centre ? { ...centre, text: itemText(choice) } : null;
+  }
+
+  /** What a field shows now: a button's text, or an input's value with the text of its box. */
+  function shownValue(id) {
+    const element = findField(id);
+    if (!element) return '';
+    if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)) return textOf(element);
+    // React Select shows the choice in its control box, not in the input's own small container.
+    const box = element.closest('[class*="control" i]') || element.closest('[class*="container" i]') || element.parentElement;
+    return cleanText(`${element.value || ''} ${textOf(box)}`);
+  }
+
   /** Field error messages shown on the page (after filling, before Submit). */
   function fieldErrors() {
     const errors = [];
@@ -814,6 +893,11 @@
     fillField,
     clearField,
     fieldIssue,
+    boxOf,
+    markShownChoices,
+    shownChoiceTexts,
+    choiceBox,
+    shownValue,
     fieldErrors,
     detectBlockers,
     buttons,

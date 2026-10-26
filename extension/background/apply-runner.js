@@ -195,15 +195,109 @@ async function reachApplicationForm(tab, onTab) {
   throw new ApplyStop('No application form or Apply button was found on the job page; apply by hand.');
 }
 
+// Real input through Chrome's debugger, for dropdowns that ignore simulated events (Greenhouse's
+// React Select, BambooHR's menus). Attached once per application tab while it is filled; Chrome
+// shows its "being debugged" bar meanwhile. Detached when the application ends.
+const debuggerTabs = new Set();
+chrome.debugger?.onDetach?.addListener((source) => debuggerTabs.delete(source.tabId));
+
+async function debuggerSend(tabId, method, params = {}) {
+  if (!debuggerTabs.has(tabId)) {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    debuggerTabs.add(tabId);
+  }
+  return chrome.debugger.sendCommand({ tabId }, method, params);
+}
+
+async function releaseDebugger(tabId) {
+  if (debuggerTabs.delete(tabId)) await chrome.debugger.detach({ tabId }).catch(() => {});
+}
+
+async function realClick(tabId, { x, y }) {
+  const at = { x, y, button: 'left', clickCount: 1 };
+  await debuggerSend(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  await debuggerSend(tabId, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...at });
+  await debuggerSend(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...at });
+}
+
+async function realEscape(tabId) {
+  const key = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 };
+  await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key }).catch(() => {});
+  await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...key }).catch(() => {});
+}
+
+/** Opens a dropdown with a real click (typing into a search list first); false when it cannot. */
+async function realOpen(tabId, field, typed = '') {
+  const box = await inForm(tabId, (id) => globalThis.__qtsApplyForm.boxOf(id), [field.id]).catch(() => null);
+  if (!box) return false;
+  await inForm(tabId, () => globalThis.__qtsApplyForm.markShownChoices()).catch(() => false);
+  await realClick(tabId, box);
+  await sleep(500);
+  if (typed) {
+    // Text left by an earlier simulated attempt would join what is typed ("NoNo"): select it all and delete it.
+    const selectAll = { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 };
+    const backspace = { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 };
+    for (const key of [selectAll, backspace]) {
+      await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key });
+      await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...key });
+    }
+    await debuggerSend(tabId, 'Input.insertText', { text: typed });
+    await sleep(900);
+  }
+  return true;
+}
+
+/** A dropdown's choices read after opening it with a real click. */
+async function readChoicesWithRealClick(tabId, field) {
+  try {
+    if (!(await realOpen(tabId, field))) return [];
+    const choices = await inForm(tabId, () => globalThis.__qtsApplyForm.shownChoiceTexts()).catch(() => []);
+    await realEscape(tabId);
+    await sleep(200);
+    return choices || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Picks a dropdown's choice with real clicks; { ok } or { ok: false, error }. */
+async function pickWithRealClick(tabId, field, value) {
+  const wanted = String([].concat(value)[0] ?? '').trim();
+  if (!wanted) return { ok: false, error: 'no answer' };
+  try {
+    const typed = field.kind === 'combobox' ? wanted.split(',')[0].trim() : '';
+    if (!(await realOpen(tabId, field, typed))) return { ok: false, error: 'the field is not on the screen' };
+    const choice = await inForm(tabId, (text) => globalThis.__qtsApplyForm.choiceBox(text), [wanted]).catch(() => null);
+    if (!choice) {
+      await realEscape(tabId);
+      return { ok: false, error: `the list has no "${wanted}"` };
+    }
+    await realClick(tabId, choice);
+    await sleep(400);
+    const shown = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownValue(id), [field.id]).catch(() => '');
+    const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9À-ɏ]+/g, '');
+    // A field may show the whole choice or a part of it (a phone country picker shows "+48" for "Poland +48").
+    const [now, picked] = [squash(shown), squash(choice.text)];
+    return now && (now.includes(picked) || (now.length >= 2 && picked.includes(now)))
+      ? { ok: true }
+      : { ok: false, error: `it shows "${String(shown).slice(0, 80)}"` };
+  } catch (error) {
+    return { ok: false, error: `real clicks failed: ${error instanceof Error ? error.message : error}` };
+  }
+}
+
 async function readComboboxOptions(tabId, fields) {
   for (const field of fields) {
     if (field.hidden || field.disabled || field.options?.length) continue;
     if (field.kind === 'combobox') {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readComboboxOptions(id), [field.id]).catch(() => []);
+      // A list that ignores simulated events (React Select) opens for a real click.
+      if (!field.options?.length) field.options = await readChoicesWithRealClick(tabId, field);
     } else if (field.kind === 'menu' && field.lazy) {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readMenuOptions(id), [field.id]).catch(() => []);
-      // An optional menu that shows no choices is left alone. A required one stays, so a choice it
-      // cannot take stops the application rather than sending what it already shows.
+      if (!field.options?.length) field.options = await readChoicesWithRealClick(tabId, field);
+      // An optional menu that shows no choices even then is left alone. A required one stays, so a
+      // choice it cannot take stops the application rather than sending what it already shows.
       if (!field.options.length && !field.required) field.hidden = true;
     }
   }
@@ -280,6 +374,11 @@ async function fillAndCheck(tabId, field, answer, file, seen) {
     seen.add(again.id);
     fieldId = again.id;
     result = await fill(fieldId);
+  }
+  // A dropdown that ignored simulated events gets real clicks.
+  if (!result?.ok && ['menu', 'combobox'].includes(field.kind) && !file) {
+    const real = await pickWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
+    result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
   }
   if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"` };
   const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
@@ -401,15 +500,9 @@ async function captureApplyProof(tabId, application, caption) {
   }
   if (!pdf && chrome.debugger) {
     try {
-      const target = { tabId };
-      await chrome.debugger.attach(target, '1.3');
-      try {
-        const shot = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', { format: 'jpeg', quality: 70 });
-        const bytes = Uint8Array.from(atob(shot.data), (char) => char.charCodeAt(0));
-        pdf = self.__qtsApplyPdf.buildImagePdf(bytes, caption);
-      } finally {
-        await chrome.debugger.detach(target).catch(() => {});
-      }
+      const shot = await debuggerSend(tabId, 'Page.captureScreenshot', { format: 'jpeg', quality: 70 });
+      const bytes = Uint8Array.from(atob(shot.data), (char) => char.charCodeAt(0));
+      pdf = self.__qtsApplyPdf.buildImagePdf(bytes, caption);
     } catch {
       // No debugger access; the page text stands in.
     }
@@ -562,6 +655,8 @@ async function runApplication(application, recipe) {
     }
   } finally {
     clearInterval(heartbeat);
+    // The "being debugged" bar goes away with the application.
+    if (tab?.id != null) await releaseDebugger(tab.id);
   }
 }
 
