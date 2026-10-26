@@ -4,10 +4,10 @@
 export type ApplicationFacts = {
   workAuthorization: string | null;
   needsSponsorship: boolean | null;
-  noticePeriod: string | null;
+  noticePeriod: "immediately" | "1_week";
   salaryExpectationAmount: number | null;
   salaryExpectationCurrency: string | null;
-  salaryExpectationPeriod: "year" | "month" | "hour" | null;
+  salaryExpectationPeriod: "year" | "month" | "day" | "hour" | null;
   yearsOfExperience: number | null;
   willingToRelocate: boolean | null;
   githubUrl: string | null;
@@ -60,7 +60,8 @@ export function readApplicationFacts(formData: FormData): ApplicationFacts | str
   if (formData.get(APPLICATION_FACTS_MARKER) !== "1") return null;
   const workAuthorization = text(formData, "workAuthorization", 300);
   const needsSponsorship = yesNo(text(formData, "needsSponsorship", 3));
-  const noticePeriod = text(formData, "noticePeriod", 100);
+  const noticeChoice = text(formData, "noticePeriod", 11);
+  const noticePeriod = noticeChoice === null ? "immediately" : noticeChoice;
   const salaryAmount = wholeNumber(text(formData, "salaryExpectationAmount", 12), 1, 100_000_000);
   const salaryCurrency = text(formData, "salaryExpectationCurrency", 3);
   const salaryPeriod = text(formData, "salaryExpectationPeriod", 5);
@@ -72,13 +73,13 @@ export function readApplicationFacts(formData: FormData): ApplicationFacts | str
 
   if (workAuthorization === undefined) return "Work authorization is too long (300 characters at most).";
   if (needsSponsorship === undefined) return "Choose whether the candidate needs visa sponsorship.";
-  if (noticePeriod === undefined) return "The notice period is too long (100 characters at most).";
+  if (noticePeriod !== "immediately" && noticePeriod !== "1_week") return "Choose a notice period: immediately or 1 week.";
   if (salaryAmount === undefined) return "Enter the salary expectation as a whole number.";
   if (salaryCurrency === undefined || (salaryCurrency && !/^[A-Za-z]{3}$/.test(salaryCurrency))) {
     return "Enter the salary currency as a 3-letter code, such as EUR or USD.";
   }
-  if (salaryPeriod === undefined || (salaryPeriod && !["year", "month", "hour"].includes(salaryPeriod))) {
-    return "Choose whether the salary is per year, month, or hour.";
+  if (salaryPeriod === undefined || (salaryPeriod && !["year", "month", "day", "hour"].includes(salaryPeriod))) {
+    return "Choose whether the salary is per year, month, day, or hour.";
   }
   if (salaryAmount !== null && (!salaryCurrency || !salaryPeriod)) {
     return "Give the salary expectation's currency and period too.";

@@ -49,10 +49,175 @@
     return value ? 'Yes' : 'No';
   }
 
+  // Salary arithmetic uses standard full-time working time: 8 hours a day, 260 working days a year.
+  const HOURS_IN = { hour: 1, day: 8, month: 2080 / 12, year: 2080 };
+  const PERIOD_WORDS = { year: 'per year', month: 'per month', day: 'per day', hour: 'per hour' };
+  const PERIOD_PATTERNS = [
+    ['hour', /\bhourly\b|\bper hour\b|\ban hour\b|\/\s*(h|hr|hour)\b/i],
+    ['day', /\bdaily\b|\bper day\b|\bday rate\b|\ba day\b|\/\s*(d|day)\b/i],
+    ['month', /\bmonthly\b|\bper month\b|\ba month\b|\/\s*(mo|mth|month)\b/i],
+    ['year', /\bannual(ly)?\b|\byearly\b|\bper (year|annum)\b|\ba year\b|\bp\.\s?a\b|\/\s*(y|yr|year)\b/i],
+  ];
+  const CURRENCY_SYMBOLS = [['US$', 'USD'], ['CA$', 'CAD'], ['AU$', 'AUD'], ['C$', 'CAD'], ['A$', 'AUD'], ['€', 'EUR'], ['£', 'GBP'], ['zł', 'PLN'], ['₹', 'INR'], ['$', 'USD']];
+  const CURRENCY_WORDS = [[/\beuros?\b/i, 'EUR'], [/\b(us )?dollars?\b/i, 'USD'], [/\bpounds?( sterling)?\b/i, 'GBP'], [/\bz[łl]oty\b/i, 'PLN']];
+  const CURRENCY_CODES = ['USD', 'EUR', 'GBP', 'PLN', 'CHF', 'CAD', 'AUD', 'NZD', 'SEK', 'NOK', 'DKK', 'CZK', 'HUF', 'RON', 'BGN', 'UAH', 'INR', 'JPY', 'CNY', 'SGD', 'HKD', 'ZAR', 'BRL', 'MXN', 'TRY', 'ILS', 'AED'];
+
+  function periodIn(text) {
+    const source = String(text || '');
+    return PERIOD_PATTERNS.find(([, pattern]) => pattern.test(source))?.[0] ?? null;
+  }
+
+  /** The currency a question or option names by code, symbol, or word; null when it names none. */
+  function currencyIn(text, exchangeRates) {
+    const source = String(text || '');
+    const codes = new Set([...CURRENCY_CODES, ...Object.keys(exchangeRates?.rates || {})]);
+    for (const [code] of source.matchAll(/\b[A-Z]{3}\b/g)) {
+      if (codes.has(code)) return code;
+    }
+    for (const [symbol, code] of CURRENCY_SYMBOLS) {
+      if (source.includes(symbol)) return code;
+    }
+    return CURRENCY_WORDS.find(([pattern]) => pattern.test(source))?.[1] ?? null;
+  }
+
+  /** The candidate's salary for a period and currency, rounded; null when the currency cannot be converted. */
+  function convertSalary(candidate, period, currency, exchangeRates) {
+    const ownPeriod = candidate.salaryExpectationPeriod;
+    if (!candidate.salaryExpectationAmount || !HOURS_IN[ownPeriod] || !HOURS_IN[period]) return null;
+    let value = (candidate.salaryExpectationAmount * HOURS_IN[period]) / HOURS_IN[ownPeriod];
+    const from = candidate.salaryExpectationCurrency;
+    if (currency && from && currency !== from) {
+      const fromRate = exchangeRates?.rates?.[from];
+      const toRate = exchangeRates?.rates?.[currency];
+      if (!fromRate || !toRate) return null;
+      value = (value / fromRate) * toRate;
+    }
+    return period === 'year' || period === 'month' ? Math.round(value) : Math.round(value * 100) / 100;
+  }
+
   function salaryText(candidate) {
     if (!candidate.salaryExpectationAmount) return null;
-    const period = { year: 'per year', month: 'per month', hour: 'per hour' }[candidate.salaryExpectationPeriod] || '';
+    const period = PERIOD_WORDS[candidate.salaryExpectationPeriod] || '';
     return [candidate.salaryExpectationAmount, candidate.salaryExpectationCurrency, period].filter(Boolean).join(' ');
+  }
+
+  /** The salary in every period, in the candidate's currency and each other one asked, for the AI. */
+  function salaryEquivalents(candidate, currencies, exchangeRates) {
+    const result = {};
+    for (const currency of new Set([candidate.salaryExpectationCurrency, ...currencies].filter(Boolean))) {
+      const figures = {};
+      for (const period of Object.keys(PERIOD_WORDS)) {
+        const amount = convertSalary(candidate, period, currency, exchangeRates);
+        if (amount !== null) figures[period] = amount;
+      }
+      if (Object.keys(figures).length) result[currency] = figures;
+    }
+    return result;
+  }
+
+  /** An option's salary range as [low, high]: "€50,000 - €70,000", "50k–70k", "Under 40k", "100k+". */
+  function parseRange(option) {
+    const text = String(option).toLowerCase().replace(/(\d)[,\s](?=\d{3}\b)/g, '$1');
+    const numbers = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(k|m)?\b/g)]
+      .map(([, number, unit]) => Number(number) * (unit === 'k' ? 1000 : unit === 'm' ? 1000000 : 1));
+    if (!numbers.length) return null;
+    if (/less than|under|below|up to|<|\bmax/.test(text)) return [0, numbers[0]];
+    if (/\+|more than|over|above|>|at least|or more|\bmin/.test(text)) return [numbers[0], Infinity];
+    return numbers.length >= 2 ? [numbers[0], numbers[1]] : [numbers[0], numbers[0]];
+  }
+
+  /**
+   * A salary question: the figure for the period and currency it asks, worked out here rather than by
+   * the AI. A question naming no period gets the candidate's own wording, or the AI when only a number fits.
+   */
+  function resolveSalary(field, label, candidate, exchangeRates) {
+    if (!candidate.salaryExpectationAmount) return { missing: 'salary expectation' };
+    const ownPeriod = candidate.salaryExpectationPeriod;
+    const ownCurrency = candidate.salaryExpectationCurrency;
+    const askedPeriod = periodIn(field.label);
+    const askedCurrency = currencyIn(field.label, exchangeRates);
+    if (hasOptions(field)) {
+      const numbered = field.options.filter((option) => /\d/.test(String(option)));
+      // A separate period or currency choice takes the candidate's own, so the amount field keeps their figure.
+      if (!numbered.length && field.options.every((option) => periodIn(option))) {
+        const option = field.options.find((entry) => periodIn(entry) === ownPeriod);
+        return option ? { value: option, source: 'profile' } : null;
+      }
+      if (!numbered.length && field.options.some((option) => currencyIn(option, exchangeRates))) {
+        const option = field.options.find((entry) => currencyIn(entry, exchangeRates) === ownCurrency);
+        return option ? { value: option, source: 'profile' } : null;
+      }
+      let best = null;
+      for (const option of numbered) {
+        const range = parseRange(option);
+        const period = periodIn(option) || askedPeriod;
+        if (!range || !period) return null;
+        const amount = convertSalary(candidate, period, currencyIn(option, exchangeRates) || askedCurrency || ownCurrency, exchangeRates);
+        if (amount === null) return null;
+        const distance = amount < range[0] ? range[0] - amount : amount > range[1] ? amount - range[1] : 0;
+        if (!best || distance < best.distance) best = { option, distance };
+      }
+      return best ? { value: best.option, source: 'profile' } : null;
+    }
+    // "Currency" or "Salary currency" alone asks for the code, not an amount.
+    if (/\bcurrency\b/.test(label) && !/\b(amount|how much|figure|and currency)\b/.test(label)) {
+      return { value: ownCurrency, source: 'profile' };
+    }
+    const currency = askedCurrency || ownCurrency;
+    if (!askedPeriod && field.kind === 'number') return null;
+    const period = askedPeriod || ownPeriod;
+    const amount = convertSalary(candidate, period, currency, exchangeRates);
+    if (amount === null) return null;
+    return { value: field.kind === 'number' ? String(amount) : `${amount} ${currency} ${PERIOD_WORDS[period]}`, source: 'profile' };
+  }
+
+  function noticeDays(candidate) {
+    return candidate.noticePeriod === '1_week' ? 7 : 0;
+  }
+
+  function startDate(candidate, today) {
+    const date = new Date(today || Date.now());
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + noticeDays(candidate));
+  }
+
+  /** A date as the field's placeholder shows it (DD/MM/YYYY, MM.DD.YYYY...), else YYYY-MM-DD. */
+  function formatDate(date, placeholder) {
+    const year = String(date.getFullYear());
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const pattern = String(placeholder || '').trim();
+    if (/^(dd|mm|yyyy)([./\- ])(dd|mm|yyyy)\2(dd|mm|yyyy)$/i.test(pattern)) {
+      return pattern.replace(/yyyy/i, year).replace(/mm/i, month).replace(/dd/i, day);
+    }
+    return `${year}-${month}-${day}`;
+  }
+
+  /** How many days an option means: "Immediately" 0, "2 weeks" 14, "1 month" 30; null when it says none. */
+  function optionDays(option) {
+    const text = String(option).toLowerCase();
+    if (/immediate|asap|as soon as possible|right away|straight away|\bnow\b/.test(text)) return 0;
+    const match = text.match(/(\d+|one|two|three|four|six)\s*(day|week|month)/);
+    if (!match) return null;
+    const count = { one: 1, two: 2, three: 3, four: 4, six: 6 }[match[1]] ?? Number(match[1]);
+    return count * { day: 1, week: 7, month: 30 }[match[2]];
+  }
+
+  /** Notice and start questions: immediately or in 1 week, as a choice, a date, or words. */
+  function resolveNotice(field, label, candidate, today) {
+    const days = noticeDays(candidate);
+    if (hasOptions(field)) {
+      const choices = field.options.map((option) => ({ option, days: optionDays(option) })).filter((entry) => entry.days !== null);
+      if (!choices.length) return null;
+      const fitting = choices.filter((entry) => entry.days <= days).sort((a, b) => b.days - a.days)[0];
+      const shortest = [...choices].sort((a, b) => a.days - b.days)[0];
+      return { value: (fitting ?? shortest).option, source: 'profile' };
+    }
+    if (field.kind === 'date' || /\bdate\b/.test(label)) {
+      const date = startDate(candidate, today);
+      return { value: field.kind === 'date' ? formatDate(date) : formatDate(date, field.placeholder), source: 'profile' };
+    }
+    if (!days) return { value: 'Immediately', source: 'profile' };
+    return { value: /notice/.test(label) ? '1 week' : 'In 1 week', source: 'profile' };
   }
 
   // Each rule: the question it recognizes, and the candidate fact that answers it (or the missing fact's name).
@@ -74,8 +239,8 @@
     { test: /^(state|province|region)(\s*\/\s*(state|province|region))?$/, fact: (c) => c.province, name: 'state or province' },
     { test: /sponsor/, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
     { test: /relocat/, yesNo: (c) => c.willingToRelocate, name: 'relocation' },
-    { test: /notice period|when can you start|earliest start|availability to start/, fact: (c) => c.noticePeriod, name: 'notice period', textOnly: true },
-    { test: /salary|compensation|pay expectation|expected (pay|rate)|desired pay/, salary: true, name: 'salary expectation' },
+    { test: /notice period|when can you start|earliest start|availability to start|available to start|start date|date (you are |you're )?available/, notice: true, name: 'notice period' },
+    { test: /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|\bcurrency\b/, salary: true, name: 'salary expectation' },
     { test: /^(total )?(years of (professional |work |relevant )?experience|how many years of experience( do you have)?)$/, fact: (c) => (c.yearsOfExperience ?? null), name: 'years of experience' },
   ];
 
@@ -83,7 +248,7 @@
    * One field's answer: { value, source } from the profile or saved answers, { missing } when a fact
    * the profile lacks is needed, { skip } for fields left as they are, or null to ask the AI.
    */
-  function resolveField(field, candidate, savedAnswers) {
+  function resolveField(field, candidate, savedAnswers, context = {}) {
     const label = labelOf(field);
     if (field.kind === 'file') {
       // "Autofill from resume" parses the file and overwrites the answers already filled.
@@ -123,18 +288,14 @@
         if (value !== null) return { value, source: 'profile' };
         return { missing: rule.name };
       }
-      if (rule.salary) {
-        if (!candidate.salaryExpectationAmount) return { missing: rule.name };
-        const value = field.kind === 'number' ? String(candidate.salaryExpectationAmount) : salaryText(candidate);
-        return hasOptions(field) ? null : { value, source: 'profile' };
-      }
+      if (rule.salary) return resolveSalary(field, label, candidate, context.exchangeRates);
+      if (rule.notice) return resolveNotice(field, label, candidate, context.today);
       const fact = rule.fact(candidate);
       if (fact === null || fact === undefined || fact === '') {
         if (rule.optionalIfMissing && !field.required) return { skip: `No ${rule.name} in the profile.` };
         return { missing: rule.name };
       }
       if (hasOptions(field)) {
-        if (rule.textOnly) return null;
         const option = field.options.find((entry) => String(entry).toLowerCase() === String(fact).toLowerCase());
         return option ? { value: option, source: 'profile' } : null;
       }
@@ -144,14 +305,14 @@
   }
 
   /** Splits a page's fields into answered, needing the AI, needing the Manager, and left alone. */
-  function resolveFields(fields, candidate, savedAnswerRows) {
+  function resolveFields(fields, candidate, savedAnswerRows, context = {}) {
     const savedAnswers = new Map((savedAnswerRows || []).map((row) => [row.questionKey, row.answer]));
     const answers = {};
     const open = [];
     const missing = [];
     for (const field of fields) {
       if (field.hidden || field.disabled) continue;
-      const resolved = resolveField(field, candidate, savedAnswers);
+      const resolved = resolveField(field, candidate, savedAnswers, context);
       if (!resolved) {
         if (field.kind !== 'checkbox' || field.required) open.push(field);
         continue;
@@ -167,17 +328,24 @@
   }
 
   /** The AI request for a page's open questions: one message, answered as strict JSON. */
-  function buildAnswerPrompt({ job, candidate, documentsJson, fields }) {
+  function buildAnswerPrompt({ job, candidate, documentsJson, fields, exchangeRates, today }) {
     const facts = {
       name: [candidate.firstName, candidate.lastName].filter(Boolean).join(' '),
       headline: candidate.headline,
       location: [candidate.city, candidate.country].filter(Boolean).join(', '),
       workAuthorization: candidate.workAuthorization,
       needsSponsorship: candidate.needsSponsorship,
-      noticePeriod: candidate.noticePeriod,
+      noticePeriod: noticeDays(candidate) ? '1 week' : 'Immediately',
+      earliestStartDate: formatDate(startDate(candidate, today)),
       yearsOfExperience: candidate.yearsOfExperience,
       willingToRelocate: candidate.willingToRelocate,
     };
+    if (candidate.salaryExpectationAmount) {
+      const asked = [job.description, ...fields.map((field) => `${field.label} ${(field.options || []).join(' ')}`)]
+        .map((text) => currencyIn(text, exchangeRates));
+      facts.salaryExpectation = salaryText(candidate);
+      facts.salaryEquivalents = salaryEquivalents(candidate, asked, exchangeRates);
+    }
     const questions = fields.map((field) => ({
       id: field.id,
       question: field.label,
@@ -192,6 +360,8 @@
       'For a question with options, answer with exactly one of the options, copied character for character.',
       'Keep each answer within its maxLength. Write free-text answers in the first person, specific to this job, plain text without markdown.',
       'If the facts do not answer a factual question (for example a date, a licence, a clearance), answer with an empty string.',
+      'For salary questions, copy a figure from salaryEquivalents for the period and currency asked; when the question names no period, use the one the job description uses, else the period of salaryExpectation. Only for a currency missing there, convert at the current exchange rate. A number field takes digits only.',
+      'For notice or start-date questions, use noticePeriod and earliestStartDate (YYYY-MM-DD).',
       'Reply with JSON only, in this shape: {"answers":[{"id":"<question id>","value":"<answer>"}]}',
       '',
       `Job: ${job.title} at ${job.company}${job.location ? ` (${job.location})` : ''}`,

@@ -442,6 +442,13 @@
       "when": 1793011493081,
       "tag": "0062_apply_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1793019407856,
+      "tag": "0063_notice_and_daily_salary",
+      "breakpoints": true
     }
   ]
 }

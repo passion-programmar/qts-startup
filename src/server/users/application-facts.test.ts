@@ -17,10 +17,10 @@ test("facts are parsed and normalized", () => {
     applicationFacts: "1",
     workAuthorization: " EU citizen ",
     needsSponsorship: "no",
-    noticePeriod: "1 month",
+    noticePeriod: "1_week",
     salaryExpectationAmount: "70000",
     salaryExpectationCurrency: "eur",
-    salaryExpectationPeriod: "year",
+    salaryExpectationPeriod: "day",
     yearsOfExperience: "8",
     willingToRelocate: "",
     githubUrl: "github.com/anna",
@@ -29,10 +29,10 @@ test("facts are parsed and normalized", () => {
   })), {
     workAuthorization: "EU citizen",
     needsSponsorship: false,
-    noticePeriod: "1 month",
+    noticePeriod: "1_week",
     salaryExpectationAmount: 70000,
     salaryExpectationCurrency: "EUR",
-    salaryExpectationPeriod: "year",
+    salaryExpectationPeriod: "day",
     yearsOfExperience: 8,
     willingToRelocate: null,
     githubUrl: "https://github.com/anna",
@@ -46,4 +46,11 @@ test("invalid facts are refused with a reason", () => {
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", salaryExpectationAmount: "70000" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", salaryExpectationCurrency: "euro" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", needsSponsorship: "maybe" })), "string");
+  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", noticePeriod: "1 month" })), "string");
+});
+
+test("an unset notice period means immediately", () => {
+  const facts = readApplicationFacts(form({ applicationFacts: "1" }));
+  assert.ok(facts && typeof facts === "object");
+  assert.equal(facts.noticePeriod, "immediately");
 });

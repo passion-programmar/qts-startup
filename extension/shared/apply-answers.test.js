@@ -14,7 +14,7 @@ const candidate = {
   country: 'Poland',
   needsSponsorship: false,
   willingToRelocate: null,
-  noticePeriod: '1 month',
+  noticePeriod: '1_week',
   salaryExpectationAmount: 70000,
   salaryExpectationCurrency: 'EUR',
   salaryExpectationPeriod: 'year',
@@ -41,7 +41,95 @@ test('profile facts answer the common questions', () => {
   assert.equal(resolved['First name'].value, 'Anna');
   assert.equal(resolved['Current location'].value, 'Warsaw, Poland');
   assert.equal(resolved['Salary expectations'].value, '70000 EUR per year');
+  assert.equal(resolved['Notice period'].value, '1 week');
   assert.equal(resolved['Years of experience'].value, '8');
+});
+
+const monthly = { ...candidate, salaryExpectationAmount: 500, salaryExpectationCurrency: 'EUR', salaryExpectationPeriod: 'month' };
+const exchangeRates = { base: 'EUR', date: '2026-10-23', rates: { EUR: 1, USD: 1.08, PLN: 4.3 } };
+
+test('salary is worked out for the period and currency each question asks', () => {
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Expected hourly rate', { kind: 'number' }),
+    field('Annual salary expectation', { kind: 'number' }),
+    field('Daily rate'),
+    field('Expected monthly salary in USD', { kind: 'number' }),
+    field('Salary expectation in PLN (gross, per year)'),
+    field('Salary expectations'),
+    field('Expected salary', { kind: 'number' }),
+  ], monthly, [], { exchangeRates });
+  assert.equal(resolved['Expected hourly rate'].value, '2.88');
+  assert.equal(resolved['Annual salary expectation'].value, '6000');
+  assert.equal(resolved['Daily rate'].value, '23.08 EUR per day');
+  assert.equal(resolved['Expected monthly salary in USD'].value, '540');
+  assert.equal(resolved['Salary expectation in PLN (gross, per year)'].value, '25800 PLN per year');
+  assert.equal(resolved['Salary expectations'].value, '500 EUR per month');
+  // A bare number with no period is left to the AI, which picks from the worked-out figures.
+  assert.deepEqual(open.map((entry) => entry.id), ['Expected salary']);
+});
+
+test('salary ranges, period choices, and currency choices take the matching option', () => {
+  const { answers: resolved } = answers.resolveFields([
+    field('Annual salary expectation', { id: 'fits', kind: 'select', options: ['Under €5,000', '€5,000 - €7,000', '€7,000+'] }),
+    field('Annual salary expectation', { id: 'nearest', kind: 'radio', options: ['€10k-20k', '€20k-30k'] }),
+    field('Salary period', { kind: 'select', options: ['Per year', 'Per month', 'Per hour'] }),
+    field('Currency', { kind: 'select', options: ['USD', 'EUR', 'GBP'] }),
+    field('Salary currency'),
+  ], monthly, [], { exchangeRates });
+  assert.equal(resolved.fits.value, '€5,000 - €7,000');
+  assert.equal(resolved.nearest.value, '€10k-20k');
+  assert.equal(resolved['Salary period'].value, 'Per month');
+  assert.equal(resolved.Currency.value, 'EUR');
+  assert.equal(resolved['Salary currency'].value, 'EUR');
+});
+
+test('without exchange rates, another currency goes to the AI instead of a wrong figure', () => {
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Expected monthly salary in CHF', { kind: 'number' }),
+    field('Expected monthly salary', { kind: 'number' }),
+  ], monthly, [], {});
+  assert.deepEqual(open.map((entry) => entry.id), ['Expected monthly salary in CHF']);
+  assert.equal(resolved['Expected monthly salary'].value, '500');
+});
+
+test('start questions answer immediately or in 1 week, as a choice, a date, or words', () => {
+  const today = new Date(2026, 9, 26);
+  const { answers: oneWeek } = answers.resolveFields([
+    field('Earliest start date', { kind: 'date' }),
+    field('Start date', { placeholder: 'DD/MM/YYYY' }),
+    field('When can you start?'),
+    field('Availability to start', { kind: 'select', options: ['Immediately', 'Within 2 weeks', '1 month'] }),
+    field('When are you available to start?', { kind: 'radio', options: ['1 week', '2 weeks'] }),
+    field('Notice period', { id: 'long', kind: 'select', options: ['2 weeks', '1 month', '3 months'] }),
+  ], candidate, [], { today });
+  assert.equal(oneWeek['Earliest start date'].value, '2026-11-02');
+  assert.equal(oneWeek['Start date'].value, '02/11/2026');
+  assert.equal(oneWeek['When can you start?'].value, 'In 1 week');
+  assert.equal(oneWeek['Availability to start'].value, 'Immediately');
+  assert.equal(oneWeek['When are you available to start?'].value, '1 week');
+  assert.equal(oneWeek.long.value, '2 weeks');
+
+  const { answers: now } = answers.resolveFields([
+    field('Earliest start date', { kind: 'date' }),
+    field('When can you start?'),
+  ], { ...candidate, noticePeriod: 'immediately' }, [], { today });
+  assert.equal(now['Earliest start date'].value, '2026-10-26');
+  assert.equal(now['When can you start?'].value, 'Immediately');
+});
+
+test('the AI gets the salary in every period and the currencies the page uses', () => {
+  const prompt = answers.buildAnswerPrompt({
+    job: { title: 'DevOps Engineer', company: 'Acme', description: 'Pay: 3,000-4,000 USD per month.' },
+    candidate: monthly,
+    documentsJson: '{}',
+    fields: [field('Expected salary', { kind: 'number' })],
+    exchangeRates,
+    today: new Date(2026, 9, 26),
+  });
+  assert.match(prompt, /"salaryExpectation":"500 EUR per month"/);
+  assert.match(prompt, /"EUR":\{"year":6000,"month":500,"day":23.08,"hour":2.88\}/);
+  assert.match(prompt, /"USD":\{"year":6480,"month":540/);
+  assert.match(prompt, /"noticePeriod":"1 week","earliestStartDate":"2026-11-02"/);
 });
 
 test('yes/no facts pick the matching option; a missing required fact stops instead of guessing', () => {

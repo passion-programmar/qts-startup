@@ -174,7 +174,7 @@ export const profiles = pgTable(
     // Facts application forms ask for. Apply fills them only from here and stops when one is missing.
     workAuthorization: text("work_authorization"),
     needsSponsorship: boolean("needs_sponsorship"),
-    noticePeriod: text("notice_period"),
+    noticePeriod: text("notice_period").default("immediately").notNull(),
     salaryExpectationAmount: integer("salary_expectation_amount"),
     salaryExpectationCurrency: text("salary_expectation_currency"),
     salaryExpectationPeriod: text("salary_expectation_period"),
@@ -194,8 +194,9 @@ export const profiles = pgTable(
     index("profiles_category_id_index").on(table.categoryId),
     check(
       "profiles_salary_expectation_check",
-      sql`(${table.salaryExpectationAmount} is null or ${table.salaryExpectationAmount} > 0) and (${table.salaryExpectationPeriod} is null or ${table.salaryExpectationPeriod} in ('year', 'month', 'hour'))`,
+      sql`(${table.salaryExpectationAmount} is null or ${table.salaryExpectationAmount} > 0) and (${table.salaryExpectationPeriod} is null or ${table.salaryExpectationPeriod} in ('year', 'month', 'day', 'hour'))`,
     ),
+    check("profiles_notice_period_check", sql`${table.noticePeriod} in ('immediately', '1_week')`),
     check(
       "profiles_years_of_experience_check",
       sql`${table.yearsOfExperience} is null or ${table.yearsOfExperience} between 0 and 70`,

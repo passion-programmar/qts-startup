@@ -17,7 +17,8 @@ test("extension versions compare numerically", () => {
 });
 
 test("only current extensions take Generation or Apply work", () => {
-  assert.equal(canTakeWork("1.33.0"), true);
+  assert.equal(canTakeWork("1.33.1"), true);
+  assert.equal(canTakeWork("1.33.0"), false);
   assert.equal(canTakeWork("2.0.0"), true);
   assert.equal(canTakeWork("1.32.0"), false);
   assert.equal(canTakeWork(null), false);

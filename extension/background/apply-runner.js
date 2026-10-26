@@ -147,6 +147,8 @@ async function askChatGptForAnswers(application, fields, keepAlive) {
     candidate: application.candidate,
     documentsJson: application.job.documentsJson,
     fields,
+    exchangeRates: application.exchangeRates,
+    today: new Date(),
   });
   await sendGenerationPromptWithRecovery(chatTabId, self.__qtsGenerationChatGpt.buildTaskPrompt(first, marker));
   let reply = await waitForGenerationAnswer(chatTabId, marker, active);
@@ -184,7 +186,10 @@ async function fillFormPage(tabId, application, keepAlive) {
   if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
   await readComboboxOptions(tabId, fields);
   const visible = fields.filter((field) => !field.hidden && !field.disabled);
-  const { answers, open, missing } = helpers.resolveFields(visible, application.candidate, application.savedAnswers);
+  const { answers, open, missing } = helpers.resolveFields(visible, application.candidate, application.savedAnswers, {
+    exchangeRates: application.exchangeRates,
+    today: new Date(),
+  });
   if (missing.length) {
     throw new ApplyStop(`Missing candidate facts: ${[...new Set(missing.map((entry) => entry.fact))].join(', ')}. Add them on the candidate's profile.`);
   }

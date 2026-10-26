@@ -163,6 +163,8 @@
         hidden: !shown,
         disabled: control.disabled || control.readOnly,
         ...(control.maxLength > 0 ? { maxLength: control.maxLength } : {}),
+        // Date fields typed as text show their format here (DD/MM/YYYY).
+        ...(control.placeholder ? { placeholder: String(control.placeholder).slice(0, 40) } : {}),
       };
       if (tag === 'SELECT') {
         field.options = [...control.options].map(optionText).filter((text) => text && !PLACEHOLDER_OPTION.test(text));

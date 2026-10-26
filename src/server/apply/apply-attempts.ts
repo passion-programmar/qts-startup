@@ -12,6 +12,7 @@ import {
   type ApplyResultReport,
   normalizeQuestionKey,
 } from "./apply-values";
+import { type ExchangeRates, loadExchangeRates } from "./exchange-rates";
 
 // Server side of Apply (docs/architecture.md): claims across Chromes, Submit permission exactly
 // once, and results that create the bid. Every step checks that the reporting Chrome owns the attempt.
@@ -59,6 +60,8 @@ export type ClaimedApplication = {
   };
   candidate: Record<string, string | number | boolean | null>;
   savedAnswers: { questionKey: string; questionText: string; answer: string }[];
+  // For salary questions in another currency; null when the candidate has no salary or the ECB is unreachable.
+  exchangeRates: ExchangeRates | null;
 };
 
 /** The next application for this Chrome, or null when none is ready or the limit of 3 is reached. */
@@ -140,6 +143,7 @@ export async function claimNextApplication(
     job: { id: jobId, url, title, company, location, description, generationRunId, documentsJson },
     candidate,
     savedAnswers,
+    exchangeRates: candidate.salaryExpectationAmount ? await loadExchangeRates() : null,
   };
 }
 

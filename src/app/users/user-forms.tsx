@@ -1257,14 +1257,15 @@ function ApplicationFactsSection({
           name="needsSponsorship"
           options={YES_NO_OPTIONS}
         />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.noticePeriod ?? ""}
+        <ChoiceField
+          defaultValue={candidate.noticePeriod === "1_week" ? "1_week" : "immediately"}
           id={fieldId("noticePeriod")}
           label="Notice period"
-          maxLength={100}
           name="noticePeriod"
-          placeholder="1 month"
+          options={[
+            { value: "immediately", label: "Immediately" },
+            { value: "1_week", label: "1 week" },
+          ]}
         />
         <TextField
           autoComplete="off"
@@ -1305,6 +1306,7 @@ function ApplicationFactsSection({
             { value: "", label: "Not set" },
             { value: "year", label: "Per year" },
             { value: "month", label: "Per month" },
+            { value: "day", label: "Per day" },
             { value: "hour", label: "Per hour" },
           ]}
         />
