@@ -425,7 +425,7 @@ test('without reusable answers on those topics, the profile facts still answer t
   assert.equal(resolved['Will you require visa sponsorship?'].value, 'No');
 });
 
-test('with static facts only, relocation and notice come from reusable answers, and nothing is assumed without them', () => {
+test('with static facts only, relocation and notice come from reusable answers; without one, notice is the usual 1 week', () => {
   const staticProfile = { firstName: 'Anna', lastName: 'Kowalska', email: 'anna@example.com', nationality: 'Polish', languages: 'English C1', yearsOfExperience: 8, eeoPreference: 'prefer_not_to_say' };
   const row = (questionText, answer) => ({ questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
   const { answers: resolved } = answers.resolveFields([
@@ -435,10 +435,15 @@ test('with static facts only, relocation and notice come from reusable answers, 
   assert.equal(resolved['Are you willing to relocate?'].value, 'No');
   assert.equal(resolved['Notice period'].value, '1 month');
 
-  const { open, missing } = answers.resolveFields([
+  const { answers: usual, open, missing } = answers.resolveFields([
     field('Notice period'),
+    field('Date available', { kind: 'date' }),
+    field('When can you start?', { id: 'choice', kind: 'select', options: ['Immediately', '1 week', '2 weeks', '1 month'] }),
     field('Will you require visa sponsorship?', { kind: 'radio', options: ['Yes', 'No'] }),
-  ], staticProfile, []);
-  assert.deepEqual(missing.map((entry) => entry.fact), ['notice period', 'visa sponsorship']);
-  assert.deepEqual(open.map((entry) => entry.id), ['Notice period', 'Will you require visa sponsorship?']);
+  ], staticProfile, [], { today: new Date(2026, 9, 26) });
+  assert.equal(usual['Notice period'].value, '1 week');
+  assert.equal(usual['Date available'].value, '2026-11-02');
+  assert.equal(usual.choice.value, '1 week');
+  assert.deepEqual(missing.map((entry) => entry.fact), ['visa sponsorship']);
+  assert.deepEqual(open.map((entry) => entry.id), ['Will you require visa sponsorship?']);
 });

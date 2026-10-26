@@ -281,8 +281,10 @@ async function pickWithRealClick(tabId, field, value) {
       if (!choice) await sleep(500);
     }
     if (!choice) {
+      // What the list or suggestion box does offer goes to the AI as the field's choices.
+      const choices = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownChoiceTexts(id), [field.id]).catch(() => []);
       await realEscape(tabId);
-      return { ok: false, error: `the list has no "${wanted}"` };
+      return { ok: false, error: `the list has no "${wanted}"`, choices: choices || [] };
     }
     await realClick(tabId, choice);
     await sleep(400);
@@ -411,14 +413,14 @@ async function fillAndCheck(tabId, field, answer, file, seen) {
   const emptied = field.kind === 'text' && !String(result?.value ?? '').trim();
   if (!result?.ok && (['menu', 'combobox'].includes(field.kind) || emptied) && !file) {
     const real = await pickWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
-    result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
+    result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}`, choices: real.choices };
   }
   // Radio and tick-box options a site ignores simulated clicks on get real clicks on their labels.
   if (!result?.ok && ['radio', 'checkbox-group'].includes(field.kind)) {
     const real = await checkWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
   }
-  if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"` };
+  if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [] };
   const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
   return issue ? { ok: false, error: issue } : { ok: true };
 }
@@ -493,9 +495,15 @@ async function fillFormPage(tabId, application, keepAlive) {
       } else if (answer.file || answer.source === 'documents') {
         if (field.required) failures.push(field.label);
       } else {
+        // The value that did not fit goes to ChatGPT with what it was (the profile's fact or a
+        // reusable answer and its note), the site's reason, and the choices the field showed.
+        const was = answer.source === 'reusable'
+          ? `The reusable answer for this question is "${answer.saved ?? answer.value}"${answer.note ? ` (note: ${answer.note})` : ''}`
+          : `The candidate's profile says "${answer.value}"`;
         rejected.push({
           ...field,
-          hint: `The candidate's profile says "${answer.value}", but the site did not take it (${outcome.error}); give it in a form this field takes.`,
+          ...(outcome.choices?.length ? { options: outcome.choices } : {}),
+          hint: `${was}, but the site did not take it (${outcome.error}); give it in a form this field takes.`,
         });
       }
     }
@@ -513,10 +521,12 @@ async function fillFormPage(tabId, application, keepAlive) {
           const outcome = await fillAndCheck(tabId, field, answer, null, seen);
           if (outcome.gone) continue;
           if (outcome.ok) used[field.label || field.id] = answer;
-          else onRejected(field, answer, outcome.error);
+          else onRejected(field, answer, outcome.error, outcome.choices);
         }
       };
-      await fillAnswers(aiAnswers, toAsk, (field, answer, error) => {
+      await fillAnswers(aiAnswers, toAsk, (field, answer, error, choices) => {
+        // The follow-up offers the choices the field showed when the answer was typed.
+        if (choices?.length) field.options = choices;
         problems.push({ id: field.id, label: field.label, reason: `the site did not take "${[].concat(answer.value).join(' | ')}": ${error}` });
       });
       if (problems.length) {

@@ -182,12 +182,13 @@
   }
 
   // The notice in days from Super Admin's reusable answer ("2 weeks"), else the profile's old
-  // choice when a claim still carries one; null when neither says, so nothing is assumed.
+  // choice when a claim still carries one, else the usual 1 week (a start date a week from today).
+  const DEFAULT_NOTICE_DAYS = 7;
   function noticeDays(candidate) {
     if (Number.isFinite(candidate.noticeDays)) return candidate.noticeDays;
     if (candidate.noticePeriod === '1_week') return 7;
     if (candidate.noticePeriod === 'immediately') return 0;
-    return null;
+    return DEFAULT_NOTICE_DAYS;
   }
 
   /** Days in words: 0 "Immediately", 7 "1 week", 14 "2 weeks", 30 "1 month", 10 "10 days". */
@@ -438,7 +439,6 @@
         return resolveSalary(field, label, candidate, context.exchangeRates) ?? { ask: salaryText(candidate) };
       }
       if (rule.notice) {
-        if (noticeDays(candidate) === null) return { missing: rule.name };
         return resolveNotice(field, label, candidate, context.today)
           ?? { ask: `notice period ${noticeWords(noticeDays(candidate)).toLowerCase()}, can start ${formatDate(startDate(candidate, context.today))}` };
       }
@@ -502,12 +502,14 @@
   /** A reusable answer for this field when it fits it as written; otherwise a hint for the AI. */
   function reusableAnswer(field, row) {
     const answer = String(row.answer);
+    // The saved answer and note travel with the value, so a site that rejects it can hand both to the AI.
+    const saved = { source: 'reusable', saved: answer, note: row.note || null };
     if (field.kind === 'checkbox' && !hasOptions(field)) {
-      if (YES.test(answer.trim())) return { value: true, source: 'reusable' };
-      if (NO.test(answer.trim())) return { value: false, source: 'reusable' };
+      if (YES.test(answer.trim())) return { value: true, ...saved };
+      if (NO.test(answer.trim())) return { value: false, ...saved };
     } else {
       const fits = checkAnswer(field, answer);
-      if (fits.ok) return { value: fits.value, source: 'reusable' };
+      if (fits.ok) return { value: fits.value, ...saved };
     }
     return { ask: answer, from: 'reusable', note: row.note || null };
   }
@@ -610,8 +612,8 @@
       contractType: { employment: 'employment contract', b2b: 'B2B or contractor', either: 'employment or B2B' }[candidate.contractType],
       workHours: { full_time: 'full-time', part_time: 'part-time', either: 'full-time or part-time' }[candidate.workHours],
       workMode: { remote: 'remote', hybrid: 'hybrid', onsite: 'on-site', any: 'remote, hybrid, or on-site' }[candidate.workMode],
-      noticePeriod: noticeDays(candidate) === null ? null : noticeWords(noticeDays(candidate)),
-      earliestStartDate: noticeDays(candidate) === null ? null : formatDate(startDate(candidate, today)),
+      noticePeriod: noticeWords(noticeDays(candidate)),
+      earliestStartDate: formatDate(startDate(candidate, today)),
       yearsOfExperience: candidate.yearsOfExperience,
       notes: candidate.applicationNotes,
     };
