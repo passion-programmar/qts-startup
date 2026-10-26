@@ -348,3 +348,36 @@ test('several choices, number limits, and dates are checked, and the follow-up n
   assert.match(fix, /"options":\["Coventry","Leeds","Remote"\]/);
   assert.match(fix, /"problem":"the site did not take \\"Paris\\""/);
 });
+
+test('the profile comes first, then a reusable answer that fits, else the reusable answer as a hint', () => {
+  const reusable = [
+    { questionKey: answers.normalizeQuestionKey('How did you hear about us?'), questionText: 'How did you hear about us?', answer: 'LinkedIn job post', note: 'Pick the closest choice.' },
+    { questionKey: answers.normalizeQuestionKey('Do you know anyone working at the company?'), questionText: 'Do you know anyone working at the company?', answer: 'No' },
+    { questionKey: answers.normalizeQuestionKey('Email address'), questionText: 'Email address', answer: 'shared@example.com' },
+    { questionKey: answers.normalizeQuestionKey('Are you open to business travel?'), questionText: 'Are you open to business travel?', answer: 'Yes' },
+  ];
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Email'),
+    field('How did you hear about this job?'),
+    field('How did you hear about us?', { id: 'choices', kind: 'select', options: ['Job board', 'Referral', 'Social media'] }),
+    field('Do you know any employee working at the company?', { kind: 'radio', options: ['Yes', 'No'] }),
+    field('I am open to business travel', { kind: 'checkbox', required: false }),
+  ], candidate, reusable);
+  assert.equal(resolved.Email.value, 'anna@example.com');
+  assert.equal(resolved['How did you hear about this job?'].value, 'LinkedIn job post');
+  assert.equal(resolved['How did you hear about this job?'].source, 'reusable');
+  assert.equal(resolved['Do you know any employee working at the company?'].value, 'No');
+  assert.equal(resolved['I am open to business travel'].value, true);
+  assert.deepEqual(open.map((entry) => entry.id), ['choices']);
+  assert.match(open[0].hint, /reusable answer for this question is "LinkedIn job post" \(note: Pick the closest choice\.\)/);
+});
+
+test('every reusable answer reaches the AI as context, with its note', () => {
+  const prompt = answers.buildAnswerPrompt({
+    job: { title: 'SRE', company: 'Acme' },
+    candidate,
+    fields: [field('Where did you find this position?')],
+    savedAnswers: [{ questionText: 'How did you hear about us?', answer: 'LinkedIn job post', note: 'Pick the closest choice.' }],
+  });
+  assert.match(prompt, /How did you hear about us\?: LinkedIn job post \(note: Pick the closest choice\.\)/);
+});

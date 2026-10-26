@@ -683,6 +683,31 @@ export const candidateSavedAnswers = pgTable(
   ],
 );
 
+// Super Admin's reusable answers for application questions every candidate may meet ("How did you
+// hear about us?"). Apply uses one when its question matches and the answer fits the field; when it
+// does not fit, ChatGPT gets it as a hint. Profile facts come first and are never overridden.
+export const reusableAnswers = pgTable(
+  "reusable_answers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    questionKey: text("question_key").notNull(),
+    questionText: text("question_text").notNull(),
+    answer: text("answer").notNull(),
+    // Guidance for ChatGPT when the answer has to be adapted to a field ("pick the closest choice").
+    note: text("note"),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [uniqueIndex("reusable_answers_question_key_unique").on(table.questionKey)],
+);
+
 // Get JD's "being checked" mark: while one Chrome evaluates a job link, others wait for its
 // verdict instead of calling Gemini again; the verdict is replayed until expires_at.
 export const getJdPageChecks = pgTable(

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
-import { applyAttempts, bids, candidateSavedAnswers, jobs, profiles, prompts, users } from "@/db/schema";
+import { applyAttempts, bids, candidateSavedAnswers, jobs, profiles, prompts, reusableAnswers, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { deliveredGenerationRunId, jobHasBid, markRowsWithBidApplied } from "@/server/jobs/job-bids";
 import type { ExtensionBrowser } from "@/server/browsers/extension-browsers";
@@ -62,7 +62,8 @@ export type ClaimedApplication = {
     coverLetterText: string | null;
   };
   candidate: Record<string, string | number | boolean | null>;
-  savedAnswers: { questionKey: string; questionText: string; answer: string }[];
+  // The candidate's own saved answers first, then Super Admin's reusable answers for everyone.
+  savedAnswers: { questionKey: string; questionText: string; answer: string; note: string | null; scope: "candidate" | "everyone" }[];
   // For salary questions in another currency; null when the candidate has no salary or the ECB is unreachable.
   exchangeRates: ExchangeRates | null;
   // Super Admin's default ChatGPT prompt for application answers; null means Apply's built-in one.
@@ -162,14 +163,30 @@ export async function claimNextApplication(
     .limit(1);
   if (!row) return null;
 
-  const savedAnswers = await db
-    .select({
-      questionKey: candidateSavedAnswers.questionKey,
-      questionText: candidateSavedAnswers.questionText,
-      answer: candidateSavedAnswers.answer,
-    })
-    .from(candidateSavedAnswers)
-    .where(eq(candidateSavedAnswers.candidateId, row.candidateId));
+  const [ownAnswers, sharedAnswers] = await Promise.all([
+    db
+      .select({
+        questionKey: candidateSavedAnswers.questionKey,
+        questionText: candidateSavedAnswers.questionText,
+        answer: candidateSavedAnswers.answer,
+      })
+      .from(candidateSavedAnswers)
+      .where(eq(candidateSavedAnswers.candidateId, row.candidateId)),
+    db
+      .select({
+        questionKey: reusableAnswers.questionKey,
+        questionText: reusableAnswers.questionText,
+        answer: reusableAnswers.answer,
+        note: reusableAnswers.note,
+      })
+      .from(reusableAnswers),
+  ]);
+  const savedAnswers = [
+    ...ownAnswers.map((entry) => ({ ...entry, note: null, scope: "candidate" as const })),
+    ...sharedAnswers
+      .filter((entry) => !ownAnswers.some((own) => own.questionKey === entry.questionKey))
+      .map((entry) => ({ ...entry, scope: "everyone" as const })),
+  ];
 
   const { jobId, url, title, company, location, description, generationRunId, documentsJson, coverLetter, aiMode, ...candidate } = row;
   return {

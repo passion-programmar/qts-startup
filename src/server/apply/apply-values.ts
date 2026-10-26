@@ -124,3 +124,21 @@ export function coverLetterText(coverLetter: unknown): string | null {
   const signOff = [clean(letter.closing), clean(letter.signatureName ?? letter.signature)].filter(Boolean).join("\n");
   return [clean(letter.salutation ?? letter.greeting), ...paragraphs, signOff].filter(Boolean).join("\n\n").slice(0, 8000);
 }
+
+export type ReusableAnswerInput = { questionText: string; questionKey: string; answer: string; note: string | null };
+
+/** A reusable answer from Super Admin's form, or a string naming what is wrong. */
+export function parseReusableAnswer(values: { question: unknown; answer: unknown; note: unknown }): ReusableAnswerInput | string {
+  const text = (value: unknown) => (typeof value === "string" ? value.replace(/\r\n/g, "\n").trim() : "");
+  const questionText = text(values.question).replace(/\s+/g, " ");
+  const answer = text(values.answer);
+  const note = text(values.note);
+  if (!questionText) return "Enter the question.";
+  if (questionText.length > 300) return "The question is too long (300 characters at most).";
+  if (!answer) return "Enter the answer.";
+  if (answer.length > 4000) return "The answer is too long (4000 characters at most).";
+  if (note.length > 500) return "The note is too long (500 characters at most).";
+  const questionKey = normalizeQuestionKey(questionText);
+  if (!questionKey) return "Enter a question with words in it.";
+  return { questionText, questionKey, answer, note: note || null };
+}

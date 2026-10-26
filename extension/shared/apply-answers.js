@@ -299,18 +299,27 @@
       }
       return null;
     }
+    // Questions about someone else (a referrer, an employee you spoke to) never take the candidate's facts.
+    const aboutSomeoneElse = /\b(employee|referr\w*|recruiter|their|someone|who referred|hiring manager)\b/.test(label);
+    // 1. The candidate's profile facts; a reusable answer never overrides them.
+    const fromProfile = aboutSomeoneElse ? undefined : profileAnswer(field, label, candidate, context);
+    if (fromProfile && !fromProfile.missing) return fromProfile;
+    // 2. Super Admin's reusable answer for a matching question: used when it fits the field, else a hint.
+    const reusable = matchSavedAnswer(field, savedAnswers);
+    if (reusable) return reusableAnswer(field, reusable);
+    if (fromProfile) return fromProfile;
     if (/how did you (hear|find|learn)|where did you (hear|find)|referral source|^source$/.test(label)) {
       const option = pickOption(field, /linkedin/i) ?? pickOption(field, /job (board|site)|online|internet|website/i);
       if (option) return { value: option, source: 'rule' };
       if (!hasOptions(field)) return { value: 'LinkedIn', source: 'rule' };
       return null;
     }
-    // Questions about someone else (a referrer, an employee you spoke to) never take the candidate's facts.
-    if (/\b(employee|referr\w*|recruiter|their|someone|who referred|hiring manager)\b/.test(label)) return null;
-    const saved = savedAnswers?.get(normalizeQuestionKey(field.label));
-    if (saved) {
-      if (!hasOptions(field) || field.options.includes(saved)) return { value: saved, source: 'saved' };
-    }
+    // 3. Everything else goes to the AI.
+    return null;
+  }
+
+  /** The answer from the candidate's profile facts; undefined when no rule recognizes the question. */
+  function profileAnswer(field, label, candidate, context) {
     for (const rule of RULES) {
       if (!rule.test.test(label)) continue;
       // A tick box takes only a yes/no fact ("SMS to my phone number" is not the phone number).
@@ -350,16 +359,63 @@
       }
       return { value: String(fact), source: 'profile' };
     }
-    return null;
+    return undefined;
+  }
+
+  // Words that say nothing about what a question asks, left out when questions are compared.
+  const FILLER_WORDS = new Set(['the', 'and', 'you', 'your', 'are', 'did', 'does', 'have', 'has', 'what', 'which', 'how', 'this', 'that', 'our', 'with', 'for', 'about', 'any', 'please', 'required', 'optional', 'would', 'could', 'can', 'will', 'from', 'into', 'there', 'were', 'was', 'been', 'its', 'them', 'they']);
+
+  function questionWords(text) {
+    return new Set(normalizeQuestionKey(text).split(' ').filter((word) => word.length > 2 && !FILLER_WORDS.has(word)));
+  }
+
+  /**
+   * The saved or reusable answer for a field's question: the same question, or one sharing most of
+   * its meaningful words ("How did you hear about this job?" ~ "How did you hear about us?").
+   * Questions that match nothing go to the AI, which sees every reusable answer as context.
+   */
+  function matchSavedAnswer(field, savedRows) {
+    const rows = savedRows || [];
+    const key = normalizeQuestionKey(field.label);
+    const exact = rows.find((row) => row.questionKey === key);
+    if (exact) return exact;
+    const words = questionWords(field.label);
+    if (!words.size) return null;
+    let best = null;
+    for (const row of rows) {
+      const other = questionWords(row.questionText);
+      if (!other.size) continue;
+      const shared = [...words].filter((word) => other.has(word)).length;
+      const score = shared / Math.min(words.size, other.size);
+      // Most of the shorter question's words, and at least two unless it is a one- or two-word question.
+      if (score >= 0.75 && (shared >= 2 || Math.min(words.size, other.size) <= 2) && (!best || score > best.score)) {
+        best = { row, score };
+      }
+    }
+    return best?.row ?? null;
+  }
+
+  /** A reusable answer for this field when it fits it as written; otherwise a hint for the AI. */
+  function reusableAnswer(field, row) {
+    const answer = String(row.answer);
+    if (field.kind === 'checkbox' && !hasOptions(field)) {
+      if (YES.test(answer.trim())) return { value: true, source: 'reusable' };
+      if (NO.test(answer.trim())) return { value: false, source: 'reusable' };
+    } else {
+      const fits = checkAnswer(field, answer);
+      if (fits.ok) return { value: fits.value, source: 'reusable' };
+    }
+    return { ask: answer, from: 'reusable', note: row.note || null };
   }
 
   /**
    * Splits a page's fields into answered from the profile, questions for the AI, and left alone.
-   * The profile goes first; whatever it cannot answer goes to the AI, with the profile's value as
-   * a hint when it had one that did not fit. Nothing stops the application here.
+   * The profile goes first, then Super Admin's reusable answers; whatever they cannot answer goes to
+   * the AI, with the profile's value or the reusable answer as a hint when one did not fit.
+   * Nothing stops the application here.
    */
   function resolveFields(fields, candidate, savedAnswerRows, context = {}) {
-    const savedAnswers = new Map((savedAnswerRows || []).map((row) => [row.questionKey, row.answer]));
+    const savedAnswers = savedAnswerRows || [];
     const answers = {};
     const open = [];
     const missing = [];
@@ -376,7 +432,10 @@
         continue;
       }
       if (resolved.ask) {
-        open.push({ ...field, hint: `The candidate's profile says "${resolved.ask}"; give it in a form this field takes.` });
+        const hint = resolved.from === 'reusable'
+          ? `The reusable answer for this question is "${resolved.ask}"${resolved.note ? ` (note: ${resolved.note})` : ''}; give it in a form this field takes.`
+          : `The candidate's profile says "${resolved.ask}"; give it in a form this field takes.`;
+        open.push({ ...field, hint });
         continue;
       }
       if (resolved.skip) continue;
@@ -413,7 +472,7 @@
     'Résumé and cover letter:',
     '{{resume_and_cover_letter}}',
     '',
-    'Answers the candidate gave before:',
+    "Reusable answers (when one matches a question, use it, adapted to the field's choices and type):",
     '{{saved_answers}}',
     '',
     'Questions:',
@@ -482,7 +541,9 @@
    */
   function buildAnswerPrompt({ template, job, candidate, documentsJson, fields, exchangeRates, today, savedAnswers }) {
     const questions = JSON.stringify(questionList(fields));
-    const saved = (savedAnswers || []).map((row) => `${row.questionText}: ${row.answer}`).join('\n') || '(none)';
+    const saved = (savedAnswers || [])
+      .map((row) => `${row.questionText}: ${row.answer}${row.note ? ` (note: ${row.note})` : ''}`)
+      .join('\n') || '(none)';
     const values = {
       job_title: job.title || '',
       company: job.company || '',

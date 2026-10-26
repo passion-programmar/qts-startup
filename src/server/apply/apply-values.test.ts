@@ -7,6 +7,7 @@ import {
   defaultBrowserName,
   normalizeQuestionKey,
   parseApplyResultReport,
+  parseReusableAnswer,
   parseBrowserHeaders,
 } from "./apply-values";
 
@@ -78,4 +79,16 @@ test("the cover letter becomes plain text for text boxes", () => {
   );
   assert.equal(coverLetterText({ paragraphs: [] }), null);
   assert.equal(coverLetterText(null), null);
+});
+
+test("reusable answers are trimmed, keyed by their question, and refused when empty or too long", () => {
+  assert.deepEqual(parseReusableAnswer({ question: " How did you hear about us? ", answer: " LinkedIn job post ", note: "" }), {
+    questionText: "How did you hear about us?",
+    questionKey: "how did you hear about us",
+    answer: "LinkedIn job post",
+    note: null,
+  });
+  assert.equal(typeof parseReusableAnswer({ question: "", answer: "Yes", note: "" }), "string");
+  assert.equal(typeof parseReusableAnswer({ question: "Why?", answer: "", note: "" }), "string");
+  assert.equal(typeof parseReusableAnswer({ question: "Why?", answer: "x".repeat(4001), note: "" }), "string");
 });

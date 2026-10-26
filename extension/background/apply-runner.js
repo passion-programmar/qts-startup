@@ -664,6 +664,8 @@ async function runApplication(application, recipe) {
     }
     const evidence = {
       answers: Object.fromEntries(Object.entries(answersUsed).map(([label, answer]) => [label.slice(0, 200), String(answer.value).slice(0, 2000)])),
+      // Where each answer came from: profile, reusable (Super Admin's answers), ai, documents, consent, rule.
+      answerSources: Object.fromEntries(Object.entries(answersUsed).map(([label, answer]) => [label.slice(0, 200), answer.source || 'ai'])),
       generationRunId: application.job.generationRunId,
       answerPromptId: application.answerPrompt?.id ?? null,
       pageEvidence: outcome.evidence,

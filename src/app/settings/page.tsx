@@ -11,13 +11,14 @@ import {
   ManagerJobDetectionUrlAccessForm,
 } from "@/app/settings/prompt-forms";
 import { groupVersions } from "@/app/prompts/prompt-groups";
-import { prompts, users } from "@/db/schema";
+import { prompts, reusableAnswers, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { JobRecordTimeZoneForm } from "@/app/settings/job-record-time-zone-form";
+import { ReusableAnswerForm } from "@/app/settings/reusable-answers";
 import { getJobRecordTimeZone } from "@/server/jobs/job-record-time-zone";
 
 export const instant = false;
@@ -56,6 +57,7 @@ export default async function SettingsPage() {
     managerRows,
     managerPromptRows,
     jobRecordTimeZone,
+    reusableAnswerRows,
   ] = await Promise.all([
     // Super Admin's library: the active version of each prompt.
     db
@@ -118,6 +120,15 @@ export default async function SettingsPage() {
       .where(and(isNotNull(prompts.ownerManagerId), isNull(prompts.archivedAt)))
       .orderBy(desc(prompts.version)),
     getJobRecordTimeZone(),
+    db
+      .select({
+        id: reusableAnswers.id,
+        questionText: reusableAnswers.questionText,
+        answer: reusableAnswers.answer,
+        note: reusableAnswers.note,
+      })
+      .from(reusableAnswers)
+      .orderBy(asc(reusableAnswers.questionText)),
   ]);
   const versionsByGroup = new Map<string, PromptVersion[]>();
   for (const row of libraryVersionRows) {
@@ -222,6 +233,22 @@ export default async function SettingsPage() {
                 </div>
               );
             })}
+          </div>
+        </section>
+
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-5">
+            <h2 className="text-sm font-semibold text-slate-800">Reusable answers</h2>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              Answers to application questions every candidate may meet. Apply fills the candidate&apos;s profile facts first, then a matching answer here when it fits the field; when it does not fit, ChatGPT gets it as a hint and answers in the form the field takes.
+            </p>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {reusableAnswerRows.map((answer) => (
+              <ReusableAnswerForm answer={answer} key={answer.id} />
+            ))}
+            {/* A new key after each added answer empties the form for the next one. */}
+            <ReusableAnswerForm key={`new-${reusableAnswerRows.length}`} />
           </div>
         </section>
 

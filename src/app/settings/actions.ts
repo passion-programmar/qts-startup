@@ -13,7 +13,8 @@ import {
   PromptVersionError,
   savePromptVersion,
 } from "@/server/prompts/prompt-versions";
-import { settings, users } from "@/db/schema";
+import { reusableAnswers, settings, users } from "@/db/schema";
+import { parseReusableAnswer } from "@/server/apply/apply-values";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -483,4 +484,68 @@ function logPromptActionFailure(stage: string, error: unknown): void {
         ? error.name
         : "unknown";
   console.error(`Prompt action failed while ${stage} (code: ${code}).`);
+}
+
+// Super Admin's reusable answers for Apply: one per question, used for every candidate whose
+// application asks it. Saving the same question again updates its answer.
+export async function saveReusableAnswerAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can manage reusable answers." };
+  }
+  const answerId = readText(formData, "answerId", 36);
+  if (answerId && !isUuid(answerId)) return { ...emptyState, error: "Refresh the page and try again." };
+  const parsed = parseReusableAnswer({
+    question: formData.get("question"),
+    answer: formData.get("answer"),
+    note: formData.get("note"),
+  });
+  if (typeof parsed === "string") return { ...emptyState, error: parsed };
+
+  try {
+    const [clash] = await db
+      .select({ id: reusableAnswers.id })
+      .from(reusableAnswers)
+      .where(eq(reusableAnswers.questionKey, parsed.questionKey))
+      .limit(1);
+    if (clash && clash.id !== answerId) {
+      return { ...emptyState, error: "That question already has a reusable answer; edit it instead." };
+    }
+    const values = { ...parsed, updatedAt: new Date() };
+    if (answerId) {
+      const updated = await db.update(reusableAnswers).set(values).where(eq(reusableAnswers.id, answerId)).returning({ id: reusableAnswers.id });
+      if (!updated.length) return { ...emptyState, error: "That answer was deleted. Refresh the page." };
+    } else {
+      await db.insert(reusableAnswers).values({ ...values, createdByUserId: actor.id });
+    }
+  } catch (error) {
+    logPromptActionFailure("saving a reusable answer", error);
+    return { ...emptyState, error: "The answer could not be saved. Please try again." };
+  }
+
+  revalidatePath("/settings");
+  return { error: null, success: answerId ? "Answer updated." : "Answer added." };
+}
+
+export async function deleteReusableAnswerAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can manage reusable answers." };
+  }
+  const answerId = readText(formData, "answerId", 36);
+  if (!isUuid(answerId)) return { ...emptyState, error: "Refresh the page and try again." };
+  try {
+    await db.delete(reusableAnswers).where(eq(reusableAnswers.id, answerId));
+  } catch (error) {
+    logPromptActionFailure("deleting a reusable answer", error);
+    return { ...emptyState, error: "The answer could not be deleted. Please try again." };
+  }
+  revalidatePath("/settings");
+  return { error: null, success: "Answer deleted." };
 }
