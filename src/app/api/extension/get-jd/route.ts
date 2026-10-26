@@ -12,7 +12,8 @@ import {
   prompts,
   users,
 } from "@/db/schema";
-import { getExtensionManager } from "@/lib/extension-auth";
+import { type ExtensionManager, getExtensionManager } from "@/lib/extension-auth";
+import { withPageCheck } from "@/server/get-jd/get-jd-page-checks";
 import { db } from "@/lib/db";
 import {
   acquireGeminiKey,
@@ -94,6 +95,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  // The first Chrome to open a job link asks Gemini; others opening it meanwhile get that verdict.
+  // Try again and Send anyway (bypassPageCheck) ask Gemini again.
+  const requestedUrl = readString(body, "pageUrl", maxPageUrlLength);
+  const bypassPageCheck = typeof body === "object" && body !== null
+    && (body as { bypassPageCheck?: unknown }).bypassPageCheck === true;
+  if (!requestedUrl || !isHttpUrl(requestedUrl)) return evaluateGetJdPage(manager, body);
+  return withPageCheck(manager.id, requestedUrl, bypassPageCheck, () => evaluateGetJdPage(manager, body));
+}
+
+async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Promise<NextResponse> {
   const pageUrl = readString(body, "pageUrl", maxPageUrlLength);
   const pageTitle = readString(body, "pageTitle", maxPageTitleLength);
   const pageText = readString(body, "pageText", maxPageTextLength);

@@ -156,6 +156,56 @@ export async function updateManagerGeminiMatchingAction(
   };
 }
 
+// Super Admin turns Apply on per Manager and picks the AI that answers application questions.
+export async function updateManagerApplyAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can change a Manager's Apply settings." };
+  }
+  const managerId = readText(formData, "managerId", 36);
+  const enabledValue = formData.get("enabled");
+  const aiModeValue = formData.get("aiMode");
+  const change = enabledValue === "true" || enabledValue === "false"
+    ? { canUseApply: enabledValue === "true" }
+    : aiModeValue === "chatgpt" || aiModeValue === "gemini"
+      ? { applyAiMode: aiModeValue }
+      : null;
+  if (!isUuid(managerId) || !change) {
+    return { ...emptyState, error: "Select a valid Manager and Apply setting." };
+  }
+
+  try {
+    const [manager] = await db
+      .update(users)
+      .set({ ...change, updatedAt: new Date() })
+      .where(and(
+        eq(users.id, managerId),
+        eq(users.role, "manager"),
+        isNull(users.blockedAt),
+      ))
+      .returning({ id: users.id });
+    if (!manager) {
+      return { ...emptyState, error: "That active Manager was not found." };
+    }
+  } catch (error) {
+    logPromptActionFailure("updating Apply settings", error);
+    return { ...emptyState, error: "The Manager's Apply settings could not be updated." };
+  }
+
+  revalidatePath("/settings");
+  return {
+    error: null,
+    success: "canUseApply" in change
+      ? change.canUseApply
+        ? "Apply was turned on. This Manager's Apply button now applies to Generation-completed jobs."
+        : "Apply was turned off for this Manager."
+      : `Apply now answers open questions with ${change.applyAiMode === "gemini" ? "Gemini" : "ChatGPT"}.`,
+  };
+}
+
 export async function updateGeminiTokenCountModeAction(
   _previousState: PromptActionState,
   formData: FormData,

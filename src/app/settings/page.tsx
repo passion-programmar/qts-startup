@@ -2,6 +2,7 @@ import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import {
   GlobalPromptForm,
+  ManagerApplyForm,
   ManagerGeminiMatchingForm,
   PromptVersionPicker,
   type PromptVersion,
@@ -87,6 +88,8 @@ export default async function SettingsPage() {
         canManagePageExclusions: users.canManagePageExclusions,
         canManageJobDetectionUrlRules: users.canManageJobDetectionUrlRules,
         useGeminiMatching: users.useGeminiMatching,
+        canUseApply: users.canUseApply,
+        applyAiMode: users.applyAiMode,
       })
       .from(users)
       .where(
@@ -221,12 +224,13 @@ export default async function SettingsPage() {
           </div>
           <PaginatedTable
             columns={[
-              { label: "Manager", className: "w-[14%]" },
-              { label: "Own prompts (read-only)", className: "w-[30%]" },
-              { label: "Get JD matching", className: "w-[14%]" },
-              { label: "Text highlight access", className: "w-[14%]" },
-              { label: "Excluded rules · job match", className: "w-[14%]" },
-              { label: "Job-detection rules · block", className: "w-[14%]" },
+              { label: "Manager", className: "w-[12%]" },
+              { label: "Own prompts (read-only)", className: "w-[24%]" },
+              { label: "Get JD matching", className: "w-[13%]" },
+              { label: "Apply", className: "w-[13%]" },
+              { label: "Text highlight access", className: "w-[13%]" },
+              { label: "Excluded rules · job match", className: "w-[12%]" },
+              { label: "Job-detection rules · block", className: "w-[13%]" },
             ]}
             emptyMessage="No active Managers"
             rows={managerRows.map((manager) => {
@@ -260,6 +264,12 @@ export default async function SettingsPage() {
                     key="gemini-matching"
                     managerId={manager.id}
                     useGemini={manager.useGeminiMatching}
+                  />,
+                  <ManagerApplyForm
+                    aiMode={manager.applyAiMode}
+                    canUseApply={manager.canUseApply}
+                    key="apply"
+                    managerId={manager.id}
                   />,
                   <ManagerTextHighlightAccessForm
                     canManage={manager.canManageTextHighlights}

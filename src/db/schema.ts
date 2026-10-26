@@ -101,6 +101,12 @@ export const users = pgTable(
       .notNull(),
     // Super Admin assigns Gemini candidate matching per Manager; others use general Get JD.
     useGeminiMatching: boolean("use_gemini_matching").default(false).notNull(),
+    // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
+    canUseApply: boolean("can_use_apply").default(false).notNull(),
+    applyAiMode: text("apply_ai_mode").default("chatgpt").notNull(),
+    // "Stop all" on the Jobs page bumps a counter; every Chrome stops that mode when it sees a new value.
+    generationStopVersion: integer("generation_stop_version").default(0).notNull(),
+    applyStopVersion: integer("apply_stop_version").default(0).notNull(),
     authVersion: integer("auth_version").default(0).notNull(),
     blockedAt: timestamp("blocked_at", { withTimezone: true, mode: "date" }),
     blockedBy: uuid("blocked_by").references((): AnyPgColumn => users.id, {
@@ -136,6 +142,7 @@ export const users = pgTable(
       "users_block_audit_fields_check",
       sql`(${table.blockedAt} is null and ${table.blockedBy} is null) or (${table.blockedAt} is not null and ${table.blockedBy} is not null)`,
     ),
+    check("users_apply_ai_mode_check", sql`${table.applyAiMode} in ('chatgpt', 'gemini')`),
   ],
 );
 
@@ -164,6 +171,18 @@ export const profiles = pgTable(
     addressLine1: text("address_line_1"),
     postalCode: text("postal_code"),
     jdMatching: text("jd_matching"),
+    // Facts application forms ask for. Apply fills them only from here and stops when one is missing.
+    workAuthorization: text("work_authorization"),
+    needsSponsorship: boolean("needs_sponsorship"),
+    noticePeriod: text("notice_period"),
+    salaryExpectationAmount: integer("salary_expectation_amount"),
+    salaryExpectationCurrency: text("salary_expectation_currency"),
+    salaryExpectationPeriod: text("salary_expectation_period"),
+    yearsOfExperience: integer("years_of_experience"),
+    willingToRelocate: boolean("willing_to_relocate"),
+    githubUrl: text("github_url"),
+    portfolioUrl: text("portfolio_url"),
+    eeoPreference: text("eeo_preference").default("prefer_not_to_say").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -173,6 +192,18 @@ export const profiles = pgTable(
   },
   (table) => [
     index("profiles_category_id_index").on(table.categoryId),
+    check(
+      "profiles_salary_expectation_check",
+      sql`(${table.salaryExpectationAmount} is null or ${table.salaryExpectationAmount} > 0) and (${table.salaryExpectationPeriod} is null or ${table.salaryExpectationPeriod} in ('year', 'month', 'hour'))`,
+    ),
+    check(
+      "profiles_years_of_experience_check",
+      sql`${table.yearsOfExperience} is null or ${table.yearsOfExperience} between 0 and 70`,
+    ),
+    check(
+      "profiles_eeo_preference_check",
+      sql`${table.eeoPreference} in ('prefer_not_to_say', 'answer_from_profile')`,
+    ),
     uniqueIndex("profiles_candidate_email_normalized_unique")
       .on(sql`lower(btrim(${table.candidateEmail}))`)
       .where(sql`${table.candidateEmail} is not null`),
@@ -319,6 +350,36 @@ export const prompts = pgTable(
   ],
 );
 
+// Each Chrome running the extension, per Manager. browser_key is the random ID the extension
+// keeps in its own storage; the name is automatic until the Manager renames it.
+export const extensionBrowsers = pgTable(
+  "extension_browsers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    browserKey: text("browser_key").notNull(),
+    name: text("name").notNull(),
+    extensionVersion: text("extension_version"),
+    getJdOn: boolean("get_jd_on").default(false).notNull(),
+    workMode: text("work_mode").default("off").notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("extension_browsers_manager_key_unique").on(table.managerId, table.browserKey),
+    check("extension_browsers_work_mode_check", sql`${table.workMode} in ('off', 'generation', 'apply')`),
+  ],
+);
+
 export const generationRuns = pgTable(
   "generation_runs",
   {
@@ -406,6 +467,11 @@ export const jobs = pgTable(
       withTimezone: true,
       mode: "date",
     }),
+    // The Chrome processing this row's Generation; each Chrome processes one row at a time.
+    generationBrowserId: uuid("generation_browser_id").references(
+      (): AnyPgColumn => extensionBrowsers.id,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -435,6 +501,9 @@ export const jobs = pgTable(
     // Null keys (rows not backfilled yet) never conflict.
     uniqueIndex("jobs_job_key_candidate_unique").on(table.jobKey, table.candidateId),
     uniqueIndex("jobs_title_company_key_candidate_unique").on(table.titleCompanyKey, table.candidateId),
+    uniqueIndex("jobs_one_generation_per_browser_unique")
+      .on(table.generationBrowserId)
+      .where(sql`${table.generationStatus} = 'processing' and ${table.generationBrowserId} is not null`),
     index("jobs_candidate_date_status_index").on(
       table.candidateId,
       table.date,
@@ -480,6 +549,13 @@ export const bids = pgTable(
     // Copied from the jobs row when the bid is made: the prompt version and template used.
     promptId: uuid("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     pdfTemplate: text("pdf_template"),
+    // Apply records whether the site confirmed the application; Manager-made bids count as confirmed.
+    confirmationStatus: text("confirmation_status").default("confirmed").notNull(),
+    confirmationSource: text("confirmation_source"),
+    // The Apply attempt that made this bid, what it sent, and the Chrome holding a screenshot, if any.
+    applyAttemptId: uuid("apply_attempt_id"),
+    applyEvidence: jsonb("apply_evidence"),
+    screenshotBrowserName: text("screenshot_browser_name"),
     appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -492,6 +568,10 @@ export const bids = pgTable(
   },
   (table) => [
     uniqueIndex("bids_source_job_id_unique").on(table.sourceJobId),
+    check(
+      "bids_confirmation_status_check",
+      sql`${table.confirmationStatus} in ('confirmed', 'not_confirmed') and (${table.confirmationSource} is null or ${table.confirmationSource} in ('page', 'email', 'manager'))`,
+    ),
     index("bids_manager_title_company_key_index").on(table.managerId, table.titleCompanyKey),
     index("bids_manager_applied_at_index").on(table.managerId, table.appliedAt),
     index("bids_candidate_applied_at_index").on(
@@ -506,6 +586,107 @@ export const bids = pgTable(
       "gin",
       table.jobUrl.op("gin_trgm_ops"),
     ),
+  ],
+);
+
+// One automatic application of one jobs row. A row is claimed by one Chrome (lease renewed by
+// heartbeats), becomes "submitting" exactly once when the server grants Submit permission, and is
+// never handed out again after that. Claims go through claim_apply_attempt (migration 0062).
+export const applyAttempts = pgTable(
+  "apply_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    candidateId: uuid("candidate_id")
+      .notNull()
+      .references(() => profiles.userId, { onDelete: "restrict" }),
+    browserId: uuid("browser_id").references(() => extensionBrowsers.id, { onDelete: "set null" }),
+    status: text("status").default("claimed").notNull(),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "date" }),
+    submitGrantedAt: timestamp("submit_granted_at", { withTimezone: true, mode: "date" }),
+    finishedAt: timestamp("finished_at", { withTimezone: true, mode: "date" }),
+    resultReason: text("result_reason"),
+    confirmationSource: text("confirmation_source"),
+    screenshotBrowserName: text("screenshot_browser_name"),
+    evidence: jsonb("evidence"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      "apply_attempts_status_check",
+      sql`${table.status} in ('claimed', 'submitting', 'confirmed', 'not_confirmed', 'failed', 'released', 'skipped')`,
+    ),
+    // Only an attempt the server let submit can end confirmed or not confirmed.
+    check(
+      "apply_attempts_submit_audit_check",
+      sql`${table.status} not in ('submitting', 'confirmed', 'not_confirmed') or ${table.submitGrantedAt} is not null`,
+    ),
+    // One live attempt per job and per candidate, across every Chrome.
+    uniqueIndex("apply_attempts_one_live_per_job_unique")
+      .on(table.jobId)
+      .where(sql`${table.status} in ('claimed', 'submitting')`),
+    uniqueIndex("apply_attempts_one_live_per_candidate_unique")
+      .on(table.candidateId)
+      .where(sql`${table.status} in ('claimed', 'submitting')`),
+    index("apply_attempts_manager_status_index").on(table.managerId, table.status),
+  ],
+);
+
+// Answers to application questions, per candidate, reused without AI the next time the question appears.
+export const candidateSavedAnswers = pgTable(
+  "candidate_saved_answers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidateId: uuid("candidate_id")
+      .notNull()
+      .references(() => profiles.userId, { onDelete: "cascade" }),
+    questionKey: text("question_key").notNull(),
+    questionText: text("question_text").notNull(),
+    answer: text("answer").notNull(),
+    source: text("source").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("candidate_saved_answers_question_unique").on(table.candidateId, table.questionKey),
+    check("candidate_saved_answers_source_check", sql`${table.source} in ('manager', 'ai')`),
+  ],
+);
+
+// Get JD's "being checked" mark: while one Chrome evaluates a job link, others wait for its
+// verdict instead of calling Gemini again; the verdict is replayed until expires_at.
+export const getJdPageChecks = pgTable(
+  "get_jd_page_checks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    pageKey: text("page_key").notNull(),
+    status: text("status").default("checking").notNull(),
+    result: jsonb("result"),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("get_jd_page_checks_manager_page_unique").on(table.managerId, table.pageKey),
+    check("get_jd_page_checks_status_check", sql`${table.status} in ('checking', 'done')`),
   ],
 );
 

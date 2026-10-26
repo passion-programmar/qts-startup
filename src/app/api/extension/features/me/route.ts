@@ -1,4 +1,7 @@
+import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { users } from "@/db/schema";
+import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { managerCanManagePageExclusions } from "@/server/page-exclusions";
 import { managerCanManageJobDetectionUrlRules } from "@/server/job-detection-url-rules";
@@ -13,10 +16,13 @@ export async function GET(request: Request): Promise<NextResponse> {
     );
   }
   try {
-    const [canManageTextHighlights, canManagePageExclusions, canManageJobDetectionUrlRules] = await Promise.all([
+    const [canManageTextHighlights, canManagePageExclusions, canManageJobDetectionUrlRules, [applySettings]] = await Promise.all([
       managerCanManageTextHighlights(manager.id),
       managerCanManagePageExclusions(manager.id),
       managerCanManageJobDetectionUrlRules(manager.id),
+      // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
+      db.select({ canUseApply: users.canUseApply, applyAiMode: users.applyAiMode })
+        .from(users).where(eq(users.id, manager.id)).limit(1),
     ]);
     return NextResponse.json(
       {
@@ -26,7 +32,8 @@ export async function GET(request: Request): Promise<NextResponse> {
           canManagePageExclusions,
           canManageJobDetectionUrlRules,
           canUseScanner: false,
-          canUseApply: false,
+          canUseApply: applySettings?.canUseApply === true,
+          applyAiMode: applySettings?.applyAiMode === "gemini" ? "gemini" : "chatgpt",
         },
       },
       { headers: { "Cache-Control": "no-store" } },

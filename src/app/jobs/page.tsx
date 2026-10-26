@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/app/components/page-header";
 import { PaginatedTable } from "@/app/components/paginated-table";
@@ -9,12 +9,43 @@ import {
   JobGenerationQueueAction,
 } from "@/app/components/record-forms";
 import { GenerationSetup } from "@/app/components/generation-setup";
+import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
 import { jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
 
 export const instant = false;
+
+type ApplyAttemptSummary = {
+  status: "claimed" | "submitting" | "confirmed" | "not_confirmed" | "failed" | "released" | "skipped";
+  reason: string | null;
+  browser: string | null;
+  screenshot: string | null;
+};
+
+/** One line about a row's latest application, plus where its screenshot is when it has one. */
+function applyStatusLines(attempt: ApplyAttemptSummary | null): { text: string; tone: "info" | "warn" | "error"; detail: string | null }[] {
+  if (!attempt) return [];
+  const where = attempt.browser ? ` on ${attempt.browser}` : "";
+  const screenshot = attempt.screenshot ? `Screenshot saved on ${attempt.screenshot}` : null;
+  switch (attempt.status) {
+    case "claimed":
+      return [{ text: `Applying${where}`, tone: "info", detail: null }];
+    case "submitting":
+      return [{ text: `Submitted${where} — checking the result`, tone: "info", detail: null }];
+    case "confirmed":
+      return [{ text: "Apply: confirmed", tone: "info", detail: null }];
+    case "not_confirmed":
+      return [{ text: "Submitted — not confirmed", tone: "warn", detail: [attempt.reason, screenshot].filter(Boolean).join(" · ") || null }];
+    case "failed":
+      return [{ text: "Apply failed", tone: "error", detail: [attempt.reason, screenshot].filter(Boolean).join(" · ") || null }];
+    case "skipped":
+      return [{ text: "Apply skipped", tone: "warn", detail: attempt.reason }];
+    case "released":
+      return attempt.reason ? [{ text: "Apply returned to the list", tone: "info", detail: attempt.reason }] : [];
+  }
+}
 
 export default async function JobsPage() {
   const currentUser = await requireUser();
@@ -45,6 +76,19 @@ export default async function JobsPage() {
       promptName: prompts.name,
       promptVersion: prompts.version,
       pdfTemplate: jobs.pdfTemplate,
+      // Where this row runs when several Chromes work, and how its latest application went.
+      generationBrowserName: sql<string | null>`(
+        select b.name from extension_browsers b where b.id = ${jobs.generationBrowserId}
+      )`,
+      applyAttempt: sql<ApplyAttemptSummary | null>`(
+        select jsonb_build_object(
+          'status', a.status, 'reason', a.result_reason,
+          'browser', b.name, 'screenshot', a.screenshot_browser_name
+        )
+        from apply_attempts a left join extension_browsers b on b.id = a.browser_id
+        where a.job_id = ${jobs.id}
+        order by a.created_at desc limit 1
+      )`,
     })
     .from(jobs)
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -60,7 +104,12 @@ export default async function JobsPage() {
     <WorkspaceShell activeHref="/jobs" user={currentUser}>
       <main className="py-1">
         <PageHeader
-          actions={<span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">{rows.length} saved</span>}
+          actions={
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <StopAllButtons />
+              <span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">{rows.length} saved</span>
+            </div>
+          }
           description="Jobs saved for your candidate accounts."
           title="Jobs"
         />
@@ -120,7 +169,20 @@ export default async function JobsPage() {
                   <span className="capitalize">{row.status.replaceAll("_", " ")}</span>
                   <span className="mt-1 block text-[10px] capitalize text-slate-500">
                     Generation: {row.generationStatus.replaceAll("_", " ")}
+                    {row.generationStatus === "processing" && row.generationBrowserName && (
+                      <span className="normal-case"> on {row.generationBrowserName}</span>
+                    )}
                   </span>
+                  {applyStatusLines(row.applyAttempt).map((line) => (
+                    <span className="mt-1 block" key={line.text}>
+                      <span className={`block text-[10px] font-semibold ${
+                        line.tone === "error" ? "text-rose-700" : line.tone === "warn" ? "text-amber-700" : "text-slate-600"
+                      }`}>
+                        {line.text}
+                      </span>
+                      {line.detail && <span className="block text-xs text-slate-500">{line.detail}</span>}
+                    </span>
+                  ))}
                   {row.generationError && (
                     // Only a failed job shows its note as an error; a requeued job's note is informational.
                     <span className={`mt-1 block text-xs ${row.generationStatus === "failed" ? "text-rose-700" : "text-slate-500"}`}>

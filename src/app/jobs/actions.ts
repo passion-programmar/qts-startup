@@ -2,7 +2,7 @@
 
 import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { bids, jobs, profiles, users } from "@/db/schema";
+import { applyAttempts, bids, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
 import { deliveredGenerationRunId, jobHasBid } from "@/server/jobs/job-bids";
@@ -333,3 +333,53 @@ function isForeignKeyViolation(error: unknown): boolean {
     "code" in error && error.code === "23503";
 }
 function uuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
+
+/**
+ * "Stop all" from the Jobs page: every Chrome of this Manager stops Generation or Apply on its next
+ * heartbeat. Generation jobs in progress go back to the queue; Apply jobs that have not reached
+ * Submit go back to the list right away, and a Submit already allowed finishes and reports.
+ */
+export async function stopAllAction(
+  _state: RecordActionState,
+  formData: FormData,
+): Promise<RecordActionState> {
+  const manager = await requireUser();
+  if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
+  const mode = text(formData, "mode", 20);
+  if (mode !== "generation" && mode !== "apply") return { error: "Choose Generation or Apply to stop.", success: null };
+
+  const now = new Date();
+  if (mode === "generation") {
+    await db.batch([
+      db.update(users)
+        .set({ generationStopVersion: sql`${users.generationStopVersion} + 1`, updatedAt: now })
+        .where(eq(users.id, manager.id)),
+      db.update(jobs)
+        .set({
+          generationStatus: "queued",
+          generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)`,
+          generationLeaseExpiresAt: null,
+          generationBrowserId: null,
+          generationError: "Stopped from the Jobs page; queued again.",
+          updatedAt: now,
+        })
+        .where(and(eq(jobs.managerId, manager.id), eq(jobs.generationStatus, "processing"))),
+    ]);
+  } else {
+    await db.batch([
+      db.update(users)
+        .set({ applyStopVersion: sql`${users.applyStopVersion} + 1`, updatedAt: now })
+        .where(eq(users.id, manager.id)),
+      // Claims that never reached Submit are dropped, so a stop does not count as a failed try.
+      db.delete(applyAttempts)
+        .where(and(eq(applyAttempts.managerId, manager.id), eq(applyAttempts.status, "claimed"))),
+    ]);
+  }
+  revalidatePath("/jobs");
+  return {
+    error: null,
+    success: mode === "generation"
+      ? "Generation stops in every Chrome within about 30 seconds; its jobs were queued again."
+      : "Apply stops in every Chrome within about 30 seconds. Applications already submitted finish and report their result.",
+  };
+}

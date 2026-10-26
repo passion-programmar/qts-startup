@@ -9,6 +9,7 @@ import {
   updateManagerTextHighlightAccessAction,
   updateManagerPageExclusionAccessAction,
   updateManagerJobDetectionUrlAccessAction,
+  updateManagerApplyAction,
   updateManagerGeminiMatchingAction,
   type PromptActionState,
 } from "@/app/settings/actions";
@@ -204,6 +205,60 @@ export function ManagerGeminiMatchingForm({
           {isPending ? "Saving..." : useGemini ? "Remove Gemini" : "Assign Gemini"}
         </button>
       </form>
+      <ActionFeedback state={state} />
+    </div>
+  );
+}
+
+export function ManagerApplyForm({
+  managerId,
+  canUseApply,
+  aiMode,
+}: {
+  managerId: string;
+  canUseApply: boolean;
+  aiMode: string;
+}) {
+  const [state, formAction, isPending] = useActionState(updateManagerApplyAction, initialState);
+  const usesGemini = aiMode === "gemini";
+
+  return (
+    <div className="min-w-0 space-y-2">
+      <form action={formAction} className="flex flex-wrap items-center gap-2">
+        <input name="managerId" type="hidden" value={managerId} />
+        <input name="enabled" type="hidden" value={String(!canUseApply)} />
+        <span className={`text-xs font-medium ${canUseApply ? "text-emerald-700" : "text-slate-500"}`}>
+          {canUseApply ? "Apply on" : "Apply off"}
+        </span>
+        <button
+          className={`inline-flex h-8 items-center rounded-lg px-3 text-[11px] font-semibold disabled:opacity-60 ${
+            canUseApply
+              ? "border border-rose-200 text-rose-700 hover:bg-rose-50"
+              : "bg-indigo-600 text-white hover:bg-indigo-700"
+          }`}
+          disabled={isPending}
+          type="submit"
+        >
+          {isPending && <LoadingIcon className="mr-1 size-3.5" />}
+          {isPending ? "Saving..." : canUseApply ? "Turn off" : "Turn on"}
+        </button>
+      </form>
+      {canUseApply && (
+        <form action={formAction} className="flex flex-wrap items-center gap-2">
+          <input name="managerId" type="hidden" value={managerId} />
+          <input name="aiMode" type="hidden" value={usesGemini ? "chatgpt" : "gemini"} />
+          <span className="text-xs font-medium text-slate-700">
+            Answers: {usesGemini ? "Gemini" : "ChatGPT"}
+          </span>
+          <button
+            className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={isPending}
+            type="submit"
+          >
+            Use {usesGemini ? "ChatGPT" : "Gemini"}
+          </button>
+        </form>
+      )}
       <ActionFeedback state={state} />
     </div>
   );

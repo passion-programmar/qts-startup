@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
+import { MIN_WORK_EXTENSION_VERSION } from "@/server/apply/apply-values";
+import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
 
 const leaseDurationMs = 20 * 60 * 1000;
@@ -82,6 +84,17 @@ export async function POST(request: Request): Promise<NextResponse> {
         expiredLease,
       ));
 
+    // Each Chrome processes one job at a time; an extension that sends no Chrome identity keeps the
+    // older rule of one job per Manager.
+    const browser = await resolveExtensionBrowser(manager.id, request);
+    if (browser && !browser.canTakeWork) {
+      return NextResponse.json(
+        { success: false, message: `Update the QTS extension to version ${MIN_WORK_EXTENSION_VERSION} or newer to run Generation.` },
+        { status: 426 },
+      );
+    }
+    const sameChrome = browser ? [eq(jobs.generationBrowserId, browser.id)] : [];
+
     const [activeJob] = await db
         .select({ id: jobs.id })
         .from(jobs)
@@ -89,6 +102,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           eq(jobs.managerId, manager.id),
           eq(jobs.generationStatus, "processing"),
           gt(jobs.generationLeaseExpiresAt, now),
+          ...sameChrome,
         ))
         .limit(1);
     if (activeJob) {
@@ -136,6 +150,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             generationAttemptCount: sql`${jobs.generationAttemptCount} + 1`,
             generationError: null,
             generationLeaseExpiresAt: new Date(now.getTime() + leaseDurationMs),
+            generationBrowserId: browser?.id ?? null,
             updatedAt: now,
           })
           .where(and(
@@ -153,6 +168,7 @@ export async function POST(request: Request): Promise<NextResponse> {
               eq(jobs.managerId, manager.id),
               eq(jobs.generationStatus, "processing"),
               gt(jobs.generationLeaseExpiresAt, now),
+              ...sameChrome,
             ))
             .limit(1);
           if (anotherActiveJob) {

@@ -435,6 +435,13 @@
       "when": 1792988212906,
       "tag": "0061_experience_work_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1793011493081,
+      "tag": "0062_apply_foundation",
+      "breakpoints": true
     }
   ]
 }

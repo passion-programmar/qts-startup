@@ -62,6 +62,17 @@ type UserRow = {
   jd_matching: string | null;
   category_id: string | null;
   category_name: string | null;
+  work_authorization: string | null;
+  needs_sponsorship: boolean | null;
+  notice_period: string | null;
+  salary_expectation_amount: number | null;
+  salary_expectation_currency: string | null;
+  salary_expectation_period: string | null;
+  years_of_experience: number | null;
+  willing_to_relocate: boolean | null;
+  github_url: string | null;
+  portfolio_url: string | null;
+  eeo_preference: string | null;
 };
 
 function userName(user: UserRow): string {
@@ -116,6 +127,17 @@ export default async function UsersPage() {
       profiles.postal_code,
       profiles.jd_matching,
       profiles.category_id,
+      profiles.work_authorization,
+      profiles.needs_sponsorship,
+      profiles.notice_period,
+      profiles.salary_expectation_amount,
+      profiles.salary_expectation_currency,
+      profiles.salary_expectation_period,
+      profiles.years_of_experience,
+      profiles.willing_to_relocate,
+      profiles.github_url,
+      profiles.portfolio_url,
+      profiles.eeo_preference,
       categories.name as category_name
     from visible_users
     left join profiles on profiles.user_id = visible_users.id
@@ -344,6 +366,17 @@ export default async function UsersPage() {
                           postalCode: candidate.postal_code,
                           jdMatching: candidate.jd_matching,
                           categoryId: candidate.category_id,
+                          workAuthorization: candidate.work_authorization,
+                          needsSponsorship: candidate.needs_sponsorship,
+                          noticePeriod: candidate.notice_period,
+                          salaryExpectationAmount: candidate.salary_expectation_amount,
+                          salaryExpectationCurrency: candidate.salary_expectation_currency,
+                          salaryExpectationPeriod: candidate.salary_expectation_period,
+                          yearsOfExperience: candidate.years_of_experience,
+                          willingToRelocate: candidate.willing_to_relocate,
+                          githubUrl: candidate.github_url,
+                          portfolioUrl: candidate.portfolio_url,
+                          eeoPreference: candidate.eeo_preference ?? "prefer_not_to_say",
                           education: (educationByCandidate.get(candidate.id) ?? []).map(
                             (entry) => ({
                               institution: entry.institution,

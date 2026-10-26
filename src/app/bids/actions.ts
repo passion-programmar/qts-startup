@@ -2,7 +2,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { bids, profiles, users } from "@/db/schema";
+import { applyAttempts, bids, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { markRowsWithBidApplied, resetRowsWithoutBid } from "@/server/jobs/job-bids";
@@ -80,3 +80,31 @@ export async function deleteBidAction(_state: RecordActionState, formData: FormD
 
 function text(data: FormData, name: string, max: number): string { const value = data.get(name); return typeof value === "string" ? value.trim().slice(0, max) : ""; }
 function uuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
+
+/** The Manager checked a "Submitted — not confirmed" application (for example its screenshot) and confirms it. */
+export async function confirmBidAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
+  const manager = await requireUser();
+  if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
+  const id = text(formData, "id", 36);
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: "Select a valid bid.", success: null };
+  const now = new Date();
+  const [bid] = await db
+    .update(bids)
+    .set({ confirmationStatus: "confirmed", confirmationSource: "manager", updatedAt: now })
+    .where(and(eq(bids.id, id), eq(bids.managerId, manager.id), eq(bids.confirmationStatus, "not_confirmed")))
+    .returning({ applyAttemptId: bids.applyAttemptId });
+  if (!bid) return { error: "That bid is not waiting for confirmation.", success: null };
+  if (bid.applyAttemptId) {
+    await db
+      .update(applyAttempts)
+      .set({ status: "confirmed", updatedAt: now })
+      .where(and(
+        eq(applyAttempts.id, bid.applyAttemptId),
+        eq(applyAttempts.managerId, manager.id),
+        eq(applyAttempts.status, "not_confirmed"),
+      ));
+  }
+  revalidatePath("/bids");
+  revalidatePath("/jobs");
+  return { error: null, success: "Marked as confirmed." };
+}

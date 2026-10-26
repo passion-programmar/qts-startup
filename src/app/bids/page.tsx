@@ -6,6 +6,7 @@ import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { BidActions } from "@/app/components/record-forms";
 import { GenerationSetup } from "@/app/components/generation-setup";
+import { ConfirmBidAction } from "@/app/bids/confirm-bid-action";
 import { bids, categories, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
@@ -43,6 +44,9 @@ export default async function BidsPage() {
       promptName: prompts.name,
       promptVersion: prompts.version,
       pdfTemplate: bids.pdfTemplate,
+      confirmationStatus: bids.confirmationStatus,
+      confirmationSource: bids.confirmationSource,
+      screenshotBrowserName: bids.screenshotBrowserName,
     })
     .from(bids)
     .innerJoin(profiles, eq(profiles.userId, bids.candidateId))
@@ -93,7 +97,20 @@ export default async function BidsPage() {
               row.location ?? "—",
               [row.employmentType, row.workplaceType].filter(Boolean).join(" · ") || "—",
               row.salary ?? "—",
-              formatDate(row.appliedAt),
+              <div key="applied">
+                {formatDate(row.appliedAt)}
+                {row.confirmationStatus === "not_confirmed" ? (
+                  <span className="mt-1 block">
+                    <span className="block text-[10px] font-semibold text-amber-700">Not confirmed</span>
+                    {row.screenshotBrowserName && (
+                      <span className="block text-[10px] text-slate-500">Screenshot saved on {row.screenshotBrowserName}</span>
+                    )}
+                    <ConfirmBidAction id={row.id} />
+                  </span>
+                ) : row.confirmationSource === "email" ? (
+                  <span className="mt-1 block text-[10px] text-slate-500">Confirmed by email</span>
+                ) : null}
+              </div>,
               row.resumeLocalPath,
               row.googleDrivePath ?? "—",
               <GenerationSetup

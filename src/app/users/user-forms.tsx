@@ -443,6 +443,17 @@ export type CandidateProfileValues = {
   postalCode: string | null;
   jdMatching: string | null;
   categoryId: string | null;
+  workAuthorization: string | null;
+  needsSponsorship: boolean | null;
+  noticePeriod: string | null;
+  salaryExpectationAmount: number | null;
+  salaryExpectationCurrency: string | null;
+  salaryExpectationPeriod: string | null;
+  yearsOfExperience: number | null;
+  willingToRelocate: boolean | null;
+  githubUrl: string | null;
+  portfolioUrl: string | null;
+  eeoPreference: string;
   education: {
     institution: string;
     degree: string | null;
@@ -629,6 +640,7 @@ export function EditCandidateProfileForm({
             options={categories}
           />
           </div>
+          <ApplicationFactsSection candidate={candidate} fieldId={fieldId} />
           <HistorySection
             addRow={() =>
               setEducationRows((rows) => [nextEducationRowId.current++, ...rows])
@@ -1194,6 +1206,174 @@ function WorkModeField({ id, defaultValue = "" }: { id: string; defaultValue?: s
         <option value="remote">Remote</option>
         <option value="hybrid">Hybrid</option>
         <option value="onsite">Onsite</option>
+      </select>
+    </div>
+  );
+}
+
+function yesNoValue(value: boolean | null): string {
+  return value === null ? "" : value ? "yes" : "no";
+}
+
+const YES_NO_OPTIONS = [
+  { value: "", label: "Not set" },
+  { value: "no", label: "No" },
+  { value: "yes", label: "Yes" },
+];
+
+// Facts application forms ask for. Apply fills them only from here and stops when one is missing.
+function ApplicationFactsSection({
+  candidate,
+  fieldId,
+}: {
+  candidate: CandidateProfileValues;
+  fieldId: (field: string) => string;
+}) {
+  return (
+    <section className="space-y-3">
+      <input name="applicationFacts" type="hidden" value="1" />
+      <div>
+        <h3 className="text-sm font-semibold text-slate-800">Application facts</h3>
+        <p className="mt-1 text-xs text-slate-500">
+          Apply answers these questions only from here; when a form needs a fact that is empty, it stops and asks you.
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="sm:col-span-2 lg:col-span-3">
+          <TextField
+            autoComplete="off"
+            defaultValue={candidate.workAuthorization ?? ""}
+            id={fieldId("workAuthorization")}
+            label="Work authorization"
+            maxLength={300}
+            name="workAuthorization"
+            placeholder="EU citizen; UK right to work"
+          />
+        </div>
+        <ChoiceField
+          defaultValue={yesNoValue(candidate.needsSponsorship)}
+          id={fieldId("needsSponsorship")}
+          label="Needs visa sponsorship"
+          name="needsSponsorship"
+          options={YES_NO_OPTIONS}
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.noticePeriod ?? ""}
+          id={fieldId("noticePeriod")}
+          label="Notice period"
+          maxLength={100}
+          name="noticePeriod"
+          placeholder="1 month"
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.yearsOfExperience === null ? "" : String(candidate.yearsOfExperience)}
+          id={fieldId("yearsOfExperience")}
+          inputMode="numeric"
+          label="Years of experience"
+          maxLength={2}
+          name="yearsOfExperience"
+          pattern="[0-9]{1,2}"
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.salaryExpectationAmount === null ? "" : String(candidate.salaryExpectationAmount)}
+          id={fieldId("salaryExpectationAmount")}
+          inputMode="numeric"
+          label="Salary expectation"
+          maxLength={12}
+          name="salaryExpectationAmount"
+          pattern="[0-9]+"
+          placeholder="70000"
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.salaryExpectationCurrency ?? ""}
+          id={fieldId("salaryExpectationCurrency")}
+          label="Salary currency"
+          maxLength={3}
+          name="salaryExpectationCurrency"
+          placeholder="EUR"
+        />
+        <ChoiceField
+          defaultValue={candidate.salaryExpectationPeriod ?? ""}
+          id={fieldId("salaryExpectationPeriod")}
+          label="Salary period"
+          name="salaryExpectationPeriod"
+          options={[
+            { value: "", label: "Not set" },
+            { value: "year", label: "Per year" },
+            { value: "month", label: "Per month" },
+            { value: "hour", label: "Per hour" },
+          ]}
+        />
+        <ChoiceField
+          defaultValue={yesNoValue(candidate.willingToRelocate)}
+          id={fieldId("willingToRelocate")}
+          label="Willing to relocate"
+          name="willingToRelocate"
+          options={YES_NO_OPTIONS}
+        />
+        <ChoiceField
+          defaultValue={candidate.eeoPreference}
+          id={fieldId("eeoPreference")}
+          label="Diversity (EEO) questions"
+          name="eeoPreference"
+          options={[
+            { value: "prefer_not_to_say", label: "Prefer not to say" },
+            { value: "answer_from_profile", label: "Answer from the profile" },
+          ]}
+        />
+        <TextField
+          autoComplete="url"
+          defaultValue={candidate.githubUrl ?? ""}
+          id={fieldId("githubUrl")}
+          label="GitHub (optional)"
+          maxLength={2048}
+          name="githubUrl"
+          placeholder="github.com/username"
+        />
+        <TextField
+          autoComplete="url"
+          defaultValue={candidate.portfolioUrl ?? ""}
+          id={fieldId("portfolioUrl")}
+          label="Portfolio or website (optional)"
+          maxLength={2048}
+          name="portfolioUrl"
+        />
+      </div>
+    </section>
+  );
+}
+
+function ChoiceField({
+  id,
+  label,
+  name,
+  options,
+  defaultValue,
+}: {
+  id: string;
+  label: string;
+  name: string;
+  options: { value: string; label: string }[];
+  defaultValue: string;
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor={id}>
+        {label}
+      </label>
+      <select
+        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+        defaultValue={defaultValue}
+        id={id}
+        name={name}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
       </select>
     </div>
   );

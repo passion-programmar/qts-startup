@@ -20,6 +20,7 @@ import {
   sortProfileHistoryNewestFirst,
 } from "@/server/users/profile-values";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
+import { readApplicationFacts } from "@/server/users/application-facts";
 
 export type UserActionState = {
   error: string | null;
@@ -387,6 +388,8 @@ export async function updateCandidateProfileAction(
   if (educationError) return { ...emptyState, error: educationError };
   const experienceError = validateExperienceRows(experienceRows);
   if (experienceError) return { ...emptyState, error: experienceError };
+  const applicationFacts = readApplicationFacts(formData);
+  if (typeof applicationFacts === "string") return { ...emptyState, error: applicationFacts };
 
   try {
     if (values.categoryId) {
@@ -490,6 +493,27 @@ export async function updateCandidateProfileAction(
         where users.id = ${userId}::uuid and users.role = 'account'
           and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
       `,
+      // Facts that application forms ask for; a form opened before this section existed leaves them as they are.
+      ...(applicationFacts ? [tx`
+        update profiles
+        set work_authorization = ${applicationFacts.workAuthorization},
+          needs_sponsorship = ${applicationFacts.needsSponsorship},
+          notice_period = ${applicationFacts.noticePeriod},
+          salary_expectation_amount = ${applicationFacts.salaryExpectationAmount},
+          salary_expectation_currency = ${applicationFacts.salaryExpectationCurrency},
+          salary_expectation_period = ${applicationFacts.salaryExpectationPeriod},
+          years_of_experience = ${applicationFacts.yearsOfExperience},
+          willing_to_relocate = ${applicationFacts.willingToRelocate},
+          github_url = ${applicationFacts.githubUrl},
+          portfolio_url = ${applicationFacts.portfolioUrl},
+          eeo_preference = ${applicationFacts.eeoPreference}
+        where profiles.user_id = ${userId}::uuid
+          and exists (
+            select 1 from users
+            where users.id = profiles.user_id and users.role = 'account'
+              and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+          )
+      `] : []),
     ]);
 
     if (results[0].length === 0) {

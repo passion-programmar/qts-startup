@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { jobs } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
+import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -14,6 +15,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    // Cancel in a launcher stops only that Chrome's Generation; "Stop all" on the Jobs page stops
+    // every Chrome. Extensions that send no Chrome identity still cancel all of the Manager's jobs.
+    const browser = await resolveExtensionBrowser(manager.id, request);
     const cancelled = await db
       .update(jobs)
       .set({
@@ -26,6 +30,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       .where(and(
         eq(jobs.managerId, manager.id),
         eq(jobs.generationStatus, "processing"),
+        ...(browser ? [eq(jobs.generationBrowserId, browser.id)] : []),
       ))
       .returning({ id: jobs.id });
 
