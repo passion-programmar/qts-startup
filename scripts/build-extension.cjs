@@ -1,5 +1,6 @@
-// Builds the unpacked Chrome extension: dist/extension (minified, for
-// "Load unpacked") and dist/qts-extension-<version>.zip for sharing.
+// Builds dist/qts-extension-<version>.zip (minified) for sharing with other PCs.
+// Chrome on this PC loads extension/ itself, so the zip is the only build output:
+// older zips and unpacked build folders in dist/ are removed.
 // Files stay one-to-one with extension/ because the extension loads them by
 // path (manifest, importScripts, chrome.scripting.executeScript).
 
@@ -11,7 +12,6 @@ const esbuild = require("esbuild");
 const root = path.resolve(__dirname, "..");
 const sourceDir = path.join(root, "extension");
 const distDir = path.join(root, "dist");
-const outputDir = path.join(distDir, "extension");
 
 function listFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -21,9 +21,7 @@ function listFiles(dir) {
 }
 
 async function buildFile(sourcePath) {
-  const relativePath = path.relative(sourceDir, sourcePath);
-  const outputPath = path.join(outputDir, relativePath);
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  const name = path.relative(sourceDir, sourcePath).split(path.sep).join("/");
   const extension = path.extname(sourcePath);
   if (extension === ".js" || extension === ".css") {
     // Without a module format esbuild keeps top-level names, which these
@@ -34,11 +32,9 @@ async function buildFile(sourcePath) {
       target: "chrome120",
       legalComments: "none",
     });
-    fs.writeFileSync(outputPath, result.code);
-  } else {
-    fs.copyFileSync(sourcePath, outputPath);
+    return { name, data: Buffer.from(result.code, "utf8") };
   }
-  return relativePath.split(path.sep).join("/");
+  return { name, data: fs.readFileSync(sourcePath) };
 }
 
 // Minimal ZIP writer (deflate, no external dependency).
@@ -85,25 +81,33 @@ function createZip(entries) {
   return Buffer.concat([...localParts, ...centralParts, end]);
 }
 
+// Earlier builds: the unpacked dist/extension folder and every qts-extension-* zip or folder.
+function removeOldBuilds() {
+  if (!fs.existsSync(distDir)) return;
+  for (const entry of fs.readdirSync(distDir)) {
+    if (entry === "extension" || entry.startsWith("qts-extension-")) {
+      fs.rmSync(path.join(distDir, entry), { recursive: true, force: true });
+    }
+  }
+}
+
 async function main() {
-  fs.rmSync(outputDir, { recursive: true, force: true });
   const sourceFiles = listFiles(sourceDir).filter((file) => !file.endsWith(".test.js"));
   const builtFiles = [];
   for (const file of sourceFiles) builtFiles.push(await buildFile(file));
-  builtFiles.sort();
+  builtFiles.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   const { version } = JSON.parse(fs.readFileSync(path.join(sourceDir, "manifest.json"), "utf8"));
   const zipPath = path.join(distDir, `qts-extension-${version}.zip`);
-  const zip = createZip(builtFiles.map((name) => ({
-    name,
-    data: fs.readFileSync(path.join(outputDir, name)),
-  })));
+  const zip = createZip(builtFiles);
+  removeOldBuilds();
+  fs.mkdirSync(distDir, { recursive: true });
   fs.writeFileSync(zipPath, zip);
 
-  const sizeOf = (files, dir) => files.reduce((size, file) => size + fs.statSync(path.join(dir, file)).size, 0);
-  const sourceSize = sizeOf(sourceFiles.map((file) => path.relative(sourceDir, file)), sourceDir);
-  console.log(`Built ${builtFiles.length} files into ${path.relative(root, outputDir)}`);
-  console.log(`Size: ${Math.round(sourceSize / 1024)} KB -> ${Math.round(sizeOf(builtFiles, outputDir) / 1024)} KB`);
+  const sourceSize = sourceFiles.reduce((size, file) => size + fs.statSync(file).size, 0);
+  const builtSize = builtFiles.reduce((size, file) => size + file.data.length, 0);
+  console.log(`Built ${builtFiles.length} files`);
+  console.log(`Size: ${Math.round(sourceSize / 1024)} KB -> ${Math.round(builtSize / 1024)} KB`);
   console.log(`Zip: ${path.relative(root, zipPath)} (${Math.round(zip.length / 1024)} KB)`);
 }
 
