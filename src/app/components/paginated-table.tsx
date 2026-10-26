@@ -33,7 +33,8 @@ export function PaginatedTable({
   );
 
   return (
-    <div className={`paginated-table min-w-0 overflow-hidden bg-white ${embedded ? "" : "rounded-2xl border border-slate-200 shadow-sm"}`}>
+    // overflow-clip rounds the corners like overflow-hidden but still lets the pagination bar stick.
+    <div className={`paginated-table min-w-0 overflow-clip bg-white ${embedded ? "" : "rounded-2xl border border-slate-200 shadow-sm"}`}>
       <div
         aria-label="Table data; scroll horizontally to see all columns"
         className="paginated-table__scroll"
@@ -81,7 +82,8 @@ export function PaginatedTable({
           </tbody>
         </table>
       </div>
-      <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/50 px-4 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+      {/* The pagination bar stays at the bottom of the screen while the table scrolls past it. */}
+      <div className="paginated-table__pager sticky bottom-0 z-10 flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500 shadow-[0_-4px_12px_-8px_rgba(15,23,42,0.25)] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <span>
             {rows.length === 0
