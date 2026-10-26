@@ -142,7 +142,6 @@ export async function claimNextApplication(
       )`,
       githubUrl: profiles.githubUrl,
       portfolioUrl: profiles.portfolioUrl,
-      eeoPreference: profiles.eeoPreference,
       nationality: profiles.nationality,
       languages: profiles.languages,
       aiMode: users.applyAiMode,

@@ -447,3 +447,22 @@ test('with static facts only, relocation and notice come from reusable answers; 
   assert.deepEqual(missing.map((entry) => entry.fact), ['visa sponsorship']);
   assert.deepEqual(open.map((entry) => entry.id), ['Will you require visa sponsorship?']);
 });
+
+test('diversity questions take Super Admin\'s reusable answers by topic, else decline, never a guess', () => {
+  const row = (questionText, answer) => ({ questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
+  const reusable = [row('Gender', 'Prefer not to say'), row('Veteran status', 'I am not a protected veteran')];
+  const { answers: resolved, open } = answers.resolveFields([
+    field('What is your gender identity?', { kind: 'select', options: ['Man', 'Woman', 'Non-binary', 'Prefer not to say'] }),
+    field('Protected veteran status', { kind: 'radio', options: ['I am a protected veteran', 'I am not a protected veteran', 'I decline to answer'] }),
+    field('Race / Ethnicity', { kind: 'select', options: ['Asian', 'White', 'Decline to self-identify'] }),
+    field('Sexual orientation', { required: false, kind: 'select', options: ['Heterosexual', 'Gay', 'Bisexual'] }),
+    field('Gender', { id: 'no-decline', kind: 'radio', options: ['Male', 'Female'] }),
+  ], { firstName: 'Anna', lastName: 'Kowalska' }, reusable);
+  assert.equal(resolved['What is your gender identity?'].value, 'Prefer not to say');
+  assert.equal(resolved['Protected veteran status'].value, 'I am not a protected veteran');
+  assert.equal(resolved['Race / Ethnicity'].value, 'Decline to self-identify');
+  assert.equal(resolved['Sexual orientation'], undefined);
+  // "Prefer not to say" is not a choice here: the AI gets the reusable answer and is told not to guess.
+  assert.deepEqual(open.map((entry) => entry.id), ['no-decline']);
+  assert.match(open[0].hint, /"Prefer not to say".*never infer it from the name/);
+});

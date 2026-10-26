@@ -1254,7 +1254,7 @@ function ApplicationFactsSection({
     >
       <input name="applicationFacts" type="hidden" value="1" />
       <p className="text-xs text-slate-500">
-        Static facts about this candidate. Salary, notice, sponsorship, right to work, relocation, and job preferences are the same for every candidate: Super Admin keeps them as reusable answers in Settings.
+        Static facts about this candidate. Salary, notice, sponsorship, right to work, relocation, job preferences, and diversity questions are the same for every candidate: Super Admin keeps them as reusable answers in Settings.
       </p>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <TextField
@@ -1301,52 +1301,11 @@ function ApplicationFactsSection({
           maxLength={2048}
           name="portfolioUrl"
         />
-        <ChoiceField
-          defaultValue={candidate.eeoPreference}
-          id={fieldId("eeoPreference")}
-          label="Diversity (EEO) questions"
-          name="eeoPreference"
-          options={[
-            { value: "prefer_not_to_say", label: "Prefer not to say" },
-            { value: "answer_from_profile", label: "Answer from the profile" },
-          ]}
-        />
       </div>
     </FormCard>
   );
 }
 
-function ChoiceField({
-  id,
-  label,
-  name,
-  options,
-  defaultValue,
-}: {
-  id: string;
-  label: string;
-  name: string;
-  options: { value: string; label: string }[];
-  defaultValue: string;
-}) {
-  return (
-    <div>
-      <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor={id}>
-        {label}
-      </label>
-      <select
-        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
-        defaultValue={defaultValue}
-        id={id}
-        name={name}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
-    </div>
-  );
-}
 
 function SelectField({
   id,

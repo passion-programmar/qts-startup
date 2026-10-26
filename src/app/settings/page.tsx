@@ -239,7 +239,7 @@ export default async function SettingsPage() {
 
         <SettingsCard summary={`${reusableAnswerRows.length} answers`} title="Reusable answers">
           <p className="mb-4 text-xs leading-5 text-slate-500">
-            Answers to application questions, the same for every candidate. Salary, notice, sponsorship, relocation, right to work, and job preferences come from here; the candidate&apos;s static profile facts (name, contacts, nationality, languages) come first for everything else. An answer that does not fit a field goes to ChatGPT as a hint.
+            Answers to application questions, the same for every candidate. Salary, notice, sponsorship, relocation, right to work, job preferences, and diversity questions (gender, ethnicity, veteran, disability) come from here; without a diversity answer Apply declines. The candidate&apos;s static profile facts (name, contacts, nationality, languages) come first for everything else. An answer that does not fit a field goes to ChatGPT as a hint.
           </p>
           <div className="space-y-3">
             {reusableAnswerRows.map((answer) => (

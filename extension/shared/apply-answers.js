@@ -296,6 +296,14 @@
     { topic: 'open to opportunities', test: /open to (new )?(opportunit|roles|offers)/ },
     { topic: 'area of interest', test: /areas? of interest|fields? of interest|area (you are|you're) interested/ },
     { topic: 'preferred location', test: /regional cent(re|er)|preferred (office|location|cent(re|er)|site|campus|city)/ },
+    // Diversity questions, one topic each, so "Gender" and "What is your gender identity?" share an answer.
+    { topic: 'pronouns', test: /\bpronouns?\b/ },
+    { topic: 'sexual orientation', test: /sexual orientation/ },
+    { topic: 'transgender', test: /transgender|trans experience/ },
+    { topic: 'gender', test: /\bgender\b|\bsex\b/ },
+    { topic: 'race or ethnicity', test: /\brace\b|racial|ethnic|hispanic|latin[oa]/ },
+    { topic: 'veteran', test: /veteran/ },
+    { topic: 'disability', test: /disabilit/ },
   ];
   const FACT_TOPICS = new Set(['salary', 'notice', 'sponsorship', 'relocation']);
   // Yes/no reusable answers that stand in for these profile facts.
@@ -382,13 +390,23 @@
       if (letter && (!field.maxLength || letter.length <= field.maxLength)) return { value: letter, source: 'documents' };
       return null;
     }
+    // Diversity questions (gender, race, veteran, disability...): Super Admin's reusable answer for
+    // the question or its topic, else the form's decline option, else empty when optional. A required
+    // one without either goes to the AI, which picks the declining or most neutral choice.
     if (EEO.test(label)) {
-      if (candidate.eeoPreference === 'prefer_not_to_say') {
-        const option = pickOption(field, DECLINE);
-        if (option) return { value: option, source: 'profile' };
-        return field.required ? null : { skip: 'Optional diversity question left unanswered.' };
+      const key = normalizeQuestionKey(field.label);
+      const topic = topicOf(field.label);
+      const row = (savedAnswers || []).find((entry) => entry.questionKey === key)
+        ?? (topic ? topicAnswer(field, topic, savedAnswers) : null);
+      const neutral = 'Choose the option that declines or is most neutral; never infer it from the name, photo, or résumé.';
+      if (row) {
+        const reused = reusableAnswer(field, row);
+        return reused.ask ? { ...reused, note: [reused.note, neutral].filter(Boolean).join(' ') } : reused;
       }
-      return null;
+      const option = pickOption(field, DECLINE);
+      if (option) return { value: option, source: 'rule' };
+      if (!field.required) return { skip: 'Optional diversity question left unanswered.' };
+      return { ask: 'Prefer not to say', from: 'reusable', note: neutral };
     }
     // Questions about someone else (a referrer, an employee you spoke to) never take the candidate's facts.
     const aboutSomeoneElse = /\b(employee|referr\w*|recruiter|their|someone|who referred|hiring manager)\b/.test(label);

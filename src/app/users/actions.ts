@@ -499,8 +499,7 @@ export async function updateCandidateProfileAction(
         set nationality = ${applicationFacts.nationality},
           languages = ${applicationFacts.languages},
           github_url = ${applicationFacts.githubUrl},
-          portfolio_url = ${applicationFacts.portfolioUrl},
-          eeo_preference = ${applicationFacts.eeoPreference}
+          portfolio_url = ${applicationFacts.portfolioUrl}
         where profiles.user_id = ${userId}::uuid
           and exists (
             select 1 from users
