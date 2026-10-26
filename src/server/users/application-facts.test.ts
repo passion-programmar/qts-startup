@@ -26,6 +26,14 @@ test("facts are parsed and normalized", () => {
     githubUrl: "github.com/anna",
     portfolioUrl: "",
     eeoPreference: "prefer_not_to_say",
+    nationality: " Polish ",
+    workCountries: "EU, UK",
+    workPermitExpiry: "",
+    languages: "English C1, Polish C2",
+    contractType: "b2b",
+    workHours: "full_time",
+    workMode: "",
+    applicationNotes: "Prefers B2B.\r\n\r\n\r\nAvailable for interviews  on weekdays.",
   })), {
     workAuthorization: "EU citizen",
     needsSponsorship: false,
@@ -38,6 +46,14 @@ test("facts are parsed and normalized", () => {
     githubUrl: "https://github.com/anna",
     portfolioUrl: null,
     eeoPreference: "prefer_not_to_say",
+    nationality: "Polish",
+    workCountries: "EU, UK",
+    workPermitExpiry: null,
+    languages: "English C1, Polish C2",
+    contractType: "b2b",
+    workHours: "full_time",
+    workMode: null,
+    applicationNotes: "Prefers B2B.\n\nAvailable for interviews on weekdays.",
   });
 });
 
@@ -46,6 +62,9 @@ test("invalid facts are refused with a reason", () => {
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", salaryExpectationAmount: "70000" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", salaryExpectationCurrency: "euro" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", needsSponsorship: "maybe" })), "string");
+  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", workPermitExpiry: "2027-02-30" })), "string");
+  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", contractType: "freelance" })), "string");
+  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", workMode: "anywhere" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", noticePeriod: "1 month" })), "string");
 });
 

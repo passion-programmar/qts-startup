@@ -1,7 +1,7 @@
 import "server-only";
 
-import { and, eq, inArray, lt, sql } from "drizzle-orm";
-import { applyAttempts, bids, candidateSavedAnswers, jobs, profiles, users } from "@/db/schema";
+import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { applyAttempts, bids, candidateSavedAnswers, jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { deliveredGenerationRunId, jobHasBid, markRowsWithBidApplied } from "@/server/jobs/job-bids";
 import type { ExtensionBrowser } from "@/server/browsers/extension-browsers";
@@ -65,7 +65,26 @@ export type ClaimedApplication = {
   savedAnswers: { questionKey: string; questionText: string; answer: string }[];
   // For salary questions in another currency; null when the candidate has no salary or the ECB is unreachable.
   exchangeRates: ExchangeRates | null;
+  // Super Admin's default ChatGPT prompt for application answers; null means Apply's built-in one.
+  answerPrompt: { id: string; template: string } | null;
 };
+
+/** Super Admin's default ChatGPT prompt for Apply answers (Settings), or null when none is set. */
+async function defaultAnswerPrompt(): Promise<{ id: string; template: string } | null> {
+  const [row] = await db
+    .select({ id: prompts.id, template: prompts.promptTemplate })
+    .from(prompts)
+    .where(and(
+      eq(prompts.provider, "openai"),
+      eq(prompts.purpose, "application_answer"),
+      eq(prompts.isActive, true),
+      eq(prompts.isDefault, true),
+      isNull(prompts.ownerManagerId),
+      isNull(prompts.archivedAt),
+    ))
+    .limit(1);
+  return row?.template.trim() ? row : null;
+}
 
 /** The next application for this Chrome, or null when none is ready or the limit of 3 is reached. */
 export async function claimNextApplication(
@@ -125,6 +144,14 @@ export async function claimNextApplication(
       githubUrl: profiles.githubUrl,
       portfolioUrl: profiles.portfolioUrl,
       eeoPreference: profiles.eeoPreference,
+      nationality: profiles.nationality,
+      workCountries: profiles.workCountries,
+      workPermitExpiry: profiles.workPermitExpiry,
+      languages: profiles.languages,
+      contractType: profiles.contractType,
+      workHours: profiles.workHours,
+      workMode: profiles.workMode,
+      applicationNotes: profiles.applicationNotes,
       aiMode: users.applyAiMode,
     })
     .from(applyAttempts)
@@ -162,6 +189,7 @@ export async function claimNextApplication(
     candidate,
     savedAnswers,
     exchangeRates: candidate.salaryExpectationAmount ? await loadExchangeRates() : null,
+    answerPrompt: await defaultAnswerPrompt(),
   };
 }
 

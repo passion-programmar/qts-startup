@@ -454,6 +454,14 @@ export type CandidateProfileValues = {
   githubUrl: string | null;
   portfolioUrl: string | null;
   eeoPreference: string;
+  nationality: string | null;
+  workCountries: string | null;
+  workPermitExpiry: string | null;
+  languages: string | null;
+  contractType: string | null;
+  workHours: string | null;
+  workMode: string | null;
+  applicationNotes: string | null;
   education: {
     institution: string;
     degree: string | null;
@@ -1235,7 +1243,7 @@ function ApplicationFactsSection({
       <div>
         <h3 className="text-sm font-semibold text-slate-800">Application facts</h3>
         <p className="mt-1 text-xs text-slate-500">
-          Apply answers these questions only from here; when a form needs a fact that is empty, it stops and asks you.
+          Apply fills form questions from these facts exactly; ChatGPT answers every other question from them, the résumé, and the job.
         </p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -1343,6 +1351,87 @@ function ApplicationFactsSection({
           label="Portfolio or website (optional)"
           maxLength={2048}
           name="portfolioUrl"
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.nationality ?? ""}
+          id={fieldId("nationality")}
+          label="Nationality"
+          maxLength={100}
+          name="nationality"
+          placeholder="Polish"
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.workCountries ?? ""}
+          id={fieldId("workCountries")}
+          label="May work without sponsorship in"
+          maxLength={300}
+          name="workCountries"
+          placeholder="EU, UK"
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.workPermitExpiry ?? ""}
+          id={fieldId("workPermitExpiry")}
+          label="Work permit expires (optional)"
+          maxLength={10}
+          name="workPermitExpiry"
+          type="date"
+        />
+        <TextField
+          autoComplete="off"
+          defaultValue={candidate.languages ?? ""}
+          id={fieldId("languages")}
+          label="Languages and levels"
+          maxLength={300}
+          name="languages"
+          placeholder="English C1, Polish C2"
+        />
+        <ChoiceField
+          defaultValue={candidate.contractType ?? ""}
+          id={fieldId("contractType")}
+          label="Contract type"
+          name="contractType"
+          options={[
+            { value: "", label: "Not set" },
+            { value: "employment", label: "Employment contract" },
+            { value: "b2b", label: "B2B / contractor" },
+            { value: "either", label: "Either" },
+          ]}
+        />
+        <ChoiceField
+          defaultValue={candidate.workHours ?? ""}
+          id={fieldId("workHours")}
+          label="Working hours"
+          name="workHours"
+          options={[
+            { value: "", label: "Not set" },
+            { value: "full_time", label: "Full-time" },
+            { value: "part_time", label: "Part-time" },
+            { value: "either", label: "Either" },
+          ]}
+        />
+        <ChoiceField
+          defaultValue={candidate.workMode ?? ""}
+          id={fieldId("workMode")}
+          label="Work mode"
+          name="workMode"
+          options={[
+            { value: "", label: "Not set" },
+            { value: "remote", label: "Remote" },
+            { value: "hybrid", label: "Hybrid" },
+            { value: "onsite", label: "On-site" },
+            { value: "any", label: "Any" },
+          ]}
+        />
+        <TextAreaField
+          className="sm:col-span-2 lg:col-span-3"
+          defaultValue={candidate.applicationNotes ?? ""}
+          id={fieldId("applicationNotes")}
+          label="Notes for application answers (ChatGPT reads these)"
+          maxLength={2000}
+          name="applicationNotes"
         />
       </div>
     </section>

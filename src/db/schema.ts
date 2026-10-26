@@ -171,7 +171,7 @@ export const profiles = pgTable(
     addressLine1: text("address_line_1"),
     postalCode: text("postal_code"),
     jdMatching: text("jd_matching"),
-    // Facts application forms ask for. Apply fills them only from here and stops when one is missing.
+    // Facts application forms ask for. Apply fills what fits from here; ChatGPT answers the rest.
     workAuthorization: text("work_authorization"),
     needsSponsorship: boolean("needs_sponsorship"),
     noticePeriod: text("notice_period").default("immediately").notNull(),
@@ -183,6 +183,17 @@ export const profiles = pgTable(
     githubUrl: text("github_url"),
     portfolioUrl: text("portfolio_url"),
     eeoPreference: text("eeo_preference").default("prefer_not_to_say").notNull(),
+    nationality: text("nationality"),
+    // Countries or regions the candidate may work in without sponsorship ("EU, UK").
+    workCountries: text("work_countries"),
+    workPermitExpiry: date("work_permit_expiry", { mode: "string" }),
+    // Languages with levels ("English C1, Polish C2").
+    languages: text("languages"),
+    contractType: text("contract_type"),
+    workHours: text("work_hours"),
+    workMode: text("work_mode"),
+    // Anything else ChatGPT should know when answering application questions.
+    applicationNotes: text("application_notes"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -204,6 +215,10 @@ export const profiles = pgTable(
     check(
       "profiles_eeo_preference_check",
       sql`${table.eeoPreference} in ('prefer_not_to_say', 'answer_from_profile')`,
+    ),
+    check(
+      "profiles_work_preferences_check",
+      sql`(${table.contractType} is null or ${table.contractType} in ('employment', 'b2b', 'either')) and (${table.workHours} is null or ${table.workHours} in ('full_time', 'part_time', 'either')) and (${table.workMode} is null or ${table.workMode} in ('remote', 'hybrid', 'onsite', 'any'))`,
     ),
     uniqueIndex("profiles_candidate_email_normalized_unique")
       .on(sql`lower(btrim(${table.candidateEmail}))`)
@@ -340,7 +355,7 @@ export const prompts = pgTable(
     check("prompts_version_positive_check", sql`${table.version} > 0`),
     check(
       "prompts_provider_matches_purpose_check",
-      sql`(${table.provider} = 'openai' and ${table.purpose} = 'document_generation') or (${table.provider} = 'gemini' and ${table.purpose} in ('job_description_evaluation', 'application_answer'))`,
+      sql`(${table.provider} = 'openai' and ${table.purpose} in ('document_generation', 'application_answer')) or (${table.provider} = 'gemini' and ${table.purpose} in ('job_description_evaluation', 'application_answer'))`,
     ),
     // Managers own only document prompts, and only a library prompt can be the default.
     check(

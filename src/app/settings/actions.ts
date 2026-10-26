@@ -458,7 +458,8 @@ function isValidProviderPurpose(
   purpose: PromptPurpose,
 ): boolean {
   return (
-    (provider === "openai" && purpose === "document_generation") ||
+    (provider === "openai" &&
+      (purpose === "document_generation" || purpose === "application_answer")) ||
     (provider === "gemini" &&
       (purpose === "job_description_evaluation" ||
         purpose === "application_answer"))

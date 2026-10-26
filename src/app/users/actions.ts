@@ -506,7 +506,15 @@ export async function updateCandidateProfileAction(
           willing_to_relocate = ${applicationFacts.willingToRelocate},
           github_url = ${applicationFacts.githubUrl},
           portfolio_url = ${applicationFacts.portfolioUrl},
-          eeo_preference = ${applicationFacts.eeoPreference}
+          eeo_preference = ${applicationFacts.eeoPreference},
+          nationality = ${applicationFacts.nationality},
+          work_countries = ${applicationFacts.workCountries},
+          work_permit_expiry = ${applicationFacts.workPermitExpiry}::date,
+          languages = ${applicationFacts.languages},
+          contract_type = ${applicationFacts.contractType},
+          work_hours = ${applicationFacts.workHours},
+          work_mode = ${applicationFacts.workMode},
+          application_notes = ${applicationFacts.applicationNotes}
         where profiles.user_id = ${userId}::uuid
           and exists (
             select 1 from users

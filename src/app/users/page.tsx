@@ -73,6 +73,14 @@ type UserRow = {
   github_url: string | null;
   portfolio_url: string | null;
   eeo_preference: string | null;
+  nationality: string | null;
+  work_countries: string | null;
+  work_permit_expiry: string | null;
+  languages: string | null;
+  contract_type: string | null;
+  work_hours: string | null;
+  work_mode: string | null;
+  application_notes: string | null;
 };
 
 function userName(user: UserRow): string {
@@ -138,6 +146,14 @@ export default async function UsersPage() {
       profiles.github_url,
       profiles.portfolio_url,
       profiles.eeo_preference,
+      profiles.nationality,
+      profiles.work_countries,
+      to_char(profiles.work_permit_expiry, 'YYYY-MM-DD') as work_permit_expiry,
+      profiles.languages,
+      profiles.contract_type,
+      profiles.work_hours,
+      profiles.work_mode,
+      profiles.application_notes,
       categories.name as category_name
     from visible_users
     left join profiles on profiles.user_id = visible_users.id
@@ -377,6 +393,14 @@ export default async function UsersPage() {
                           githubUrl: candidate.github_url,
                           portfolioUrl: candidate.portfolio_url,
                           eeoPreference: candidate.eeo_preference ?? "prefer_not_to_say",
+                          nationality: candidate.nationality,
+                          workCountries: candidate.work_countries,
+                          workPermitExpiry: candidate.work_permit_expiry,
+                          languages: candidate.languages,
+                          contractType: candidate.contract_type,
+                          workHours: candidate.work_hours,
+                          workMode: candidate.work_mode,
+                          applicationNotes: candidate.application_notes,
                           education: (educationByCandidate.get(candidate.id) ?? []).map(
                             (entry) => ({
                               institution: entry.institution,

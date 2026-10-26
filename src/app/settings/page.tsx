@@ -34,6 +34,12 @@ const promptGroups = [
     heading: "Gemini · Job-description evaluation",
   },
   {
+    provider: "openai",
+    purpose: "application_answer",
+    heading: "ChatGPT · Application answers (Apply)",
+    note: "Apply fills what the candidate's profile answers exactly; this prompt decides how ChatGPT answers every other question. Placeholders: {{job_title}}, {{company}}, {{job_location}}, {{job_description}}, {{today}}, {{candidate_profile}}, {{resume_and_cover_letter}}, {{saved_answers}}, {{questions}}. Apply always adds the reply format at the end.",
+  },
+  {
     provider: "gemini",
     purpose: "application_answer",
     heading: "Gemini · Application-answer generation",
@@ -167,10 +173,13 @@ export default async function SettingsPage() {
                 group.purpose,
               );
               return (
-                <div className="border-t border-slate-100 pt-5" key={group.purpose}>
+                <div className="border-t border-slate-100 pt-5" key={`${group.provider}-${group.purpose}`}>
                   <h3 className="mb-4 text-xs font-semibold text-slate-700">
                     {group.heading}
                   </h3>
+                  {"note" in group && (
+                    <p className="-mt-2 mb-4 text-xs leading-5 text-slate-500">{group.note}</p>
+                  )}
                   {groupPrompts.length > 0 ? (
                     <div className="space-y-5">
                       {groupPrompts.map((prompt) => (

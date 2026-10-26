@@ -652,6 +652,21 @@
       || null;
   }
 
+  /**
+   * The site's complaint about one field right after it was filled: the field marked invalid, or an
+   * error message in its question block. '' when the site accepted it.
+   */
+  function fieldIssue(id) {
+    const element = findField(id);
+    if (!element) return '';
+    const { block } = blockQuestion(element);
+    const message = [...(block?.querySelectorAll('[role="alert"], [class*="error" i], [class*="invalid" i]') || [])]
+      .filter((node) => isShown(node) && !node.contains(element) && textOf(node) && textOf(node).length < 300)
+      .map(textOf)[0];
+    if (message) return message;
+    return element.getAttribute('aria-invalid') === 'true' ? 'The site marks this answer as invalid.' : '';
+  }
+
   /** Field error messages shown on the page (after filling, before Submit). */
   function fieldErrors() {
     const errors = [];
@@ -798,6 +813,7 @@
     readMenuOptions,
     fillField,
     clearField,
+    fieldIssue,
     fieldErrors,
     detectBlockers,
     buttons,

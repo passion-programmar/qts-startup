@@ -3,9 +3,10 @@
 // the service worker with importScripts; it uses the worker's shared helpers (workerApiRequest,
 // getTab, sleep, tabOwnership, the ChatGPT helpers) at call time.
 //
-// Rules (docs/architecture.md): facts come only from the candidate's profile and saved answers;
-// a required fact that is missing stops the application instead of being guessed; open questions
-// go to ChatGPT once per page with one fix-up; CAPTCHAs and logins go to the Manager; after Submit
+// Rules (docs/architecture.md): the candidate's profile and saved answers fill what they can, each
+// answer checked against what the site accepts; everything else, and any profile answer the site
+// rejects, goes to ChatGPT with Super Admin's answer prompt, with one follow-up for answers that do
+// not fit; CAPTCHAs and logins go to the Manager; after Submit
 // the page is watched for up to 2 minutes; an unconfirmed or failed application keeps a screenshot
 // PDF in this computer's Downloads, in the job's Generation folder.
 
@@ -208,36 +209,49 @@ async function readComboboxOptions(tabId, fields) {
   }
 }
 
-/** ChatGPT's checked answers for a page's open questions, with one fix-up for unusable ones. */
+/**
+ * ChatGPT's checked answers for a page's open questions, asked with Super Admin's answer prompt
+ * (or the default), with one fix-up for answers that do not fit their field.
+ */
 async function askChatGptForAnswers(application, fields, keepAlive) {
+  // A new chat per round; its follow-up goes to the same chat so ChatGPT keeps the context.
   const chatTabId = await applyChatTab();
-  const marker = application.attemptId;
+  application.chatTabId = chatTabId;
   const helpers = self.__qtsApplyAnswers;
-  const active = { local: () => {}, server: keepAlive };
   const first = helpers.buildAnswerPrompt({
+    template: application.answerPrompt?.template,
     job: application.job,
     candidate: application.candidate,
     documentsJson: application.job.documentsJson,
     fields,
     exchangeRates: application.exchangeRates,
     today: new Date(),
+    savedAnswers: application.savedAnswers,
   });
-  await sendGenerationPromptWithRecovery(chatTabId, self.__qtsGenerationChatGpt.buildTaskPrompt(first, marker));
-  let reply = await waitForGenerationAnswer(chatTabId, marker, active);
-  let { answers, invalid } = helpers.parseAnswerReply(reply, fields);
+  const reply = await askChatGpt(chatTabId, application, first, keepAlive);
+  const { answers, invalid } = helpers.parseAnswerReply(reply, fields);
   const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
-  if (needed.length) {
-    const retryFields = fields.filter((field) => needed.some((entry) => entry.id === field.id));
-    await sendGenerationPromptWithRecovery(chatTabId, self.__qtsGenerationChatGpt.buildTaskPrompt(helpers.buildFixPrompt(needed), marker));
-    reply = await waitForGenerationAnswer(chatTabId, marker, active);
-    const retried = helpers.parseAnswerReply(reply, retryFields);
-    answers = { ...answers, ...retried.answers };
-    invalid = retried.invalid;
-    if (invalid.length) {
-      throw new ApplyStop(`ChatGPT could not answer: ${invalid.map((entry) => `${entry.label} (${entry.reason})`).join('; ')}`.slice(0, 480));
-    }
+  if (!needed.length) return answers;
+  return { ...answers, ...(await askChatGptToFix(application, needed, fields, keepAlive)) };
+}
+
+async function askChatGpt(chatTabId, application, prompt, keepAlive) {
+  const marker = application.attemptId;
+  await sendGenerationPromptWithRecovery(chatTabId, self.__qtsGenerationChatGpt.buildTaskPrompt(prompt, marker));
+  return waitForGenerationAnswer(chatTabId, marker, { local: () => {}, server: keepAlive });
+}
+
+/** The one follow-up: these answers did not fit (before filling) or the site rejected them (after). */
+async function askChatGptToFix(application, problems, fields, keepAlive) {
+  const helpers = self.__qtsApplyAnswers;
+  const retryFields = fields.filter((field) => problems.some((entry) => entry.id === field.id));
+  const reply = await askChatGpt(application.chatTabId, application, helpers.buildFixPrompt(problems, retryFields), keepAlive);
+  const retried = helpers.parseAnswerReply(reply, retryFields);
+  const stillWrong = retried.invalid.filter((entry) => retryFields.find((field) => field.id === entry.id)?.required);
+  if (stillWrong.length) {
+    throw new ApplyStop(`ChatGPT could not answer: ${stillWrong.map((entry) => `${entry.label} (${entry.reason})`).join('; ')}`.slice(0, 480));
   }
-  return answers;
+  return retried.answers;
 }
 
 async function fetchApplyDocuments(attemptId) {
@@ -251,8 +265,33 @@ async function fetchApplyDocuments(attemptId) {
 }
 
 /**
- * Fills one page in rounds: each round answers the questions not seen before, in page order, then
- * looks again for questions those answers revealed. Returns the answers used, for the evidence.
+ * Fills one field and checks the site took it: the value read back, then the site's own message
+ * next to the field. { ok, error } or { gone } when the field left the page for good.
+ */
+async function fillAndCheck(tabId, field, answer, file, seen) {
+  const fill = (fieldId) => inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file]);
+  let fieldId = field.id;
+  let result = await fill(fieldId);
+  // The page may rebuild a field after another answer (BambooHR); find it again by its question.
+  if (result?.error === 'The field is no longer on the page.') {
+    const again = (await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()) || [])
+      .find((entry) => entry.label === field.label && entry.kind === field.kind && !entry.hidden);
+    if (!again) return { gone: true };
+    seen.add(again.id);
+    fieldId = again.id;
+    result = await fill(fieldId);
+  }
+  if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"` };
+  const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
+  return issue ? { ok: false, error: issue } : { ok: true };
+}
+
+/**
+ * Fills one page in rounds. Each round: the profile's answers first, each checked against what
+ * the site accepts; then one ChatGPT request for the questions the profile could not answer and
+ * the profile answers the site rejected (with the profile's value as a hint); then ChatGPT's
+ * answers, with one follow-up for any the site rejects. A new round answers questions those
+ * answers revealed. Returns the answers used, for the evidence.
  */
 async function fillFormPage(tabId, application, keepAlive) {
   const helpers = self.__qtsApplyAnswers;
@@ -271,31 +310,26 @@ async function fillFormPage(tabId, application, keepAlive) {
     }
     const fresh = (fields || []).filter((field) => !field.hidden && !field.disabled && !seen.has(field.id));
     if (!fresh.length) break;
+    for (const field of fresh) seen.add(field.id);
     await readComboboxOptions(tabId, fresh);
-    const { answers, open, missing } = helpers.resolveFields(fresh, application.candidate, application.savedAnswers, {
+    const { answers, open } = helpers.resolveFields(fresh, application.candidate, application.savedAnswers, {
       exchangeRates: application.exchangeRates,
       today: new Date(),
       coverLetterText: application.job.coverLetterText,
     });
-    if (missing.length) {
-      throw new ApplyStop(`Missing candidate facts: ${[...new Set(missing.map((entry) => entry.fact))].join(', ')}. Add them on the candidate's profile.`);
-    }
-    if (open.length) {
-      if (application.aiMode !== 'chatgpt') throw new ApplyStop('Gemini answers for Apply come in a later release; ask your Super Admin to use ChatGPT mode.');
-      Object.assign(answers, await askChatGptForAnswers(application, open, keepAlive));
-    }
     if (!documents && Object.values(answers).some((answer) => answer.file)) {
       documents = await fetchApplyDocuments(application.attemptId);
       application.documentsFolder = documents.folder;
     }
 
+    // 1. The profile's answers, in page order; one the site does not take goes to ChatGPT.
     const failures = [];
+    const rejected = [];
     for (const field of fresh) {
-      seen.add(field.id);
       const answer = answers[field.id];
       if (!answer) {
         // Text left from someone else is emptied; a referral or source code the site filled stays.
-        if (field.filled && !/referr|source|\bcode\b|token|utm/i.test(field.label)) {
+        if (field.filled && !open.some((entry) => entry.id === field.id) && !/referr|source|\bcode\b|token|utm/i.test(field.label)) {
           await inForm(tabId, (id) => globalThis.__qtsApplyForm.clearField(id), [field.id]).catch(() => false);
         }
         continue;
@@ -304,22 +338,46 @@ async function fillFormPage(tabId, application, keepAlive) {
       if (answer.file && !file?.base64) continue;
       // Each document goes up once per page; a site may redraw its upload field after taking it.
       if (answer.file && uploaded.has(answer.file)) continue;
-      const fill = (fieldId) => inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file]);
-      let result = await fill(field.id);
-      // The page may rebuild a field after another answer (BambooHR); find it again by its question.
-      if (result?.error === 'The field is no longer on the page.') {
-        const again = (await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()) || [])
-          .find((entry) => entry.label === field.label && entry.kind === field.kind && !entry.hidden);
-        if (again) {
-          seen.add(again.id);
-          result = await fill(again.id);
-        } else {
-          continue;
-        }
+      const outcome = await fillAndCheck(tabId, field, answer, file, seen);
+      if (outcome.gone) continue;
+      if (outcome.ok) {
+        if (answer.file) uploaded.add(answer.file);
+        else used[field.label || field.id] = answer;
+      } else if (answer.file || answer.source === 'documents') {
+        if (field.required) failures.push(field.label);
+      } else {
+        rejected.push({
+          ...field,
+          hint: `The candidate's profile says "${answer.value}", but the site did not take it (${outcome.error}); give it in a form this field takes.`,
+        });
       }
-      if (answer.file && result?.ok) uploaded.add(answer.file);
-      if (!result?.ok && field.required) failures.push(field.label);
-      if (!answer.file) used[field.label || field.id] = answer;
+    }
+
+    // 2. One ChatGPT request for the rest; 3. its answers, with one follow-up for any the site rejects.
+    const toAsk = [...open, ...rejected];
+    if (toAsk.length) {
+      if (application.aiMode !== 'chatgpt') throw new ApplyStop('Gemini answers for Apply come in a later release; ask your Super Admin to use ChatGPT mode.');
+      const aiAnswers = await askChatGptForAnswers(application, toAsk, keepAlive);
+      const problems = [];
+      const fillAnswers = async (answersById, fieldsToFill, onRejected) => {
+        for (const field of fieldsToFill) {
+          const answer = answersById[field.id];
+          if (!answer) continue;
+          const outcome = await fillAndCheck(tabId, field, answer, null, seen);
+          if (outcome.gone) continue;
+          if (outcome.ok) used[field.label || field.id] = answer;
+          else onRejected(field, answer, outcome.error);
+        }
+      };
+      await fillAnswers(aiAnswers, toAsk, (field, answer, error) => {
+        problems.push({ id: field.id, label: field.label, reason: `the site did not take "${[].concat(answer.value).join(' | ')}": ${error}` });
+      });
+      if (problems.length) {
+        const fixed = await askChatGptToFix(application, problems, toAsk, keepAlive);
+        await fillAnswers(fixed, toAsk.filter((field) => problems.some((entry) => entry.id === field.id)), (field) => {
+          if (field.required) failures.push(field.label);
+        });
+      }
     }
     if (failures.length) throw new ApplyStop(`Could not fill: ${failures.join('; ')}`.slice(0, 480));
     // Let the page show the questions these answers unlock before looking again.
@@ -462,6 +520,7 @@ async function runApplication(application, recipe) {
     const evidence = {
       answers: Object.fromEntries(Object.entries(answersUsed).map(([label, answer]) => [label.slice(0, 200), String(answer.value).slice(0, 2000)])),
       generationRunId: application.job.generationRunId,
+      answerPromptId: application.answerPrompt?.id ?? null,
       pageEvidence: outcome.evidence,
     };
     await reportApplyResult(application, {

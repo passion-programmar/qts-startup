@@ -197,7 +197,8 @@ test('the AI prompt carries the job, the facts, and only the open questions', ()
   assert.match(prompt, /DevOps Engineer at Exadel/);
   assert.match(prompt, /Platform engineer/);
   assert.match(prompt, /"maxLength":500/);
-  assert.match(prompt, /never invent/);
+  assert.match(prompt, /Never invent/);
+  assert.match(prompt, /Reply with JSON only/);
 });
 
 test('questions about someone else never take the candidate\'s facts', () => {
@@ -297,4 +298,53 @@ test('a box about future job opportunities stays unticked even when it mentions 
     field('Yes, XTB can contact me about future job opportunities for up to 1 year, in line with the privacy notice', { kind: 'checkbox', required: false }),
   ], candidate, []);
   assert.deepEqual(resolved, {});
+});
+
+test('a fact the profile lacks, or has in another form, goes to the AI with a hint instead of stopping', () => {
+  const { answers: resolved, open, missing } = answers.resolveFields([
+    field('Are you willing to relocate?', { kind: 'radio', options: ['Yes', 'No'] }),
+    field('Country', { kind: 'select', options: ['Polska', 'Niemcy', 'Czechy'] }),
+    field('What is your nationality?'),
+  ], { ...candidate, willingToRelocate: null, nationality: null }, []);
+  assert.deepEqual(resolved, {});
+  assert.deepEqual(missing.map((entry) => entry.fact), ['relocation', 'nationality']);
+  const hints = Object.fromEntries(open.map((entry) => [entry.id, entry.hint]));
+  assert.match(hints['Are you willing to relocate?'], /has no relocation/);
+  assert.match(hints.Country, /profile says "Poland"/);
+  assert.match(hints['What is your nationality?'], /has no nationality/);
+});
+
+test('Super Admin\'s prompt gets its placeholders filled and always ends with the reply format', () => {
+  const fields = [field('Do you speak German?', { kind: 'radio', options: ['Yes', 'No'], hint: 'The candidate\'s profile has no languages.' })];
+  const prompt = answers.buildAnswerPrompt({
+    template: 'Answer for {{company}} ({{job_title}}).\nFacts: {{candidate_profile}}\nBefore: {{saved_answers}}\nQ: {{questions}}\n{{unknown_thing}}',
+    job: { title: 'SRE', company: 'Acme', description: 'Go and Kubernetes.' },
+    candidate: { ...candidate, languages: 'English C1, Polish C2', contractType: 'b2b' },
+    documentsJson: '{}',
+    fields,
+    savedAnswers: [{ questionText: 'Earliest interview date', answer: 'Any weekday' }],
+    today: new Date(2026, 9, 26),
+  });
+  assert.match(prompt, /^Answer for Acme \(SRE\)\./);
+  assert.match(prompt, /"languages":"English C1, Polish C2"/);
+  assert.match(prompt, /"contractType":"B2B or contractor"/);
+  assert.match(prompt, /Earliest interview date: Any weekday/);
+  assert.match(prompt, /"hint":"The candidate's profile has no languages\."/);
+  assert.match(prompt, /\{\{unknown_thing\}\}/);
+  assert.match(prompt, /Reply with JSON only/);
+  // A prompt without a questions placeholder still carries the questions.
+  const bare = answers.buildAnswerPrompt({ template: 'Be brief.', job: {}, candidate, fields });
+  assert.match(bare, /Questions:\n\[\{"id":"Do you speak German\?"/);
+});
+
+test('several choices, number limits, and dates are checked, and the follow-up names the problem', () => {
+  const group = field('Locations', { kind: 'checkbox-group', options: ['Coventry', 'Leeds', 'Remote'] });
+  assert.deepEqual(answers.checkAnswer(group, 'Leeds | Remote'), { ok: true, value: ['Leeds', 'Remote'] });
+  assert.equal(answers.checkAnswer(group, 'Leeds | Paris').ok, false);
+  const weeks = field('Notice in weeks', { kind: 'range', min: 0, max: 25 });
+  assert.equal(answers.checkAnswer(weeks, '30').ok, false);
+  assert.equal(answers.checkAnswer(field('Start', { kind: 'date' }), '02/11/2026').ok, false);
+  const fix = answers.buildFixPrompt([{ id: 'Locations', label: 'Locations', reason: 'the site did not take "Paris"' }], [group]);
+  assert.match(fix, /"options":\["Coventry","Leeds","Remote"\]/);
+  assert.match(fix, /"problem":"the site did not take \\"Paris\\""/);
 });
