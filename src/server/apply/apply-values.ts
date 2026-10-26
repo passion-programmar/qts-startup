@@ -8,7 +8,7 @@ export const APPLY_LEASE_SECONDS = 120;
 /** After Submit, the lease covers the 2-minute confirmation wait plus reporting. */
 export const APPLY_SUBMIT_LEASE_SECONDS = 300;
 /** Generation and Apply work goes only to this extension version or newer. */
-export const MIN_WORK_EXTENSION_VERSION = "1.33.1";
+export const MIN_WORK_EXTENSION_VERSION = "1.33.2";
 
 /** -1, 0, or 1 for dotted numeric versions; null when either is not one. */
 export function compareExtensionVersions(left: string, right: string): number | null {

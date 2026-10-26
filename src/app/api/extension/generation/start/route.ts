@@ -151,7 +151,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         savedJob.country,
         savedJob.postalCode,
       ].filter(Boolean).join(", "),
-      jdMatching: savedJob.jdMatching,
+      // JD matching notes stay out: they pick jobs for Get JD, not what the resume says.
       education,
       experience,
     };

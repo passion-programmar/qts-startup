@@ -345,11 +345,21 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.equal(serviceWorker.includes('Generation must be started from a job page.'), false);
   assert.ok(serviceWorker.includes('Checking the oldest eligible saved job'));
   assert.ok(serviceWorker.includes('pinned: true'));
-  // ChatGPT gets one minute per answer; an error refreshes the tab and resends once; an unusable
-  // answer gets one follow-up; a failed job is tried once more in the run.
+  // ChatGPT gets three minutes per answer; an error ("This response couldn't load") closes the tab
+  // and resends once in a fresh pinned tab; an unusable answer gets one follow-up; a failed job is
+  // tried once more in the run.
   assert.ok(serviceWorker.includes('const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;'));
   assert.ok(serviceWorker.includes('while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS)'));
+  assert.ok(serviceWorker.includes("response couldn['’]t load"));
   assert.ok(serviceWorker.includes("if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;"));
+  const askSource = serviceWorker.slice(
+    serviceWorker.indexOf('async function askGenerationChatGpt'),
+    serviceWorker.indexOf('async function runGenerationForTab'),
+  );
+  assert.ok(askSource.includes('await chrome.tabs.remove(chatTab.id)'));
+  assert.ok(askSource.includes('chatTab.id = (await acquireGenerationChatGptTab()).id;'));
+  assert.equal(askSource.includes('chrome.tabs.reload'), false);
+  assert.ok(serviceWorker.includes('await runGenerationForTab(jobTabId, queuedJob, chatTab);'));
   assert.ok(serviceWorker.includes('if (!unusable || followUps > 0)'));
   assert.ok(serviceWorker.includes('const retrying = failed.success === true && failed.canRetry === true && failures < 2;'));
   // One pinned ChatGPT tab is opened and ready before the job page, serves up to ten jobs (a new chat
