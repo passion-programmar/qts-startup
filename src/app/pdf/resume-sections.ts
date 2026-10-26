@@ -74,11 +74,42 @@ export const templateSectionOrders: Record<PdfTemplate, readonly ResumeSectionId
   banded: ["experience", "education", "skills", "projects", "certifications"], // QTS Template 24
 };
 
-/** The sections a template shows, in its order. Sections it does not list are left out. */
-export function orderResumeSections<T extends { id?: string }>(
+type PrintableItem = {
+  focus?: string[];
+  subheading?: string;
+  location?: string;
+  workMode?: string;
+  dateRange?: string;
+  bullets?: (string | { name: string; detail?: string })[];
+};
+
+/**
+ * The sections a template shows, in its order, as every template prints them. Sections it does
+ * not list are left out. Content rules shared by all templates:
+ * - Projects show only their name, a "Technologies:" line (the entry's focus) and bullets.
+ * - Education entries have no bullets.
+ * - Skills are names only, without years or levels.
+ * - Other entries show at most 3 focus skills.
+ */
+export function orderResumeSections<T extends { id?: string; items: PrintableItem[] }>(
   sections: readonly T[],
   template: PdfTemplate,
 ): T[] {
   const order = templateSectionOrders[template] ?? templateSectionOrders["qts-standard"];
-  return order.flatMap((sectionId) => sections.filter((section) => section.id === sectionId));
+  return order.flatMap((sectionId) => sections
+    .filter((section) => section.id === sectionId)
+    .map((section) => ({ ...section, items: section.items.map((item) => printableItem(sectionId, item)) })));
+}
+
+function printableItem<I extends PrintableItem>(sectionId: ResumeSectionId, item: I): I {
+  switch (sectionId) {
+    case "projects":
+      return { ...item, subheading: undefined, location: undefined, workMode: undefined, dateRange: undefined };
+    case "education":
+      return { ...item, bullets: [], focus: undefined };
+    case "skills":
+      return { ...item, bullets: item.bullets?.map((bullet) => (typeof bullet === "string" ? bullet : bullet.name)) };
+    default:
+      return { ...item, focus: item.focus?.slice(0, 3) };
+  }
 }

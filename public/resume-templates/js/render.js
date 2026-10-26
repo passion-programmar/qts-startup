@@ -163,7 +163,7 @@
     const entries = list(source.bullets);
     return {
       heading: text(source.heading),
-      focus: list(source.focus).map(text).filter(Boolean).slice(0, 3),
+      focus: list(source.focus).map(text).filter(Boolean).slice(0, 6),
       subheading: text(source.subheading),
       location: text(source.location),
       workMode: text(source.workMode),
@@ -528,7 +528,7 @@
       if (!item.heading) return [];
       const heading = el("h3", "item-heading", item.heading);
       if (settings.showFocus === "yes" && item.focus.length) {
-        return [heading, el("span", "item-focus", ` | ${item.focus.join(" | ")}`)];
+        return [heading, el("span", "item-focus", ` | ${item.focus.slice(0, 3).join(" | ")}`)];
       }
       return [heading];
     };
@@ -592,7 +592,33 @@
     return header;
   }
 
-  function renderItem(item, settings) {
+  // Every template prints a project the same way: its name, a "Technologies:" line and
+  // bullets, with no dates or company line.
+  function renderProject(item) {
+    const node = el("div", "item");
+    if (item.heading) {
+      const header = el("div", "item-header");
+      header.append(el("h3", "item-heading", item.heading));
+      if (item.focus.length) {
+        const technologies = el("p", "item-technologies");
+        technologies.append(el("span", "item-technologies-label", "Technologies:"), ` ${item.focus.join(", ")}`);
+        header.append(technologies);
+      }
+      node.append(header);
+    }
+    if (item.description) node.append(rich(el("p", "item-description"), item.description));
+    if (item.bullets.length) {
+      const bullets = el("ul", "item-bullets");
+      item.bullets.forEach((bullet) => bullets.append(rich(el("li"), bullet)));
+      node.append(bullets);
+    }
+    return node;
+  }
+
+  function renderItem(item, settings, sectionKey = "") {
+    if (sectionKey === "projects") return renderProject(item);
+    // Education entries print without bullets in every template.
+    if (sectionKey === "education") item = { ...item, bullets: [] };
     const node = el("div", "item");
     if (settings.entryLayout) {
       const header = renderEntryHeader(item, settings);
@@ -647,7 +673,7 @@
       item.skills.forEach((skill, index) => {
         const entry = el("li", "skill");
         entry.append(rich(el("span", "skill-name"), skill.name));
-        if (skill.detail) entry.append(el("span", "skill-detail", DETAIL_TEXT[settings.skillDetail](skill.detail)));
+        // Skills print as names only; years and levels are left out in every template.
         if (inline && index < item.skills.length - 1) entry.append(labels.listSeparator);
         skillList.append(entry);
         // A real space between tags and inline items keeps extracted words apart.
@@ -693,7 +719,7 @@
       const node = renderSection(section.title, `section-${index}`, isSkills ? "section--skills" : "");
       node.dataset.section = key;
       if (isSkills) node.append(renderSkills(section, settings, labels));
-      else section.items.forEach((item) => node.append(renderItem(item, settings)));
+      else section.items.forEach((item) => node.append(renderItem(item, settings, key)));
       body.append(node);
     });
     article.append(body);

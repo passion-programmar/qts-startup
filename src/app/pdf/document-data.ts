@@ -333,13 +333,14 @@ function parseBullets(value: unknown): DocumentBullet[] | undefined {
   });
 }
 
-// Up to three short skills shown next to an entry's heading; anything else is ignored.
+// Short skills for an entry: up to 3 shown next to a job title, up to 6 as a project's
+// "Technologies:" line (resume-sections.ts decides which); anything else is ignored.
 function parseFocus(value: unknown): string[] | undefined {
   const focus = (Array.isArray(value) ? value : typeof value === "string" ? value.split(/[,|]/) : [])
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())
     .filter((entry) => entry && entry.length <= 60)
-    .slice(0, 3);
+    .slice(0, 6);
   return focus.length ? focus : undefined;
 }
 

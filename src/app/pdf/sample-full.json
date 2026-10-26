@@ -7,7 +7,12 @@
     "location": "Bucharest, Romania",
     "linkedinUrl": "https://www.linkedin.com/in/sample-candidate",
     "headline": "Senior DevOps Engineer",
-    "links": [{ "label": "Portfolio", "url": "https://portfolio.example.com" }]
+    "links": [
+      {
+        "label": "Portfolio",
+        "url": "https://portfolio.example.com"
+      }
+    ]
   },
   "resume": {
     "targetRole": "Senior DevOps Engineer",
@@ -20,7 +25,11 @@
         "items": [
           {
             "heading": "Senior DevOps Engineer",
-            "focus": ["Kubernetes", "Terraform", "AWS"],
+            "focus": [
+              "Kubernetes",
+              "Terraform",
+              "AWS"
+            ],
             "subheading": "Northwind Cloud",
             "location": "Bucharest, Romania",
             "workMode": "Remote",
@@ -37,7 +46,11 @@
           },
           {
             "heading": "DevOps Engineer",
-            "focus": ["Docker", "CI/CD", "GCP"],
+            "focus": [
+              "Docker",
+              "CI/CD",
+              "GCP"
+            ],
             "subheading": "Blue Harbor Analytics",
             "location": "Cluj-Napoca, Romania",
             "workMode": "Hybrid",
@@ -52,7 +65,10 @@
           },
           {
             "heading": "Systems Administrator",
-            "focus": ["Linux", "Networking"],
+            "focus": [
+              "Linux",
+              "Networking"
+            ],
             "subheading": "Danube Retail Group",
             "location": "Bucharest, Romania",
             "workMode": "Onsite",
@@ -72,11 +88,12 @@
         "items": [
           {
             "heading": "Open-source Kubernetes cost reporter",
-            "focus": ["Go", "Kubernetes"],
-            "subheading": "Personal project",
-            "startDate": "2023-01",
-            "endDate": "2023-08",
-            "link": "https://portfolio.example.com/cost-reporter",
+            "focus": [
+              "Go",
+              "Kubernetes",
+              "Prometheus",
+              "Helm"
+            ],
             "bullets": [
               "Built a small Go service that reports cost per namespace from cluster usage and cloud prices.",
               "Used by three companies; reached 900 stars on GitHub."
@@ -84,10 +101,11 @@
           },
           {
             "heading": "Home-lab GitOps platform",
-            "focus": ["Argo CD", "Helm"],
-            "subheading": "Personal project",
-            "startDate": "2021-04",
-            "endDate": "2021-09",
+            "focus": [
+              "Argo CD",
+              "Helm",
+              "Terraform"
+            ],
             "bullets": [
               "Ran a self-hosted cluster managed entirely through Git with Argo CD and Helm charts, as a test bed for new tools."
             ]
@@ -103,8 +121,7 @@
             "subheading": "Politehnica University of Bucharest",
             "location": "Bucharest, Romania",
             "startDate": "2012-10",
-            "endDate": "2016-07",
-            "bullets": ["Thesis: automated deployment of web applications on virtual machines."]
+            "endDate": "2016-07"
           }
         ]
       },
@@ -116,26 +133,44 @@
           {
             "heading": "Cloud",
             "bullets": [
-              { "name": "AWS", "detail": "6 years" },
-              { "name": "GCP", "detail": "3 years" },
+              "AWS",
+              "GCP",
               "Azure basics"
             ]
           },
           {
             "heading": "Containers and orchestration",
-            "bullets": ["Kubernetes", "Docker", "Helm", "Argo CD"]
+            "bullets": [
+              "Kubernetes",
+              "Docker",
+              "Helm",
+              "Argo CD"
+            ]
           },
           {
             "heading": "Infrastructure as code",
-            "bullets": ["Terraform", "Ansible", "CloudFormation"]
+            "bullets": [
+              "Terraform",
+              "Ansible",
+              "CloudFormation"
+            ]
           },
           {
             "heading": "CI/CD and monitoring",
-            "bullets": ["GitHub Actions", "GitLab CI", "Prometheus", "Grafana"]
+            "bullets": [
+              "GitHub Actions",
+              "GitLab CI",
+              "Prometheus",
+              "Grafana"
+            ]
           },
           {
             "heading": "Languages",
-            "bullets": ["Python", "Go", "Bash"]
+            "bullets": [
+              "Python",
+              "Go",
+              "Bash"
+            ]
           }
         ]
       },
@@ -143,8 +178,16 @@
         "id": "certifications",
         "title": "Certifications",
         "items": [
-          { "heading": "Certified Kubernetes Administrator (CKA)", "subheading": "The Linux Foundation", "startDate": "2023-05" },
-          { "heading": "AWS Certified Solutions Architect – Associate", "subheading": "Amazon Web Services", "startDate": "2021-11" }
+          {
+            "heading": "Certified Kubernetes Administrator (CKA)",
+            "subheading": "The Linux Foundation",
+            "startDate": "2023-05"
+          },
+          {
+            "heading": "AWS Certified Solutions Architect – Associate",
+            "subheading": "Amazon Web Services",
+            "startDate": "2021-11"
+          }
         ]
       },
       {
@@ -169,7 +212,10 @@
     "recipient": {
       "name": "Hiring Manager",
       "company": "Example Employer",
-      "address": ["Example Street 10", "Bucharest, Romania"]
+      "address": [
+        "Example Street 10",
+        "Bucharest, Romania"
+      ]
     },
     "paragraphs": [
       "I am applying for the **Senior DevOps Engineer** role at Example Employer. Your focus on reliable, well-automated cloud platforms matches the work I enjoy most and have done for the last eight years.",

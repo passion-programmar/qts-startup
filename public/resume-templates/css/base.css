@@ -433,6 +433,19 @@ a {
   color: var(--color-ink);
 }
 
+/* Projects: name, then "Technologies: ..." on its own line (same in every template). */
+.item-technologies {
+  margin-top: 1.5pt;
+  font-family: var(--font-meta);
+  font-size: calc(var(--text-meta) * var(--font-scale));
+  color: var(--color-muted);
+}
+
+.item-technologies-label {
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
 /* The entry's dates use .item-date; on the role line of layout A they are bold. */
 .doc[data-entry-layout] .item-date {
   display: inline;

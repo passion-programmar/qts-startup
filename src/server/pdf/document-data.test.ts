@@ -110,10 +110,7 @@ test("the supplied full template sample parses and retains its content", () => {
     parsed.resume.sections.map((section) => section.id),
     ["experience", "projects", "education", "skills", "certifications", "career_highlights"],
   );
-  assert.deepEqual(parsed.resume.sections[3].items[0].bullets?.[0], {
-    name: "AWS",
-    detail: "6 years",
-  });
+  assert.equal(parsed.resume.sections[3].items[0].bullets?.[0], "AWS");
   // Dates come from startDate/endDate in one format; focus and work mode are kept.
   const job = parsed.resume.sections[0].items[0];
   assert.equal(job.dateRange, "Mar 2022 – Present");
@@ -189,6 +186,43 @@ test("the template adapter removes links from project sections but preserves oth
 
   assert.equal(section("projects")?.items[0].link, undefined);
   assert.equal(section("experience")?.items[0].link, "https://example.com/experience");
+});
+
+test("every template prints projects as name, technologies and bullets, education without bullets, and skills without details", () => {
+  const parsed = parsePdfPackage(JSON.stringify({
+    ...generatedPackage,
+    resume: {
+      ...generatedPackage.resume,
+      sections: [
+        ...generatedPackage.resume.sections.filter((section) => !["projects", "education", "skills"].includes(section.id ?? "")),
+        { id: "skills", title: "Skills", items: [{ heading: "Cloud", bullets: [{ name: "AWS", detail: "6 years" }, "GCP"] }] },
+        { id: "education", title: "Education", items: [{ heading: "BSc", subheading: "University", bullets: ["Thesis"] }] },
+        {
+          id: "projects",
+          title: "Projects",
+          items: [{
+            heading: "Cost reporter",
+            subheading: "Personal project",
+            startDate: "2023-01",
+            endDate: "2023-08",
+            focus: ["Go", "Kubernetes", "Helm", "Prometheus"],
+            bullets: ["Built it."],
+          }],
+        },
+      ],
+    },
+  }));
+  for (const template of pdfTemplateValues) {
+    const sections = toResumeTemplateData(parsed, template).resume.sections;
+    const project = sections.find((section) => section.id === "projects")?.items[0];
+    if (project) {
+      assert.equal(project.dateRange, undefined, template);
+      assert.equal(project.subheading, undefined, template);
+      assert.deepEqual(project.focus, ["Go", "Kubernetes", "Helm", "Prometheus"], template);
+    }
+    assert.deepEqual(sections.find((section) => section.id === "education")?.items[0].bullets, [], template);
+    assert.deepEqual(sections.find((section) => section.id === "skills")?.items[0].bullets, ["AWS", "GCP"], template);
+  }
 });
 
 test("PDF document data rejects missing document sections", () => {

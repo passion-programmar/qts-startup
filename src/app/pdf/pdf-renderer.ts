@@ -97,11 +97,14 @@ async function renderResumePdf(
       pdf.skills(section.items);
       continue;
     }
+    const projects = section.id === "projects";
     section.items.forEach((item, index) => {
       pdf.entry(
-        [item.heading, ...(item.focus ?? [])].filter(Boolean).join(" | "),
+        projects ? item.heading ?? "" : [item.heading, ...(item.focus ?? [])].filter(Boolean).join(" | "),
         item.dateRange,
-        [item.subheading, item.location, item.workMode].filter(Boolean).join(" · ") || undefined,
+        projects
+          ? (item.focus?.length ? `Technologies: ${item.focus.join(", ")}` : undefined)
+          : [item.subheading, item.location, item.workMode].filter(Boolean).join(" · ") || undefined,
         (item.bullets ?? []).map(pdfBulletText),
         index < section.items.length - 1,
       );
