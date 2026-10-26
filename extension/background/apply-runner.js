@@ -372,6 +372,8 @@ async function runApplication(application, recipe) {
       skip: stop.skip,
       dryRun: stop.dryRun === true,
     }).catch(() => {});
+    // Test mode deletes the attempt, so the same job would be claimed again at once: one test per click.
+    if (stop.dryRun) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
     if (stop.keepTab) {
       await notifyApply(`${application.job.company}: ${stop.message}`);
     } else if (tab?.id != null) {
