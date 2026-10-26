@@ -17,14 +17,12 @@ test("the static facts are parsed and normalized", () => {
     applicationFacts: "1",
     nationality: " Polish ",
     languages: "English C1,  Polish C2",
-    yearsOfExperience: "8",
     githubUrl: "github.com/anna",
     portfolioUrl: "",
     eeoPreference: "prefer_not_to_say",
   })), {
     nationality: "Polish",
     languages: "English C1, Polish C2",
-    yearsOfExperience: 8,
     githubUrl: "https://github.com/anna",
     portfolioUrl: null,
     eeoPreference: "prefer_not_to_say",
@@ -32,7 +30,6 @@ test("the static facts are parsed and normalized", () => {
 });
 
 test("invalid facts are refused with a reason", () => {
-  assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", yearsOfExperience: "eight" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", githubUrl: "not a url at all" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", eeoPreference: "maybe" })), "string");
   assert.equal(typeof readApplicationFacts(form({ applicationFacts: "1", nationality: "x".repeat(101) })), "string");

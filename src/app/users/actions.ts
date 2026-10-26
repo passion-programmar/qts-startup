@@ -498,7 +498,6 @@ export async function updateCandidateProfileAction(
         update profiles
         set nationality = ${applicationFacts.nationality},
           languages = ${applicationFacts.languages},
-          years_of_experience = ${applicationFacts.yearsOfExperience},
           github_url = ${applicationFacts.githubUrl},
           portfolio_url = ${applicationFacts.portfolioUrl},
           eeo_preference = ${applicationFacts.eeoPreference}

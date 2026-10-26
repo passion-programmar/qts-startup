@@ -134,7 +134,12 @@ export async function claimNextApplication(
       province: profiles.province,
       addressLine1: profiles.addressLine1,
       postalCode: profiles.postalCode,
-      yearsOfExperience: profiles.yearsOfExperience,
+      // Whole years from the oldest experience start month until today, as the profile page shows it.
+      yearsOfExperience: sql<number | null>`(
+        select floor((extract(year from age(current_date, min(e.start_date))) * 12
+          + extract(month from age(current_date, min(e.start_date)))) / 12)::int
+        from experiences e where e.profile_user_id = ${profiles.userId}
+      )`,
       githubUrl: profiles.githubUrl,
       portfolioUrl: profiles.portfolioUrl,
       eeoPreference: profiles.eeoPreference,

@@ -16,7 +16,7 @@ export function SettingsCard({
 }) {
   return item ? (
     <details className="group/item rounded-xl border border-slate-200 bg-white">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-left [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
           <span className="block truncate text-xs font-semibold text-slate-800">{title}</span>
           {summary && <span className="mt-0.5 block truncate text-[11px] text-slate-500">{summary}</span>}
@@ -27,7 +27,7 @@ export function SettingsCard({
     </details>
   ) : (
     <details className="group/section mb-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 sm:px-6 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-left sm:px-6 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
           <span className="block text-sm font-semibold text-slate-800">{title}</span>
           {summary && <span className="mt-0.5 block truncate text-xs text-slate-500">{summary}</span>}

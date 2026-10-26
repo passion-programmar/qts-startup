@@ -9,12 +9,16 @@ import {
   useState,
 } from "react";
 import {
+  Briefcase,
   ChevronDown,
+  ClipboardList,
+  GraduationCap,
   Pencil,
   Plus,
   ShieldCheck,
   Trash2,
   UserPlus,
+  UserRound,
   X,
 } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
@@ -83,7 +87,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
         <form action={formAction} className={isAccount ? "space-y-3" : "space-y-6"} onInvalidCapture={openCardOfInvalidField}>
         {isAccount ? (
           <>
-          <FormCard summary="Name, contacts, address, category" title="Basic information">
+          <FormCard icon={<UserRound />} summary="Name, contacts, address, category" title="Basic information">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <TextField
               autoComplete="given-name"
@@ -488,13 +492,22 @@ export function EditCandidateProfileForm({
     initialState,
   );
   const fieldId = (field: string) => `${field}-${candidate.userId}`;
+  // Each opening starts from the saved history, newest first as the page loads it, so rows never
+  // keep an earlier order or point at another entry after a save.
+  const openEditor = () => {
+    setEducationRows(candidate.education.length ? candidate.education.map((_, index) => index) : [0]);
+    setExperienceRows(candidate.experience.length ? candidate.experience.map((_, index) => index) : [0]);
+    nextEducationRowId.current = Math.max(1, candidate.education.length);
+    nextExperienceRowId.current = Math.max(1, candidate.experience.length);
+    setIsOpen(true);
+  };
 
   return (
     <>
       <button
         aria-label="Edit candidate profile"
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100"
-        onClick={() => setIsOpen(true)}
+        onClick={openEditor}
         type="button"
       >
         <Pencil aria-hidden="true" className="size-3.5" />
@@ -511,6 +524,7 @@ export function EditCandidateProfileForm({
         <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField}>
           <input name="userId" type="hidden" value={candidate.userId} />
           <FormCard
+            icon={<UserRound />}
             summary={[[candidate.firstName, candidate.lastName].filter(Boolean).join(" "), candidate.candidateEmail, candidate.city].filter(Boolean).join(" · ") || "Name, contacts, address, category"}
             title="Basic information"
           >
@@ -1156,7 +1170,8 @@ function HistorySection({
         </button>
       }
       className="sm:col-span-2 xl:col-span-3"
-      summary={`${rowIds.length} ${rowIds.length === 1 ? "entry" : "entries"}`}
+      icon={title === "Education" ? <GraduationCap /> : <Briefcase />}
+      summary={`${rowIds.length} ${rowIds.length === 1 ? "entry" : "entries"} · newest first`}
       title={title}
     >
       {rowIds.map((rowId, index) => (
@@ -1208,6 +1223,20 @@ function WorkModeField({ id, defaultValue = "" }: { id: string; defaultValue?: s
   );
 }
 
+/**
+ * Whole years from the oldest experience start month (YYYY-MM) until today, with that month; the
+ * same count QTS sends to Apply. Null without any start month.
+ */
+function yearsOfExperience(startMonths: (string | null)[]): { years: number; since: string } | null {
+  const oldest = startMonths.filter((month): month is string => Boolean(month && /^\d{4}-\d{2}/.test(month))).sort()[0];
+  if (!oldest) return null;
+  const [year, month] = oldest.split("-").map(Number);
+  const today = new Date();
+  const months = (today.getFullYear() - year) * 12 + (today.getMonth() + 1 - month);
+  const since = new Date(year, month - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+  return { years: Math.max(0, Math.floor(months / 12)), since };
+}
+
 // The candidate's static facts application forms ask for; Apply fills them exactly.
 function ApplicationFactsSection({
   candidate,
@@ -1216,9 +1245,11 @@ function ApplicationFactsSection({
   candidate: CandidateProfileValues;
   fieldId: (field: string) => string;
 }) {
+  const experience = yearsOfExperience(candidate.experience.map((entry) => entry.startDate));
   return (
     <FormCard
-      summary={[candidate.nationality, candidate.languages, candidate.yearsOfExperience === null ? null : `${candidate.yearsOfExperience} years`].filter(Boolean).join(" · ") || "Nationality, languages, experience, links"}
+      icon={<ClipboardList />}
+      summary={[candidate.nationality, candidate.languages, experience ? `${experience.years} years of experience` : null].filter(Boolean).join(" · ") || "Nationality, languages, links"}
       title="Application facts"
     >
       <input name="applicationFacts" type="hidden" value="1" />
@@ -1244,16 +1275,15 @@ function ApplicationFactsSection({
           name="languages"
           placeholder="English C1, Polish C2"
         />
-        <TextField
-          autoComplete="off"
-          defaultValue={candidate.yearsOfExperience === null ? "" : String(candidate.yearsOfExperience)}
-          id={fieldId("yearsOfExperience")}
-          inputMode="numeric"
-          label="Years of experience"
-          maxLength={2}
-          name="yearsOfExperience"
-          pattern="[0-9]{1,2}"
-        />
+        <div>
+          <p className="mb-2 block text-xs font-semibold text-slate-700">Years of experience</p>
+          <p className="flex h-10 items-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 text-xs text-slate-700">
+            {experience
+              ? `${experience.years} ${experience.years === 1 ? "year" : "years"} · since ${experience.since}`
+              : "Add experience with a start month"}
+          </p>
+          <p className="mt-1 text-[11px] text-slate-500">Calculated from the oldest experience start month until today.</p>
+        </div>
         <TextField
           autoComplete="url"
           defaultValue={candidate.githubUrl ?? ""}

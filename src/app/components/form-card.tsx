@@ -1,26 +1,33 @@
 import { ChevronDown } from "lucide-react";
 import type { FormEvent, ReactNode } from "react";
 
-// A folded card for long forms (candidate profile): its title and a one-line summary show, and the
-// fields open on click. Folded fields are still sent with the form.
+// A folded card for long forms (candidate profile): an icon, its title, and a one-line summary
+// show, and the fields open on click. Folded fields are still sent with the form.
 export function FormCard({
   title,
   summary,
+  icon,
   actions,
   children,
   className = "",
 }: {
   title: ReactNode;
   summary?: ReactNode;
+  icon?: ReactNode;
   // Buttons shown in the opened card above its fields (e.g. "Add education").
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
   return (
-    <details className={`group/card rounded-xl border border-slate-200 bg-white ${className}`}>
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 sm:px-5 [&::-webkit-details-marker]:hidden">
-        <span className="min-w-0">
+    <details className={`group/card rounded-xl border border-slate-200 bg-white text-left transition open:border-indigo-200 open:shadow-sm ${className}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl px-4 py-3 transition hover:bg-slate-50 sm:px-5 [&::-webkit-details-marker]:hidden">
+        {icon && (
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 [&>svg]:size-4">
+            {icon}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 text-left">
           <span className="block text-sm font-semibold text-slate-800">{title}</span>
           {summary && <span className="mt-0.5 block truncate text-xs text-slate-500">{summary}</span>}
         </span>
