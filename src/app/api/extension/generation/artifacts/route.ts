@@ -5,12 +5,15 @@ import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
+import { chromePrintJob, wantsChromePrint } from "@/server/pdf/chrome-print";
 import { renderDocumentPdfs } from "@/server/pdf/document-pdfs";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
 // Chromium's first launch on a cold instance takes a few seconds.
 export const maxDuration = 60;
 
+// The three download files. With ?print=chrome the two PDFs come as a print job instead, printed
+// in the extension's Chrome; without it (older extensions, or when that failed) they are printed here.
 export async function GET(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
   if (!manager) {
@@ -61,8 +64,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     // Runs from before template rotation have no saved template and use the account's.
     const savedTemplate = row.runTemplate ?? row.profileTemplate;
     const template = isPdfTemplate(savedTemplate) ? savedTemplate : "qts-standard";
+    const inChrome = wantsChromePrint(request);
     // No page limit: a longer résumé or cover letter is delivered as it is.
-    const pdfs = await renderDocumentPdfs(data, template, { enforcePageLimits: false });
+    const pdfs = inChrome ? null : await renderDocumentPdfs(data, template, { enforcePageLimits: false });
     const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
     const paths = generationDownloadPaths({
       managerName: manager.displayName,
@@ -73,18 +77,19 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
     return NextResponse.json({
       success: true,
+      ...(inChrome ? { print: chromePrintJob(data, template) } : {}),
       files: [
         {
           filename: paths.resume.split("/").at(-1),
           downloadPath: paths.resume,
           mimeType: "application/pdf",
-          base64: Buffer.from(pdfs.resume).toString("base64"),
+          ...(pdfs ? { base64: Buffer.from(pdfs.resume).toString("base64") } : { printDocument: "resume" }),
         },
         {
           filename: paths.coverLetter.split("/").at(-1),
           downloadPath: paths.coverLetter,
           mimeType: "application/pdf",
-          base64: Buffer.from(pdfs.coverLetter).toString("base64"),
+          ...(pdfs ? { base64: Buffer.from(pdfs.coverLetter).toString("base64") } : { printDocument: "cover-letter" }),
         },
         {
           filename: "JD.txt",

@@ -776,7 +776,10 @@ async function initializeQtsPageLauncher() {
   main.addEventListener('click', async () => {
     // The launcher is only visible while signed in; a session that just expired hides it here.
     if (!(await syncSessionAction())) return;
-    setOpen(!launcher.classList.contains('open'));
+    const opening = !launcher.classList.contains('open');
+    setOpen(opening);
+    // Opening QTS ends any idle back-off: this Chrome checks for work right away.
+    if (opening) chrome.runtime.sendMessage({ type: 'QTS_ACTIVITY' }).catch(() => {});
   });
   launcher.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));

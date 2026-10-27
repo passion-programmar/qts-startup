@@ -3205,6 +3205,8 @@ function applyGptDispatchResult(msg) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Opening QTS ends any idle back-off: this Chrome checks for work right away.
+  chrome.runtime.sendMessage({ type: 'QTS_ACTIVITY' }).catch(() => {});
   initializePageHighlightColorPickers();
   initializePageHighlightPreview();
   if (new URLSearchParams(window.location.search).get('embedded') === '1') {

@@ -456,9 +456,33 @@ async function askChatGptToFix(application, problems, fields, keepAlive) {
   return retried.answers;
 }
 
-async function fetchApplyDocuments(attemptId) {
+/**
+ * The résumé and cover letter to upload, printed in a hidden tab of this application's window
+ * (shared/chrome-pdf.js). An older server sends them printed already; when printing here fails,
+ * QTS prints them, as before.
+ */
+async function fetchApplyDocuments(attemptId, tabId) {
+  const path = `/api/extension/apply/documents?attemptId=${encodeURIComponent(attemptId)}`;
+  const forChrome = await workerApiRequest('GET', `${path}&print=chrome`);
+  if (forChrome.success === true && !forChrome.documents?.print) return forChrome.documents;
+  if (forChrome.success === true) {
+    const { print, ...documents } = forChrome.documents;
+    const printed = await self.__qtsChromePdf.printDocuments(print, {
+      serverUrl: await self.__qtsRuntimeConfig.getServerUrl(),
+      windowId: (await getTab(tabId))?.windowId,
+    });
+    if (printed) {
+      return {
+        ...documents,
+        resume: { ...documents.resume, base64: printed.resume },
+        coverLetter: { ...documents.coverLetter, base64: printed['cover-letter'] },
+      };
+    }
+  } else if (forChrome.retry !== true) {
+    throw new ApplyStop(forChrome.message || 'The résumé could not be prepared.', { skip: false });
+  }
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await workerApiRequest('GET', `/api/extension/apply/documents?attemptId=${encodeURIComponent(attemptId)}`);
+    const response = await workerApiRequest('GET', path);
     if (response.success === true) return response.documents;
     if (response.retry !== true) throw new ApplyStop(response.message || 'The résumé could not be prepared.', { skip: false });
     await sleep(5000);
@@ -557,7 +581,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     });
     if (!documents && Object.values(answers).some((answer) => answer.file)) {
       try {
-        documents = await fetchApplyDocuments(application.attemptId);
+        documents = await fetchApplyDocuments(application.attemptId, tabId);
         application.documentsFolder = documents.folder;
       } catch (error) {
         problem(`The résumé could not be prepared (${error instanceof Error ? error.message : 'unknown error'}); upload it by hand from the folder above.`, null, 'upload');
@@ -946,11 +970,19 @@ chrome.tabs.onRemoved.addListener((tabId) => {
  */
 async function runApplication(application, recipe) {
   let lostClaim = false;
+  // While the Manager reviews, the server holds the application longer (it says how long), so the
+  // hold is renewed less often; any other time, every 30 seconds.
+  let renewedAt = 0;
+  let waitingLeaseSeconds = 0;
   const keepAlive = async () => {
+    const waiting = reviewWaiters.has(application.attemptId);
+    if (waiting && Date.now() - renewedAt < self.__qtsIdlePacing.renewEveryMs(waitingLeaseSeconds)) return;
     const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId: application.attemptId });
     if (renewed._httpStatus === 409) lostClaim = true;
     // Super Admin may change the review mode or automatic Submit during an application: the next step uses it.
     if (renewed.success === true) {
+      renewedAt = Date.now();
+      waitingLeaseSeconds = waiting ? Number(renewed.leaseSeconds) || 0 : 0;
       if (renewed.reviewMode) application.reviewMode = renewed.reviewMode;
       if (typeof renewed.autoSubmit === 'boolean') application.autoSubmit = renewed.autoSubmit;
     }
@@ -1213,6 +1245,8 @@ async function processApplyQueue() {
       }
       const application = claim.application;
       if (!application) return;
+      // Work found: this Chrome is not idle (shared/idle-pacing.js), until the queue is empty for a while.
+      await self.__qtsIdlePacing.noteActivity();
       const recipe = self.__qtsApplyRecipes.recipeFor(application.job.url);
       if (recipe.unsupported) {
         await workerApiRequest('POST', '/api/extension/apply/release', {
@@ -1223,10 +1257,14 @@ async function processApplyQueue() {
         continue;
       }
       await runApplication(application, recipe);
+      await self.__qtsIdlePacing.noteActivity();
     }
   } finally {
     applyLoopRunning = false;
   }
 }
 
-self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY };
+// An application being filled or waiting for the Manager: never paced down or turned off.
+const isBusy = () => activeReviews.size > 0;
+
+self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY };

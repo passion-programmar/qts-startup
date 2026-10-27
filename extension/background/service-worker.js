@@ -27,6 +27,8 @@ importScripts(
   '../shared/apply-answers.js',
   '../shared/apply-recipes.js',
   '../shared/apply-pdf.js',
+  '../shared/idle-pacing.js',
+  '../shared/chrome-pdf.js',
   'apply-runner.js'
 );
 
@@ -34,6 +36,8 @@ function isExtractablePageUrl(url) {
   if (!url || typeof url !== 'string') return false;
   try {
     const parsed = new URL(url);
+    // QTS's résumé template pages, which this Chrome prints PDFs from, are never job pages.
+    if (parsed.pathname.startsWith('/resume-templates/')) return false;
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
@@ -1295,6 +1299,7 @@ async function saveGetJdSelection(tabId, profileIds) {
     if (!job || (!job.description && !pageText)) {
       return { ok: false, error: 'The job description is missing. Run Get JD on the job page again.' };
     }
+    await self.__qtsIdlePacing.noteActivity();
     const response = await workerApiRequest('POST', '/api/extension/get-jd/save', {
       job,
       openerUrl: await tabOpenedFrom(tabId),
@@ -1536,6 +1541,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       }
       const pageText = jobText.text.slice(0, 100_000);
       if (!pageText.trim()) throw new Error('Could not read the job text from the loaded page.');
+      await self.__qtsIdlePacing.noteActivity();
       const geminiResult = await workerApiRequest('POST', '/api/extension/get-jd', {
         pageUrl: url,
         pageTitle: tab.title || documentId || url,
@@ -1718,6 +1724,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       await saveGetJdResult(tabId, { ...initialResult, status: 'cancelled', updatedAt: Date.now() });
       return;
     }
+    // A job page checked by Get JD: the Manager is browsing, so this Chrome is not idle.
+    await self.__qtsIdlePacing.noteActivity();
     const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
       job: {
         jobUrl: extractedJobDetails.url,
@@ -3757,12 +3765,28 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
-  async function downloadQueuedGenerationFiles(generationId, jobId, downloadIds) {
+  /**
+   * The three download files, with the two PDFs printed in this Chrome (shared/chrome-pdf.js).
+   * An older server sends them printed already; when printing here fails, QTS prints them as before.
+   */
+  async function readGenerationArtifacts(generationId, windowId) {
+    const path = `/api/extension/generation/artifacts?generationId=${encodeURIComponent(generationId)}`;
+    const forChrome = await workerApiRequest('GET', `${path}&print=chrome`);
+    if (forChrome.success !== true || !forChrome.print) return forChrome;
+    const printed = await self.__qtsChromePdf.printDocuments(forChrome.print, {
+      serverUrl: await self.__qtsRuntimeConfig.getServerUrl(),
+      windowId,
+    });
+    if (!printed) return workerApiRequest('GET', path);
+    return {
+      ...forChrome,
+      files: forChrome.files.map((file) => (file?.printDocument ? { ...file, base64: printed[file.printDocument] } : file)),
+    };
+  }
+
+  async function downloadQueuedGenerationFiles(generationId, jobId, downloadIds, windowId) {
     await ensureQueuedGenerationIsActive(jobId);
-    const artifactResult = await workerApiRequest(
-      'GET',
-      `/api/extension/generation/artifacts?generationId=${encodeURIComponent(generationId)}`,
-    );
+    const artifactResult = await readGenerationArtifacts(generationId, windowId);
     if (
       artifactResult.success !== true
       || !Array.isArray(artifactResult.files)
@@ -3981,8 +4005,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         }
         if (!claim.job) {
           // Several Chromes share the queue, so Generation stays on and checks again on its
-          // 30-second alarm instead of turning itself off; Cancel or Stop all turns it off.
+          // 30-second alarm (less often when idle) instead of turning itself off; Cancel or Stop
+          // all turns it off.
           if (completedCount || failedCount) {
+            // Work just ended: the idle back-off counts from now.
+            await self.__qtsIdlePacing.noteActivity();
             await notifyGenerationManager(
               `Generation finished ${completedCount} job(s) and ${failedCount} failed job(s). It stays on and takes new jobs as they are saved. Each failed job was tried twice; use Reset Generation on the Jobs page to try it again.`,
             );
@@ -3998,6 +4025,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           return;
         }
         await chrome.storage.local.remove(GENERATION_IDLE_NOTICE_KEY);
+        await self.__qtsIdlePacing.noteActivity();
         const queuedJob = claim.job;
         let jobTabId = null;
         let generationId = '';
@@ -4049,7 +4077,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           const result = await runGenerationForTab(jobTabId, queuedJob, chatTab);
           generationId = result.generationId;
           await updateGenerationBrowserState({ phase: 'downloading' });
-          await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds);
+          // The PDFs are printed in a hidden tab of the ChatGPT window, out of the Manager's way.
+          const printWindowId = (await getTab(chatTab.id))?.windowId;
+          await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds, printWindowId);
           finalizeAttempted = true;
           const finalized = await workerApiRequest(
             'POST',
@@ -5610,7 +5640,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const features = await getManagerExtensionFeatures();
         sendResponse({
           ok: true,
-          excluded: isManagerBlockedUrl(sender.tab.url, rules),
+          // A tab printing PDFs gets no QTS button: it would be printed into the PDF.
+          excluded: self.__qtsChromePdf.isPrintTab(sender.tab.id) || isManagerBlockedUrl(sender.tab.url, rules),
           canManagePageExclusions: features.success === true
             && features.features?.canManagePageExclusions === true,
           canManageJobDetectionUrlRules: features.success === true
@@ -5901,6 +5932,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     })().catch((e) => sendResponse({ error: e.message || 'Extraction failed.', manualOnly: true }));
     return true;
+  }
+
+  if (msg.type === 'QTS_ACTIVITY') {
+    checkForWorkNow().catch((error) => console.warn('[QTS] Could not check for work:', error));
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (msg.type === 'REGISTER_JOB_TAB') {
@@ -6389,8 +6426,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // The queue alarm restarts or recovers a run, so it only ticks while Generation is running or cancelling.
-// Every 30 seconds, while signed in with a mode on, this Chrome tells QTS which modes it runs and
-// learns whether "Stop all" was pressed on the Jobs page, which stops that mode here.
+// Every 30 seconds (less often when idle: pacedBrowserHeartbeat), while signed in with a mode on,
+// this Chrome tells QTS which modes it runs and learns whether "Stop all" was pressed on the Jobs
+// page, which stops that mode here.
 const BROWSER_HEARTBEAT_ALARM = 'qts-browser-heartbeat';
 const STOP_VERSIONS_KEY = 'qtsStopVersions';
 
@@ -6457,6 +6495,63 @@ async function notifyWorkStopped(message) {
   });
 }
 
+// ---- Fewer calls when idle (shared/idle-pacing.js) ----
+// The 30-second alarms keep ticking, but an idle Chrome skips most ticks: QTS is asked less and
+// less often, and after two quiet hours the modes turn off. Work running here is never paced down.
+
+/** Work running in this Chrome: a Generation job, a Cancel being finished, or an application. */
+async function isWorkBusy() {
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
+  return Boolean(stored[ACTIVE_GENERATION_JOB_KEY])
+    || stored[EXTENSION_STATUS_KEY] === 'cancel'
+    || self.__qtsApplyRunner?.isBusy?.() === true;
+}
+
+/** After two idle hours: the work slot stops the way Cancel does, Get JD turns off, and a notice says so. */
+async function turnOffIdleModes() {
+  const modes = await browserModes();
+  const names = [
+    modes.workMode === 'generation' ? 'Generation' : modes.workMode === 'apply' ? 'Apply' : '',
+    modes.getJdOn ? 'Get JD' : '',
+  ].filter(Boolean);
+  if (modes.workMode !== 'off') await stopWorkSlotLocally();
+  if (modes.getJdOn) {
+    await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
+    getJdInFlightTabs.clear();
+    getJdLastPageByTab.clear();
+  }
+  if (names.length) {
+    await notifyWorkStopped(`${names.join(' and ')} turned off in this Chrome after 2 hours with nothing to do. Turn it on again in QTS when you need it.`);
+  }
+}
+
+async function pacedBrowserHeartbeat() {
+  const busy = await isWorkBusy();
+  if (await self.__qtsIdlePacing.idleTooLong(busy)) {
+    await turnOffIdleModes();
+    return;
+  }
+  if (await self.__qtsIdlePacing.claimCheck('heartbeat', busy)) await sendBrowserHeartbeat();
+}
+
+async function pacedGenerationQueue() {
+  if (await self.__qtsIdlePacing.claimCheck('generation', await isWorkBusy())) await processQueuedGenerationJobs();
+}
+
+async function pacedApplyQueue() {
+  if (await self.__qtsIdlePacing.claimCheck('apply', await isWorkBusy())) await self.__qtsApplyRunner.processApplyQueue();
+}
+
+/** Opening QTS (the popup or the page launcher): not idle, and this Chrome checks for work right away. */
+async function checkForWorkNow() {
+  await self.__qtsIdlePacing.noteActivity();
+  const modes = await browserModes();
+  if (!modes.signedIn || (!modes.getJdOn && modes.workMode === 'off')) return;
+  await sendBrowserHeartbeat();
+  if (modes.workMode === 'generation') await processQueuedGenerationJobs();
+  if (modes.workMode === 'apply') await self.__qtsApplyRunner.processApplyQueue();
+}
+
 async function syncGenerationQueueAlarm() {
   const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
   const status = stored[EXTENSION_STATUS_KEY];
@@ -6474,6 +6569,10 @@ async function syncGenerationQueueAlarm() {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
+  // Turning a mode on is activity: the idle back-off starts again from every 30 seconds.
+  if (['generation', 'apply'].includes(changes[EXTENSION_STATUS_KEY]?.newValue) || changes[GET_JD_ON_KEY]?.newValue === true) {
+    self.__qtsIdlePacing.noteActivity().catch(() => {});
+  }
   if (changes[EXTENSION_STATUS_KEY] || changes[GET_JD_ON_KEY] || changes.authExpiresAt) {
     syncBrowserHeartbeatAlarm().catch(() => {});
     self.__qtsApplyRunner?.syncApplyQueueAlarm().catch(() => {});
@@ -6510,15 +6609,15 @@ self.chrome?.runtime?.onStartup?.addListener(() => {
 
 self.chrome?.alarms?.onAlarm?.addListener((alarm) => {
   if (alarm.name === self.__qtsApplyRunner?.APPLY_QUEUE_ALARM) {
-    self.__qtsApplyRunner.processApplyQueue().catch((error) => console.error('[QTS Apply] Queue worker failed:', error));
+    pacedApplyQueue().catch((error) => console.error('[QTS Apply] Queue worker failed:', error));
     return;
   }
   if (alarm.name === BROWSER_HEARTBEAT_ALARM) {
-    sendBrowserHeartbeat().catch((error) => console.warn('[QTS] Chrome heartbeat failed:', error));
+    pacedBrowserHeartbeat().catch((error) => console.warn('[QTS] Chrome heartbeat failed:', error));
     return;
   }
   if (alarm.name !== GENERATION_QUEUE_ALARM) return;
-  processQueuedGenerationJobs().catch((error) => {
+  pacedGenerationQueue().catch((error) => {
     console.error('[QTS Generation] Queue worker failed:', error);
   });
 });

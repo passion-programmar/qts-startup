@@ -264,7 +264,8 @@ const leaseFor = (seconds: number) => new Date(Date.now() + seconds * 1000);
  * Renews this Chrome's hold; false when the attempt is no longer its own (for example after a long
  * sleep). Filling is held for 2 minutes between heartbeats, waiting for the Manager for 10.
  */
-export async function renewApplyAttempt(attemptId: string, managerId: string, browserId: string): Promise<boolean> {
+/** Renews this Chrome's hold; the seconds it now lasts (longer while the Manager reviews), or null when it is not its own. */
+export async function renewApplyAttempt(attemptId: string, managerId: string, browserId: string): Promise<number | null> {
   const updated = await db
     .update(applyAttempts)
     .set({
@@ -279,8 +280,9 @@ export async function renewApplyAttempt(attemptId: string, managerId: string, br
       // An application waiting for the Manager's Yes/No stays answerable after its Chrome is gone.
       sql`(${applyAttempts.leaseExpiresAt} > now() or ${applyAttempts.status} = 'waiting_confirmation')`,
     ))
-    .returning({ id: applyAttempts.id });
-  return updated.length > 0;
+    .returning({ status: applyAttempts.status });
+  if (!updated.length) return null;
+  return updated[0].status === "claimed" ? APPLY_LEASE_SECONDS : APPLY_REVIEW_LEASE_SECONDS;
 }
 
 /**

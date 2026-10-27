@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { ApplyDocumentsUnavailableError, buildApplyDocuments } from "@/server/apply/apply-documents";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
+import { wantsChromePrint } from "@/server/pdf/chrome-print";
 
 // Chromium's first launch on a cold instance takes a few seconds.
 export const maxDuration = 60;
 
 // The résumé and cover-letter PDFs to upload for a claimed application, printed from the job's
-// delivered Generation run, with the job's folder name for a screenshot.
+// delivered Generation run, with the job's folder name for a screenshot. With ?print=chrome they
+// come as a print job instead, printed in the extension's Chrome.
 export async function GET(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
@@ -15,7 +17,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ success: false, message: "A valid attempt ID is required." }, { status: 400 });
   }
   try {
-    const documents = await buildApplyDocuments(attemptId, auth.manager.id, auth.manager.displayName, auth.browser.id);
+    const documents = await buildApplyDocuments(attemptId, auth.manager.id, auth.manager.displayName, auth.browser.id, {
+      printInChrome: wantsChromePrint(request),
+    });
     if (!documents) {
       return NextResponse.json(
         { success: false, message: "The job's delivered résumé was not found, or this Chrome no longer holds the application." },

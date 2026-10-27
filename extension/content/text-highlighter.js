@@ -1,11 +1,13 @@
 // ChatGPT is driven by Generation and streams constantly, so highlighting there only costs CPU.
 const TEXT_HIGHLIGHT_SKIPPED_HOSTS = /(^|\.)(chatgpt\.com|chat\.openai\.com)$/i;
+// QTS's résumé template pages are printed into PDFs: a highlight there would end up in the file.
+const TEXT_HIGHLIGHT_SKIPPED_PATHS = /^\/resume-templates\//;
 // Page changes are batched so busy pages are rescanned at most twice a second.
 const TEXT_HIGHLIGHT_BATCH_MS = 500;
 
 async function startPageTextHighlighter() {
   if (globalThis.__qtsPageTextHighlighter) return;
-  if (TEXT_HIGHLIGHT_SKIPPED_HOSTS.test(location.hostname)) return;
+  if (TEXT_HIGHLIGHT_SKIPPED_HOSTS.test(location.hostname) || TEXT_HIGHLIGHT_SKIPPED_PATHS.test(location.pathname)) return;
 
   const highlighting = globalThis.__qtsTextHighlighting;
   if (!highlighting || !globalThis.chrome?.storage?.local) return;
