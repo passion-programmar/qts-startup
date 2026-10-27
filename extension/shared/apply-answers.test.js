@@ -275,6 +275,32 @@ test('a form\'s only general upload takes the résumé; other documents never do
   }
 });
 
+test('photo and image uploads are never filled, even when required; image links are not made up', () => {
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Photo', { id: 'photo', kind: 'file' }),
+    field('Upload', { id: 'pictureOnly', kind: 'file', accept: 'image/png, image/jpeg' }),
+    field('Profile picture', { id: 'picture', kind: 'file', required: false }),
+    field('File upload', { id: 'general', kind: 'file', required: false }),
+    field('Link to your headshot', { id: 'headshotLink', kind: 'url' }),
+    field('Describe an image classification model you shipped', { id: 'ml', kind: 'textarea' }),
+  ], candidate, []);
+  assert.equal(resolved.photo, undefined);
+  assert.equal(resolved.pictureOnly, undefined);
+  assert.equal(resolved.picture, undefined);
+  assert.equal(resolved.headshotLink, undefined);
+  // Required image uploads do not count as the résumé's own upload: the general one still takes it.
+  assert.equal(resolved.general.file, 'resume');
+  // A question that only mentions images is still answered (by the AI here).
+  assert.deepEqual(open.map((entry) => entry.id), ['ml']);
+  // "CV with photo" and a document upload that also takes images are still the résumé.
+  const cv = answers.resolveFields([
+    field('CV with photo', { id: 'cv', kind: 'file' }),
+    field('Resume', { id: 'resume', kind: 'file', accept: '.pdf,.doc,.docx,.png' }),
+  ], candidate, []);
+  assert.equal(cv.answers.cv.file, 'resume');
+  assert.equal(cv.answers.resume.file, 'resume');
+});
+
 test('a tick box takes only yes/no facts, and a non-yes/no list goes to the AI instead of stopping', () => {
   const { answers: resolved, open, missing } = answers.resolveFields([
     field('Arden University can use my phone number for recruiting-related communication via SMS.', { kind: 'checkbox', required: false }),

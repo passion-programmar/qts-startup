@@ -983,6 +983,34 @@ async function getTab(tabId) {
   }
 }
 
+/**
+ * The window Generation and Apply open their tabs in: the Manager's current one (the last focused),
+ * or a new one when none is open. Only their own tabs are marked as theirs, never the window, so
+ * the Manager's tabs there stay the Manager's (Get JD still checks them).
+ */
+async function currentWorkWindowId() {
+  const current = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+  if (current?.id != null) return current.id;
+  return (await chrome.windows.create({ focused: false, state: 'normal' })).id;
+}
+
+/** Shows a tab in its window; the tab shown before, to come back to, or null. */
+async function bringTabToFront(tabId) {
+  const tab = await getTab(tabId);
+  if (!tab) return null;
+  const [shown] = await chrome.tabs.query({ windowId: tab.windowId, active: true }).catch(() => []);
+  if (!tab.active) await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  return shown && shown.id !== tabId ? shown.id : null;
+}
+
+/** The tab shown before comes back, unless the Manager has moved to another tab meanwhile. */
+async function returnToTab(workTabId, previousTabId) {
+  if (previousTabId == null) return;
+  const tab = await getTab(workTabId);
+  if (tab && !tab.active) return;
+  if (await getTab(previousTabId)) await chrome.tabs.update(previousTabId, { active: true }).catch(() => {});
+}
+
 async function canInjectIntoTab(tab) {
   if (!tab?.id || !tab.url) return false;
   if (!isExtractablePageUrl(tab.url)) return false;
@@ -3235,14 +3263,16 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
-  // Generation works in its own window (pinned ChatGPT tab plus the job pages it opens), opened
-  // without taking focus, so the Manager's browsing window stays theirs.
+  // Generation works in the Manager's current window: a pinned ChatGPT tab, shown while ChatGPT
+  // writes, and the job pages it opens next to it in the background.
   async function acquireGenerationChatGptTab() {
-    const window = await chrome.windows.create({ url: 'https://chatgpt.com/', focused: false, state: 'normal' });
-    const created = window?.tabs?.[0];
+    const created = await chrome.tabs.create({
+      windowId: await currentWorkWindowId(),
+      url: 'https://chatgpt.com/',
+      active: false,
+      pinned: true,
+    });
     if (created?.id == null) throw new Error('Could not open a new pinned ChatGPT tab.');
-    await tabOwnership.markWindow(window.id, 'generation');
-    await chrome.tabs.update(created.id, { pinned: true }).catch(() => {});
     await tabOwnership.markTab(created.id, 'generation');
     const existingTabs = await chrome.tabs.query({});
     const otherChatTabs = existingTabs.filter((tab) =>
@@ -3959,6 +3989,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     const excludedJobIds = new Set();
     const failuresThisRun = new Map();
     let chatTab = null;
+    // The Manager's tab before ChatGPT was shown, shown again when this run ends.
+    let tabBeforeChatGpt = null;
     let completedCount = 0;
     let failedCount = 0;
     let shouldStop = false;
@@ -4027,7 +4059,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         await chrome.storage.local.remove(GENERATION_IDLE_NOTICE_KEY);
         await self.__qtsIdlePacing.noteActivity();
         const queuedJob = claim.job;
-        let jobTabId = null;
+        // Generation opens no job page; its steps show on the ChatGPT tab's card.
+        const jobTabId = null;
         let generationId = '';
         let finalizeAttempted = false;
         const downloadIds = [];
@@ -4058,22 +4091,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             await startNewChatGptChat(chatTab.id);
           }
           chatTab.jobs += 1;
-          // Then the job page, in the background. The prompt uses the saved job, so it is not waited for.
-          try {
-            const chatWindowId = (await getTab(chatTab.id))?.windowId;
-            const jobTab = await chrome.tabs.create({
-              url: queuedJob.jobUrl,
-              active: false,
-              ...(chatWindowId != null ? { windowId: chatWindowId } : {}),
-            });
-            if (jobTab?.id != null) {
-              await tabOwnership.markTab(jobTab.id, 'generation');
-              jobTabId = jobTab.id;
-              await updateGenerationBrowserState({ jobTabId, jobUrl: queuedJob.jobUrl });
-            }
-          } catch (error) {
-            console.warn('[QTS Generation] Could not open the job page; continuing with saved job data:', error);
-          }
+          // ChatGPT is shown while it writes (Chrome slows hidden tabs); the first job remembers the tab to return to.
+          const shownBefore = await bringTabToFront(chatTab.id);
+          tabBeforeChatGpt ??= shownBefore;
+          // No job page is opened: the prompt uses the saved job (description, title, company).
           const result = await runGenerationForTab(jobTabId, queuedJob, chatTab);
           generationId = result.generationId;
           await updateGenerationBrowserState({ phase: 'downloading' });
@@ -4215,7 +4236,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       }
     } finally {
       generationQueueInFlight = false;
-      if (chatTab) await chrome.tabs.remove(chatTab.id).catch(() => {});
+      if (chatTab) {
+        await returnToTab(chatTab.id, tabBeforeChatGpt);
+        await chrome.tabs.remove(chatTab.id).catch(() => {});
+      }
       try {
         const current = await chrome.storage.local.get([
           EXTENSION_STATUS_KEY,

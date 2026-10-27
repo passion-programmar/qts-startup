@@ -173,6 +173,33 @@
     return cleanText(item.getAttribute('data-search-text') || textOf(item));
   }
 
+  // Choice buttons a page draws itself: pressable ones side by side (Ashby's Yes / No).
+  function pressButtons(element) {
+    return [...element.children].filter((child) => child.tagName === 'BUTTON' && child.hasAttribute('aria-pressed'));
+  }
+
+  /** Two or more short pressable buttons in a question's block are one choice question. */
+  function isPressGroup(element) {
+    if (element.tagName === 'BUTTON' || element.hasAttribute('role')) return false;
+    const buttons = pressButtons(element);
+    return buttons.length >= 2 && buttons.every((button) => { const text = itemText(button); return text && text.length <= 40; })
+      && Boolean(blockQuestion(element).text);
+  }
+
+  // A styled radio group's choices: role="radio" items, or pressable buttons.
+  function groupItems(group) {
+    const radios = [...group.querySelectorAll('[role="radio"]')];
+    return radios.length ? radios : pressButtons(group);
+  }
+
+  const isChosen = (item) => item.getAttribute('aria-checked') === 'true' || item.getAttribute('aria-pressed') === 'true';
+
+  // Ashby draws a required question's asterisk with CSS: its heading's class says "required".
+  function headingRequired(element) {
+    const heading = blockQuestion(element).block?.querySelector('label, legend');
+    return Boolean(heading && !heading.contains(element) && /required/i.test(String(heading.className)));
+  }
+
   /**
    * A styled dropdown button (Radix and shadcn: role="combobox") whose real choices sit in the
    * hidden native select next to it, which the page keeps for its form.
@@ -239,6 +266,23 @@
     for (const control of allElements()) {
       const tag = control.tagName;
       const type = (control.getAttribute('type') || '').toLowerCase();
+      // Pressable choice buttons (Ashby's Yes / No) are one question, answered like a radio group;
+      // the tick box the page keeps hidden beside them is not a question of its own.
+      if (isPressGroup(control)) {
+        const label = blockQuestion(control).text;
+        control.setAttribute(RADIO_GROUP_ATTRIBUTE, 'press');
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'radio',
+          required: isRequired(control, label) || headingRequired(control),
+          options: pressButtons(control).map(itemText),
+          hidden: !isShown(control),
+          disabled: pressButtons(control).every((button) => button.disabled),
+        });
+        continue;
+      }
+      if (tag === 'INPUT' && control.closest(`[${RADIO_GROUP_ATTRIBUTE}="press"]`)) continue;
       // Menus count only inside the form (a "Share page" menu is not a question).
       if ((tag === 'BUTTON' || control.getAttribute('role') === 'button') && control.closest('form, fieldset') && menuChoices(control)) {
         const label = labelFor(control);
@@ -397,6 +441,8 @@
         hidden: !shown,
         disabled: control.disabled || control.readOnly,
         ...(control.maxLength > 0 ? { maxLength: control.maxLength } : {}),
+        // What an upload takes ("image/*" for a photo), so Apply never puts a document there.
+        ...(type === 'file' && control.accept ? { accept: String(control.accept).slice(0, 200) } : {}),
         // Date fields typed as text show their format here (DD/MM/YYYY).
         ...(control.placeholder ? { placeholder: String(control.placeholder).slice(0, 40) } : {}),
         // Text already in the box (a site may remember the previous applicant).
@@ -545,11 +591,11 @@
     if (element.hasAttribute(MENU_ATTRIBUTE)) return pickMenuChoice(element, value);
     if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
       const wanted = cleanText(value).toLowerCase();
-      const item = [...element.querySelectorAll('[role="radio"]')].find((entry) => itemText(entry).toLowerCase() === wanted);
+      const item = groupItems(element).find((entry) => itemText(entry).toLowerCase() === wanted);
       if (!item) return { ok: false, error: `"${value}" is not an option.` };
-      if (item.getAttribute('aria-checked') !== 'true') press(item);
+      if (!isChosen(item)) press(item);
       await new Promise((resolve) => setTimeout(resolve, 200));
-      return { ok: item.getAttribute('aria-checked') === 'true', value: itemText(item) };
+      return { ok: isChosen(item), value: itemText(item) };
     }
     if (element.tagName !== 'INPUT' && element.getAttribute('role') === 'checkbox') {
       if ((element.getAttribute('aria-checked') === 'true') !== Boolean(value)) element.click();
@@ -829,7 +875,7 @@
     if (!element) return null;
     const wanted = cleanText(value).toLowerCase();
     if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
-      return [...element.querySelectorAll('[role="radio"]')].find((entry) => itemText(entry).toLowerCase() === wanted) || null;
+      return groupItems(element).find((entry) => itemText(entry).toLowerCase() === wanted) || null;
     }
     const control = element.name ? controlsOfGroup(element).find((entry) => choiceText(entry).toLowerCase() === wanted) : null;
     if (!control) return null;
@@ -845,7 +891,10 @@
   function optionChecked(id, value) {
     const element = findField(id);
     if (!element) return false;
-    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return optionOf(id, value)?.getAttribute('aria-checked') === 'true';
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
+      const option = optionOf(id, value);
+      return Boolean(option && isChosen(option));
+    }
     const wanted = cleanText(value).toLowerCase();
     return controlsOfGroup(element).some((entry) => entry.checked && choiceText(entry).toLowerCase() === wanted);
   }
@@ -859,7 +908,7 @@
     return scanForm().filter((field) => field.required && !field.hidden && !field.disabled && field.kind !== 'file').filter((field) => {
       const element = findField(field.id);
       if (!element) return false;
-      if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return !element.querySelector('[role="radio"][aria-checked="true"]');
+      if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return !groupItems(element).some(isChosen);
       if (field.kind === 'radio' || field.kind === 'checkbox-group') return !controlsOfGroup(element).some((control) => control.checked);
       if (field.kind === 'checkbox') return element.tagName === 'INPUT' ? !element.checked : element.getAttribute('aria-checked') !== 'true';
       if (field.kind === 'select') return !element.value || placeholder.test(optionText(element.selectedOptions?.[0] || {}));
@@ -1064,7 +1113,7 @@
         if (!element) return null;
         let value = '';
         if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
-          value = textOf(element.querySelector('[role="radio"][aria-checked="true"]') || {});
+          value = textOf(groupItems(element).find(isChosen) || {});
         } else if (field.kind === 'radio' || field.kind === 'checkbox-group') {
           value = controlsOfGroup(element).filter((control) => control.checked)
             .map((control) => labelFor(control) || control.value).filter(Boolean).join(' | ');

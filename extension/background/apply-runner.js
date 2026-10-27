@@ -1,5 +1,5 @@
 // Apply with Manager review: takes Generation-completed jobs from the server one at a time (one per
-// Chrome), fills each step of the form in Apply's own window, and waits for the Manager on every
+// Chrome), fills each step of the form in a tab of the Manager's current window, and waits for the Manager on every
 // step. The Manager clicks the site's Submit and answers "Submitted successfully?": Yes makes the
 // bid. Loaded by the service worker with importScripts; it uses the worker's shared helpers
 // (workerApiRequest, getTab, sleep, tabOwnership, openDownloadedFolder, the ChatGPT helpers) at call time.
@@ -62,7 +62,10 @@ async function notifyApply(message) {
   });
 }
 
-/** Apply's own window, opened without taking focus; every tab in it belongs to Apply. */
+/**
+ * The window Apply opens its tabs in: the one it used last while that is still open, else the
+ * Manager's current one. Only Apply's own tabs there are marked as Apply's, never the window.
+ */
 async function applyWindowId() {
   const stored = await chrome.storage.session.get(APPLY_WINDOW_KEY);
   const existing = stored[APPLY_WINDOW_KEY];
@@ -70,20 +73,18 @@ async function applyWindowId() {
     const window = await chrome.windows.get(existing).catch(() => null);
     if (window) return window.id;
   }
-  const window = await chrome.windows.create({ url: 'about:blank', focused: false, state: 'normal' });
-  await tabOwnership.markWindow(window.id, 'apply');
-  await chrome.storage.session.set({ [APPLY_WINDOW_KEY]: window.id });
-  return window.id;
+  const windowId = await currentWorkWindowId();
+  await chrome.storage.session.set({ [APPLY_WINDOW_KEY]: windowId });
+  return windowId;
 }
 
+// The form is shown while Apply fills it. It opens next to the Manager's tab as its opener, so
+// Chrome shows that tab again when the form closes.
 async function openApplyTab(url) {
   const windowId = await applyWindowId();
-  const tab = await chrome.tabs.create({ windowId, url, active: true });
+  const [shown] = await chrome.tabs.query({ windowId, active: true }).catch(() => []);
+  const tab = await chrome.tabs.create({ windowId, url, active: true, ...(shown?.id != null ? { openerTabId: shown.id } : {}) });
   await tabOwnership.markTab(tab.id, 'apply');
-  // The about:blank tab the window opened with is no longer needed.
-  for (const other of await chrome.tabs.query({ windowId })) {
-    if (other.id !== tab.id && other.url === 'about:blank') chrome.tabs.remove(other.id).catch(() => {});
-  }
   return tab;
 }
 

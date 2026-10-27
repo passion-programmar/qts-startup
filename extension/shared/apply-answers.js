@@ -453,10 +453,16 @@
     if (field.kind === 'file') {
       // "Autofill from resume" parses the file and overwrites the answers already filled.
       if (/autofill/.test(label)) return { skip: 'The site\'s autofill-from-résumé upload.' };
+      // Photos and other images are never uploaded, even when required: Apply has no image to give.
+      if (isImageUpload(field)) return { skip: 'An image upload (photo).' };
       if (/cover/.test(label)) return { file: 'coverLetter', source: 'documents' };
       if (/resume|résumé|\bcv\b|curriculum/.test(label) || field.required) return { file: 'resume', source: 'documents' };
       if (field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
       return { skip: 'An optional upload that is not a résumé or cover letter.' };
+    }
+    // A link to a photo is not made up either; a question that only mentions images is answered.
+    if (['text', 'url'].includes(field.kind) && IMAGE_WORDS.test(label) && /\b(url|link)\b/.test(label)) {
+      return { skip: 'A link to a photo or image.' };
     }
     // Required consent and certification boxes are ticked; optional ones (marketing, future jobs) are left.
     // Agreeing to the terms or privacy policy is needed to apply even when the box is not marked required.
@@ -626,6 +632,20 @@
     return { ask: answer, from: 'reusable', note: row.note || null };
   }
 
+  const IMAGE_WORDS = /\b(photos?|photograph|pictures?|pic|images?|headshot|avatar|selfie|portrait)\b/;
+  const IMAGE_FILE = /^(image\/.*|\.(jpe?g|png|gif|webp|heic|heif|bmp|svg|tiff?))$/;
+
+  /**
+   * An upload for a photo or other image: it takes only image files, or it asks for a photo and not
+   * a CV ("CV with photo" is still the résumé). Apply never uploads anything there.
+   */
+  function isImageUpload(field) {
+    const types = String(field.accept || '').toLowerCase().split(',').map((entry) => entry.trim()).filter(Boolean);
+    if (types.length && types.every((entry) => IMAGE_FILE.test(entry))) return true;
+    const label = labelOf(field);
+    return IMAGE_WORDS.test(label) && !/resume|résumé|\bcv\b|curriculum|cover/.test(label);
+  }
+
   const GENERAL_UPLOAD = /\b(files?|upload|attach|attachments?|documents?)\b/;
   const OTHER_DOCUMENT = /\b(additional|other|supporting|extra|portfolio|photo|picture|image|avatar|headshot|certificates?|certifications?|transcripts?|diploma|degree|passport|identity|id|samples?|writing|references?|recommendation|video|audio)\b/;
 
@@ -635,7 +655,7 @@
    * "Additional files") are never it. The id of that one upload, or null.
    */
   function generalUploadId(fields) {
-    const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled);
+    const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled && !isImageUpload(field));
     // The uploads resolveField already gives the résumé (named for it, or required).
     const takesResume = (field) => !/cover|autofill/.test(labelOf(field))
       && (/resume|résumé|\bcv\b|curriculum/.test(labelOf(field)) || field.required);
