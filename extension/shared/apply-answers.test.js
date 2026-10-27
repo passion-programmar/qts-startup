@@ -246,6 +246,35 @@ test('Teamtailor\'s menu dropdown and drag-and-drop CV are answered like any cho
   assert.deepEqual(open.map((entry) => entry.id), ['Please select what right to work you hold: * Required']);
 });
 
+test('a form\'s only general upload takes the résumé; other documents never do', () => {
+  // justjoin.it: one optional upload named "File upload" (its box says "Add document").
+  const justJoin = answers.resolveFields([
+    field('First and last name'),
+    field('File upload Add document Format: PDF. Max size 5 MB', { id: 'upload', kind: 'file', required: false }),
+  ], candidate, []);
+  assert.equal(justJoin.answers.upload.file, 'resume');
+  // A separate cover-letter upload or a "fill from résumé" upload still leaves the résumé to the general one.
+  const withOthers = answers.resolveFields([
+    field('Autofill from resume', { id: 'autofill', kind: 'file', required: false }),
+    field('Cover letter', { id: 'cover', kind: 'file', required: false }),
+    field('Attachment', { id: 'attach', kind: 'file', required: false }),
+  ], candidate, []);
+  assert.equal(withOthers.answers.attach.file, 'resume');
+  assert.equal(withOthers.answers.cover.file, 'coverLetter');
+  assert.equal(withOthers.answers.autofill, undefined);
+  // A form with its own résumé upload keeps a general one empty; photos and extra files are never the résumé.
+  const named = answers.resolveFields([
+    field('Resume', { id: 'resume', kind: 'file', required: false }),
+    field('Attach file', { id: 'attach', kind: 'file', required: false }),
+  ], candidate, []);
+  assert.equal(named.answers.resume.file, 'resume');
+  assert.equal(named.answers.attach, undefined);
+  for (const label of ['Additional files', 'Upload a photo', 'Portfolio upload', 'Upload certificates']) {
+    const other = answers.resolveFields([field(label, { id: 'x', kind: 'file', required: false })], candidate, []);
+    assert.equal(other.answers.x, undefined, label);
+  }
+});
+
 test('a tick box takes only yes/no facts, and a non-yes/no list goes to the AI instead of stopping', () => {
   const { answers: resolved, open, missing } = answers.resolveFields([
     field('Arden University can use my phone number for recruiting-related communication via SMS.', { kind: 'checkbox', required: false }),

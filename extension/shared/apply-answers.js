@@ -455,6 +455,7 @@
       if (/autofill/.test(label)) return { skip: 'The site\'s autofill-from-résumé upload.' };
       if (/cover/.test(label)) return { file: 'coverLetter', source: 'documents' };
       if (/resume|résumé|\bcv\b|curriculum/.test(label) || field.required) return { file: 'resume', source: 'documents' };
+      if (field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
       return { skip: 'An optional upload that is not a résumé or cover letter.' };
     }
     // Required consent and certification boxes are ticked; optional ones (marketing, future jobs) are left.
@@ -625,14 +626,36 @@
     return { ask: answer, from: 'reusable', note: row.note || null };
   }
 
+  const GENERAL_UPLOAD = /\b(files?|upload|attach|attachments?|documents?)\b/;
+  const OTHER_DOCUMENT = /\b(additional|other|supporting|extra|portfolio|photo|picture|image|avatar|headshot|certificates?|certifications?|transcripts?|diploma|degree|passport|identity|id|samples?|writing|references?|recommendation|video|audio)\b/;
+
+  /**
+   * A form with no upload of its own for the résumé gets it in its general upload ("File upload",
+   * "Attachment", "Add document": justjoin.it). Uploads for other documents (photos, portfolios,
+   * "Additional files") are never it. The id of that one upload, or null.
+   */
+  function generalUploadId(fields) {
+    const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled);
+    // The uploads resolveField already gives the résumé (named for it, or required).
+    const takesResume = (field) => !/cover|autofill/.test(labelOf(field))
+      && (/resume|résumé|\bcv\b|curriculum/.test(labelOf(field)) || field.required);
+    if (uploads.some(takesResume)) return null;
+    const general = uploads.find((field) => {
+      const label = labelOf(field);
+      return GENERAL_UPLOAD.test(label) && !OTHER_DOCUMENT.test(label) && !/cover|autofill/.test(label);
+    });
+    return general ? general.id : null;
+  }
+
   /**
    * Splits a page's fields into answered from the profile, questions for the AI, and left alone.
    * The profile goes first, then Super Admin's reusable answers; whatever they cannot answer goes to
    * the AI, with the profile's value or the reusable answer as a hint when one did not fit.
    * Nothing stops the application here.
    */
-  function resolveFields(fields, profile, savedAnswerRows, context = {}) {
+  function resolveFields(fields, profile, savedAnswerRows, givenContext = {}) {
     const savedAnswers = savedAnswerRows || [];
+    const context = { ...givenContext, generalUploadId: generalUploadId(fields) };
     const candidate = withReusableFacts(profile, savedAnswers, context.exchangeRates);
     const answers = {};
     const open = [];
