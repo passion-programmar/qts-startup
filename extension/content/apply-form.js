@@ -576,6 +576,16 @@
     return [...root.querySelectorAll(`input[type="${first.type}"][name="${CSS.escape(first.name)}"]`)];
   }
 
+  /** Whether a file input takes this file: no accept list, or one naming its type or extension. */
+  function acceptsFile(input, file) {
+    const types = String(input.accept || '').toLowerCase().split(',').map((entry) => entry.trim()).filter(Boolean);
+    if (!types.length) return true;
+    const mime = String(file.mimeType || '').toLowerCase();
+    const extension = `.${String(file.filename || '').split('.').pop()?.toLowerCase()}`;
+    return types.some((entry) => entry === '*/*' || entry === mime || entry === extension
+      || (entry.endsWith('/*') && mime.startsWith(entry.slice(0, -1))));
+  }
+
   function base64ToFile(base64, filename, mimeType) {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
@@ -605,6 +615,7 @@
     const type = (element.getAttribute('type') || '').toLowerCase();
     if (type === 'file') {
       if (!file) return { ok: false, error: 'No file to attach.' };
+      if (!acceptsFile(element, file)) return { ok: false, error: `This upload does not take ${file.filename.split('.').pop()?.toUpperCase() || 'this'} files (it takes ${element.accept}).` };
       const transfer = new DataTransfer();
       transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
       element.files = transfer.files;
@@ -699,7 +710,12 @@
       zone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
     }
     if (await waitShown()) return { ok: true, value: file.filename };
-    const hiddenInput = [...document.querySelectorAll('input.dz-hidden-input, body > input[type="file"]')][0];
+    // The zone's own input first (in its box), then a Dropzone's hidden one; never one that does not
+    // take this kind of file (a photo upload elsewhere on the page).
+    const hiddenInput = [
+      ...[zone, block].flatMap((element) => [...(element?.querySelectorAll('input[type="file"]') || [])]),
+      ...document.querySelectorAll('input.dz-hidden-input, body > input[type="file"]'),
+    ].find((input) => acceptsFile(input, file));
     if (hiddenInput) {
       hiddenInput.files = transfer.files;
       hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
@@ -956,13 +972,30 @@
     return /\p{L}{2}/u.test(question) ? question : '';
   }
 
+  // Page components that are controls (<spl-button>, <x-input>…): their real control is in a shadow root.
+  const CONTROL_COMPONENT = /-(button|input|select|checkbox|radio|textarea|dropdown|combobox|autocomplete|upload)$/i;
+  const isControl = (element) => element.matches(INTERACTIVE) || CONTROL_COMPONENT.test(element.tagName);
+
   /** The question's own block: the heading itself around its control, else the nearest parent holding one. */
   function questionBlock(heading) {
-    if (heading.querySelector(INTERACTIVE)) return heading;
+    if ([...heading.querySelectorAll('*')].some(isControl)) return heading;
     for (let node = heading.parentElement, depth = 0; node && depth < 4; node = node.parentElement, depth += 1) {
-      if ([...node.querySelectorAll(INTERACTIVE)].some((control) => !heading.contains(control))) return node;
+      if ([...node.querySelectorAll('*')].some((control) => isControl(control) && !heading.contains(control))) return node;
     }
     return null;
+  }
+
+  /**
+   * Whether a block shows more than its question and buttons: entries a section already lists
+   * ("Experience" with jobs added), which count as answered.
+   */
+  function blockHasContent(block, question) {
+    let rest = textOf(block);
+    for (const element of block.querySelectorAll('*')) {
+      if (isControl(element)) rest = rest.replace(textOf(element), ' ');
+    }
+    rest = cleanText(rest.replace(question, ' ').replace(/[*✱+]/g, ' '));
+    return rest.length > 30;
   }
 
   /**
@@ -992,6 +1025,12 @@
       const known = marked.map((element) => fields.get(element.getAttribute(FIELD_ATTRIBUTE)))
         .filter((field) => field && (!field.hidden || !isUnanswered(field)));
       if (!known.length) {
+        // Entries a section lists may sit next to its heading's box: the section counts when it
+        // holds no other question.
+        const section = block.parentElement;
+        const ownSection = section && !section.querySelector(`[${FIELD_ATTRIBUTE}]`)
+          && ![...section.querySelectorAll('label, legend, h2, h3, h4, h5, h6')].some((element) => !block.contains(element) && requiredHeadingText(element));
+        if (blockHasContent(block, question) || (ownSection && blockHasContent(section, question))) continue;
         found.push({ id: fieldId(heading), label: question.slice(0, 200), kind: 'unread' });
       } else if (!known.some((field) => field.required || field.kind === 'file') && known.every(isUnanswered)) {
         // A field required only on screen (emptyRequired covers the ones known to be required).

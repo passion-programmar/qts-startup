@@ -638,15 +638,16 @@
   const AUTOFILL_UPLOAD = /auto-?fill|auto-?complete|auto-?populate|pre-?fill|easy apply|\b(parse|import)\b[^.]{0,30}\b(resume|résumé|cv)\b|\b(resume|résumé|cv)\b[^.]{0,40}\b(to |and )?(fill|complete) (in )?(the |your )?(form|application|profile|fields)/;
 
   function isAutofillUpload(field) {
-    return field.kind === 'file' && AUTOFILL_UPLOAD.test(labelOf(field));
+    // A photo upload near an "Easy Apply" heading is still a photo upload.
+    return field.kind === 'file' && AUTOFILL_UPLOAD.test(labelOf(field)) && !isImageUpload(field);
   }
 
   // A box for the cover letter, or a message to the employer, takes Generation's cover letter text.
   const COVER_LETTER_BOX = /cover letter|motivation(al)? letter|letter of motivation/;
-  const MESSAGE_BOX = /message (to|for) (the )?(hiring (team|manager)|recruit(er|ing team)|employer|company|team)|note to (the )?(hiring|recruit)/;
+  const MESSAGE_BOX = /message (to|for) (the )?(hiring (team|manager)|recruit(er|ing team)|employer|company|team)|note to (the )?(hiring|recruit)|let (the|us) (company|team|employer|hiring team|recruiter) know (about )?(your|why)/;
 
   const IMAGE_WORDS = /\b(photos?|photograph|pictures?|pic|images?|headshot|avatar|selfie|portrait)\b/;
-  const IMAGE_FILE = /^(image\/.*|\.(jpe?g|png|gif|webp|heic|heif|bmp|svg|tiff?))$/;
+  const IMAGE_FILE = /^(image\/.*|\.(jpe?g|jfif|pjpeg|pjp|png|gif|webp|avif|heic|heif|bmp|svg|ico|tiff?))$/;
 
   /**
    * An upload for a photo or other image: it takes only image files, or it asks for a photo and not

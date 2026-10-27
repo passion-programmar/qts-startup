@@ -283,6 +283,12 @@ test('uploads that read the résumé to fill the form are recognised on any site
     assert.equal(answers.isAutofillUpload({ kind: 'file', label }), false, label);
   }
   assert.equal(answers.isAutofillUpload({ kind: 'text', label: 'Autofill from resume' }), false);
+  // A photo upload under an "Easy Apply" heading (SmartRecruiters takes .jfif photos) is not the résumé box.
+  assert.equal(answers.isAutofillUpload({ kind: 'file', label: 'Easy Apply Choose an option to autocomplete your application.', accept: '.bmp,.gif,.jfif,.jpeg,.jpg,.png,.tif,.tiff,.webp' }), false);
+  const { answers: letMessage } = answers.resolveFields([
+    field('Let the company know about your interest working there', { id: 'interest', kind: 'textarea', required: false }),
+  ], candidate, [], { coverLetterText: 'Dear Hiring Team' });
+  assert.equal(letMessage.interest.value, 'Dear Hiring Team');
   const coverLetterText = 'Dear Hiring Team,\n\nI am applying.';
   const { answers: resolved } = answers.resolveFields([
     field('Easy Apply Choose an option to autocomplete your application.', { id: 'easy', kind: 'file', required: false }),
