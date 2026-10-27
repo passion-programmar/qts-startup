@@ -189,7 +189,8 @@ export type AppliedAnswer = { question: string; answer: string; source: string }
 // One Apply run as the job row keeps it: when, how it ended, and every answer with its source.
 export type ApplyRun = { at: string; outcome: string; reason: string | null; answers: AppliedAnswer[] };
 
-const ANSWER_SOURCES = new Set(["profile", "reusable", "ai", "documents", "consent", "rule", "saved", "manager"]);
+// "site": what the site filled itself from the uploaded résumé.
+const ANSWER_SOURCES = new Set(["profile", "reusable", "ai", "documents", "consent", "rule", "saved", "manager", "site"]);
 
 /**
  * The answers a run used, as the extension reports them: question, answer (lists joined, tick boxes

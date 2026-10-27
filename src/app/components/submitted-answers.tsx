@@ -14,6 +14,7 @@ const sourceLabels: Record<string, string> = {
   consent: "Consent",
   rule: "Rule",
   manager: "Manager",
+  site: "Site (from résumé)",
 };
 const sourceClasses: Record<string, string> = {
   profile: "bg-blue-50 text-blue-700",

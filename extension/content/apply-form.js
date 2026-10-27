@@ -899,25 +899,106 @@
     return controlsOfGroup(element).some((entry) => entry.checked && choiceText(entry).toLowerCase() === wanted);
   }
 
+  const PLACEHOLDER = /^(|-+|–?\s*select\s*–?|select( an option| one)?\.*|choose.*|please select.*|kliknij.*|wybierz.*)$/i;
+
+  /** Whether a scanned field still has no answer, whatever kind it is. */
+  function isUnanswered(field) {
+    const element = findField(field.id);
+    if (!element) return false;
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return !groupItems(element).some(isChosen);
+    if (field.kind === 'radio' || field.kind === 'checkbox-group') return !controlsOfGroup(element).some((control) => control.checked);
+    if (field.kind === 'checkbox') return element.tagName === 'INPUT' ? !element.checked : element.getAttribute('aria-checked') !== 'true';
+    if (field.kind === 'select') return !element.value || PLACEHOLDER.test(optionText(element.selectedOptions?.[0] || {}));
+    if (field.kind === 'menu' || field.kind === 'combobox') {
+      const shown = shownValue(field.id).replace(/[×✕]/g, '').trim();
+      return PLACEHOLDER.test(shown);
+    }
+    return !String(element.value || '').trim();
+  }
+
   /**
    * Required questions on the page that still have no answer, whatever kind they are: the check
    * that an application is complete before Submit. Uploads are left to the site's own check.
    */
   function emptyRequired() {
-    const placeholder = /^(|-+|–?\s*select\s*–?|select( an option| one)?\.*|choose.*|please select.*|kliknij.*|wybierz.*)$/i;
-    return scanForm().filter((field) => field.required && !field.hidden && !field.disabled && field.kind !== 'file').filter((field) => {
-      const element = findField(field.id);
-      if (!element) return false;
-      if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return !groupItems(element).some(isChosen);
-      if (field.kind === 'radio' || field.kind === 'checkbox-group') return !controlsOfGroup(element).some((control) => control.checked);
-      if (field.kind === 'checkbox') return element.tagName === 'INPUT' ? !element.checked : element.getAttribute('aria-checked') !== 'true';
-      if (field.kind === 'select') return !element.value || placeholder.test(optionText(element.selectedOptions?.[0] || {}));
-      if (field.kind === 'menu' || field.kind === 'combobox') {
-        const shown = shownValue(field.id).replace(/[×✕]/g, '').trim();
-        return placeholder.test(shown);
+    return scanForm()
+      .filter((field) => field.required && !field.hidden && !field.disabled && field.kind !== 'file' && isUnanswered(field))
+      .map((field) => ({ id: field.id, label: field.label }));
+  }
+
+  // ---- The safety net: required questions read the way a person reads them ----
+
+  // A question shown as required: "Name *", "Email (required)", or a heading styled required (Ashby).
+  const REQUIRED_MARK = /[*✱]\s*$|\(required\)\s*$/i;
+  // "* indicates a required field" is a note, not a question.
+  const REQUIRED_NOTE = /indicates? (a )?required|required fields?|fields? (marked|with)|are (required|mandatory)|mandatory fields?/i;
+  const INTERACTIVE = 'input:not([type="hidden"]), textarea, select, button, [role="radio"], [role="checkbox"], '
+    + '[role="combobox"], [role="listbox"], [role="switch"], [contenteditable="true"]';
+  const QTS_UI = ['data-qts-apply-review', 'data-qts-page-launcher', 'data-qts-page-toast', 'data-qts-get-jd-ui'];
+  const UPLOAD_QUESTION = /resume|résumé|\bcv\b|cover letter|upload|attach|\bfiles?\b|\bdocuments?\b/i;
+
+  /** QTS's own panels on the page (in their own shadow roots) are not the form. */
+  function insideQtsUi(element) {
+    for (let node = element; node; node = node.parentNode || node.host) {
+      if (node.nodeType === 1 && (node.id === 'qts-generation-steps' || QTS_UI.some((name) => node.hasAttribute(name)))) return true;
+    }
+    return false;
+  }
+
+  function requiredHeadingText(element) {
+    if (!['LABEL', 'LEGEND', 'SPAN', 'DIV', 'P', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(element.tagName)) return '';
+    const text = textOf(element);
+    if (!text || text.length > 300 || REQUIRED_NOTE.test(text)) return '';
+    const styledRequired = ['LABEL', 'LEGEND'].includes(element.tagName) && /required/i.test(String(element.className));
+    if (!REQUIRED_MARK.test(text) && !styledRequired) return '';
+    // A question has words besides its mark.
+    const question = cleanText(text.replace(/[*✱]/g, ' ').replace(/\(required\)/ig, ' '));
+    return /\p{L}{2}/u.test(question) ? question : '';
+  }
+
+  /** The question's own block: the heading itself around its control, else the nearest parent holding one. */
+  function questionBlock(heading) {
+    if (heading.querySelector(INTERACTIVE)) return heading;
+    for (let node = heading.parentElement, depth = 0; node && depth < 4; node = node.parentElement, depth += 1) {
+      if ([...node.querySelectorAll(INTERACTIVE)].some((control) => !heading.contains(control))) return node;
+    }
+    return null;
+  }
+
+  /**
+   * The safety net behind the scanner: every question the page shows as required whose block holds
+   * no field Apply recognised ("unread"), or only recognised fields that are still empty and were
+   * not known to be required ("empty"). Nothing is filled from here; the Manager is asked to check.
+   */
+  function unreadRequired() {
+    const fields = new Map(scanForm().filter((field) => !field.disabled).map((field) => [field.id, field]));
+    const found = [];
+    const blocks = new Set();
+    for (const heading of allElements()) {
+      if (!isShown(heading) || insideQtsUi(heading)) continue;
+      const question = requiredHeadingText(heading);
+      // The innermost element saying it: a wrapper around the same question is skipped.
+      if (!question || [...heading.children].some((child) => isShown(child) && requiredHeadingText(child))) continue;
+      const block = questionBlock(heading);
+      if (!block || blocks.has(block)) continue;
+      blocks.add(block);
+      // Uploads have their own check (a failed upload is marked for the Manager): a block with a
+      // file input or a drop box, or a question asking for a document, is left to it. Sites swap
+      // the input for the file's name once uploaded (Greenhouse).
+      if (block.querySelector(`input[type="file"], [${DROP_ATTRIBUTE}]`) || UPLOAD_QUESTION.test(question)) continue;
+      const marked = [block, ...block.querySelectorAll(`[${FIELD_ATTRIBUTE}]`)];
+      // A field the page hid once answered (a picked dropdown, an uploaded file) still counts; a
+      // hidden one with no answer (a box behind buttons Apply did not read) does not.
+      const known = marked.map((element) => fields.get(element.getAttribute(FIELD_ATTRIBUTE)))
+        .filter((field) => field && (!field.hidden || !isUnanswered(field)));
+      if (!known.length) {
+        found.push({ id: fieldId(heading), label: question.slice(0, 200), kind: 'unread' });
+      } else if (!known.some((field) => field.required || field.kind === 'file') && known.every(isUnanswered)) {
+        // A field required only on screen (emptyRequired covers the ones known to be required).
+        found.push({ id: known[0].id, label: question.slice(0, 200), kind: 'empty' });
       }
-      return !String(element.value || '').trim();
-    }).map((field) => ({ id: field.id, label: field.label }));
+    }
+    return found.slice(0, 10);
   }
 
   /** What a field shows now: a button's text, or an input's value with the text of its box. */
@@ -955,6 +1036,8 @@
         && element.getBoundingClientRect().height > 100)
       || (/recaptcha\/(api2|enterprise)\/anchor|hcaptcha\.com\/.*frame=checkbox|challenges\.cloudflare\.com/i.test(element.src || '')
         && element.getBoundingClientRect().height > 40 && !/size=invisible/i.test(element.src || ''))
+      // DataDome's "verify you are human" (SmartRecruiters and others).
+      || (/captcha-delivery\.com/i.test(element.src || '') && element.getBoundingClientRect().height > 40)
     ));
     // Cloudflare's "Just a moment..." page checks the browser before showing the site.
     if (challenge || /^just a moment/i.test(document.title)) blockers.push('captcha');
@@ -966,7 +1049,16 @@
   }
 
   function buttonText(element) {
-    return cleanText(element.innerText || element.value || element.getAttribute('aria-label') || '');
+    const own = cleanText(element.innerText || element.value || element.getAttribute('aria-label') || '');
+    if (own) return own;
+    // A button inside a page component (<spl-button>Next</spl-button>) shows the component's own
+    // words through a slot: read them there, or from the component when it is just that button.
+    const slotted = cleanText([...(element.querySelectorAll?.('slot') || [])]
+      .flatMap((slot) => slot.assignedNodes({ flatten: true })).map((node) => node.textContent || '').join(' '));
+    if (slotted) return slotted;
+    const host = element.getRootNode?.()?.host;
+    const hostText = host ? cleanText(host.innerText || host.getAttribute?.('aria-label') || '') : '';
+    return hostText.length <= 40 ? hostText : '';
   }
 
   function findButton(kind) {
@@ -1085,6 +1177,7 @@
     optionBox,
     optionChecked,
     emptyRequired,
+    unreadRequired,
     fieldErrors,
     detectBlockers,
     buttons,

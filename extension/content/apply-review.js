@@ -88,7 +88,7 @@
   function answerRow(answer) {
     const row = element('div', 'answer');
     row.title = 'Show this question on the form';
-    const sourceLabel = { ai: `${state?.aiName || 'ChatGPT'} ⚑`, saved: 'Saved', reusable: 'Reusable', profile: 'Profile', documents: 'Documents', consent: 'Consent', rule: 'Rule', manager: 'Manager' }[answer.source] || answer.source;
+    const sourceLabel = { ai: `${state?.aiName || 'ChatGPT'} ⚑`, saved: 'Saved', reusable: 'Reusable', profile: 'Profile', documents: 'Documents', consent: 'Consent', rule: 'Rule', manager: 'Manager', site: 'Site (from résumé)' }[answer.source] || answer.source;
     row.append(
       element('span', 'q', answer.question),
       element('span', 'a', answer.answer || '—'),

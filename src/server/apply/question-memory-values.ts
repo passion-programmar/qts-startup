@@ -35,7 +35,8 @@ const MAX_STORED_ANSWER = 100;
 const PERSONAL_QUESTION = /\b(?:name|e-?mail|phone|mobile|address|street|city|town|postcode|postal|zip|country|citizenship|linkedin|github|portfolio|website|gender|sex|race|veteran|birth|age)\b|\b(?:nationalit|ethnic|disabilit|orientation|pronoun)/i;
 // Answers that depend on the candidate's own experience or wishes differ per candidate.
 const EXPERIENCE_QUESTION = /\b(years?|experience|how (long|many|much)|describe|tell us|why|explain|example|salary|rate|compensation|pay|notice|start|availab|level|proficien)\b/i;
-const NOT_LEARNED_SOURCES = new Set(["profile", "documents", "consent"]);
+// A site's reading of one candidate's résumé is that candidate's own, never learned for others.
+const NOT_LEARNED_SOURCES = new Set(["profile", "documents", "consent", "site"]);
 
 const clean = (value: unknown, max: number) => (typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "");
 const same = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();

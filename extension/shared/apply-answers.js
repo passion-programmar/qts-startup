@@ -452,7 +452,8 @@
     const label = labelOf(field);
     if (field.kind === 'file') {
       // "Autofill from resume" parses the file and overwrites the answers already filled.
-      if (/autofill/.test(label)) return { skip: 'The site\'s autofill-from-résumé upload.' };
+      // Apply uploads the résumé there first, before the rest (apply-runner.js); never as an answer.
+      if (isAutofillUpload(field)) return { skip: 'The site\'s autofill-from-résumé upload.' };
       // Photos and other images are never uploaded, even when required: Apply has no image to give.
       if (isImageUpload(field)) return { skip: 'An image upload (photo).' };
       if (/cover/.test(label)) return { file: 'coverLetter', source: 'documents' };
@@ -475,7 +476,7 @@
       return { value: field.options[0], source: 'consent' };
     }
     // A cover letter typed into the form is the one Generation wrote; a shorter one comes from the AI.
-    if (!hasOptions(field) && ['textarea', 'text'].includes(field.kind) && /cover letter|motivation(al)? letter|letter of motivation/.test(label)) {
+    if (!hasOptions(field) && ['textarea', 'text'].includes(field.kind) && (COVER_LETTER_BOX.test(label) || (field.kind === 'textarea' && MESSAGE_BOX.test(label)))) {
       const letter = context.coverLetterText;
       if (letter && (!field.maxLength || letter.length <= field.maxLength)) return { value: letter, source: 'documents' };
       return null;
@@ -632,6 +633,18 @@
     return { ask: answer, from: 'reusable', note: row.note || null };
   }
 
+  // An upload that reads the résumé to fill the form ("Autofill from resume", "Easy Apply: choose an
+  // option to autocomplete your application", "Import from CV").
+  const AUTOFILL_UPLOAD = /auto-?fill|auto-?complete|auto-?populate|pre-?fill|easy apply|\b(parse|import)\b[^.]{0,30}\b(resume|résumé|cv)\b|\b(resume|résumé|cv)\b[^.]{0,40}\b(to |and )?(fill|complete) (in )?(the |your )?(form|application|profile|fields)/;
+
+  function isAutofillUpload(field) {
+    return field.kind === 'file' && AUTOFILL_UPLOAD.test(labelOf(field));
+  }
+
+  // A box for the cover letter, or a message to the employer, takes Generation's cover letter text.
+  const COVER_LETTER_BOX = /cover letter|motivation(al)? letter|letter of motivation/;
+  const MESSAGE_BOX = /message (to|for) (the )?(hiring (team|manager)|recruit(er|ing team)|employer|company|team)|note to (the )?(hiring|recruit)/;
+
   const IMAGE_WORDS = /\b(photos?|photograph|pictures?|pic|images?|headshot|avatar|selfie|portrait)\b/;
   const IMAGE_FILE = /^(image\/.*|\.(jpe?g|png|gif|webp|heic|heif|bmp|svg|tiff?))$/;
 
@@ -655,14 +668,15 @@
    * "Additional files") are never it. The id of that one upload, or null.
    */
   function generalUploadId(fields) {
-    const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled && !isImageUpload(field));
+    const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled
+      && !isImageUpload(field) && !isAutofillUpload(field));
     // The uploads resolveField already gives the résumé (named for it, or required).
-    const takesResume = (field) => !/cover|autofill/.test(labelOf(field))
+    const takesResume = (field) => !/cover/.test(labelOf(field))
       && (/resume|résumé|\bcv\b|curriculum/.test(labelOf(field)) || field.required);
     if (uploads.some(takesResume)) return null;
     const general = uploads.find((field) => {
       const label = labelOf(field);
-      return GENERAL_UPLOAD.test(label) && !OTHER_DOCUMENT.test(label) && !/cover|autofill/.test(label);
+      return GENERAL_UPLOAD.test(label) && !OTHER_DOCUMENT.test(label) && !/cover/.test(label);
     });
     return general ? general.id : null;
   }
@@ -944,7 +958,7 @@
     return hit ? field.options.find((option) => String(option).trim() === String(hit.choice).trim()) ?? null : null;
   }
 
-  const api = { normalizeQuestionKey, resolveField, resolveFields, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, DEFAULT_ANSWER_PROMPT };
+  const api = { normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

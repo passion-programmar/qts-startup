@@ -458,6 +458,27 @@ async function askChatGptToFix(application, problems, fields, keepAlive) {
 }
 
 /**
+ * After the résumé goes into a site's autofill upload, the site reads it and fills the form: waits
+ * until the form has stopped changing for 3 seconds (at least 5, at most 20 seconds in all).
+ */
+async function waitForSiteFill(tabId) {
+  const read = () => inForm(tabId, () => JSON.stringify(globalThis.__qtsApplyForm.currentAnswers())).catch(() => '');
+  const started = Date.now();
+  let last = await read();
+  let stableSince = Date.now();
+  while (Date.now() - started < 20_000) {
+    await sleep(1000);
+    const now = await read();
+    if (now !== last) {
+      last = now;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= 3000 && Date.now() - started >= 5000) {
+      return;
+    }
+  }
+}
+
+/**
  * The résumé and cover letter to upload, printed in a hidden tab of this application's window
  * (shared/chrome-pdf.js). An older server sends them printed already; when printing here fails,
  * QTS prints them, as before.
@@ -566,6 +587,30 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       continue;
     }
     for (const field of fresh) seen.add(field.id);
+    // Résumé first: a form that reads the résumé to fill itself ("Autofill from resume", "Easy
+    // Apply") gets it before anything else, once per application. The form is then read again.
+    const autofill = !application.resumeAutofillTried && fresh.find((field) => helpers.isAutofillUpload(field));
+    if (autofill) {
+      application.resumeAutofillTried = true;
+      if (!documents) {
+        try {
+          documents = await fetchApplyDocuments(application.attemptId, tabId);
+          application.documentsFolder = documents.folder;
+        } catch {
+          documents = {};
+        }
+      }
+      if (documents?.resume?.base64) {
+        const outcome = await fillAndCheck(tabId, autofill, { file: 'resume', source: 'documents' }, { ...documents.resume, mimeType: 'application/pdf' }, seen);
+        if (outcome.ok) {
+          application.siteFilledFromResume = true;
+          await waitForSiteFill(tabId);
+          for (const field of fresh) if (field.id !== autofill.id) seen.delete(field.id);
+          round -= 1;
+          continue;
+        }
+      }
+    }
     await readComboboxOptions(tabId, fresh);
     const resolved = helpers.resolveFields(fresh, application.candidate, application.savedAnswers, {
       exchangeRates: application.exchangeRates,
@@ -575,6 +620,8 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     const { answers } = resolved;
     // "Fill again" reuses this application's earlier answers instead of asking ChatGPT again.
     const open = resolved.open.filter((field) => {
+      // What the site filled from the résumé is kept, not asked of the AI again.
+      if (application.siteFilledFromResume && field.filled) return false;
       const cached = application.answerCache?.get(field.label);
       if (!cached) return true;
       answers[field.id] = cached;
@@ -595,6 +642,12 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     for (const field of fresh) {
       const answer = answers[field.id];
       if (!answer) {
+        // Filled by the site from the résumé: kept, and listed so the Manager can check it.
+        if (field.filled && application.siteFilledFromResume) {
+          const value = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownValue(id), [field.id]).catch(() => '');
+          if (value) used[field.label || field.id] = { value, source: 'site', step, fieldId: field.id, ...fieldFacts(field) };
+          continue;
+        }
         // Text left from someone else is emptied; a referral or source code the site filled stays.
         if (field.filled && !open.some((entry) => entry.id === field.id) && !/referr|source|\bcode\b|token|utm/i.test(field.label)) {
           await inForm(tabId, (id) => globalThis.__qtsApplyForm.clearField(id), [field.id]).catch(() => false);
@@ -699,6 +752,11 @@ async function fillFormPage(tabId, application, keepAlive, step) {
   }
   const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
   for (const entry of stillEmpty || []) problem(`Still empty: "${entry.label}".`, entry);
+  // The safety net: questions the page shows as required that Apply could not read, or left empty.
+  const unread = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadRequired()).catch(() => []);
+  for (const entry of unread || []) {
+    problem(entry.kind === 'unread' ? `QTS couldn't read this question — check it: "${entry.label}".` : `Still empty: "${entry.label}".`, entry);
+  }
   const errors = await inForm(tabId, () => globalThis.__qtsApplyForm.fieldErrors()).catch(() => []);
   for (const text of errors || []) problem(`The form shows: ${text}`);
   return { used, problems, canAskAgain };

@@ -275,6 +275,28 @@ test('a form\'s only general upload takes the résumé; other documents never do
   }
 });
 
+test('uploads that read the résumé to fill the form are recognised on any site, and a message to the employer takes the cover letter', () => {
+  for (const label of ['Autofill from resume', 'Easy Apply Choose an option to autocomplete your application.', 'Import from CV', 'Upload your resume to fill the form', 'Auto-populate with your CV']) {
+    assert.equal(answers.isAutofillUpload({ kind: 'file', label }), true, label);
+  }
+  for (const label of ['Resume', 'Resume/CV', 'Cover letter', 'File upload']) {
+    assert.equal(answers.isAutofillUpload({ kind: 'file', label }), false, label);
+  }
+  assert.equal(answers.isAutofillUpload({ kind: 'text', label: 'Autofill from resume' }), false);
+  const coverLetterText = 'Dear Hiring Team,\n\nI am applying.';
+  const { answers: resolved } = answers.resolveFields([
+    field('Easy Apply Choose an option to autocomplete your application.', { id: 'easy', kind: 'file', required: false }),
+    field('File upload', { id: 'general', kind: 'file', required: false }),
+    field('Message to the Hiring Team Let the company know about your interest working there', { id: 'message', kind: 'textarea', required: false }),
+    field('Message to the hiring team (one line)', { id: 'line', kind: 'text', required: false }),
+  ], candidate, [], { coverLetterText });
+  // The autofill upload is Apply's first step, not an answer; the general upload still takes the résumé.
+  assert.equal(resolved.easy, undefined);
+  assert.equal(resolved.general.file, 'resume');
+  assert.equal(resolved.message.value, coverLetterText);
+  assert.equal(resolved.line, undefined);
+});
+
 test('photo and image uploads are never filled, even when required; image links are not made up', () => {
   const { answers: resolved, open } = answers.resolveFields([
     field('Photo', { id: 'photo', kind: 'file' }),
