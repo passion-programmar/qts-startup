@@ -10,8 +10,10 @@ import {
 } from "react";
 import {
   Briefcase,
+  Check,
   ChevronDown,
   ClipboardList,
+  Copy,
   Eye,
   GraduationCap,
   Pencil,
@@ -558,8 +560,12 @@ export function EditCandidateProfileForm({
       >
         <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField}>
           <input name="userId" type="hidden" value={candidate.userId} />
+          <div className="flex justify-end">
+            <CopyProfileButton />
+          </div>
           <fieldset className="min-w-0 space-y-3" disabled={readOnly}>
           <FormCard
+            copySection="Basic information"
             icon={<UserRound />}
             summary={[[candidate.firstName, candidate.lastName].filter(Boolean).join(" "), candidate.candidateEmail, candidate.city].filter(Boolean).join(" · ") || "Name, contacts, address, category"}
             title="Basic information"
@@ -1203,6 +1209,7 @@ function HistorySection({
           Add {title.toLowerCase()}
         </button>
       }
+      copySection={title}
       className="sm:col-span-2 xl:col-span-3"
       icon={title === "Education" ? <GraduationCap /> : <Briefcase />}
       summary={`${rowIds.length} ${rowIds.length === 1 ? "entry" : "entries"} · newest first`}
@@ -1235,6 +1242,67 @@ function HistorySection({
         </fieldset>
       ))}
     </FormCard>
+  );
+}
+
+/**
+ * "Label: value" lines for the filled fields under root, as the form shows them now (unsaved edits
+ * included). Selects give their option text; a ticked checkbox gives "Yes", an empty field nothing.
+ * QTS settings (PDF template, category) are not profile content and are left out.
+ */
+function filledFieldLines(root: ParentNode): string[] {
+  const lines: string[] = [];
+  root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input[id], select[id], textarea[id]").forEach((field) => {
+    if (field.name === "pdfTemplate" || field.name === "categoryId") return;
+    const label = field.labels?.[0]?.textContent?.replace(/\s*\(optional\)\s*$/i, "").replace(/\?$/, "").trim();
+    if (!label) return;
+    let value = "";
+    if (field instanceof HTMLSelectElement) value = field.value ? field.selectedOptions[0]?.textContent?.trim() ?? "" : "";
+    else if (field instanceof HTMLInputElement && field.type === "checkbox") value = field.checked ? "Yes" : "";
+    else value = field.value.trim();
+    if (value) lines.push(`${label}: ${value}`);
+  });
+  return lines;
+}
+
+// One card as plain text under its title; entries of a history card each get their own block.
+function copySectionText(card: HTMLElement): string {
+  const title = card.dataset.copySection ?? "";
+  const body = card.querySelector("fieldset > legend")
+    ? [...card.querySelectorAll("fieldset")]
+        .filter((entry) => entry.querySelector(":scope > legend"))
+        .map((entry) => filledFieldLines(entry))
+        .filter((lines) => lines.length)
+        .map((lines, index) => [`${title} ${index + 1}`, ...lines].join("\n"))
+        .join("\n\n")
+    : filledFieldLines(card).join("\n");
+  return body ? `${title}\n\n${body}` : "";
+}
+
+// Copies the whole profile (Basic information, Education, Experience) as plain text in one go.
+function CopyProfileButton() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+      onClick={(event) => {
+        const form = event.currentTarget.closest("form");
+        if (!form) return;
+        const text = [...form.querySelectorAll<HTMLElement>("details[data-copy-section]")]
+          .map(copySectionText)
+          .filter(Boolean)
+          .join("\n\n\n");
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 2000);
+        });
+      }}
+      title="Copy basic information, education, and experience as text"
+      type="button"
+    >
+      {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
+      {copied ? "Copied" : "Copy profile"}
+    </button>
   );
 }
 

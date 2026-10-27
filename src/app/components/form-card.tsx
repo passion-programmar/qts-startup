@@ -11,7 +11,10 @@ export function FormCard({
   children,
   className = "",
   defaultOpen = false,
+  copySection,
 }: {
+  // Names the card for a "Copy profile" button, which copies the cards that carry a name.
+  copySection?: string;
   // The main card of a window (a job's details) starts open; the rest stay folded.
   defaultOpen?: boolean;
   title: ReactNode;
@@ -23,7 +26,7 @@ export function FormCard({
   className?: string;
 }) {
   return (
-    <details open={defaultOpen || undefined} className={`group/card rounded-xl border border-slate-200 bg-white text-left transition open:border-indigo-200 open:shadow-sm ${className}`}>
+    <details data-copy-section={copySection} open={defaultOpen || undefined} className={`group/card rounded-xl border border-slate-200 bg-white text-left transition open:border-indigo-200 open:shadow-sm ${className}`}>
       <summary className="flex cursor-pointer list-none items-center gap-3 rounded-xl px-4 py-3 transition hover:bg-slate-50 sm:px-5 [&::-webkit-details-marker]:hidden">
         {icon && (
           <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 [&>svg]:size-4">
