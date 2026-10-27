@@ -3,8 +3,8 @@ import {
   asc,
   eq,
   isNull,
+  sql,
 } from "drizzle-orm";
-import { randomInt } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
   categories,
@@ -16,22 +16,21 @@ import { type ExtensionManager, getExtensionManager } from "@/lib/extension-auth
 import { withPageCheck } from "@/server/get-jd/get-jd-page-checks";
 import { db } from "@/lib/db";
 import {
-  acquireGeminiKey,
   geminiModel,
   getGeminiApiKeys,
   getGeminiApiLimits,
   releaseGeminiKey,
   recordGeminiApiCall,
   requestGeminiApi,
-  reserveGeminiGeneration,
 } from "@/lib/gemini-usage";
-import { estimateGeminiInputTokens } from "@/server/gemini/gemini-request";
 import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
 import { candidatesWithJdNotes } from "@/server/gemini/candidates-with-jd-notes";
 import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
 import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-indexes";
-import { getGeminiTokenCountMode, type GeminiTokenCountMode } from "@/server/gemini/token-count-mode";
+import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
+import { scheduleDailyCleanup } from "@/server/database/database-usage";
 import {
+  findExpiredApplication,
   findGetJdDuplicateDetails,
   findManagerJobPresence,
   getJdAccountState,
@@ -42,6 +41,14 @@ import {
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 import { getGetJdFailureMessage } from "@/server/gemini/get-jd-failure-message";
 import { withGeminiRetry } from "@/server/gemini/gemini-retry";
+import {
+  type GeminiTokenCounts,
+  readGeminiErrorMessage,
+  readGeminiText,
+  selectAvailableGeminiApiKey,
+} from "@/server/gemini/gemini-keys";
+import { normalizeCompanyName } from "@/server/jobs/job-key";
+import { sourceSiteUrl } from "@/server/jobs/source-site";
 
 const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
@@ -57,7 +64,15 @@ type CandidateProfileForEvaluation = {
   name: string;
   category: string | null;
   jdMatching: string | null;
+  // The company of the candidate's most recent experience; a job there is never saved for them.
+  currentEmployer: string | null;
 };
+
+/** Whether the candidate's most recent employer is the job's company. */
+function worksAtCompany(candidate: CandidateProfileForEvaluation, company: string): boolean {
+  const employer = normalizeCompanyName(candidate.currentEmployer ?? "");
+  return Boolean(employer) && employer === normalizeCompanyName(company);
+}
 
 type GetJdClassification = {
   isJobPage: boolean;
@@ -84,6 +99,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       401,
     );
   }
+  scheduleDailyCleanup();
 
   let body: unknown;
   try {
@@ -136,6 +152,9 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
       );
     }
     const candidateProfiles = profileResult.profiles;
+    // 7 days after its first application (any account), a job is rejected for everyone: no Gemini.
+    const expiredByUrl = await findExpiredApplication(manager.id, { jobUrl: pageUrl, jobTitle: "", company: "" });
+    if (expiredByUrl) return expiredApplicationResponse(expiredByUrl);
     // Accounts that already have this job (by URL) are not sent to Gemini; only
     // available accounts are evaluated, and Gemini is skipped when none remain.
     const urlDuplicates = await findGetJdDuplicateDetails(
@@ -227,7 +246,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
 
     const selectedKey = await selectAvailableGeminiApiKey(
       apiKeys,
-      promptText,
+      [{ role: "user", parts: [{ text: promptText }] }],
       generationConfig,
       await getGeminiTokenCountMode(),
       await getGeminiApiLimits(),
@@ -271,11 +290,16 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
         message: `Not eligible: ${classification.job.reason}`,
       });
     }
+    // Where the Manager found the job: the page it was opened from, its link's source tag, or its own site.
+    const sourceSite = sourceSiteUrl({ openerUrl: readString(body, "openerUrl", maxPageUrlLength) || null, jobUrl: pageUrl });
     const jobIdentity = {
       jobUrl: pageUrl,
       jobTitle: classification.job.title,
       company: classification.job.company,
     };
+    // The same job under another address (LinkedIn and the company's page) is known only now.
+    const expiredByTitle = await findExpiredApplication(manager.id, jobIdentity);
+    if (expiredByTitle) return expiredApplicationResponse(expiredByTitle);
     let [duplicateDetails, presence] = await Promise.all([
       findGetJdDuplicateDetails(manager.id, jobIdentity, candidateProfiles.map((profile) => profile.id)),
       findManagerJobPresence(manager.id, jobIdentity),
@@ -286,6 +310,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
     const autoSaveFailedProfileIds = new Set<string>();
     for (const candidate of candidateProfiles) {
       if (!matchingProfileIds.has(candidate.id)) continue;
+      if (worksAtCompany(candidate, classification.job.company)) continue;
       const jobToSave = {
         jobUrl: classification.job.jobUrl,
         jobTitle: classification.job.title,
@@ -300,6 +325,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
         managerId: manager.id,
         candidateId: candidate.id,
         autoSavedByGetJd: true,
+        sourceSiteUrl: sourceSite,
       };
       if (duplicateDetails.has(candidate.id)) {
         try {
@@ -337,17 +363,20 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
     const profilesWithStatus = candidateProfiles.map((candidate) => {
       const duplicate = duplicateDetails.get(candidate.id) ?? null;
       const autoSaved = autoSavedProfileIds.has(candidate.id);
+      // A candidate working at this company now is shown greyed out and can't be ticked.
+      const worksHere = !autoSaved && duplicate === null && worksAtCompany(candidate, classification.job.company);
       return {
         id: candidate.id,
         name: candidate.name,
         category: candidate.category,
-        recommended: matchingProfileIds.has(candidate.id),
+        recommended: matchingProfileIds.has(candidate.id) && !worksHere,
         autoSaved,
         autoSaveJobId: autoSavedJobs.get(candidate.id) ?? null,
         autoSaveFailed: autoSaveFailedProfileIds.has(candidate.id),
         // An account that has the job (saved earlier or just auto-saved) is not "available" to add again.
-        available: !autoSaved && duplicate === null,
-        state: autoSaved ? "has_job" : getJdAccountState(duplicate),
+        available: !autoSaved && duplicate === null && !worksHere,
+        state: autoSaved ? "has_job" : worksHere ? "works_here" : getJdAccountState(duplicate),
+        worksAt: worksHere ? candidate.currentEmployer : null,
         rowId: autoSavedJobs.get(candidate.id) ?? duplicate?.rowId ?? null,
         duplicateKind: duplicate?.kind ?? null,
         jobStatus: duplicate?.jobStatus ?? null,
@@ -395,88 +424,6 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
   }
 }
 
-type GeminiTokenCounts = { local: number; gemini: number | null };
-
-async function selectAvailableGeminiApiKey(
-  apiKeys: string[],
-  prompt: string,
-  config: typeof generationConfig,
-  tokenCountMode: GeminiTokenCountMode,
-  limits: Awaited<ReturnType<typeof getGeminiApiLimits>>,
-): Promise<{ apiKey: string; leaseId: string; tokenCounts: GeminiTokenCounts } | null> {
-  const shuffledKeys = [...apiKeys];
-  for (let index = shuffledKeys.length - 1; index > 0; index -= 1) {
-    const swapIndex = randomInt(index + 1);
-    [shuffledKeys[index], shuffledKeys[swapIndex]] = [
-      shuffledKeys[swapIndex],
-      shuffledKeys[index],
-    ];
-  }
-
-  for (const apiKey of shuffledKeys) {
-    const leaseId = await acquireGeminiKey(apiKey, limits);
-    if (!leaseId) continue;
-    try {
-      // Local Count: the local estimate only, with no CountTokens call. Gemini Count: both,
-      // recorded side by side for comparison; the key's limit uses Google's count.
-      const tokenCounts: GeminiTokenCounts = {
-        local: estimateGeminiInputTokens(prompt, config),
-        gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, prompt) : null,
-      };
-      if (await reserveGeminiGeneration(apiKey, leaseId, tokenCounts.gemini ?? tokenCounts.local, limits)) {
-        return { apiKey, leaseId, tokenCounts };
-      }
-    } catch (error) {
-      await releaseGeminiKey(apiKey, leaseId);
-      throw error;
-    }
-    await releaseGeminiKey(apiKey, leaseId);
-  }
-  return null;
-}
-
-async function requestGeminiTokenCount(apiKey: string, prompt: string): Promise<number> {
-  await recordGeminiApiCall(apiKey, "count_tokens");
-  const response = await requestGeminiApi(
-    apiKey,
-    "count_tokens",
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:countTokens`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        generateContentRequest: {
-          model: `models/${geminiModel}`,
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig,
-        },
-      }),
-      signal: AbortSignal.timeout(20_000),
-      cache: "no-store",
-    },
-  );
-  if (!response.ok) {
-    throw getJdError(
-      `gemini_count_tokens_http_${response.status}`,
-      "Gemini CountTokens failed.",
-      readGeminiErrorMessage(response.body, apiKey),
-    );
-  }
-  let data: unknown;
-  try {
-    data = JSON.parse(response.body) as unknown;
-  } catch {
-    throw getJdError(
-      "gemini_count_tokens_invalid_response",
-      "Gemini CountTokens returned invalid JSON.",
-    );
-  }
-  if (!isRecord(data) || typeof data.totalTokens !== "number" || !Number.isSafeInteger(data.totalTokens) || data.totalTokens < 0) {
-    throw getJdError("gemini_count_tokens_invalid_response", "Gemini CountTokens returned invalid data.");
-  }
-  return data.totalTokens;
-}
-
 async function loadManagerCandidateProfiles(
   managerId: string,
 ): Promise<{
@@ -490,6 +437,13 @@ async function loadManagerCandidateProfiles(
       lastName: profiles.lastName,
       category: categories.name,
       jdMatching: profiles.jdMatching,
+      // The current job first, else the one that ended last.
+      currentEmployer: sql<string | null>`(
+        select e.company_name from experiences e
+         where e.profile_user_id = ${profiles.userId}
+         order by e.is_current desc, e.end_date desc nulls first, e.start_date desc nulls last
+         limit 1
+      )`,
     })
     .from(users)
     .innerJoin(profiles, eq(profiles.userId, users.id))
@@ -513,6 +467,7 @@ async function loadManagerCandidateProfiles(
         .slice(0, 300),
       category: row.category || null,
       jdMatching: row.jdMatching,
+      currentEmployer: row.currentEmployer,
     })),
   };
 }
@@ -577,18 +532,6 @@ async function requestGeminiJson(
   } catch {
     throw getJdError("gemini_invalid_json", "Gemini returned invalid JSON.");
   }
-}
-
-function readGeminiText(value: unknown): string {
-  if (!isRecord(value) || !Array.isArray(value.candidates)) return "";
-  const candidate = value.candidates[0];
-  if (!isRecord(candidate) || !isRecord(candidate.content)) return "";
-  if (!Array.isArray(candidate.content.parts)) return "";
-  return candidate.content.parts
-    .filter((part): part is Record<string, unknown> => isRecord(part))
-    .map((part) => (typeof part.text === "string" ? part.text : ""))
-    .join("")
-    .trim();
 }
 
 function validateClassification(
@@ -694,6 +637,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Get JD's answer for a job first applied to more than 7 days ago: nothing is evaluated or saved. */
+function expiredApplicationResponse(first: { candidateName: string; appliedAt: Date }): NextResponse {
+  const days = Math.floor((Date.now() - first.appliedAt.getTime()) / 86_400_000);
+  const message = `First applied ${days} days ago (${first.candidateName}) — skipped.`;
+  return jsonResponse({
+    success: true,
+    skippedEvaluation: true,
+    expiredApplication: { candidateName: first.candidateName, appliedAt: first.appliedAt.toISOString() },
+    classification: { isJobPage: true, isRemote: true, matchingProfileIds: [] },
+    profiles: [],
+    autoSavedProfileIds: [],
+    autoSavedJobs: [],
+    autoSaveFailureCount: 0,
+    allCandidatesAssigned: true,
+    exists: true,
+    inJobs: false,
+    inBids: true,
+    toastKind: "applied",
+    toastMessage: message,
+    message,
+  });
+}
+
 function jsonResponse(body: object, status = 200): NextResponse {
   return NextResponse.json(body, {
     status,
@@ -707,27 +673,6 @@ function getJdError(
   providerMessage?: string,
 ): Error {
   return Object.assign(new Error(message), { code, providerMessage });
-}
-
-function readGeminiErrorMessage(
-  responseBody: string,
-  apiKey: string,
-): string | undefined {
-  let body: unknown;
-  try {
-    body = JSON.parse(responseBody) as unknown;
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(body) || !isRecord(body.error)) return undefined;
-  const message = body.error.message;
-  if (typeof message !== "string") return undefined;
-  const safeMessage = message
-    .replaceAll(apiKey, "[redacted]")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 400);
-  return safeMessage || undefined;
 }
 
 function getGetJdProviderMessage(error: unknown): string | undefined {

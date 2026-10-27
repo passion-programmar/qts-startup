@@ -1,13 +1,14 @@
 "use server";
 
-import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { applyAttempts, bids, jobs, profiles, users } from "@/db/schema";
+import { applyAttempts, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
-import { deliveredGenerationRunId, jobHasBid } from "@/server/jobs/job-bids";
+import { jobHasBid } from "@/server/jobs/job-bids";
+import { answerApplication, applyJobAgain } from "@/server/apply/apply-attempts";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
-import { jobStatusChangeError, statusChangeCreatesBid, type JobStatus } from "@/server/jobs/job-status-change";
+import { jobStatusChangeError, type JobStatus } from "@/server/jobs/job-status-change";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import type { RecordActionState } from "@/app/record-action-state";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
@@ -40,18 +41,19 @@ export async function updateJobAction(
   }
   const [candidate] = await db.select({ id: profiles.userId }).from(profiles)
     .innerJoin(users, eq(users.id, profiles.userId))
-    .where(and(eq(profiles.userId, candidateId), eq(users.parentUserId, manager.id), eq(users.role, "account"))).limit(1);
-  if (!candidate) return { error: "Select one of your candidate accounts.", success: null };
+    .where(and(
+      eq(profiles.userId, candidateId),
+      eq(users.parentUserId, manager.id),
+      eq(users.role, "account"),
+      isNull(users.blockedAt),
+    )).limit(1);
+  if (!candidate) return { error: "Select one of your active candidate accounts.", success: null };
 
   const [existingJob] = await db.select({
     status: jobs.status,
     generationStatus: jobs.generationStatus,
     relationId: jobs.relationId,
     candidateId: jobs.candidateId,
-    resumeLocalPath: jobs.resumeLocalPath,
-    googleDrivePath: jobs.googleDrivePath,
-    promptId: jobs.promptId,
-    pdfTemplate: jobs.pdfTemplate,
     hasBid: jobHasBid(),
   }).from(jobs)
     .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
@@ -119,24 +121,6 @@ export async function updateJobAction(
         existingJob.relationId ? eq(jobs.relationId, existingJob.relationId) : sql`false`,
         ne(jobs.id, id),
       )),
-      // Applied is recorded as a bid, so the row and Bids never disagree.
-      ...(statusChangeCreatesBid(jobStatus, existingJob) && existingJob.resumeLocalPath
-        ? [db.insert(bids).values({
-          sourceJobId: id,
-          managerId: manager.id,
-          candidateId,
-          jobUrl: normalizedUrl, jobTitle, company, titleCompanyKey,
-          location: location || null,
-          employmentType: employmentType || null,
-          workplaceType: workplaceType || null,
-          salary: salary || null,
-          resumeLocalPath: existingJob.resumeLocalPath,
-          googleDrivePath: existingJob.googleDrivePath,
-          generationRunId: deliveredGenerationRunId(id),
-          promptId: existingJob.promptId,
-          pdfTemplate: existingJob.pdfTemplate,
-        }).onConflictDoNothing({ target: bids.sourceJobId })]
-        : []),
     ]);
     updated = ownRow;
   } catch (error) {
@@ -147,7 +131,6 @@ export async function updateJobAction(
   }
   if (!updated.length) return { error: "Job is unavailable or Generation started processing; refresh and try again.", success: null };
   revalidatePath("/jobs");
-  revalidatePath("/bids");
   return { error: null, success: "Job updated." };
 }
 
@@ -370,9 +353,10 @@ export async function stopAllAction(
       db.update(users)
         .set({ applyStopVersion: sql`${users.applyStopVersion} + 1`, updatedAt: now })
         .where(eq(users.id, manager.id)),
-      // Claims that never reached Submit are dropped, so a stop does not count as a failed try.
+      // Applications not submitted yet (filling or in review) are dropped, so a stop does not count
+      // as a failed try; ones waiting for the Manager's Yes/No stay.
       db.delete(applyAttempts)
-        .where(and(eq(applyAttempts.managerId, manager.id), eq(applyAttempts.status, "claimed"))),
+        .where(and(eq(applyAttempts.managerId, manager.id), inArray(applyAttempts.status, ["claimed", "waiting_review"]))),
     ]);
   }
   revalidatePath("/jobs");
@@ -380,6 +364,32 @@ export async function stopAllAction(
     error: null,
     success: mode === "generation"
       ? "Generation stops in every Chrome within about 30 seconds; its jobs were queued again."
-      : "Apply stops in every Chrome within about 30 seconds. Applications already submitted finish and report their result.",
+      : "Apply stops in every Chrome within about 30 seconds. Submitted applications still wait for your Yes or No here.",
   };
+}
+
+/** The Manager's answer to "Submitted successfully?" from the Jobs page: Yes makes the bid, No marks the job Failed. */
+export async function answerApplicationAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
+  const manager = await requireUser();
+  if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
+  const attemptId = text(formData, "attemptId", 36);
+  const answer = text(formData, "submitted", 3);
+  if (!uuid(attemptId) || !["yes", "no"].includes(answer)) return { error: "Choose Yes or No.", success: null };
+  const result = await answerApplication({ attemptId, managerId: manager.id, browserId: null, submitted: answer === "yes" });
+  if (!result) return { error: "This application is no longer waiting for your answer. Refresh the page.", success: null };
+  revalidatePath("/jobs");
+  revalidatePath("/bids");
+  return { error: null, success: result === "confirmed" ? "Applied: the bid was created." : "Marked Failed." };
+}
+
+/** "Apply again": a Failed, skipped, or twice-returned job is offered to Apply once more. */
+export async function applyAgainAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
+  const manager = await requireUser();
+  if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
+  const jobId = text(formData, "jobId", 36);
+  if (!uuid(jobId)) return { error: "Select a valid job.", success: null };
+  const offered = await applyJobAgain(jobId, manager.id);
+  if (!offered) return { error: "This job has no failed or skipped application to try again.", success: null };
+  revalidatePath("/jobs");
+  return { error: null, success: "Apply will fill it again from the start." };
 }

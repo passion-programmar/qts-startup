@@ -15,6 +15,7 @@ import {
 } from "@/server/prompts/prompt-versions";
 import { reusableAnswers, settings, users } from "@/db/schema";
 import { parseReusableAnswer } from "@/server/apply/apply-values";
+import { dismissQuestionSuggestion } from "@/server/apply/question-memory";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -169,11 +170,17 @@ export async function updateManagerApplyAction(
   const managerId = readText(formData, "managerId", 36);
   const enabledValue = formData.get("enabled");
   const aiModeValue = formData.get("aiMode");
+  const autoSubmitValue = formData.get("autoSubmit");
+  const reviewModeValue = formData.get("reviewMode");
   const change = enabledValue === "true" || enabledValue === "false"
     ? { canUseApply: enabledValue === "true" }
     : aiModeValue === "chatgpt" || aiModeValue === "gemini"
       ? { applyAiMode: aiModeValue }
-      : null;
+      : autoSubmitValue === "true" || autoSubmitValue === "false"
+        ? { autoSubmit: autoSubmitValue === "true" }
+        : reviewModeValue === "every_step" || reviewModeValue === "before_submit"
+          ? { applyReviewMode: reviewModeValue }
+          : null;
   if (!isUuid(managerId) || !change) {
     return { ...emptyState, error: "Select a valid Manager and Apply setting." };
   }
@@ -203,7 +210,15 @@ export async function updateManagerApplyAction(
       ? change.canUseApply
         ? "Apply was turned on. This Manager's Apply button now applies to Generation-completed jobs."
         : "Apply was turned off for this Manager."
-      : `Apply now answers open questions with ${change.applyAiMode === "gemini" ? "Gemini" : "ChatGPT"}.`,
+      : "applyReviewMode" in change
+        ? change.applyReviewMode === "before_submit"
+          ? "Apply now fills every step by itself and stops once before Submit for this Manager's review (problems still stop on their step)."
+          : "Apply now stops on every step for this Manager's review."
+      : "autoSubmit" in change
+        ? change.autoSubmit
+          ? "Apply now clicks Submit itself when nothing needs the Manager; a bid still waits for their Yes."
+          : "Apply now stops before Submit for the Manager's review."
+        : `Apply now answers open questions with ${change.applyAiMode === "gemini" ? "Gemini" : "ChatGPT"}.`,
   };
 }
 
@@ -514,7 +529,8 @@ export async function saveReusableAnswerAction(
     if (clash && clash.id !== answerId) {
       return { ...emptyState, error: "That question already has a reusable answer; edit it instead." };
     }
-    const values = { ...parsed, updatedAt: new Date() };
+    // A Super Admin's save makes an automatically added answer their own.
+    const values = { ...parsed, autoAdded: false, updatedAt: new Date() };
     if (answerId) {
       const updated = await db.update(reusableAnswers).set(values).where(eq(reusableAnswers.id, answerId)).returning({ id: reusableAnswers.id });
       if (!updated.length) return { ...emptyState, error: "That answer was deleted. Refresh the page." };
@@ -548,4 +564,26 @@ export async function deleteReusableAnswerAction(
   }
   revalidatePath("/settings");
   return { error: null, success: "Answer deleted." };
+}
+
+export async function dismissQuestionSuggestionAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can manage reusable answers." };
+  }
+  const suggestionId = readText(formData, "suggestionId", 36);
+  if (!isUuid(suggestionId)) return { ...emptyState, error: "Refresh the page and try again." };
+  try {
+    if (!(await dismissQuestionSuggestion(suggestionId))) {
+      return { ...emptyState, error: "That suggestion is gone. Refresh the page." };
+    }
+  } catch (error) {
+    logPromptActionFailure("dismissing a question suggestion", error);
+    return { ...emptyState, error: "The suggestion could not be dismissed. Please try again." };
+  }
+  revalidatePath("/settings");
+  return { error: null, success: "Suggestion dismissed." };
 }

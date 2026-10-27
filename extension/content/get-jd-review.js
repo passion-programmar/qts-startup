@@ -997,10 +997,21 @@ async function initializeGetJdReviewOnce() {
     return state === 'applied' || state === 'generation_running';
   }
 
+  // A candidate who works at this company now stays unchecked and cannot be ticked.
+  function worksHere(profile) {
+    return profileState(profile) === 'works_here';
+  }
+
+  // Neither kind can be changed by clicking.
+  function isFixedProfile(profile) {
+    return isLockedProfile(profile) || worksHere(profile);
+  }
+
   const PROFILE_STATE_LABELS = {
     applied: 'Applied (in Bids)',
     generation_running: 'Generation running',
     has_job: 'Has this job · uncheck to remove',
+    works_here: 'Works at this company now · not saved',
     available: '',
   };
 
@@ -1067,9 +1078,9 @@ async function initializeGetJdReviewOnce() {
         (currentResult.profiles || []).map((profile) => [profile.id, profile]),
       );
       root.querySelectorAll('input[data-profile-id]').forEach((input) => {
-        input.disabled = isLockedProfile(profileById.get(input.dataset.profileId));
+        input.disabled = isFixedProfile(profileById.get(input.dataset.profileId));
       });
-      elements.save.disabled = !(currentResult.profiles || []).some((profile) => !isLockedProfile(profile));
+      elements.save.disabled = !(currentResult.profiles || []).some((profile) => !isFixedProfile(profile));
       elements.cancel.disabled = false;
     }
   }
@@ -1120,7 +1131,9 @@ async function initializeGetJdReviewOnce() {
         profile.category || 'Uncategorized',
         profile.autoSaved === true ? 'Saved automatically' : '',
         profile.autoSaveFailed === true ? 'Auto-save failed · select Save to retry' : '',
-        saveResult?.message || PROFILE_STATE_LABELS[profileState(profile)] || '',
+        saveResult?.message
+          || (worksHere(profile) && profile.worksAt ? `Works at ${profile.worksAt} now · not saved` : '')
+          || PROFILE_STATE_LABELS[profileState(profile)] || '',
       ].filter(Boolean).join(' · ');
       if (saveResult?.status === 'saved') category.classList.add('saved');
       if (saveResult?.status === 'failed') category.classList.add('failed');
@@ -1130,9 +1143,9 @@ async function initializeGetJdReviewOnce() {
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.dataset.profileId = profile.id;
-        checkbox.disabled = !selectionEnabled || locked;
-        checkbox.checked = locked || selectedIds.has(profile.id);
-        if (locked) label.classList.add('unavailable');
+        checkbox.disabled = !selectionEnabled || locked || worksHere(profile);
+        checkbox.checked = locked || (!worksHere(profile) && selectedIds.has(profile.id));
+        if (locked || worksHere(profile)) label.classList.add('unavailable');
         else if (checkbox.disabled) label.classList.add('inactive');
         checkbox.addEventListener('change', () => {
           sendSelection().catch((error) => {
@@ -1235,7 +1248,7 @@ async function initializeGetJdReviewOnce() {
     });
 
     elements.save.hidden = false;
-    elements.save.disabled = !candidates.some((profile) => !isLockedProfile(profile));
+    elements.save.disabled = !candidates.some((profile) => !isFixedProfile(profile));
     elements.cancel.hidden = false;
     elements.save.textContent = 'Save';
     elements.cancel.disabled = false;
@@ -1267,7 +1280,7 @@ async function initializeGetJdReviewOnce() {
         elements.status.classList.remove('is-loading');
         const profileById = new Map(candidates.map((profile) => [profile.id, profile]));
         root.querySelectorAll('input[data-profile-id]').forEach((input) => {
-          input.disabled = isLockedProfile(profileById.get(input.dataset.profileId));
+          input.disabled = isFixedProfile(profileById.get(input.dataset.profileId));
         });
       } finally {
         selectionUpdateInProgress = false;

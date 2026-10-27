@@ -484,6 +484,41 @@
       "when": 1793048947926,
       "tag": "0068_useful_prompts",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1793102638355,
+      "tag": "0069_bids_drop_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1793102765942,
+      "tag": "0070_manager_review_apply",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1793107400930,
+      "tag": "0071_source_site_url",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1793107898320,
+      "tag": "0072_apply_review_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1793113915618,
+      "tag": "0073_apply_question_memory",
+      "breakpoints": true
     }
   ]
 }

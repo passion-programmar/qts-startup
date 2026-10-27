@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import { parsePdfPackage } from "@/app/pdf/document-data";
+import { cleanGeneratedDocuments } from "@/server/generation/clean-documents";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const maxResponseLength = 1_000_000;
@@ -70,6 +71,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       .select({
         jobId: generationRuns.jobId,
         jobDescription: generationRuns.jobDescription,
+        jobTitle: generationRuns.jobTitle,
+        company: generationRuns.company,
+        composedPrompt: generationRuns.composedPrompt,
       })
       .from(generationRuns)
       .where(and(
@@ -115,12 +119,34 @@ export async function POST(request: Request): Promise<NextResponse> {
         }
       }
     }
+    // The documents are cleaned before they are saved (stray symbols, placeholders, bold only
+    // where it belongs). A clean-up that would break the structure is skipped, never failing the run.
+    let savedJson = responseJson;
+    if (completed && responseJson && parsedPackage) {
+      try {
+        const profileStart = run.composedPrompt.lastIndexOf("Candidate profile:");
+        const profileEnd = run.composedPrompt.lastIndexOf("Job data:");
+        const cleaned = cleanGeneratedDocuments(responseJson, {
+          company: run.company ?? "",
+          jobTitle: run.jobTitle ?? "",
+          candidateName: parsedPackage.resume.candidate.fullName,
+          jobDescription: jobDescription ?? "",
+          profileText: profileStart >= 0 && profileEnd > profileStart
+            ? run.composedPrompt.slice(profileStart, profileEnd)
+            : "",
+        });
+        parsePdfPackage(JSON.stringify(cleaned), { requireCoreSections: true });
+        savedJson = cleaned;
+      } catch (error) {
+        console.warn("The generated documents were saved without the clean-up.", error instanceof Error ? error.message : error);
+      }
+    }
     const [updated] = await db
       .update(generationRuns)
       .set({
         jobDescription,
         responseText: completed ? responseText : null,
-        responseJson: completed ? responseJson : null,
+        responseJson: completed ? savedJson : null,
         status: completed ? "completed" : "failed",
         failureReason: completed ? null : failureReason,
         updatedAt: new Date(),

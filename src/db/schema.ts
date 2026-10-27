@@ -104,6 +104,14 @@ export const users = pgTable(
     // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
     canUseApply: boolean("can_use_apply").default(false).notNull(),
     applyAiMode: text("apply_ai_mode").default("chatgpt").notNull(),
+    // Apply clicks Submit itself when on (Super Admin, per Manager); a bid still waits for the Manager's Yes.
+    autoSubmit: boolean("auto_submit").default(false).notNull(),
+    // When Apply stops for the Manager (Super Admin, per Manager): "every_step" (the default) or
+    // "before_submit", where it goes through the steps itself and stops once before Submit. Problems
+    // still stop on their step either way.
+    applyReviewMode: text("apply_review_mode").default("every_step").notNull(),
+    // The Romania-time day the "Clear applied jobs?" question was last asked: once a day across all Chromes.
+    appliedCleanupAskedOn: date("applied_cleanup_asked_on", { mode: "string" }),
     // "Stop all" on the Jobs page bumps a counter; every Chrome stops that mode when it sees a new value.
     generationStopVersion: integer("generation_stop_version").default(0).notNull(),
     applyStopVersion: integer("apply_stop_version").default(0).notNull(),
@@ -126,6 +134,7 @@ export const users = pgTable(
     uniqueIndex("users_single_super_admin_unique")
       .on(table.role)
       .where(sql`${table.role} = 'super_admin'`),
+    check("users_apply_review_mode_check", sql`${table.applyReviewMode} in ('every_step', 'before_submit')`),
     check(
       "users_parent_matches_role_check",
       sql`(${table.role} = 'super_admin' and ${table.parentUserId} is null) or (${table.role} <> 'super_admin' and ${table.parentUserId} is not null)`,
@@ -493,6 +502,13 @@ export const jobs = pgTable(
     // The last Apply runs on this job, newest first (at most 10): when, how each ended, and every
     // answer with its source (profile, reusable answer, ChatGPT...), for the Jobs page.
     applyAnswers: jsonb("apply_answers"),
+    // The delivered résumé and cover letter as plain text (the PDFs' words), saved by Generation:
+    // Apply's ChatGPT answers use them, and cover-letter text boxes get the letter.
+    resumeText: text("resume_text"),
+    coverLetterText: text("cover_letter_text"),
+    // The main site the job was found on (the page it was opened from, a source tag in its link, or
+    // its own job site), saved by Get JD; copied into the bid.
+    sourceSiteUrl: text("source_site_url"),
     // The Chrome processing this row's Generation; each Chrome processes one row at a time.
     generationBrowserId: uuid("generation_browser_id").references(
       (): AnyPgColumn => extensionBrowsers.id,
@@ -546,11 +562,12 @@ export const jobs = pgTable(
   ],
 );
 
+// One application the Manager confirmed (Yes after Submit). Independent of the jobs row: every
+// value is a copy taken when it was made, so cleaning up job rows or renaming prompts never changes it.
 export const bids = pgTable(
   "bids",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    sourceJobId: uuid("source_job_id").notNull(),
     managerId: uuid("manager_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -563,25 +580,19 @@ export const bids = pgTable(
     // Same-job key with job_url, so "Applied" is still found if the jobs row was deleted.
     titleCompanyKey: text("title_company_key"),
     location: text("location"),
-    employmentType: text("employment_type"),
-    workplaceType: text("workplace_type"),
+    // Employment type and work arrangement, e.g. "Full-time · Remote".
+    workType: text("work_type"),
     salary: text("salary"),
-    resumeLocalPath: text("resume_local_path").notNull(),
-    // The delivered Generation run whose documents were submitted, when known.
-    generationRunId: uuid("generation_run_id").references(() => generationRuns.id, {
-      onDelete: "set null",
-    }),
+    // The folder holding the résumé and cover letter, under Downloads, and the Chrome that saved them.
+    resumeFolder: text("resume_folder").notNull(),
+    resumeSavedOn: text("resume_saved_on"),
+    // The main site the job was found on, copied from the jobs row (LinkedIn, a job board, its own site).
+    sourceSiteUrl: text("source_site_url"),
     googleDrivePath: text("google_drive_path"),
-    // Copied from the jobs row when the bid is made: the prompt version and template used.
-    promptId: uuid("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
-    pdfTemplate: text("pdf_template"),
-    // Apply records whether the site confirmed the application; Manager-made bids count as confirmed.
-    confirmationStatus: text("confirmation_status").default("confirmed").notNull(),
-    confirmationSource: text("confirmation_source"),
-    // The Apply attempt that made this bid, what it sent, and the Chrome holding a screenshot, if any.
-    applyAttemptId: uuid("apply_attempt_id"),
-    applyEvidence: jsonb("apply_evidence"),
-    screenshotBrowserName: text("screenshot_browser_name"),
+    templateName: text("template_name"),
+    promptName: text("prompt_name"),
+    // What was submitted: [{ question, answer, source }], the Manager's edits included.
+    answers: jsonb("answers"),
     appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -593,10 +604,10 @@ export const bids = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("bids_source_job_id_unique").on(table.sourceJobId),
-    check(
-      "bids_confirmation_status_check",
-      sql`${table.confirmationStatus} in ('confirmed', 'not_confirmed') and (${table.confirmationSource} is null or ${table.confirmationSource} in ('page', 'email', 'manager'))`,
+    // One bid per candidate and job address.
+    uniqueIndex("bids_candidate_job_url_unique").on(
+      table.candidateId,
+      sql`regexp_replace(split_part(btrim(${table.jobUrl}), '#', 1), '/+$', '')`,
     ),
     index("bids_manager_title_company_key_index").on(table.managerId, table.titleCompanyKey),
     index("bids_manager_applied_at_index").on(table.managerId, table.appliedAt),
@@ -615,9 +626,11 @@ export const bids = pgTable(
   ],
 );
 
-// One automatic application of one jobs row. A row is claimed by one Chrome (lease renewed by
-// heartbeats), becomes "submitting" exactly once when the server grants Submit permission, and is
-// never handed out again after that. Claims go through claim_apply_attempt (migration 0062).
+// One application of one jobs row. A Chrome claims it (lease renewed by heartbeats) and fills it
+// ("claimed"), the Manager reviews it ("waiting_review"), clicks Submit ("waiting_confirmation"), and
+// answers Yes ("confirmed", which makes the bid) or No ("failed"). Once submitted the job is never
+// handed out again unless the Manager clicks "Apply again" ("cleared"). Claims go through
+// claim_apply_attempt (migrations 0062, 0070). "submitting" and "not_confirmed" are from before review.
 export const applyAttempts = pgTable(
   "apply_attempts",
   {
@@ -650,20 +663,21 @@ export const applyAttempts = pgTable(
   (table) => [
     check(
       "apply_attempts_status_check",
-      sql`${table.status} in ('claimed', 'submitting', 'confirmed', 'not_confirmed', 'failed', 'released', 'skipped')`,
+      sql`${table.status} in ('claimed', 'waiting_review', 'waiting_confirmation', 'submitting', 'confirmed', 'not_confirmed', 'failed', 'released', 'skipped', 'cleared')`,
     ),
-    // Only an attempt the server let submit can end confirmed or not confirmed.
+    // Only an attempt recorded as submitted can wait for the Manager's answer or end confirmed.
     check(
       "apply_attempts_submit_audit_check",
-      sql`${table.status} not in ('submitting', 'confirmed', 'not_confirmed') or ${table.submitGrantedAt} is not null`,
+      sql`${table.status} not in ('waiting_confirmation', 'submitting', 'confirmed', 'not_confirmed') or ${table.submitGrantedAt} is not null`,
     ),
-    // One live attempt per job and per candidate, across every Chrome.
+    // One live attempt per job, across every Chrome; a candidate is filled in one Chrome at a time
+    // (an application waiting for the Manager's Yes/No does not hold the candidate).
     uniqueIndex("apply_attempts_one_live_per_job_unique")
       .on(table.jobId)
-      .where(sql`${table.status} in ('claimed', 'submitting')`),
+      .where(sql`${table.status} in ('claimed', 'waiting_review', 'waiting_confirmation', 'submitting')`),
     uniqueIndex("apply_attempts_one_live_per_candidate_unique")
       .on(table.candidateId)
-      .where(sql`${table.status} in ('claimed', 'submitting')`),
+      .where(sql`${table.status} in ('claimed', 'waiting_review', 'submitting')`),
     index("apply_attempts_manager_status_index").on(table.managerId, table.status),
   ],
 );
@@ -705,6 +719,8 @@ export const reusableAnswers = pgTable(
     answer: text("answer").notNull(),
     // Guidance for ChatGPT when the answer has to be adapted to a field ("pick the closest choice").
     note: text("note"),
+    // Added by Apply's learning (a choice question every candidate answered the same way), not by hand.
+    autoAdded: boolean("auto_added").default(false).notNull(),
     createdByUserId: uuid("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -716,6 +732,42 @@ export const reusableAnswers = pgTable(
       .notNull(),
   },
   (table) => [uniqueIndex("reusable_answers_question_key_unique").on(table.questionKey)],
+);
+
+// What Apply learned about one application question, kept small: one row per question (not per
+// application). It holds how often the question came up, a few choice lists forms offered, the
+// top answers with the candidates who gave them, and remembered choices (which option a value
+// that did not fit became on a given choice list). Updated when the Manager answers Yes; feeds the
+// suggestions in Settings and safe automatic reusable answers. Personal facts and long free-text
+// answers are never stored here; rows unseen for 90 days are removed.
+export const applyQuestionMemory = pgTable(
+  "apply_question_memory",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    questionKey: text("question_key").notNull(),
+    questionText: text("question_text").notNull(),
+    // "choice" (Yes/No, menus, radios, tick lists) or "text".
+    kind: text("kind").default("choice").notNull(),
+    timesSeen: integer("times_seen").default(0).notNull(),
+    // Up to 5 choice lists forms offered: [["Yes", "No"], ...].
+    options: jsonb("options").default(sql`'[]'::jsonb`).notNull(),
+    // Up to 5 answers, most used first: [{ answer, count, candidates: [candidateId, ...] }].
+    answers: jsonb("answers").default(sql`'[]'::jsonb`).notNull(),
+    // Up to 10 remembered choices: [{ optionsKey, intended, choice, uses }].
+    choices: jsonb("choices").default(sql`'[]'::jsonb`).notNull(),
+    dismissed: boolean("dismissed").default(false).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("apply_question_memory_question_key_unique").on(table.questionKey),
+    index("apply_question_memory_last_seen_index").on(table.lastSeenAt),
+    check("apply_question_memory_kind_check", sql`${table.kind} in ('choice', 'text')`),
+  ],
 );
 
 // A Manager's own library of prompts kept for special cases; Generation and Apply never use them.

@@ -379,9 +379,42 @@ async function readJobBoardFrameText(tabId, pageText) {
 // The job's text, shown or collapsed, without the site's header, footer, menus, or cookie banners,
 // with any embedded job board's text after it.
 async function readVisiblePageText(tabId) {
+  await waitForJobText(tabId);
   const [pageText = ''] = await readJobTextInFrames(tabId, [0]);
   const frameText = await readJobBoardFrameText(tabId, pageText);
   return frameText ? `${pageText}\n\nJob from the embedded job board:\n${frameText}` : pageText;
+}
+
+// Pages that build the job with scripts (Workable) show only their cookie banner for a few seconds
+// before the job appears. The job reader leaves the banner out, so while it finds almost nothing,
+// wait for the job instead of sending Gemini the banner. A page with an embedded job board does not
+// wait: its job is read from the frame.
+const JOB_TEXT_WAIT_MS = 12_000;
+
+async function waitForJobText(tabId) {
+  const target = { tabId, frameIds: [0] };
+  const deadline = Date.now() + JOB_TEXT_WAIT_MS;
+  await chrome.scripting.executeScript({ target, files: [JOB_PAGE_TEXT_FILE] }).catch(() => {});
+  for (;;) {
+    const [result] = await chrome.scripting.executeScript({
+      target,
+      func: (frameHostSource) => {
+        const frameHost = new RegExp(frameHostSource, 'i');
+        const hasJobBoardFrame = [...document.querySelectorAll('iframe[src]')].some((frame) => {
+          try {
+            return frameHost.test(new URL(frame.src).hostname);
+          } catch {
+            return false;
+          }
+        });
+        return { length: String(globalThis.__qtsReadJobPageText?.() || '').length, hasJobBoardFrame };
+      },
+      args: [JOB_BOARD_FRAME_HOST.source],
+    }).catch(() => []);
+    const state = result?.result;
+    if (!state || state.hasJobBoardFrame || state.length >= JOB_BOARD_FRAME_MIN_TEXT || Date.now() > deadline) return;
+    await sleep(1000);
+  }
 }
 
 // Background tabs Get JD opens to read a description page; Get JD itself never runs in them.
@@ -409,6 +442,7 @@ async function readJobTextInBackgroundTab(openerTab, url) {
     }
     const target = { tabId: helperTabId, frameIds: [0] };
     await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [700, 6000] });
+    await waitForJobText(helperTabId);
     const [text = ''] = await readJobTextInFrames(helperTabId, [0]);
     return text;
   } catch {
@@ -1158,6 +1192,8 @@ function getJdProfileState(profile) {
 
 // Applied accounts and running Generation stay checked and cannot be unchecked.
 const GET_JD_LOCKED_STATES = new Set(['applied', 'generation_running']);
+// Nothing can be changed for these: locked accounts, and candidates who work at the company now.
+const GET_JD_FIXED_STATES = new Set([...GET_JD_LOCKED_STATES, 'works_here']);
 
 // Stores the checked accounts only; Save applies the difference.
 async function updateGetJdSelection(tabId, profileIds) {
@@ -1177,7 +1213,9 @@ async function updateGetJdSelection(tabId, profileIds) {
   ) {
     return { ok: false, error: 'The current job review is no longer available.' };
   }
-  const allowedIds = new Set((result.profiles || []).map((profile) => profile.id));
+  const allowedIds = new Set((result.profiles || [])
+    .filter((profile) => getJdProfileState(profile) !== 'works_here')
+    .map((profile) => profile.id));
   if (profileIds.some((id) => !allowedIds.has(id))) {
     return { ok: false, error: 'One or more selected candidates are unavailable.' };
   }
@@ -1259,6 +1297,7 @@ async function saveGetJdSelection(tabId, profileIds) {
     }
     const response = await workerApiRequest('POST', '/api/extension/get-jd/save', {
       job,
+      openerUrl: await tabOpenedFrom(tabId),
       ...(pageText ? { pageText } : {}),
       profileIds: additions.map((profile) => profile.id),
       ...(result.evaluationMode === 'gemini'
@@ -1341,7 +1380,7 @@ async function saveGetJdSelection(tabId, profileIds) {
 }
 
 const GET_JD_AUTO_CLOSE_KEY = 'qtsGetJdAutoClose';
-const GET_JD_CLOSE_SECONDS = 3;
+const GET_JD_CLOSE_SECONDS = 5;
 // The page Get JD last finished in each tab, and whether it is a search page showing one job.
 const getJdFinishedPageByTab = new Map();
 
@@ -1501,6 +1540,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
         pageUrl: url,
         pageTitle: tab.title || documentId || url,
         pageText,
+        openerUrl: await tabOpenedFrom(tabId),
       });
       if (geminiResult.success !== true) {
         // The diagnostic code (for example gemini_http_400) names the real cause for troubleshooting.
@@ -1549,7 +1589,23 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
         ? geminiResult.autoSavedProfileIds.filter((id) => typeof id === 'string')
         : [];
       // Only when no account can be added or unchecked is there nothing to review.
-      if (profiles.every((profile) => GET_JD_LOCKED_STATES.has(getJdProfileState(profile)))) {
+      // 7 days after its first application (any account), a job is skipped for everyone.
+      if (geminiResult.expiredApplication) {
+        await saveGetJdResult(tabId, {
+          ...initialResult,
+          pageTitle: tab.title || '',
+          status: 'duplicate',
+          message: geminiResult.message,
+          toastKind: 'applied',
+          toastMessage: geminiResult.message,
+          inJobs: false,
+          inBids: true,
+          updatedAt: Date.now(),
+        });
+        await showGetJdDone(tabId, url, geminiResult.message, 'info');
+        return;
+      }
+      if (profiles.every((profile) => GET_JD_FIXED_STATES.has(getJdProfileState(profile)))) {
         await saveGetJdResult(tabId, {
           ...initialResult,
           pageTitle: tab.title || '',
@@ -1607,13 +1663,17 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           ...matchingAvailableProfiles.map((profile) => profile.id),
         ])],
       });
-      // Gemini picked candidates and the server saved the job for all of them: nothing is left to do
-      // here. Without a pick, or after a failed save, the review stays open for the Manager.
-      if (autoSavedProfileIds.length > 0 && !(geminiResult.autoSaveFailureCount > 0)) {
+      // Gemini's picks are final: no manual review. The job is saved for the candidates it matched
+      // (or for none) and the tab closes after the countdown. Only a failed save stays open, so the
+      // Manager can retry it.
+      if (!(geminiResult.autoSaveFailureCount > 0)) {
         await showGetJdDone(
           tabId,
           url,
-          `Saved for ${autoSavedProfileIds.length} candidate${autoSavedProfileIds.length === 1 ? '' : 's'}.`,
+          autoSavedProfileIds.length > 0
+            ? `Saved for ${autoSavedProfileIds.length} candidate${autoSavedProfileIds.length === 1 ? '' : 's'}.`
+            : 'No candidate matched; nothing was saved.',
+          autoSavedProfileIds.length > 0 ? 'success' : 'info',
         );
       }
       return;
@@ -1682,7 +1742,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       .filter((profile) => profile.recommended === true || matchingProfileIds.has(profile.id))
       .map((profile) => profile.id);
     // The review stays open while any account can still be added or unchecked.
-    const actionableProfiles = profiles.filter((profile) => !GET_JD_LOCKED_STATES.has(getJdProfileState(profile)));
+    const actionableProfiles = profiles.filter((profile) => !GET_JD_FIXED_STATES.has(getJdProfileState(profile)));
     if (actionableProfiles.length === 0) {
       await saveGetJdResult(tabId, {
         ...initialResult,
@@ -4889,6 +4949,32 @@ function disabledFeatureForMessage(type) {
   return null;
 }
 
+/**
+ * Opens Windows Explorer at a folder under Downloads (a job's résumé folder), with the file this
+ * Chrome downloaded there selected. { ok } or { ok: false, notHere } when this Chrome did not save it.
+ */
+async function openDownloadedFolder(folderPath) {
+  const folder = String(folderPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!folder) return { ok: false, error: 'No folder was given.' };
+  // Downloads keep the full Windows path; match the folder with either slash.
+  const pattern = folder.split('/').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]');
+  const found = await chrome.downloads.search({ filenameRegex: `${pattern}[\\\\/]`, orderBy: ['-startTime'] }).catch(() => []);
+  const download = found.find((item) => item.exists !== false && item.state === 'complete');
+  if (!download) return { ok: false, notHere: true, error: 'This Chrome did not download that folder.' };
+  chrome.downloads.show(download.id);
+  return { ok: true };
+}
+
+/** Whether a page belongs to the QTS site this extension signs in to. */
+async function isQtsSite(pageUrl) {
+  const server = await self.__qtsRuntimeConfig.getServerUrl();
+  try {
+    return new URL(pageUrl || '').origin === new URL(server).origin;
+  } catch {
+    return false;
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const disabledFeature = disabledFeatureForMessage(msg?.type);
   if (disabledFeature) {
@@ -5012,6 +5098,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.storage.local.set({ [GET_JD_AUTO_CLOSE_KEY]: msg.enabled === true })
       .then(() => sendResponse({ ok: true }))
       .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // The Bids page asks to open a résumé folder: Windows Explorer opens on the résumé this Chrome
+  // downloaded there. Only the QTS site may ask; a folder saved by another Chrome is reported missing.
+  if (msg.type === 'QTS_IS_QTS_SITE') {
+    isQtsSite(sender.url).then((qtsSite) => sendResponse({ qtsSite }), () => sendResponse({ qtsSite: false }));
+    return true;
+  }
+  if (msg.type === 'QTS_OPEN_RESUME_FOLDER') {
+    (async () => {
+      if (!(await isQtsSite(sender.url))) {
+        sendResponse({ ok: false, error: 'Only the QTS site can open résumé folders.' });
+        return;
+      }
+      sendResponse(await openDownloadedFolder(msg.folder));
+    })().catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'The folder could not be opened.' }));
     return true;
   }
 
@@ -5218,6 +5321,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         return;
       }
+      if (action === 'clear_applied_jobs') {
+        const cleared = await workerApiRequest('POST', '/api/extension/get-jd/applied-cleanup', { action: 'clear' });
+        sendResponse(cleared.success === true
+          ? { ok: true, message: `Removed ${cleared.deleted} applied job row${cleared.deleted === 1 ? '' : 's'}. Their bids stay.` }
+          : { ok: false, error: cleared.message || 'Could not clear the applied jobs.' });
+        return;
+      }
       if (action !== 'get_jd') {
         sendResponse({ ok: false, error: 'Unknown QTS action.' });
         return;
@@ -5236,10 +5346,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       enableGetJdForTab(tabId).catch((error) => {
         console.error('[QTS Get JD] Could not start page monitoring:', error);
       });
+      // After 4:00 PM Romania time the first Get JD start of the day (in any Chrome) asks to clear
+      // applied job rows; the server answers whether to ask, once a day.
+      const cleanup = await workerApiRequest('POST', '/api/extension/get-jd/applied-cleanup', { action: 'check' }).catch(() => null);
       sendResponse({
         ok: true,
         status: 'get_jd',
         message: 'Get JD is on. QTS checks each job page you open.',
+        appliedCleanupCount: cleanup?.success === true && cleanup.ask === true ? Number(cleanup.appliedCount) || 0 : 0,
       });
     })().catch((error) => sendResponse({
       ok: false,
@@ -6525,9 +6639,72 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   })().catch(() => {});
 });
 
+// Where each tab's page was opened from, for the job's source site (Bids): the tab whose link
+// opened it, or the page before it in the same tab. Redirect pages are skipped; typed, pasted and
+// bookmarked addresses have none, and QTS's own tabs are left out. The server turns it into the
+// site's main address (src/server/jobs/source-site.ts).
+const TAB_SOURCES_KEY = 'qtsTabSources';
+const REDIRECT_HOSTS = /^(?:lnkd\.in|t\.co|bit\.ly|l\.facebook\.com|lm\.facebook\.com|out\.reddit\.com)$/i;
+let tabSourcesWrite = Promise.resolve();
+
+function updateTabSource(tabId, change) {
+  tabSourcesWrite = tabSourcesWrite.then(async () => {
+    const stored = (await chrome.storage.session.get(TAB_SOURCES_KEY))[TAB_SOURCES_KEY] || {};
+    const next = change(stored[tabId] || { source: null, last: null });
+    if (next) stored[tabId] = next;
+    else delete stored[tabId];
+    await chrome.storage.session.set({ [TAB_SOURCES_KEY]: stored });
+  }).catch(() => {});
+  return tabSourcesWrite;
+}
+
+function isRedirectPage(url) {
+  try {
+    const page = new URL(url);
+    return REDIRECT_HOSTS.test(page.hostname)
+      || (/\/(?:redir|redirect|url|out)\b/i.test(page.pathname) && /[?&](?:url|u|q|target|dest)=/i.test(page.search));
+  } catch {
+    return true;
+  }
+}
+
+/** The page a tab's job was opened from, or null when it is not known (typed, pasted, QTS's own). */
+async function tabOpenedFrom(tabId) {
+  await tabSourcesWrite;
+  const entry = ((await chrome.storage.session.get(TAB_SOURCES_KEY))[TAB_SOURCES_KEY] || {})[tabId];
+  const source = entry?.source || null;
+  if (!source || await isQtsSite(source)) return null;
+  return source;
+}
+
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (details.frameId !== 0 || !/^https?:/i.test(details.url || '')) return;
+  const redirected = (details.transitionQualifiers || []).some((qualifier) => qualifier === 'server_redirect' || qualifier === 'client_redirect');
+  updateTabSource(details.tabId, (entry) => {
+    let source = entry.source;
+    if (!redirected) {
+      if (details.transitionType === 'link' || details.transitionType === 'form_submit') {
+        // A link in the same tab: the page before it (unless that was a redirect page).
+        if (entry.last && !isRedirectPage(entry.last)) source = entry.last;
+      } else if (details.transitionType !== 'reload') {
+        // Typed, pasted, a bookmark, history, the start page: nothing opened it.
+        source = null;
+      }
+    }
+    return { source, last: details.url };
+  });
+});
+
 // Ownership passes to tabs opened from a workflow's tab or in a workflow's window.
 chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
   tabOwnership.inherit(details.tabId, { sourceTabId: details.sourceTabId }).catch(() => {});
+  // A link that opened a new tab: the source is the page it was clicked on.
+  (async () => {
+    if (await tabOwnership.ownerOf(details.sourceTabId)) return;
+    const opener = await getTab(details.sourceTabId);
+    if (!/^https?:/i.test(opener?.url || '')) return;
+    await updateTabSource(details.tabId, () => ({ source: opener.url, last: null }));
+  })().catch(() => {});
 });
 chrome.tabs.onCreated.addListener((tab) => {
   if (tab.id == null) return;
@@ -6542,6 +6719,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabOwnership.releaseTab(tabId).catch(() => {});
+  updateTabSource(tabId, () => null);
   lastAutoDetectKeyByTab.delete(tabId);
   capturePanelOpenPromisesByTab.delete(tabId);
   lastAutoPipelineKeyByTab.delete(tabId);

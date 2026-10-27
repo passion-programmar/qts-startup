@@ -4,6 +4,7 @@ import {
   Activity,
   BriefcaseBusiness,
   ChevronDown,
+  Database,
   FileCheck2,
   FileText,
   X,
@@ -81,6 +82,7 @@ export function WorkspaceShellClient({
           { label: "Categories", href: "/categories", icon: Tags },
           { label: "AI settings", href: "/settings", icon: Settings2 },
           { label: "Gemini usage", href: "/settings/gemini-usage", icon: Activity },
+          { label: "Database usage", href: "/settings/database-usage", icon: Database },
         ]
       : user.role === "manager"
         ? [

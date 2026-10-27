@@ -11,7 +11,8 @@ export type GetJdDuplicate = {
   generationStatus: string | null;
 };
 
-export type GetJdAccountState = "applied" | "generation_running" | "has_job" | "available";
+// "works_here": the candidate's most recent employer is this job's company, so it is never saved for them.
+export type GetJdAccountState = "applied" | "generation_running" | "has_job" | "works_here" | "available";
 
 export function getJdAccountState(duplicate: GetJdDuplicate | null | undefined): GetJdAccountState {
   if (!duplicate) return "available";
@@ -34,12 +35,14 @@ export function summarizeAccountStates(states: GetJdAccountState[]): GetJdAccoun
   const applied = states.filter((state) => state === "applied").length;
   const hasJob = states.filter((state) => state === "has_job" || state === "generation_running").length;
   const available = states.filter((state) => state === "available").length;
-  if (!available && (applied || hasJob)) {
+  const worksHere = states.filter((state) => state === "works_here").length;
+  if (!available && (applied || hasJob) && !worksHere) {
     return { applied, hasJob, available, text: "All candidates already have this job." };
   }
   const parts = [
     applied ? `Applied by ${candidates(applied)}` : "",
     hasJob ? `${hasJob} already ${hasJob === 1 ? "has" : "have"} this job` : "",
+    worksHere ? `${candidates(worksHere)} ${worksHere === 1 ? "works" : "work"} there now` : "",
     available ? `${available} can be added` : "",
   ].filter(Boolean);
   return { applied, hasJob, available, text: parts.length ? `${parts.join(" · ")}.` : "No active candidates." };

@@ -1,25 +1,26 @@
 import { NextResponse } from "next/server";
-import { releaseApplyAttempt } from "@/server/apply/apply-attempts";
+import { releaseApplyAttempt, type ReleaseMode } from "@/server/apply/apply-attempts";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { parseAppliedAnswers } from "@/server/apply/apply-values";
 
-// Gives a claimed job back before Submit: to the ready list, or skipped for good (skip=true)
-// when the site is not supported yet or the Manager must handle it.
+const MODES = new Set<ReleaseMode>(["error", "skip", "later", "test"]);
+
+// Ends a claimed application before Submit: an error returns it to the list, Skip keeps it from
+// being offered again, Later (and test mode) gives it back without counting as a return.
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
-  const body = await request.json().catch(() => null) as { attemptId?: unknown; reason?: unknown; skip?: unknown; dryRun?: unknown; appliedAnswers?: unknown } | null;
-  if (!isUuid(body?.attemptId) || typeof body.reason !== "string" || !body.reason.trim()) {
-    return NextResponse.json({ success: false, message: "An attempt ID and a reason are required." }, { status: 400 });
+  const body = await request.json().catch(() => null) as { attemptId?: unknown; mode?: unknown; reason?: unknown; appliedAnswers?: unknown } | null;
+  if (!isUuid(body?.attemptId) || !MODES.has(body.mode as ReleaseMode) || typeof body.reason !== "string" || !body.reason.trim()) {
+    return NextResponse.json({ success: false, message: "An attempt ID, how it ends, and a reason are required." }, { status: 400 });
   }
   try {
     const released = await releaseApplyAttempt(
       body.attemptId,
       auth.manager.id,
       auth.browser.id,
+      body.mode as ReleaseMode,
       body.reason,
-      body.skip === true,
-      body.dryRun === true,
       parseAppliedAnswers(body.appliedAnswers),
     );
     return released

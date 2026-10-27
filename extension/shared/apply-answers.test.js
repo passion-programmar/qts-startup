@@ -490,3 +490,57 @@ test('diversity questions take the candidate\'s own profile answers, in each for
   assert.deepEqual(open.map((entry) => entry.id), ['two-choices']);
   assert.match(open[0].hint, /profile says "Female".*never infer/i);
 });
+
+test('a question naming the candidate\'s own country is a Yes from the profile', () => {
+  const sanctions = { questionKey: 'are you located in one of the following countries or regions', questionText: 'Are you located in one of the following countries or regions?', answer: 'No', note: null };
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Are you based in Romania, Serbia, Poland or Bulgaria?', { kind: 'radio', options: ['YES', 'NO'] }),
+    field('Do you live in Warsaw or Krakow?', { kind: 'checkbox' }),
+    field('Are you located in Germany or Austria?', { kind: 'radio', options: ['Yes', 'No'] }),
+  ], candidate, [sanctions]);
+  assert.deepEqual(resolved['Are you based in Romania, Serbia, Poland or Bulgaria?'], { value: 'YES', source: 'profile' });
+  assert.deepEqual(resolved['Do you live in Warsaw or Krakow?'], { value: true, source: 'profile' });
+  // A list without the candidate's country is not decided by this rule.
+  assert.equal(resolved['Are you located in Germany or Austria?']?.source === 'profile', false);
+  assert.ok(resolved['Are you located in Germany or Austria?'] || open.some((entry) => entry.label === 'Are you located in Germany or Austria?'));
+});
+
+test('the answer prompt gets the delivered résumé and cover letter as plain text', () => {
+  const prompt = answers.buildAnswerPrompt({
+    template: 'R: {{resume}}\nC: {{cover_letter}}\nBoth: {{resume_and_cover_letter}}\n{{questions}}',
+    job: { title: 'DevOps Engineer', company: 'Acme', description: 'Kubernetes' },
+    candidate,
+    resumeText: 'Anna Kowalska\nKubernetes at Acme',
+    coverLetterText: 'Dear Hiring Team,',
+    fields: [field('Why Acme?')],
+    savedAnswers: [],
+  });
+  assert.match(prompt, /R: Anna Kowalska\nKubernetes at Acme/);
+  assert.match(prompt, /C: Dear Hiring Team,/);
+  assert.match(prompt, /Both: Résumé:\nAnna Kowalska[\s\S]*Cover letter:\nDear Hiring Team,/);
+  // Without them, the placeholders say so rather than staying as braces.
+  const bare = answers.buildAnswerPrompt({ template: '{{resume}} {{cover_letter}} {{questions}}', job: {}, candidate, fields: [field('Why?')], savedAnswers: [] });
+  assert.match(bare, /^\(none\) \(none\)/);
+});
+
+test('a remembered choice fills a value that did not fit, only on the same question and choices', () => {
+  const field = { id: 'f', label: 'Right to work in the UK? *', kind: 'select', options: ['No', 'Yes, I have ILR', 'Yes, I am a British citizen'] };
+  const remembered = [{
+    questionKey: answers.normalizeQuestionKey('Right to work in the UK?'),
+    optionsKey: answers.optionsKey(['Yes, I am a British citizen', 'Yes, I have ILR', 'No']),
+    intended: 'Yes',
+    choice: 'Yes, I have ILR',
+  }];
+  assert.equal(answers.findRememberedChoice(field, 'yes', remembered), 'Yes, I have ILR');
+  assert.equal(answers.findRememberedChoice(field, 'No', remembered), null);
+  assert.equal(answers.findRememberedChoice({ ...field, options: ['Yes', 'No'] }, 'Yes', remembered), null);
+  assert.equal(answers.findRememberedChoice({ ...field, label: 'Other question' }, 'Yes', remembered), null);
+  // The server keys choice lists the same way.
+  assert.equal(answers.optionsKey(['B', ' a ']), 'a|b');
+});
+
+test('a reusable answer that does not fit carries the value meant, for remembered choices', () => {
+  const rows = [{ questionKey: answers.normalizeQuestionKey('Do you have the right to work?'), questionText: 'Do you have the right to work?', answer: 'Yes', note: null }];
+  const { open } = answers.resolveFields([field('Do you have the right to work?', { kind: 'select', options: ['Yes, I have ILR', 'No'] })], candidate, rows);
+  assert.equal(open[0].intended, 'Yes');
+});

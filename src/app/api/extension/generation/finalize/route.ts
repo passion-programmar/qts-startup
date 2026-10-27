@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
+import { coverLetterText, resumeText } from "@/server/apply/apply-values";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -45,6 +46,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         createdAt: generationRuns.createdAt,
         promptId: generationRuns.promptId,
         pdfTemplate: generationRuns.pdfTemplate,
+        responseJson: generationRuns.responseJson,
       })
       .from(generationRuns)
       .innerJoin(jobs, eq(jobs.id, generationRuns.jobId))
@@ -81,6 +83,9 @@ export async function POST(request: Request): Promise<NextResponse> {
           // The prompt version and template this Generation used, shown on Jobs and Bids.
           promptId: run.promptId,
           pdfTemplate: run.pdfTemplate,
+          // The delivered documents as plain text, for Apply's answers and cover-letter text boxes.
+          resumeText: resumeText(isRecord(run.responseJson) ? run.responseJson.resume : null),
+          coverLetterText: coverLetterText(isRecord(run.responseJson) ? run.responseJson.coverLetter : null),
           updatedAt: new Date(),
         })
         .where(and(

@@ -634,58 +634,35 @@ export async function deleteCandidateAccountAction(
     return { ...emptyState, error: "Select a valid candidate account." };
   }
 
+  // A candidate is never erased: Delete blocks the account. It stays on the accounts page, read-only,
+  // with its jobs, bids, and history, and is left out of Get JD, Generation, and Apply.
   try {
-    const results = await neonSql.transaction((tx) => [
-      tx`
-        delete from bids
-        using users as candidate
-        where bids.candidate_id = candidate.id
-          and candidate.id = ${userId}::uuid
-          and candidate.role = 'account'
-          and candidate.parent_user_id = ${actor.id}::uuid
-      `,
-      tx`
-        delete from jobs
-        using users as candidate
-        where jobs.candidate_id = candidate.id
-          and candidate.id = ${userId}::uuid
-          and candidate.role = 'account'
-          and candidate.parent_user_id = ${actor.id}::uuid
-      `,
-      tx`
-        delete from profiles
-        using users as candidate
-        where profiles.user_id = candidate.id
-          and candidate.id = ${userId}::uuid
-          and candidate.role = 'account'
-          and candidate.parent_user_id = ${actor.id}::uuid
-      `,
-      tx`
-        delete from users
-        where users.id = ${userId}::uuid
-          and users.role = 'account'
-          and users.parent_user_id = ${actor.id}::uuid
-        returning users.id
-      `,
-    ]);
-
-    if (results[3].length === 0) {
+    const blocked = await neonSql`
+      update users
+      set blocked_at = now(), blocked_by = ${actor.id}::uuid, auth_version = auth_version + 1, updated_at = now()
+      where users.id = ${userId}::uuid
+        and users.role = 'account'
+        and users.parent_user_id = ${actor.id}::uuid
+        and users.blocked_at is null
+      returning users.id
+    `;
+    if (blocked.length === 0) {
       return {
         ...emptyState,
-        error: "That candidate account was not found in your team.",
+        error: "That candidate account was not found in your team, or it is already blocked.",
       };
     }
   } catch (error) {
-    logUserActionFailure("deleting a candidate account", error);
+    logUserActionFailure("blocking a candidate account", error);
     return {
       ...emptyState,
-      error: "The candidate account could not be deleted. Please try again.",
+      error: "The candidate account could not be blocked. Please try again.",
     };
   }
 
   revalidatePath("/");
   revalidatePath("/users");
-  return { error: null, success: "Candidate account permanently deleted." };
+  return { error: null, success: "Candidate blocked. Their profile and history stay read-only; they are no longer used for jobs." };
 }
 
 export async function deleteStaffUserAction(

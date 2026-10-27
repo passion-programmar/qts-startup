@@ -1,11 +1,12 @@
 "use client";
 
 import { useActionState, useRef, useState } from "react";
-import { Check, Plus, Trash2 } from "lucide-react";
+import { Check, EyeOff, Plus, Trash2 } from "lucide-react";
 import { ConfirmButton } from "@/app/components/confirm-button";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import {
   deleteReusableAnswerAction,
+  dismissQuestionSuggestionAction,
   saveReusableAnswerAction,
   type PromptActionState,
 } from "@/app/settings/actions";
@@ -24,16 +25,21 @@ export type ReusableAnswer = {
 const inputClass =
   "w-full rounded-lg border border-slate-200 px-3 text-xs outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100";
 
+// A suggestion from applications, filled in to add as a new answer.
+export type AnswerDraft = { key: string; questionText: string; answer: string; choices: string[] };
+
 // One reusable answer: its question, answer, and an optional note for ChatGPT. Without an answer
-// passed in, it is the form for a new one.
-export function ReusableAnswerForm({ answer }: { answer?: ReusableAnswer }) {
+// passed in, it is the form for a new one (filled from a draft when one is passed).
+export function ReusableAnswerForm({ answer, draft }: { answer?: ReusableAnswer; draft?: AnswerDraft }) {
   const [state, formAction, isPending] = useActionState(saveReusableAnswerAction, initialState);
   const [deleteState, deleteAction, isDeleting] = useActionState(deleteReusableAnswerAction, initialState);
-  const key = answer?.id ?? "new";
+  const key = answer?.id ?? draft?.key ?? "new";
   // The choices real forms offered for this question; one click puts it in the answer.
-  const [question, setQuestion] = useState(answer?.questionText ?? "");
+  const [question, setQuestion] = useState(answer?.questionText ?? draft?.questionText ?? "");
   const answerRef = useRef<HTMLTextAreaElement>(null);
-  const suggestions = suggestionsFor(question);
+  const suggestions = draft?.choices.length
+    ? { choices: draft.choices, seenOn: "in applications" }
+    : suggestionsFor(question);
 
   return (
     <div className="space-y-2">
@@ -44,7 +50,7 @@ export function ReusableAnswerForm({ answer }: { answer?: ReusableAnswer }) {
         </label>
         <input
           className={`${inputClass} h-9`}
-          defaultValue={answer?.questionText ?? ""}
+          defaultValue={answer?.questionText ?? draft?.questionText ?? ""}
           id={`question-${key}`}
           maxLength={300}
           name="question"
@@ -57,7 +63,7 @@ export function ReusableAnswerForm({ answer }: { answer?: ReusableAnswer }) {
         </label>
         <textarea
           className={`${inputClass} min-h-16 resize-y py-2`}
-          defaultValue={answer?.answer ?? ""}
+          defaultValue={answer?.answer ?? draft?.answer ?? ""}
           id={`answer-${key}`}
           maxLength={4000}
           name="answer"
@@ -125,5 +131,24 @@ export function ReusableAnswerForm({ answer }: { answer?: ReusableAnswer }) {
         </form>
       )}
     </div>
+  );
+}
+
+// "Dismiss": a personal or one-off question stops being suggested.
+export function DismissSuggestionButton({ suggestionId }: { suggestionId: string }) {
+  const [state, formAction, isPending] = useActionState(dismissQuestionSuggestionAction, initialState);
+  return (
+    <form action={formAction}>
+      <input name="suggestionId" type="hidden" value={suggestionId} />
+      <ActionFeedback state={state} />
+      <button
+        className="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-60"
+        disabled={isPending}
+        type="submit"
+      >
+        {isPending ? <LoadingIcon className="size-3.5" /> : <EyeOff className="size-3.5" />}
+        {isPending ? "Dismissing..." : "Dismiss"}
+      </button>
+    </form>
   );
 }

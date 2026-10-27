@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { categories, profiles, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
@@ -11,6 +11,8 @@ import {
 import { readExtensionSavedJob } from "@/server/jobs/get-jd-save-values";
 import { isGetJdEvaluationAccepted } from "@/server/gemini/job-evaluation-config";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
+import { normalizeCompanyName } from "@/server/jobs/job-key";
+import { sourceSiteUrl } from "@/server/jobs/source-site";
 
 const maxProfilesPerSave = 100;
 
@@ -43,6 +45,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const job = readExtensionSavedJob(body);
+  // Where the Manager found the job: the page it was opened from, its link's source tag, or its own site.
+  const openerUrl = isRecord(body) && typeof body.openerUrl === "string" && body.openerUrl.length <= 2048 ? body.openerUrl : null;
+  const sourceSite = job ? sourceSiteUrl({ openerUrl, jobUrl: job.jobUrl }) : null;
   const profileIds = readProfileIds(body, "profileIds");
   // Explicit removals (accounts unchecked in the panel); never inferred from what is missing.
   const removeProfileIds = readProfileIds(body, "removeProfileIds");
@@ -77,6 +82,13 @@ export async function POST(request: Request): Promise<NextResponse> {
         firstName: profiles.firstName,
         lastName: profiles.lastName,
         category: categories.name,
+        // The company of the candidate's most recent experience: a job there is never saved for them.
+        currentEmployer: sql<string | null>`(
+          select e.company_name from experiences e
+           where e.profile_user_id = ${profiles.userId}
+           order by e.is_current desc, e.end_date desc nulls first, e.start_date desc nulls last
+           limit 1
+        )`,
       })
       .from(users)
       .innerJoin(profiles, eq(profiles.userId, users.id))
@@ -127,11 +139,17 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     // Additions, one by one: the first account creates the job's relation_id, later ones reuse it.
     for (const candidate of candidates.filter((entry) => profileIds.includes(entry.id))) {
+      const employer = normalizeCompanyName(candidate.currentEmployer ?? "");
+      if (employer && employer === normalizeCompanyName(job.company)) {
+        results.push({ ...describe(candidate), status: "locked", message: `Not saved: works at ${candidate.currentEmployer} now.` });
+        continue;
+      }
       try {
         const savedJob = await insertGetJdJob({
           ...job,
           managerId: manager.id,
           candidateId: candidate.id,
+          sourceSiteUrl: sourceSite,
         });
         results.push(savedJob.status === "saved"
           ? { ...describe(candidate), status: "saved", message: "Saved to Jobs.", jobId: savedJob.jobId }

@@ -18,9 +18,10 @@ import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { JobRecordTimeZoneForm } from "@/app/settings/job-record-time-zone-form";
-import { ReusableAnswerForm } from "@/app/settings/reusable-answers";
+import { DismissSuggestionButton, ReusableAnswerForm } from "@/app/settings/reusable-answers";
 import { SettingsCard } from "@/app/settings/settings-card";
 import { getJobRecordTimeZone } from "@/server/jobs/job-record-time-zone";
+import { listQuestionSuggestions } from "@/server/apply/question-memory";
 
 export const instant = false;
 
@@ -59,6 +60,7 @@ export default async function SettingsPage() {
     managerPromptRows,
     jobRecordTimeZone,
     reusableAnswerRows,
+    questionSuggestions,
   ] = await Promise.all([
     // Super Admin's library: the active version of each prompt.
     db
@@ -99,6 +101,8 @@ export default async function SettingsPage() {
         useGeminiMatching: users.useGeminiMatching,
         canUseApply: users.canUseApply,
         applyAiMode: users.applyAiMode,
+        autoSubmit: users.autoSubmit,
+        applyReviewMode: users.applyReviewMode,
       })
       .from(users)
       .where(
@@ -127,9 +131,11 @@ export default async function SettingsPage() {
         questionText: reusableAnswers.questionText,
         answer: reusableAnswers.answer,
         note: reusableAnswers.note,
+        autoAdded: reusableAnswers.autoAdded,
       })
       .from(reusableAnswers)
       .orderBy(asc(reusableAnswers.questionText)),
+    listQuestionSuggestions(),
   ]);
   const versionsByGroup = new Map<string, PromptVersion[]>();
   for (const row of libraryVersionRows) {
@@ -237,13 +243,21 @@ export default async function SettingsPage() {
           </div>
         </SettingsCard>
 
-        <SettingsCard summary={`${reusableAnswerRows.length} answers`} title="Reusable answers">
+        <SettingsCard
+          summary={`${reusableAnswerRows.length} answers${questionSuggestions.length ? ` · ${questionSuggestions.length} suggestions` : ""}`}
+          title="Reusable answers"
+        >
           <p className="mb-4 text-xs leading-5 text-slate-500">
             Answers to application questions, the same for every candidate. Salary, notice, sponsorship, relocation, right to work, job preferences, and diversity questions (gender, ethnicity, veteran, disability) come from here; without a diversity answer Apply declines. The candidate&apos;s static profile facts (name, contacts, nationality, languages) come first for everything else. An answer that does not fit a field goes to ChatGPT as a hint.
           </p>
           <div className="space-y-3">
             {reusableAnswerRows.map((answer) => (
-              <SettingsCard item key={answer.id} summary={answer.answer} title={answer.questionText}>
+              <SettingsCard
+                item
+                key={answer.id}
+                summary={answer.autoAdded ? `${answer.answer} · Added automatically` : answer.answer}
+                title={answer.questionText}
+              >
                 <ReusableAnswerForm answer={answer} />
               </SettingsCard>
             ))}
@@ -252,6 +266,53 @@ export default async function SettingsPage() {
               <ReusableAnswerForm />
             </SettingsCard>
           </div>
+
+          <h3 className="mb-1 mt-6 text-xs font-semibold text-slate-700">
+            Suggestions from applications ({questionSuggestions.length})
+          </h3>
+          <p className="mb-3 text-xs leading-5 text-slate-500">
+            Questions met in 2 or more confirmed applications that have no reusable answer yet, the most frequent first. Add one to answer it the same way for every candidate, or Dismiss a personal or one-off question. A choice question answered the same way 5 or more times by 3 or more candidates is added by itself and marked “Added automatically”.
+          </p>
+          {questionSuggestions.length ? (
+            <div className="space-y-3">
+              {questionSuggestions.map((suggestion) => {
+                const choices = [...new Set(suggestion.options.flat())];
+                return (
+                  <SettingsCard
+                    item
+                    key={suggestion.id}
+                    summary={`Seen ${suggestion.timesSeen} times${suggestion.answers.length
+                      ? ` · ${suggestion.answers.map((entry) => `${entry.answer} (${entry.count})`).join(", ")}`
+                      : " · free-text answers are not kept"}`}
+                    title={suggestion.questionText}
+                  >
+                    {suggestion.answers.length > 0 && (
+                      <ul className="mb-3 space-y-0.5 text-[11px] text-slate-600">
+                        {suggestion.answers.map((entry) => (
+                          <li key={entry.answer}>
+                            <span className="font-semibold text-slate-800">{entry.answer}</span>: {entry.count} times, {entry.candidates} {entry.candidates === 1 ? "candidate" : "candidates"}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <ReusableAnswerForm
+                      draft={{
+                        key: `suggestion-${suggestion.id}`,
+                        questionText: suggestion.questionText,
+                        answer: suggestion.answers[0]?.answer ?? "",
+                        choices,
+                      }}
+                    />
+                    <div className="mt-2">
+                      <DismissSuggestionButton suggestionId={suggestion.id} />
+                    </div>
+                  </SettingsCard>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400">No suggestions yet. They appear after confirmed applications.</p>
+          )}
         </SettingsCard>
 
         <SettingsCard summary={`${managerRows.length} active Managers`} title="Managers">
@@ -300,6 +361,8 @@ export default async function SettingsPage() {
                   />,
                   <ManagerApplyForm
                     aiMode={manager.applyAiMode}
+                    autoSubmit={manager.autoSubmit}
+                    reviewMode={manager.applyReviewMode}
                     canUseApply={manager.canUseApply}
                     key="apply"
                     managerId={manager.id}

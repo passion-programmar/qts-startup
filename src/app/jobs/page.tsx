@@ -1,4 +1,4 @@
-import { asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/app/components/page-header";
 import { PaginatedTable } from "@/app/components/paginated-table";
@@ -12,6 +12,7 @@ import {
 } from "@/app/components/record-forms";
 import { GenerationSetup } from "@/app/components/generation-setup";
 import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
+import { AnswerApplicationButtons, ApplyAgainButton } from "@/app/jobs/apply-buttons";
 import { jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
@@ -22,33 +23,45 @@ import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 export const instant = false;
 
 type ApplyAttemptSummary = {
-  status: "claimed" | "submitting" | "confirmed" | "not_confirmed" | "failed" | "released" | "skipped";
+  id: string;
+  status: "claimed" | "waiting_review" | "waiting_confirmation" | "submitting" | "confirmed" | "not_confirmed"
+    | "failed" | "released" | "skipped" | "cleared";
   reason: string | null;
   browser: string | null;
-  screenshot: string | null;
+  returns: number;
 };
 
 /** One line about a row's latest application, plus where its screenshot is when it has one. */
 function applyStatusLines(attempt: ApplyAttemptSummary | null): ApplyStatusLine[] {
   if (!attempt) return [];
   const where = attempt.browser ? ` on ${attempt.browser}` : "";
-  const screenshot = attempt.screenshot ? `Screenshot saved on ${attempt.screenshot}` : null;
   switch (attempt.status) {
     case "claimed":
-      return [{ text: `Applying${where}`, tone: "info", detail: null }];
+      return [{ text: `Apply is filling the form${where}`, tone: "info", detail: null }];
+    case "waiting_review":
+      return [{ text: `Waiting for your review${where}`, tone: "warn", detail: null }];
+    case "waiting_confirmation":
     case "submitting":
-      return [{ text: `Submitted${where} — checking the result`, tone: "info", detail: null }];
+      return [{ text: `Submitted${where} — waiting for your answer`, tone: "warn", detail: null }];
     case "confirmed":
-      return [{ text: "Apply: confirmed", tone: "info", detail: null }];
+      return [{ text: "Applied: you confirmed it", tone: "info", detail: null }];
     case "not_confirmed":
-      return [{ text: "Submitted — not confirmed", tone: "warn", detail: [attempt.reason, screenshot].filter(Boolean).join(" · ") || null }];
+      return [{ text: "Submitted — not confirmed", tone: "warn", detail: attempt.reason }];
     case "failed":
-      return [{ text: "Apply failed", tone: "error", detail: [attempt.reason, screenshot].filter(Boolean).join(" · ") || null }];
+      return [{ text: "Not submitted (you answered No)", tone: "error", detail: null }];
     case "skipped":
       return [{ text: "Apply skipped", tone: "warn", detail: attempt.reason }];
     case "released":
-      return attempt.reason ? [{ text: "Apply returned to the list", tone: "info", detail: attempt.reason }] : [];
+      return attempt.reason ? [{ text: attempt.returns >= 2 ? "Apply stopped twice" : "Apply returned to the list", tone: attempt.returns >= 2 ? "error" : "info", detail: attempt.reason }] : [];
+    case "cleared":
+      return [{ text: "Offered to Apply again", tone: "info", detail: null }];
   }
+}
+
+/** Whether a job's latest application can be offered to Apply again. */
+function canApplyAgain(attempt: ApplyAttemptSummary | null, jobStatus: string): boolean {
+  if (!attempt || jobStatus === "applied") return false;
+  return attempt.status === "failed" || attempt.status === "skipped" || (attempt.status === "released" && attempt.returns >= 2);
 }
 
 export default async function JobsPage() {
@@ -89,8 +102,8 @@ export default async function JobsPage() {
       )`,
       applyAttempt: sql<ApplyAttemptSummary | null>`(
         select jsonb_build_object(
-          'status', a.status, 'reason', a.result_reason,
-          'browser', b.name, 'screenshot', a.screenshot_browser_name
+          'id', a.id, 'status', a.status, 'reason', a.result_reason, 'browser', b.name,
+          'returns', (select count(*) from apply_attempts r where r.job_id = a.job_id and r.status = 'released')
         )
         from apply_attempts a left join extension_browsers b on b.id = a.browser_id
         where a.job_id = ${jobs.id}
@@ -104,7 +117,9 @@ export default async function JobsPage() {
     .orderBy(desc(jobs.date), desc(jobs.createdAt));
   const candidateRows = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
     .from(profiles).innerJoin(users, eq(users.id, profiles.userId))
-    .where(eq(users.parentUserId, currentUser.id)).orderBy(asc(profiles.firstName), asc(profiles.lastName));
+    // Blocked candidates are read-only: no job can be moved to one.
+    .where(and(eq(users.parentUserId, currentUser.id), isNull(users.blockedAt)))
+    .orderBy(asc(profiles.firstName), asc(profiles.lastName));
   const candidateOptions = candidateRows.map((candidate) => ({ id: candidate.id, name: [candidate.firstName, candidate.lastName].filter(Boolean).join(" ") || "Candidate" }));
 
   return (
@@ -201,6 +216,10 @@ export default async function JobsPage() {
                       {line.detail && <span className="block text-xs text-slate-500">{line.detail}</span>}
                     </span>
                   ))}
+                  {row.applyAttempt && ["waiting_confirmation", "submitting"].includes(row.applyAttempt.status) && (
+                    <AnswerApplicationButtons attemptId={row.applyAttempt.id} title={`${row.title} — ${row.company}`} />
+                  )}
+                  {canApplyAgain(row.applyAttempt, row.status) && <ApplyAgainButton jobId={row.id} />}
                   {row.generationError && (
                     // Only a failed job shows its note as an error; a requeued job's note is informational.
                     <span className={`mt-1 block text-xs ${row.generationStatus === "failed" ? "text-rose-700" : "text-slate-500"}`}>

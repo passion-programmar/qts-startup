@@ -1,14 +1,16 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { applyAttempts, bids, profiles, users } from "@/db/schema";
+import { bids, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
-import { markRowsWithBidApplied, resetRowsWithoutBid } from "@/server/jobs/job-bids";
 import { computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import type { RecordActionState } from "@/app/record-action-state";
+
+// A bid is an independent record of one confirmed application: editing or deleting it never
+// changes a jobs row. Its submitted answers and applied time stay as they were.
 
 export async function updateBidAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
   const manager = await requireUser();
@@ -19,42 +21,45 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   const jobTitle = text(formData, "jobTitle", 500);
   const company = text(formData, "company", 500);
   const location = text(formData, "location", 500);
-  const employmentType = text(formData, "employmentType", 200);
-  const workplaceType = text(formData, "workplaceType", 200);
+  const workType = text(formData, "workType", 200);
   const salary = text(formData, "salary", 500);
-  const resumeLocalPath = text(formData, "resumeLocalPath", 2048);
+  const resumeFolder = text(formData, "resumeFolder", 2048);
   const googleDrivePath = text(formData, "googleDrivePath", 2048);
-  const appliedAtText = text(formData, "appliedAt", 32);
-  const appliedAt = new Date(appliedAtText);
-  if (!uuid(id) || !uuid(candidateId) || !jobTitle || !company || !resumeLocalPath || !isHttpUrl(jobUrl) || Number.isNaN(appliedAt.getTime())) {
-    return { error: "Enter valid job, candidate, resume, URL, and applied date values.", success: null };
+  if (!uuid(id) || !uuid(candidateId) || !jobTitle || !company || !resumeFolder || !isHttpUrl(jobUrl)) {
+    return { error: "Enter valid candidate, job, URL, and résumé folder values.", success: null };
   }
+  // Blocked candidates are read-only, so a bid cannot be moved to one.
   const [candidate] = await db.select({ id: profiles.userId }).from(profiles)
     .innerJoin(users, eq(users.id, profiles.userId))
-    .where(and(eq(profiles.userId, candidateId), eq(users.parentUserId, manager.id), eq(users.role, "account"))).limit(1);
-  if (!candidate) return { error: "Select one of your candidate accounts.", success: null };
-  const [current] = await db.select({
-    candidateId: bids.candidateId, sourceJobId: bids.sourceJobId, jobUrl: bids.jobUrl, titleCompanyKey: bids.titleCompanyKey,
-  }).from(bids).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).limit(1);
-  if (!current) return { error: "Bid was not found.", success: null };
-  const normalizedUrl = normalizeJobUrl(jobUrl);
-  // Rows the bid stops covering go back to To do; rows it now covers become Applied.
-  const [updated] = await db.batch([
-    db.update(bids).set({
-      candidateId, jobUrl: normalizedUrl, jobTitle, company,
+    .where(and(
+      eq(profiles.userId, candidateId),
+      eq(users.parentUserId, manager.id),
+      eq(users.role, "account"),
+      isNull(users.blockedAt),
+    )).limit(1);
+  if (!candidate) return { error: "Select one of your active candidate accounts.", success: null };
+  try {
+    const updated = await db.update(bids).set({
+      candidateId,
+      jobUrl: normalizeJobUrl(jobUrl),
+      jobTitle,
+      company,
       titleCompanyKey: computeTitleCompanyKey(jobTitle, company) || null,
       location: location || null,
-      employmentType: employmentType || null,
-      workplaceType: workplaceType || null,
+      workType: workType || null,
       salary: salary || null,
-      resumeLocalPath, googleDrivePath: googleDrivePath || null, appliedAt, updatedAt: new Date(),
-    }).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).returning({ id: bids.id }),
-    resetRowsWithoutBid(manager.id, current),
-    markRowsWithBidApplied(manager.id, candidateId),
-  ]);
-  if (!updated.length) return { error: "Bid was not found.", success: null };
+      resumeFolder,
+      googleDrivePath: googleDrivePath || null,
+      updatedAt: new Date(),
+    }).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).returning({ id: bids.id });
+    if (!updated.length) return { error: "Bid was not found.", success: null };
+  } catch (error) {
+    if (error instanceof Error && /bids_candidate_job_url_unique/.test(`${error.message} ${String(error.cause ?? "")}`)) {
+      return { error: "This candidate already has a bid for this job address.", success: null };
+    }
+    throw error;
+  }
   revalidatePath("/bids");
-  revalidatePath("/jobs");
   return { error: null, success: "Bid updated." };
 }
 
@@ -63,48 +68,11 @@ export async function deleteBidAction(_state: RecordActionState, formData: FormD
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
   const id = text(formData, "id", 36);
   if (!uuid(id)) return { error: "Invalid bid.", success: null };
-  const [bid] = await db.select({
-    candidateId: bids.candidateId, sourceJobId: bids.sourceJobId, jobUrl: bids.jobUrl, titleCompanyKey: bids.titleCompanyKey,
-  }).from(bids).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).limit(1);
-  if (!bid) return { error: "Bid was not found.", success: null };
-  // The rows this bid covered are no longer Applied once no bid is left for them.
-  const [deleted] = await db.batch([
-    db.delete(bids).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).returning({ id: bids.id }),
-    resetRowsWithoutBid(manager.id, bid),
-  ]);
+  const deleted = await db.delete(bids).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).returning({ id: bids.id });
   if (!deleted.length) return { error: "Bid was not found.", success: null };
   revalidatePath("/bids");
-  revalidatePath("/jobs");
   return { error: null, success: "Bid deleted." };
 }
 
 function text(data: FormData, name: string, max: number): string { const value = data.get(name); return typeof value === "string" ? value.trim().slice(0, max) : ""; }
 function uuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
-
-/** The Manager checked a "Submitted — not confirmed" application (for example its screenshot) and confirms it. */
-export async function confirmBidAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
-  const manager = await requireUser();
-  if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
-  const id = text(formData, "id", 36);
-  if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: "Select a valid bid.", success: null };
-  const now = new Date();
-  const [bid] = await db
-    .update(bids)
-    .set({ confirmationStatus: "confirmed", confirmationSource: "manager", updatedAt: now })
-    .where(and(eq(bids.id, id), eq(bids.managerId, manager.id), eq(bids.confirmationStatus, "not_confirmed")))
-    .returning({ applyAttemptId: bids.applyAttemptId });
-  if (!bid) return { error: "That bid is not waiting for confirmation.", success: null };
-  if (bid.applyAttemptId) {
-    await db
-      .update(applyAttempts)
-      .set({ status: "confirmed", updatedAt: now })
-      .where(and(
-        eq(applyAttempts.id, bid.applyAttemptId),
-        eq(applyAttempts.managerId, manager.id),
-        eq(applyAttempts.status, "not_confirmed"),
-      ));
-  }
-  revalidatePath("/bids");
-  revalidatePath("/jobs");
-  return { error: null, success: "Marked as confirmed." };
-}

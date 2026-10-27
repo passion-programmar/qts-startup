@@ -31,7 +31,7 @@ export type JobTrack = {
   applyStatus: ApplyStatusLine[];
   applyRuns: ApplyRun[];
 };
-export type EditableBid = CommonRecord & { employmentType: string | null; workplaceType: string | null; salary: string | null; resumeLocalPath: string; googleDrivePath: string | null; appliedAt: string };
+export type EditableBid = CommonRecord & { workType: string | null; salary: string | null; resumeFolder: string; googleDrivePath: string | null };
 
 export function JobEditAction({ record, candidates, track }: { record: EditableJob; candidates: CandidateOption[]; track: JobTrack }) {
   return <RecordActions kind="job" record={record} candidates={candidates} showDelete={false} track={track} />;
@@ -319,15 +319,17 @@ function JobDetailFields({ record }: { record: EditableJob }) {
       <Field label="Work arrangement"><input className={inputClass} defaultValue={record.workplaceType ?? ""} maxLength={200} name="workplaceType" /></Field>
       <Field label="Salary"><input className={inputClass} defaultValue={record.salary ?? ""} maxLength={500} name="salary" /></Field>
       <DatePicker defaultValue={record.date} id={`jobDate-${record.id}`} label="Date" name="date" required />
-      <Field label="Status"><select className={inputClass} defaultValue={record.status} name="status">{jobStatusOptions.map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></Field>
+      {/* Applied comes only from Apply (the Manager's Yes after Submit), so it is offered only to keep it. */}
+      <Field label="Status"><select className={inputClass} defaultValue={record.status} name="status">{jobStatusOptions.filter(([status]) => status !== "applied" || record.status === "applied").map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select></Field>
     </>
   );
 }
 
 const outcomeLabels: Record<string, { label: string; className: string }> = {
-  confirmed: { label: "Confirmed", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
+  confirmed: { label: "Applied (Yes)", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
   not_confirmed: { label: "Submitted, not confirmed", className: "bg-amber-50 text-amber-700 ring-amber-200" },
-  failed: { label: "Failed", className: "bg-rose-50 text-rose-700 ring-rose-200" },
+  failed: { label: "Not submitted (No)", className: "bg-rose-50 text-rose-700 ring-rose-200" },
+  later: { label: "Later", className: "bg-slate-100 text-slate-700 ring-slate-200" },
   test: { label: "Test mode", className: "bg-violet-50 text-violet-700 ring-violet-200" },
   stopped: { label: "Stopped", className: "bg-slate-100 text-slate-700 ring-slate-200" },
   skipped: { label: "Skipped", className: "bg-amber-50 text-amber-700 ring-amber-200" },
@@ -340,6 +342,7 @@ const sourceLabels: Record<string, string> = {
   documents: "Documents",
   consent: "Consent",
   rule: "Rule",
+  manager: "Manager",
 };
 const sourceClasses: Record<string, string> = {
   profile: "bg-blue-50 text-blue-700",
@@ -474,7 +477,14 @@ function ApplyRunCard({ run, startOpen }: { run: ApplyRun; startOpen: boolean })
   );
 }
 function BidFields({ record }: { record: EditableBid }) {
-  return <><Field label="Employment type"><input className={inputClass} defaultValue={record.employmentType ?? ""} maxLength={200} name="employmentType" /></Field><Field label="Work arrangement"><input className={inputClass} defaultValue={record.workplaceType ?? ""} maxLength={200} name="workplaceType" /></Field><Field label="Salary"><input className={inputClass} defaultValue={record.salary ?? ""} maxLength={500} name="salary" /></Field><Field label="Applied at"><input className={inputClass} defaultValue={record.appliedAt} name="appliedAt" required type="datetime-local" /></Field><Field className="sm:col-span-2" label="Resume local path"><input className={inputClass} defaultValue={record.resumeLocalPath} maxLength={2048} name="resumeLocalPath" required /></Field><Field className="sm:col-span-2" label="Google Drive path"><input className={inputClass} defaultValue={record.googleDrivePath ?? ""} maxLength={2048} name="googleDrivePath" /></Field></>;
+  return (
+    <>
+      <Field label="Work type"><input className={inputClass} defaultValue={record.workType ?? ""} maxLength={200} name="workType" placeholder="Full-time · Remote" /></Field>
+      <Field label="Salary"><input className={inputClass} defaultValue={record.salary ?? ""} maxLength={500} name="salary" /></Field>
+      <Field className="sm:col-span-2" label="Résumé folder"><input className={inputClass} defaultValue={record.resumeFolder} maxLength={2048} name="resumeFolder" required /></Field>
+      <Field className="sm:col-span-2" label="Google Drive path"><input className={inputClass} defaultValue={record.googleDrivePath ?? ""} maxLength={2048} name="googleDrivePath" /></Field>
+    </>
+  );
 }
 const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 function Field({ label, className = "", children }: { label: string; className?: string; children: React.ReactNode }) { return <label className={`text-xs font-semibold text-slate-700 ${className}`}>{label}{children}</label>; }

@@ -214,10 +214,16 @@ export function ManagerApplyForm({
   managerId,
   canUseApply,
   aiMode,
+  autoSubmit,
+  reviewMode,
 }: {
   managerId: string;
   canUseApply: boolean;
   aiMode: string;
+  // Off by default: Apply stops before Submit for the Manager's review.
+  autoSubmit: boolean;
+  // "every_step" by default; "before_submit" reviews everything once at the end.
+  reviewMode: string;
 }) {
   const [state, formAction, isPending] = useActionState(updateManagerApplyAction, initialState);
   const usesGemini = aiMode === "gemini";
@@ -256,6 +262,44 @@ export function ManagerApplyForm({
             type="submit"
           >
             Use {usesGemini ? "ChatGPT" : "Gemini"}
+          </button>
+        </form>
+      )}
+      {canUseApply && (
+        <form action={formAction} className="flex flex-wrap items-center gap-2">
+          <input name="managerId" type="hidden" value={managerId} />
+          <input name="reviewMode" type="hidden" value={reviewMode === "before_submit" ? "every_step" : "before_submit"} />
+          <span className="text-xs font-medium text-slate-700">
+            Review: {reviewMode === "before_submit" ? "before Submit only" : "every step"}
+          </span>
+          <button
+            className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={isPending}
+            title={reviewMode === "before_submit"
+              ? "Stop on every step of the form for the Manager's review"
+              : "Fill every step by itself and stop once before Submit (problems still stop on their step)"}
+            type="submit"
+          >
+            {reviewMode === "before_submit" ? "Use every step" : "Use before Submit only"}
+          </button>
+        </form>
+      )}
+      {canUseApply && (
+        <form action={formAction} className="flex flex-wrap items-center gap-2">
+          <input name="managerId" type="hidden" value={managerId} />
+          <input name="autoSubmit" type="hidden" value={String(!autoSubmit)} />
+          <span className="text-xs font-medium text-slate-700">
+            Submit: {autoSubmit ? "automatic" : "Manager reviews"}
+          </span>
+          <button
+            className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={isPending}
+            title={autoSubmit
+              ? "Stop before Submit so the Manager reviews every step"
+              : "Click Submit automatically when nothing needs the Manager (a bid still waits for their Yes)"}
+            type="submit"
+          >
+            {autoSubmit ? "Use review" : "Use automatic"}
           </button>
         </form>
       )}

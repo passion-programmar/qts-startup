@@ -12,6 +12,7 @@ import {
   Briefcase,
   ChevronDown,
   ClipboardList,
+  Eye,
   GraduationCap,
   Pencil,
   Plus,
@@ -493,9 +494,12 @@ export type CandidateProfileValues = {
 export function EditCandidateProfileForm({
   candidate,
   categories,
+  readOnly = false,
 }: {
   candidate: CandidateProfileValues;
   categories: CandidateCategoryOption[];
+  // A blocked ("deleted") candidate: everything can be read, nothing changed.
+  readOnly?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [educationRows, setEducationRows] = useState(() =>
@@ -534,24 +538,27 @@ export function EditCandidateProfileForm({
   return (
     <>
       <button
-        aria-label="Edit candidate profile"
+        aria-label={readOnly ? "View blocked candidate profile" : "Edit candidate profile"}
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100"
         onClick={openEditor}
         type="button"
       >
-        <Pencil aria-hidden="true" className="size-3.5" />
-        Edit
+        {readOnly ? <Eye aria-hidden="true" className="size-3.5" /> : <Pencil aria-hidden="true" className="size-3.5" />}
+        {readOnly ? "View" : "Edit"}
       </button>
       <Modal
-        confirmOnDismiss
+        confirmOnDismiss={!readOnly}
         dismissQuestion="Discard unsaved changes?"
         onClose={closeModal}
         open={isOpen}
-        subtitle="Update the candidate's contact information and profile details."
-        title="Edit candidate profile"
+        subtitle={readOnly
+          ? "This candidate is blocked: the profile can be read but not changed, and it is not used for jobs."
+          : "Update the candidate's contact information and profile details."}
+        title={readOnly ? "Blocked candidate (read-only)" : "Edit candidate profile"}
       >
         <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField}>
           <input name="userId" type="hidden" value={candidate.userId} />
+          <fieldset className="min-w-0 space-y-3" disabled={readOnly}>
           <FormCard
             icon={<UserRound />}
             summary={[[candidate.firstName, candidate.lastName].filter(Boolean).join(" "), candidate.candidateEmail, candidate.city].filter(Boolean).join(" · ") || "Name, contacts, address, category"}
@@ -731,6 +738,7 @@ export function EditCandidateProfileForm({
               );
             }}
           </HistorySection>
+          </fieldset>
           {message.error && <FormMessage variant="error">{message.error}</FormMessage>}
           <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
             <button
@@ -738,16 +746,18 @@ export function EditCandidateProfileForm({
               onClick={() => setIsOpen(false)}
               type="button"
             >
-              Cancel
+              {readOnly ? "Close" : "Cancel"}
             </button>
-            <button
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
-              disabled={isPending}
-              type="submit"
-            >
-              {isPending && <LoadingIcon className="size-4" />}
-              {isPending ? "Saving..." : "Save profile"}
-            </button>
+            {!readOnly && (
+              <button
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
+                disabled={isPending}
+                type="submit"
+              >
+                {isPending && <LoadingIcon className="size-4" />}
+                {isPending ? "Saving..." : "Save profile"}
+              </button>
+            )}
           </div>
         </form>
       </Modal>
@@ -774,7 +784,7 @@ export function DeleteCandidateAccountForm({
         ariaLabel={`Delete ${candidateName}`}
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
         confirmLabel="Delete candidate"
-        description={<>Permanently delete {candidateName}? Their profile, Jobs, Bids, education, and experience records are deleted too. This cannot be undone.</>}
+        description={<>Delete {candidateName}? The account is blocked, not erased: their profile, Jobs, Bids, and history stay read-only on this page, and they are no longer used for Get JD, Generation, or Apply. This cannot be undone.</>}
         disabled={isPending}
         title="Delete this candidate?"
       >

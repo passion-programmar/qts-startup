@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD COLUMN "apply_review_mode" text DEFAULT 'every_step' NOT NULL;--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_apply_review_mode_check" CHECK ("users"."apply_review_mode" in ('every_step', 'before_submit'));

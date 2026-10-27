@@ -26,3 +26,8 @@ test("the summary counts each state and says when nothing is left to add", () =>
   assert.equal(summarizeAccountStates(["applied", "has_job"]).text, "All candidates already have this job.");
   assert.equal(summarizeAccountStates([]).text, "No active candidates.");
 });
+
+test("a candidate who works at the company now is counted apart", () => {
+  assert.equal(summarizeAccountStates(["works_here", "available"]).text, "1 candidate works there now · 1 can be added.");
+  assert.equal(summarizeAccountStates(["has_job", "works_here"]).text, "1 already has this job · 1 candidate works there now.");
+});

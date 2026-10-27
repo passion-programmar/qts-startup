@@ -40,6 +40,17 @@
   }
 
   /** The option whose text matches, for selects, radios, and comboboxes. */
+  // A yes/no question about where the candidate lives ("Are you based in ...?", "Do you live in ...?").
+  const LOCATED_QUESTION = /\b(are you|do you)\b.*\b(based|located|living|live|reside|residing|resident)\b/;
+
+  /** Whether the question names the candidate's country or city as a whole word. */
+  function namesCandidatePlace(label, candidate) {
+    return [candidate.country, candidate.city]
+      .map((place) => String(place || '').trim().toLowerCase())
+      .filter((place) => place.length >= 3)
+      .some((place) => new RegExp(`(^|[^\\p{L}])${place.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}])`, 'u').test(label));
+  }
+
   function pickOption(field, pattern) {
     if (!hasOptions(field)) return null;
     return field.options.find((option) => pattern.test(String(option))) ?? null;
@@ -485,6 +496,13 @@
     }
     // Questions about someone else (a referrer, an employee you spoke to) never take the candidate's facts.
     const aboutSomeoneElse = /\b(employee|referr\w*|recruiter|their|someone|who referred|hiring manager)\b/.test(label);
+    // "Are you based in Romania, Serbia or Poland?" naming the candidate's own country or city is a
+    // Yes from the profile, never a guess; other country lists (sanctions lists) go on as before.
+    if (!aboutSomeoneElse && LOCATED_QUESTION.test(label) && namesCandidatePlace(label, candidate)) {
+      if (field.kind === 'checkbox' && !hasOptions(field)) return { value: true, source: 'profile' };
+      const yes = hasOptions(field) ? pickOption(field, /^\s*yes\b/i) : 'Yes';
+      if (yes) return { value: yes, source: 'profile' };
+    }
     // 0. A reusable answer saved for exactly this question ("Does the advertised salary align with
     //    your expectations?" → Yes), unless it is the one standing in for a profile fact.
     const exactRow = aboutSomeoneElse ? null : (savedAnswers || []).find((row) => row.questionKey === normalizeQuestionKey(field.label));
@@ -636,7 +654,8 @@
         const hint = resolved.from === 'reusable'
           ? `The reusable answer for this question is "${resolved.ask}"${note}; give it in a form this field takes.`
           : `The candidate's profile says "${resolved.ask}"${note}; give it in a form this field takes.`;
-        open.push({ ...field, hint });
+        // The value meant: a remembered choice for it may fill the field without the AI.
+        open.push({ ...field, hint, intended: String(resolved.ask) });
         continue;
       }
       if (resolved.skip) continue;
@@ -749,13 +768,19 @@
    * The AI request for a page's open questions: Super Admin's prompt (or the default) with its
    * placeholders filled, then the fixed reply format. One message, answered as strict JSON.
    */
-  function buildAnswerPrompt({ template, job, candidate: profile, documentsJson, fields, exchangeRates, today, savedAnswers }) {
-    // ChatGPT sees the salary, notice, and sponsorship Apply uses: Super Admin's reusable ones first.
+  function buildAnswerPrompt({ template, job, candidate: profile, resumeText, coverLetterText, documentsJson, fields, exchangeRates, today, savedAnswers }) {
+    // The AI sees the salary, notice, and sponsorship Apply uses: Super Admin's reusable ones first.
     const candidate = withReusableFacts(profile, savedAnswers, exchangeRates);
     const questions = JSON.stringify(questionList(fields));
     const saved = (savedAnswers || [])
       .map((row) => `${row.questionText}: ${row.answer}${row.note ? ` (note: ${row.note})` : ''}`)
       .join('\n') || '(none)';
+    // The delivered résumé and cover letter as plain text, complete; older callers pass the JSON.
+    const resume = String(resumeText || '').trim();
+    const coverLetter = String(coverLetterText || '').trim();
+    const documents = resume || coverLetter
+      ? [resume && `Résumé:\n${resume}`, coverLetter && `Cover letter:\n${coverLetter}`].filter(Boolean).join('\n\n')
+      : String(documentsJson || '').slice(0, 15000);
     const values = {
       job_title: job.title || '',
       company: job.company || '',
@@ -763,7 +788,9 @@
       job_description: String(job.description || '').slice(0, 12000),
       today: formatDate(new Date(today || Date.now())),
       candidate_profile: JSON.stringify(candidateFacts(candidate, job, fields, exchangeRates, today)),
-      resume_and_cover_letter: String(documentsJson || '').slice(0, 15000),
+      resume: resume || '(none)',
+      cover_letter: coverLetter || '(none)',
+      resume_and_cover_letter: documents,
       saved_answers: saved,
       questions,
       // The Gemini answer prompt's name for the questions.
@@ -855,7 +882,26 @@
     ].join('\n');
   }
 
-  const api = { normalizeQuestionKey, resolveField, resolveFields, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, DEFAULT_ANSWER_PROMPT };
+  // The same choice list in any order and case gives the same key (as src/server/apply/question-memory-values.ts).
+  function optionsKey(options) {
+    return (options || []).map((option) => String(option).toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean).sort().join('|').slice(0, 500);
+  }
+
+  /**
+   * The option a value that did not fit became before, on this question with these choices (Apply's
+   * question memory), when the field still offers it; null otherwise, and the AI is asked.
+   */
+  function findRememberedChoice(field, intended, remembered) {
+    if (!intended || !hasOptions(field) || !Array.isArray(remembered)) return null;
+    const key = normalizeQuestionKey(field.label);
+    const listKey = optionsKey(field.options);
+    const meant = String(intended).toLowerCase().replace(/\s+/g, ' ').trim();
+    const hit = remembered.find((entry) => entry.questionKey === key && entry.optionsKey === listKey
+      && String(entry.intended).toLowerCase().replace(/\s+/g, ' ').trim() === meant);
+    return hit ? field.options.find((option) => String(option).trim() === String(hit.choice).trim()) ?? null : null;
+  }
+
+  const api = { normalizeQuestionKey, resolveField, resolveFields, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

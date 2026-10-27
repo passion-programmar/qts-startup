@@ -116,7 +116,8 @@ export default async function UsersPage() {
         child.login_name, child.blocked_at, child.created_at
       from users as child
       inner join visible_users as parent on child.parent_user_id = parent.id
-      where ${includeBlocked} or child.blocked_at is null
+      -- Blocked candidate accounts stay visible (read-only) to their Manager.
+      where ${includeBlocked} or child.blocked_at is null or child.role = 'account'
     )
     select
       visible_users.id,
@@ -331,6 +332,11 @@ export default async function UsersPage() {
                         value={userName(candidate)}
                       >
                         {userName(candidate)}
+                        {candidate.blocked_at && (
+                          <span className="ml-2 inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-rose-100">
+                            Blocked
+                          </span>
+                        )}
                       </CopyableAccountField>,
                       <CopyableAccountField
                         ariaLabel={`Copy category for ${userName(candidate)}`}
@@ -445,12 +451,17 @@ export default async function UsersPage() {
                         }}
                         categories={categoryOptions}
                         key="edit"
+                        readOnly={Boolean(candidate.blocked_at)}
                       />,
-                      <DeleteCandidateAccountForm
-                        candidateName={userName(candidate)}
-                        key="delete"
-                        userId={candidate.id}
-                      />,
+                      candidate.blocked_at ? (
+                        <span className="text-xs text-slate-500" key="delete">Blocked</span>
+                      ) : (
+                        <DeleteCandidateAccountForm
+                          candidateName={userName(candidate)}
+                          key="delete"
+                          userId={candidate.id}
+                        />
+                      ),
                     ],
                   }))}
               />

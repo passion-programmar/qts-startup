@@ -449,7 +449,9 @@ test('queued Generation prompts use saved job and profile data only', () => {
 
   assert.ok(startRoute.includes('jobUrl: normalizeJobUrl(savedJob.jobUrl)'));
   assert.ok(startRoute.includes('jobDescription: savedJob.description'));
-  assert.ok(startRoute.includes('jdMatching: savedJob.jdMatching'));
+  // JD matching notes decide which jobs Generation picks, but stay out of the prompt.
+  assert.ok(startRoute.includes('!savedJob.jdMatching?.trim()'));
+  assert.equal(startRoute.includes('jdMatching: savedJob.jdMatching'), false);
   assert.ok(startRoute.includes('educations'));
   assert.ok(startRoute.includes('experiences'));
   assert.equal(startRoute.includes('readGenerationJob'), false);
@@ -539,9 +541,11 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes('if (!sessionIsValid(stored))'));
   assert.ok(review.includes('result.classification.matchingProfileIds'));
   assert.ok(serviceWorker.includes('selectionModified: true'));
-  assert.ok(serviceWorker.includes('const actionableProfiles = profiles.filter((profile) => !GET_JD_LOCKED_STATES.has(getJdProfileState(profile)))'));
+  // Candidates who work at the company now are not actionable either.
+  assert.ok(serviceWorker.includes('const actionableProfiles = profiles.filter((profile) => !GET_JD_FIXED_STATES.has(getJdProfileState(profile)))'));
   assert.ok(serviceWorker.includes("status: 'complete'"));
-  assert.ok(review.includes('checkbox.checked = locked || selectedIds.has(profile.id)'));
+  // Locked accounts stay checked; a candidate working at the company now stays unchecked.
+  assert.ok(review.includes('checkbox.checked = locked || (!worksHere(profile) && selectedIds.has(profile.id))'));
   assert.ok(review.includes('checkbox.disabled = !selectionEnabled || locked'));
   assert.ok(review.includes("has_job: 'Has this job · uncheck to remove'"));
   assert.ok(review.includes("applied: 'Applied (in Bids)'"));
@@ -671,13 +675,14 @@ test('the prompt and template flow from the Generation run to the job and its bi
   const read = (...parts) => fs.readFileSync(path.join(repositoryRoot, ...parts), 'utf8');
   const start = read('src', 'app', 'api', 'extension', 'generation', 'start', 'route.ts');
   const finalize = read('src', 'app', 'api', 'extension', 'generation', 'finalize', 'route.ts');
-  const jobActions = read('src', 'app', 'jobs', 'actions.ts');
+  const applyAttempts = read('src', 'server', 'apply', 'apply-attempts.ts');
 
   assert.ok(start.includes('const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);'));
   assert.ok(finalize.includes('promptId: run.promptId,'));
   assert.ok(finalize.includes('pdfTemplate: run.pdfTemplate,'));
-  assert.ok(jobActions.includes('promptId: existingJob.promptId,'));
-  assert.ok(jobActions.includes('pdfTemplate: existingJob.pdfTemplate,'));
+  // The bid keeps the prompt and template by name, copied when the Manager confirms the application.
+  assert.ok(applyAttempts.includes('templateName: templateLabel(attempt.pdfTemplate),'));
+  assert.ok(applyAttempts.includes('promptName: attempt.promptName,'));
 });
 
 test('every candidate has a category, falling back to the default Global category', () => {
@@ -937,13 +942,14 @@ test('Get JD saves use shared job keys, explicit removals, and skip Gemini when 
 test('Local Count never calls CountTokens; Gemini Count records both counts on the request', () => {
   const root = path.join(extensionRoot, '..');
   const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
-  const route = read('src', 'app', 'api', 'extension', 'get-jd', 'route.ts');
+  // Key selection and token counting are shared by Get JD and Apply's Gemini answers.
+  const route = read('src', 'server', 'gemini', 'gemini-keys.ts');
   const usage = read('src', 'lib', 'gemini-usage.ts');
   const page = read('src', 'app', 'settings', 'gemini-usage', 'page.tsx');
   const modeForm = read('src', 'app', 'settings', 'gemini-usage', 'token-count-mode-form.tsx');
 
-  assert.ok(route.includes('local: estimateGeminiInputTokens(prompt, config)'));
-  assert.ok(route.includes('gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, prompt) : null'));
+  assert.ok(route.includes('local: estimateGeminiInputTokens(promptText, config)'));
+  assert.ok(route.includes('gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, contents, config) : null'));
   assert.ok(usage.includes('localInputTokens: tokenCounts.local ?? null'));
   assert.ok(usage.includes('geminiInputTokens: tokenCounts.gemini ?? null'));
   assert.ok(page.includes('{ label: "No", className: "w-[5%]" }'));

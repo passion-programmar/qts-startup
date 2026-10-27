@@ -120,15 +120,21 @@ function normalizeKeyText(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+/** A company name without case, punctuation, or legal endings: "N-iX LLC" and "n-ix" are the same. */
+export function normalizeCompanyName(company: string): string {
+  let normalized = normalizeKeyText(String(company || ""));
+  // Repeat so "Acme Co Ltd" loses both suffixes.
+  for (let previous = ""; previous !== normalized;) {
+    previous = normalized;
+    normalized = normalized.replace(LEGAL_SUFFIX, "").trim();
+  }
+  return normalized;
+}
+
 /** Normalized "title|company"; a match means the same job. Empty when either part is missing. */
 export function computeTitleCompanyKey(title: string, company: string): string {
   const normalizedTitle = normalizeKeyText(String(title || "").replace(REMOTE_TAG, " "));
-  let normalizedCompany = normalizeKeyText(String(company || ""));
-  // Repeat so "Acme Co Ltd" loses both suffixes.
-  for (let previous = ""; previous !== normalizedCompany;) {
-    previous = normalizedCompany;
-    normalizedCompany = normalizedCompany.replace(LEGAL_SUFFIX, "").trim();
-  }
+  const normalizedCompany = normalizeCompanyName(company);
   if (!normalizedTitle || !normalizedCompany) return "";
   return `${normalizedTitle}|${normalizedCompany}`;
 }

@@ -1,12 +1,13 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { bids, jobs } from "@/db/schema";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { bids, jobs, profiles } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
 import { jobHasBid } from "@/server/jobs/job-bids";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { getJobRecordDate } from "@/server/jobs/job-record-time-zone";
 import { normalizeJobUrl } from "@/server/jobs/job-values";
+import { normalizeEmploymentType, normalizeWorkplaceType } from "@/server/apply/apply-values";
 
 // Shared-jobs model (docs/get-jd-redesign.md): one row per account on a job; rows
 // of the same job share relation_id. Two pages are the same job when job_key or
@@ -47,7 +48,22 @@ type NewGetJdJob = GetJdJobIdentity & {
   managerId: string;
   candidateId: string;
   autoSavedByGetJd?: boolean;
+  // The main site the job was found on (src/server/jobs/source-site.ts).
+  sourceSiteUrl?: string | null;
 };
+
+/**
+ * Gemini's employment type and work arrangement in fixed words ("FULL_TIME" → "Full-time",
+ * "TELECOMMUTE" → "Remote"), so Jobs, Bids and Apply read them the same way. Unknown wording stays.
+ */
+function withCleanWorkFields(job: NewGetJdJob): NewGetJdJob {
+  const keep = (value: string | null) => value?.trim() || null;
+  return {
+    ...job,
+    employmentType: normalizeEmploymentType(job.employmentType) ?? keep(job.employmentType),
+    workplaceType: normalizeWorkplaceType(job.workplaceType) ?? keep(job.workplaceType),
+  };
+}
 
 type JobIdentityKeys = {
   jobKey: string | null;
@@ -98,6 +114,33 @@ function sameBidCondition(keys: JobIdentityKeys) {
       sql`lower(btrim(${bids.company})) = ${keys.company.toLowerCase()}`,
     ),
   );
+}
+
+/**
+ * Days a job stays open for the Manager's other candidates after its first application. Once they
+ * have passed, Get JD rejects the job for everyone: no Gemini, no save.
+ */
+export const REUSE_AFTER_APPLY_DAYS = 7;
+
+/**
+ * The first application to this job by any of the Manager's candidates, when it is older than
+ * 7 days, matched by its address (and, once Gemini has read them, its title and company); else null.
+ */
+export async function findExpiredApplication(
+  managerId: string,
+  job: GetJdJobIdentity,
+): Promise<{ candidateName: string; appliedAt: Date } | null> {
+  const keys = identityKeys(job);
+  const [first] = await db
+    .select({ appliedAt: bids.appliedAt, firstName: profiles.firstName, lastName: profiles.lastName })
+    .from(bids)
+    .innerJoin(profiles, eq(profiles.userId, bids.candidateId))
+    .where(and(eq(bids.managerId, managerId), sameBidCondition(keys)))
+    .orderBy(asc(bids.appliedAt))
+    .limit(1);
+  if (!first) return null;
+  if (Date.now() - first.appliedAt.getTime() < REUSE_AFTER_APPLY_DAYS * 86_400_000) return null;
+  return { candidateName: [first.firstName, first.lastName].filter(Boolean).join(" ") || "a candidate", appliedAt: first.appliedAt };
 }
 
 // The same rule in raw SQL for the locked insert ($1 job_key, $2 title_company_key,
@@ -223,8 +266,9 @@ export async function findGetJdDuplicateDetails(
  * and a description always replaces page_text.
  */
 export async function insertGetJdJob(
-  job: NewGetJdJob,
+  newJob: NewGetJdJob,
 ): Promise<{ status: "saved"; jobId: string } | { status: GetJdDuplicateKind }> {
+  const job = withCleanWorkFields(newJob);
   const keys = identityKeys(job);
   const description = job.description.trim() || null;
   const pageText = description ? null : job.pageText?.trim() || null;
@@ -253,13 +297,13 @@ export async function insertGetJdJob(
        INSERT INTO jobs (
          relation_id, job_key, title_company_key, job_url, job_title, company,
          description, page_text, location, employment_type, workplace_type, salary,
-         job_reason, auto_saved_by_get_jd, manager_id, candidate_id, date, status
+         job_reason, auto_saved_by_get_jd, manager_id, candidate_id, date, status, source_site_url
        )
        SELECT
          m.relation_id, $1::text, $2::text, $8::text, $4::text, $5::text,
          m.description, CASE WHEN m.description IS NULL THEN m.page_text END,
          m.location, m.employment_type, m.workplace_type, m.salary,
-         $15::text, $16::boolean, $7::uuid, $6::uuid, $17::date, 'todo'
+         $15::text, $16::boolean, $7::uuid, $6::uuid, $17::date, 'todo', $18::text
          FROM merged m
         WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE candidate_id = $6 AND ${SAME_JOB_SQL})
        ON CONFLICT DO NOTHING
@@ -278,6 +322,7 @@ export async function insertGetJdJob(
         job.jobReason,
         job.autoSavedByGetJd ?? false,
         recordDate,
+        job.sourceSiteUrl ?? null,
       ],
     ),
     // Fill empty shared details on the job's other rows; a new description clears page_text.
@@ -322,8 +367,9 @@ export async function insertGetJdJob(
 
 /** Fills empty shared details from a later save; kept for callers that skip the insert. */
 export async function updateExistingGetJdJobDetails(
-  job: NewGetJdJob,
+  newJob: NewGetJdJob,
 ): Promise<void> {
+  const job = withCleanWorkFields(newJob);
   const keys = identityKeys(job);
   const description = job.description.trim() || null;
   await db
@@ -332,6 +378,7 @@ export async function updateExistingGetJdJobDetails(
       description: sql`coalesce(nullif(btrim(${jobs.description}), ''), ${description})`,
       pageText: sql`case when coalesce(nullif(btrim(${jobs.description}), ''), ${description}) is not null then null else ${jobs.pageText} end`,
       location: sql`coalesce(nullif(btrim(${jobs.location}), ''), ${job.location})`,
+      sourceSiteUrl: sql`coalesce(nullif(btrim(${jobs.sourceSiteUrl}), ''), ${job.sourceSiteUrl ?? null})`,
       employmentType: sql`coalesce(nullif(btrim(${jobs.employmentType}), ''), ${job.employmentType})`,
       workplaceType: sql`coalesce(nullif(btrim(${jobs.workplaceType}), ''), ${job.workplaceType})`,
       salary: sql`coalesce(nullif(btrim(${jobs.salary}), ''), ${job.salary})`,

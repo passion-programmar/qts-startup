@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   computeJobKey,
   computeTitleCompanyKey,
+  normalizeCompanyName,
   isJobSpecificUrl,
   normalizeJobKeyUrl,
   platformJobKey,
@@ -81,4 +82,11 @@ test("title and company keys ignore case, punctuation, legal suffixes and remote
 test("unparseable URLs have no key", () => {
   assert.equal(platformJobKey("javascript:alert(1)"), null);
   assert.equal(job("not a url"), null);
+});
+
+test("company names match without case, punctuation, or legal endings", () => {
+  assert.equal(normalizeCompanyName("N-iX LLC"), normalizeCompanyName("n-ix"));
+  assert.equal(normalizeCompanyName("Endava plc"), "endava");
+  assert.equal(normalizeCompanyName("Accesa S.R.L."), "accesa");
+  assert.notEqual(normalizeCompanyName("Supabase"), normalizeCompanyName("Sedona Digital"));
 });

@@ -144,7 +144,8 @@ test("template matrix assigns varied section and skills layouts", () => {
   assert.ok(sectionLayouts.has("centered-rules"));
   assert.deepEqual(
     [...skillsLayouts].sort(),
-    ["flat-inline", "grouped-columns", "grouped-inline", "grouped-stacked"],
+    // The column layout (titles on top, skills listed under them) is no longer used.
+    ["flat-inline", "grouped-inline", "grouped-stacked"],
   );
 });
 

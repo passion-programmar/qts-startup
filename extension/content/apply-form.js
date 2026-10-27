@@ -1,9 +1,10 @@
 // Apply's form engine, injected into an application page. It reads the form's fields (shown and
 // hidden, inside open and closed shadow roots), fills them the way a person would so React forms
 // accept the values, attaches files, and reports CAPTCHAs, login walls, field errors, and the page's
-// result after Submit. It never clicks Submit by itself: the service worker calls clickButton('submit')
-// only after the server grants Submit permission. On a job page without a form it finds the button
-// that starts the application (clickStart), the way a person would.
+// result after Submit. It never clicks Submit by itself: the Manager does, after reviewing (the
+// service worker calls clickButton('submit') only with Super Admin's automatic Submit option). On a
+// job page without a form it finds the button that starts the application (clickStart), the way a
+// person would. It also reads back what the form shows, for the record of what was submitted.
 
 (function initQtsApplyForm(global) {
   const FIELD_ATTRIBUTE = 'data-qts-apply-field';
@@ -1044,5 +1045,97 @@
     jobClosed,
     pageOutcome,
     pageText: () => cleanText(document.body?.innerText || '').slice(0, 20000),
+    currentAnswers,
+    focusField,
+    markProblemFields,
+    isSubmitControl,
+    enterManually,
   };
+
+  /**
+   * What every visible question shows now, for the record of what was submitted (the Manager's
+   * edits included): [{ id, label, value }]. Uploads are left out; tick boxes read Ticked/Not ticked.
+   */
+  function currentAnswers() {
+    return scanForm()
+      .filter((field) => !field.hidden && field.kind !== 'file')
+      .map((field) => {
+        const element = findField(field.id);
+        if (!element) return null;
+        let value = '';
+        if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
+          value = textOf(element.querySelector('[role="radio"][aria-checked="true"]') || {});
+        } else if (field.kind === 'radio' || field.kind === 'checkbox-group') {
+          value = controlsOfGroup(element).filter((control) => control.checked)
+            .map((control) => labelFor(control) || control.value).filter(Boolean).join(' | ');
+        } else if (field.kind === 'checkbox') {
+          const ticked = element.tagName === 'INPUT' ? element.checked : element.getAttribute('aria-checked') === 'true';
+          value = ticked ? 'Ticked' : 'Not ticked';
+        } else if (field.kind === 'select') {
+          value = element.value ? optionText(element.selectedOptions?.[0] || {}) : '';
+        } else if (field.kind === 'menu' || field.kind === 'combobox') {
+          value = shownValue(field.id).replace(/[×✕]/g, '').trim();
+        } else {
+          value = String(element.value || '');
+        }
+        return { id: field.id, label: field.label, value: cleanText(value).slice(0, 2000) };
+      })
+      .filter(Boolean);
+  }
+
+  /** Scrolls a question into view and outlines it briefly, for "click an answer" in the review panel. */
+  function focusField(id) {
+    const element = findField(id);
+    if (!element) return false;
+    element.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const box = element.closest('label, fieldset, [class*="field" i], [class*="question" i]') || element;
+    const before = box.style.outline;
+    box.style.outline = '3px solid #6366f1';
+    setTimeout(() => { box.style.outline = before; }, 2500);
+    return true;
+  }
+
+  /** Outlines the questions the Manager must fill by hand (a rejected value, an empty answer, an upload). */
+  function markProblemFields(ids) {
+    for (const element of allElements()) {
+      if (element.hasAttribute('data-qts-apply-problem')) {
+        element.removeAttribute('data-qts-apply-problem');
+        element.style.outline = '';
+      }
+    }
+    for (const id of ids || []) {
+      const element = findField(id);
+      if (!element) continue;
+      const box = element.closest('label, fieldset, [class*="field" i], [class*="question" i]') || element;
+      box.setAttribute('data-qts-apply-problem', '');
+      box.style.outline = '3px solid #e11d48';
+      box.style.outlineOffset = '2px';
+    }
+  }
+
+  /** Whether a click target is the form's Submit button (the Manager's own click, in review). */
+  function isSubmitControl(target) {
+    const control = target?.closest?.('button, input[type="submit"], input[type="button"], [role="button"], a');
+    if (!control || control.closest('[data-qts-apply-review]')) return false;
+    if (control.tagName === 'INPUT' && control.type === 'submit') return true;
+    return SUBMIT_TEXT.test(buttonText(control));
+  }
+
+  /**
+   * Clicks "Enter manually" next to a document field (Greenhouse's cover letter: Attach / Dropbox /
+   * Google Drive / Enter manually), so a text box takes the letter instead. True when clicked.
+   */
+  function enterManually(id) {
+    let container = findField(id);
+    for (let depth = 0; container && depth < 5; depth += 1) {
+      const button = [...container.querySelectorAll('button, a, [role="button"]')]
+        .find((element) => isShown(element) && /^(enter|type|paste) (it )?manually$|^paste( text)?$/i.test(buttonText(element)));
+      if (button) {
+        button.click();
+        return true;
+      }
+      container = container.parentElement;
+    }
+    return false;
+  }
 })(globalThis);

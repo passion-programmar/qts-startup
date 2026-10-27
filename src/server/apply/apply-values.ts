@@ -1,14 +1,14 @@
 // Values and rules shared by the Apply and Chrome-registry routes. Pure, so they are testable
 // without a database.
 
-/** Applications in progress at once per Manager, across all Chromes (the 2-minute email wait included). */
+/** Applications in progress at once per Manager, across all Chromes (each Chrome holds one). */
 export const APPLY_PARALLEL_LIMIT = 3;
-/** A claim lives this long without a heartbeat; Chromes renew it every 30 seconds. */
+/** A claim being filled lives this long without a heartbeat; Chromes renew it every 30 seconds. */
 export const APPLY_LEASE_SECONDS = 120;
-/** After Submit, the lease covers the 2-minute confirmation wait plus reporting. */
-export const APPLY_SUBMIT_LEASE_SECONDS = 300;
-/** Generation and Apply work goes only to this extension version or newer. */
-export const MIN_WORK_EXTENSION_VERSION = "1.33.2";
+/** An application waiting for the Manager (review, or Yes/No in an open tab) is held this long without a heartbeat. */
+export const APPLY_REVIEW_LEASE_SECONDS = 600;
+/** Generation and Apply work goes only to this extension version or newer (Apply with Manager review). */
+export const MIN_WORK_EXTENSION_VERSION = "1.36.0";
 
 /** -1, 0, or 1 for dotted numeric versions; null when either is not one. */
 export function compareExtensionVersions(left: string, right: string): number | null {
@@ -68,45 +68,87 @@ export function normalizeQuestionKey(question: string): string {
     .slice(0, 300);
 }
 
-export type ApplyResult = "confirmed" | "not_confirmed" | "failed";
-export type ConfirmationSource = "page" | "email";
+/** The folder a delivered résumé was saved in ("QTS_Resume/MSK/Anna/2026-10-27_..._Acme/"). */
+export function resumeFolderOf(resumePath: string): string {
+  const path = resumePath.replace(/\\/g, "/").trim();
+  const slash = path.lastIndexOf("/");
+  return slash > 0 ? path.slice(0, slash + 1) : path;
+}
 
-export type ApplyResultReport = {
-  result: ApplyResult;
-  reason: string | null;
-  confirmationSource: ConfirmationSource | null;
-  screenshotBrowserName: string | null;
-  evidence: Record<string, unknown> | null;
-};
+const EMPLOYMENT_TYPES: [RegExp, string][] = [
+  [/intern/i, "Internship"],
+  [/part[\s_-]?time/i, "Part-time"],
+  [/temp|seasonal/i, "Temporary"],
+  [/contract|freelanc|b2b|contractor|self[\s_-]?employ/i, "Contract"],
+  [/full[\s_-]?time|permanent|employee/i, "Full-time"],
+];
+const WORKPLACE_TYPES: [RegExp, string][] = [
+  [/hybrid|flexib|partly remote|remote.{0,20}office|office.{0,20}remote/i, "Hybrid"],
+  [/remote|telecommut|work from home|wfh|home[\s-]?based|anywhere/i, "Remote"],
+  [/on[\s_-]?site|in[\s_-]?office|office[\s_-]?based|in[\s_-]?person/i, "On-site"],
+];
 
-const MAX_EVIDENCE_BYTES = 100_000;
+/** Gemini's employment type in one fixed word: Full-time, Part-time, Contract, Internship, Temporary. */
+export function normalizeEmploymentType(value: string | null | undefined): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  return EMPLOYMENT_TYPES.find(([pattern]) => pattern.test(text))?.[1] ?? null;
+}
 
-/** A Chrome's result report, checked; a string is the reason it is refused. */
-export function parseApplyResultReport(body: unknown): ApplyResultReport | string {
-  if (!body || typeof body !== "object") return "The result report is missing.";
-  const value = body as Record<string, unknown>;
-  const result = value.result;
-  if (result !== "confirmed" && result !== "not_confirmed" && result !== "failed") {
-    return "The result must be confirmed, not_confirmed, or failed.";
+/** Gemini's work arrangement in one fixed word: Remote, Hybrid, On-site. */
+export function normalizeWorkplaceType(value: string | null | undefined): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  return WORKPLACE_TYPES.find(([pattern]) => pattern.test(text))?.[1] ?? null;
+}
+
+/** A bid's work type: "Full-time · Remote", either part alone, or null. */
+export function workTypeOf(employmentType: string | null | undefined, workplaceType: string | null | undefined): string | null {
+  const parts = [normalizeEmploymentType(employmentType), normalizeWorkplaceType(workplaceType)].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/**
+ * The delivered résumé as plain text, in the PDF's order: name and headline, summary, then each
+ * section with its items (heading, company, place, dates) and bullets, without bold marks.
+ */
+export function resumeText(resume: unknown): string | null {
+  if (!resume || typeof resume !== "object") return null;
+  const value = resume as Record<string, unknown>;
+  const clean = (text: unknown) =>
+    typeof text === "string" ? text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\s+/g, " ").trim() : "";
+  const lines: string[] = [];
+  const candidate = (value.candidate && typeof value.candidate === "object" ? value.candidate : {}) as Record<string, unknown>;
+  for (const line of [clean(candidate.fullName), clean(candidate.headline)]) if (line) lines.push(line);
+  const summary = clean(value.summary);
+  if (summary) lines.push("", "Summary", summary);
+  for (const section of Array.isArray(value.sections) ? value.sections : []) {
+    if (!section || typeof section !== "object") continue;
+    const { title, items } = section as Record<string, unknown>;
+    const entries = Array.isArray(items) ? items : [];
+    if (!entries.length) continue;
+    lines.push("", clean(title) || "Section");
+    for (const item of entries) {
+      if (typeof item === "string") {
+        if (clean(item)) lines.push(`- ${clean(item)}`);
+        continue;
+      }
+      if (!item || typeof item !== "object") continue;
+      const entry = item as Record<string, unknown>;
+      const dates = [clean(entry.startDate), clean(entry.endDate)].filter(Boolean).join(" – ");
+      const head = [clean(entry.heading), clean(entry.subheading), clean(entry.location), clean(entry.workMode), dates]
+        .filter(Boolean)
+        .join(" · ");
+      if (head) lines.push(head);
+      const focus = Array.isArray(entry.focus) ? entry.focus.map(clean).filter(Boolean) : [];
+      if (focus.length) lines.push(`Focus: ${focus.join(", ")}`);
+      for (const bullet of Array.isArray(entry.bullets) ? entry.bullets : []) {
+        if (clean(bullet)) lines.push(`- ${clean(bullet)}`);
+      }
+    }
   }
-  const source = value.confirmationSource ?? null;
-  if (source !== null && source !== "page" && source !== "email") return "The confirmation source is invalid.";
-  if (result === "confirmed" && source === null) return "A confirmed result needs its source (page or email).";
-  const reason = typeof value.reason === "string" ? value.reason.replace(/\s+/g, " ").trim().slice(0, 500) : "";
-  if (result !== "confirmed" && !reason) return "A not-confirmed or failed result needs a short reason.";
-  const screenshot = typeof value.screenshotBrowserName === "string"
-    ? value.screenshotBrowserName.replace(/\s+/g, " ").trim().slice(0, 60)
-    : "";
-  const evidence = value.evidence ?? null;
-  if (evidence !== null && (typeof evidence !== "object" || Array.isArray(evidence))) return "The evidence is invalid.";
-  if (evidence && JSON.stringify(evidence).length > MAX_EVIDENCE_BYTES) return "The evidence is too large.";
-  return {
-    result,
-    reason: reason || null,
-    confirmationSource: source,
-    screenshotBrowserName: screenshot || null,
-    evidence: evidence as Record<string, unknown> | null,
-  };
+  const text = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return text ? text.slice(0, 30000) : null;
 }
 
 /**
@@ -147,7 +189,7 @@ export type AppliedAnswer = { question: string; answer: string; source: string }
 // One Apply run as the job row keeps it: when, how it ended, and every answer with its source.
 export type ApplyRun = { at: string; outcome: string; reason: string | null; answers: AppliedAnswer[] };
 
-const ANSWER_SOURCES = new Set(["profile", "reusable", "ai", "documents", "consent", "rule", "saved"]);
+const ANSWER_SOURCES = new Set(["profile", "reusable", "ai", "documents", "consent", "rule", "saved", "manager"]);
 
 /**
  * The answers a run used, as the extension reports them: question, answer (lists joined, tick boxes

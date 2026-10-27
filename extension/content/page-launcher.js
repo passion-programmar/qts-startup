@@ -275,7 +275,65 @@ async function initializeQtsPageLauncher() {
   outcomeAuto.append(outcomeAutoInput, document.createTextNode('Close finished job tabs automatically'));
   outcomeCard.append(outcomeHead, outcomeCountdown, outcomeActions, outcomeAuto);
 
-  root.append(style, launcher, signInForm, preview, outcomeCard);
+  // The daily "Clear applied jobs?" question: asked at the first Get JD start after 4:00 PM
+  // Romania time, once across all Chromes. Get JD starts either way.
+  const cleanupStyle = document.createElement('style');
+  cleanupStyle.textContent = `
+    .cleanup { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; padding: 16px; background: #0f172a8c; pointer-events: auto; font: 14px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .cleanup[hidden] { display: none; }
+    .cleanup-card { width: min(420px, 100%); padding: 22px; border-radius: 16px; background: #fff; color: #0f172a; box-shadow: 0 24px 60px #0f172a59; }
+    .cleanup-card h2 { margin: 0 0 8px; font-size: 17px; }
+    .cleanup-card p { margin: 0; color: #475569; font-size: 13px; }
+    .cleanup-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+    .cleanup-buttons button { min-height: 38px; padding: 0 16px; border-radius: 10px; font: 600 13px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .cleanup-later { border: 1px solid #cbd5e1; background: #fff; color: #334155; }
+    .cleanup-yes { border: 0; background: #4f46e5; color: #fff; }
+  `;
+  const cleanup = document.createElement('div');
+  cleanup.className = 'cleanup';
+  cleanup.hidden = true;
+  cleanup.setAttribute('role', 'alertdialog');
+  cleanup.setAttribute('aria-modal', 'true');
+  const cleanupCard = document.createElement('div');
+  cleanupCard.className = 'cleanup-card';
+  const cleanupTitle = document.createElement('h2');
+  cleanupTitle.textContent = 'Clear applied jobs?';
+  const cleanupText = document.createElement('p');
+  const cleanupButtons = document.createElement('div');
+  cleanupButtons.className = 'cleanup-buttons';
+  const cleanupLater = document.createElement('button');
+  cleanupLater.type = 'button';
+  cleanupLater.className = 'cleanup-later';
+  cleanupLater.textContent = 'Not now';
+  const cleanupYes = document.createElement('button');
+  cleanupYes.type = 'button';
+  cleanupYes.className = 'cleanup-yes';
+  cleanupYes.textContent = 'Yes, remove';
+  cleanupButtons.append(cleanupLater, cleanupYes);
+  cleanupCard.append(cleanupTitle, cleanupText, cleanupButtons);
+  cleanup.append(cleanupCard);
+
+  function askAppliedCleanup(count) {
+    cleanupText.textContent = `${count} job row${count === 1 ? ' is' : 's are'} already applied. Remove ${count === 1 ? 'it' : 'them'} from the Jobs page? Their bids stay on the Bids page.`;
+    cleanup.hidden = false;
+    cleanupLater.focus();
+    cleanupLater.onclick = () => { cleanup.hidden = true; };
+    cleanupYes.onclick = async () => {
+      cleanupYes.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: 'clear_applied_jobs' });
+        if (!result?.ok) throw new Error(result?.error || 'Could not clear the applied jobs.');
+        showToast(result.message || 'Applied jobs cleared.', 'success');
+      } catch (error) {
+        showToast(error?.message || 'Could not clear the applied jobs.', 'error');
+      } finally {
+        cleanupYes.disabled = false;
+        cleanup.hidden = true;
+      }
+    };
+  }
+
+  root.append(style, cleanupStyle, launcher, signInForm, preview, outcomeCard, cleanup);
   (document.documentElement || document.body).appendChild(host);
 
   function setOpen(open) {
@@ -705,6 +763,7 @@ async function initializeQtsPageLauncher() {
           response.message || (resolvedAction.startsWith('cancel_') ? 'Cancelled.' : 'Started.'),
           response.warning ? 'warn' : 'info',
         );
+        if (resolvedAction === 'get_jd' && response.appliedCleanupCount > 0) askAppliedCleanup(response.appliedCleanupCount);
         await syncModeActions();
       }
     } catch (error) {
