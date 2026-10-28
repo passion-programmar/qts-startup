@@ -1,14 +1,13 @@
 import "server-only";
 
-import { geminiModel, getGeminiApiKeys, getGeminiApiLimits, recordGeminiApiCall, releaseGeminiKey, requestGeminiApi } from "@/lib/gemini-usage";
+import { geminiModel, getGeminiApiKeys, getGeminiApiLimits, requestGeminiApi } from "@/lib/gemini-usage";
 import {
   type GeminiContent,
   geminiError,
   readGeminiErrorMessage,
   readGeminiText,
-  selectAvailableGeminiApiKey,
+  withAvailableGeminiKey,
 } from "@/server/gemini/gemini-keys";
-import { withGeminiRetry } from "@/server/gemini/gemini-retry";
 import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
 
 // Apply's answers in Gemini mode: the same prompt the extension would type into ChatGPT, sent by
@@ -43,16 +42,15 @@ export async function askGeminiForApplyAnswers(turns: ApplyGeminiTurn[]): Promis
   const apiKeys = getGeminiApiKeys();
   if (!apiKeys.length) throw geminiError("gemini_not_configured", "Gemini is not set up. Ask your Super Admin.");
   const contents: GeminiContent[] = turns.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] }));
-  const selected = await selectAvailableGeminiApiKey(apiKeys, contents, generationConfig, await getGeminiTokenCountMode(), await getGeminiApiLimits());
-  if (!selected) {
-    throw geminiError("gemini_local_capacity_unavailable", "Every Gemini key is busy or at its QTS limit. Try again shortly.");
-  }
-  const { apiKey, leaseId, tokenCounts } = selected;
-  try {
-    // One 60-second budget covers the first attempt and a possible retry.
-    const signal = AbortSignal.timeout(60_000);
-    const response = await withGeminiRetry(
-      () => requestGeminiApi(
+  // A key Gemini answers "unavailable" is paused for 5 minutes and another key is asked.
+  const text = await withAvailableGeminiKey(
+    apiKeys,
+    contents,
+    generationConfig,
+    await getGeminiTokenCountMode(),
+    await getGeminiApiLimits(),
+    async ({ apiKey, tokenCounts }) => {
+      const response = await requestGeminiApi(
         apiKey,
         "generate_content",
         `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
@@ -60,26 +58,27 @@ export async function askGeminiForApplyAnswers(turns: ApplyGeminiTurn[]): Promis
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
           body: JSON.stringify({ contents, generationConfig }),
-          signal,
+          signal: AbortSignal.timeout(60_000),
           cache: "no-store",
         },
         tokenCounts,
-      ),
-      { beforeRetry: () => recordGeminiApiCall(apiKey, "generate_content") },
-    );
-    if (!response.ok) {
-      throw geminiError(`gemini_http_${response.status}`, `Gemini returned HTTP ${response.status}.`, readGeminiErrorMessage(response.body, apiKey));
-    }
-    let data: unknown;
-    try {
-      data = JSON.parse(response.body) as unknown;
-    } catch {
-      throw geminiError("gemini_invalid_http_response", "Gemini returned an invalid response.");
-    }
-    const text = readGeminiText(data);
-    if (!text || Buffer.byteLength(text, "utf8") > MAX_REPLY_BYTES) throw geminiError("gemini_empty_response", "Gemini's answer was empty or too large.");
-    return text;
-  } finally {
-    await releaseGeminiKey(apiKey, leaseId);
+      );
+      if (!response.ok) {
+        throw geminiError(`gemini_http_${response.status}`, `Gemini returned HTTP ${response.status}.`, readGeminiErrorMessage(response.body, apiKey));
+      }
+      let data: unknown;
+      try {
+        data = JSON.parse(response.body) as unknown;
+      } catch {
+        throw geminiError("gemini_invalid_http_response", "Gemini returned an invalid response.");
+      }
+      const reply = readGeminiText(data);
+      if (!reply || Buffer.byteLength(reply, "utf8") > MAX_REPLY_BYTES) throw geminiError("gemini_empty_response", "Gemini's answer was empty or too large.");
+      return reply;
+    },
+  );
+  if (text === null) {
+    throw geminiError("gemini_local_capacity_unavailable", "Every Gemini key is busy or at its QTS limit. Try again shortly.");
   }
+  return text;
 }

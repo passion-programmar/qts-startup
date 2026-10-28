@@ -122,7 +122,11 @@ export default async function GeminiUsagePage({
   const keyNumberByHash = new Map(keyHashes.map((hash, index) => [hash, index + 1]));
   const busyRows = keyHashes.length && activeTab === "limits"
     ? await db
-        .select({ keyHash: geminiKeyBusyLeases.keyHash })
+        .select({
+          keyHash: geminiKeyBusyLeases.keyHash,
+          expiresAt: geminiKeyBusyLeases.expiresAt,
+          paused: sql<boolean>`${geminiKeyBusyLeases.expiresAt} > now() + interval '2 minutes'`,
+        })
         .from(geminiKeyBusyLeases)
         .where(
           and(
@@ -132,6 +136,11 @@ export default async function GeminiUsagePage({
         )
     : [];
   const busyKeys = new Set(busyRows.map((row) => row.keyHash));
+  // A request holds a key for at most 2 minutes; a longer hold is a pause after Gemini answered it
+  // "unavailable" (5 minutes), shown with the time it ends.
+  const pausedUntil = new Map(busyRows
+    .filter((row) => row.paused)
+    .map((row) => [row.keyHash, row.expiresAt]));
 
   return (
     <WorkspaceShell activeHref="/settings/gemini-usage" user={currentUser}>
@@ -258,7 +267,9 @@ export default async function GeminiUsagePage({
                     }`}
                     key="status"
                   >
-                    {isBusy ? "Busy" : isLimited ? "Limit reached" : "Available"}
+                    {pausedUntil.has(hash)
+                      ? `Paused until ${pausedUntil.get(hash)!.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" })} PT`
+                      : isBusy ? "Busy" : isLimited ? "Limit reached" : "Available"}
                   </span>,
                   usage
                     ? new Intl.DateTimeFormat("en", {

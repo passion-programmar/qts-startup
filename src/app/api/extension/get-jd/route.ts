@@ -19,8 +19,6 @@ import {
   geminiModel,
   getGeminiApiKeys,
   getGeminiApiLimits,
-  releaseGeminiKey,
-  recordGeminiApiCall,
   requestGeminiApi,
 } from "@/lib/gemini-usage";
 import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
@@ -40,12 +38,11 @@ import {
 } from "@/server/jobs/get-jd-jobs";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 import { getGetJdFailureMessage } from "@/server/gemini/get-jd-failure-message";
-import { withGeminiRetry } from "@/server/gemini/gemini-retry";
 import {
   type GeminiTokenCounts,
   readGeminiErrorMessage,
   readGeminiText,
-  selectAvailableGeminiApiKey,
+  withAvailableGeminiKey,
 } from "@/server/gemini/gemini-keys";
 import { normalizeCompanyName } from "@/server/jobs/job-key";
 import { sourceSiteUrl } from "@/server/jobs/source-site";
@@ -244,14 +241,16 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
       candidates: candidateContext,
     });
 
-    const selectedKey = await selectAvailableGeminiApiKey(
+    // A key Gemini answers "unavailable" is paused for 5 minutes and another key is asked.
+    const modelResult = await withAvailableGeminiKey(
       apiKeys,
       [{ role: "user", parts: [{ text: promptText }] }],
       generationConfig,
       await getGeminiTokenCountMode(),
       await getGeminiApiLimits(),
+      ({ apiKey, tokenCounts }) => requestGeminiJson(apiKey, promptText, tokenCounts),
     );
-    if (!selectedKey) {
+    if (modelResult === null) {
       return jsonResponse(
         {
           success: false,
@@ -261,13 +260,6 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
         },
         503,
       );
-    }
-    const { apiKey, leaseId, tokenCounts } = selectedKey;
-    let modelResult: unknown;
-    try {
-      modelResult = await requestGeminiJson(apiKey, promptText, tokenCounts);
-    } finally {
-      await releaseGeminiKey(apiKey, leaseId);
     }
     const classification = validateClassification(
       modelResult,
@@ -477,30 +469,25 @@ async function requestGeminiJson(
   prompt: string,
   tokenCounts: GeminiTokenCounts,
 ): Promise<unknown> {
-  // One 45-second budget covers the first attempt and a possible retry.
-  const signal = AbortSignal.timeout(45_000);
-  const response = await withGeminiRetry(
-    () => requestGeminiApi(
-      apiKey,
-      "generate_content",
-      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig,
-        }),
-        signal,
-        cache: "no-store",
+  // One request with this key; a 5xx sends the request to another key (withAvailableGeminiKey).
+  const response = await requestGeminiApi(
+    apiKey,
+    "generate_content",
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
       },
-      tokenCounts,
-    ),
-    // The retry is another request against the key's per-minute limit; its tokens were reserved with the first.
-    { beforeRetry: () => recordGeminiApiCall(apiKey, "generate_content") },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig,
+      }),
+      signal: AbortSignal.timeout(45_000),
+      cache: "no-store",
+    },
+    tokenCounts,
   );
 
   if (!response.ok) {

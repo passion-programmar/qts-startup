@@ -2,7 +2,7 @@
 
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { parseGeminiApiLimits } from "@/server/gemini/gemini-api-limits";
+import { maxGeminiRequestsPerMinute, parseGeminiApiLimits } from "@/server/gemini/gemini-api-limits";
 import {
   isJobRecordTimeZone,
   jobRecordTimeZoneOptions,
@@ -286,6 +286,9 @@ export async function saveGeminiApiLimitsAction(
       ...emptyState,
       error: "Enter positive whole-number limits within the allowed ranges.",
     };
+  }
+  if (limits.requestsPerMinute > maxGeminiRequestsPerMinute) {
+    return { ...emptyState, error: `Each key is called at most ${maxGeminiRequestsPerMinute} times a minute.` };
   }
 
   try {

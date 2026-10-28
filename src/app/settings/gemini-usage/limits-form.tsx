@@ -5,6 +5,7 @@ import {
   saveGeminiApiLimitsAction,
   type PromptActionState,
 } from "@/app/settings/actions";
+import { maxGeminiRequestsPerMinute } from "@/server/gemini/gemini-api-limits";
 
 const initialState: PromptActionState = { error: null, success: null };
 
@@ -28,7 +29,7 @@ export function GeminiApiLimitsForm({
         <LimitInput
           id="gemini-requests-per-minute"
           label="Requests per rolling minute"
-          max={1_000}
+          max={maxGeminiRequestsPerMinute}
           name="requestsPerMinute"
           value={requestsPerMinute}
         />

@@ -4,6 +4,7 @@ import { randomInt } from "node:crypto";
 import {
   acquireGeminiKey,
   geminiModel,
+  pauseGeminiKey,
   type getGeminiApiLimits,
   recordGeminiApiCall,
   releaseGeminiKey,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/gemini-usage";
 import { estimateGeminiInputTokens } from "@/server/gemini/gemini-request";
 import type { GeminiTokenCountMode } from "@/server/gemini/token-count-mode";
+import { GEMINI_UNAVAILABLE_PAUSE_MINUTES, withGeminiKeyFailover } from "@/server/gemini/gemini-retry";
 
 // Shared by Get JD and Apply's Gemini answers: picking a Gemini key that has room under QTS's
 // limits, counting tokens the configured way, and reading Gemini's replies and errors.
@@ -137,4 +139,25 @@ export async function selectAvailableGeminiApiKey(
     await releaseGeminiKey(apiKey, leaseId);
   }
   return null;
+}
+
+/**
+ * Runs one Gemini request with a free key (see selectAvailableGeminiApiKey). When Gemini answers
+ * a key "unavailable" (5xx, for example 503 "high demand"), that key is paused for 5 minutes and
+ * the request goes to another free key (up to three keys). Null when no key is free.
+ */
+export async function withAvailableGeminiKey<T>(
+  apiKeys: string[],
+  contents: GeminiContent[],
+  config: GenerationConfig,
+  tokenCountMode: GeminiTokenCountMode,
+  limits: Awaited<ReturnType<typeof getGeminiApiLimits>>,
+  run: (key: { apiKey: string; tokenCounts: GeminiTokenCounts }) => Promise<T>,
+): Promise<T | null> {
+  return withGeminiKeyFailover({
+    select: (excluded) => selectAvailableGeminiApiKey(apiKeys.filter((apiKey) => !excluded.has(apiKey)), contents, config, tokenCountMode, limits),
+    run,
+    pause: ({ apiKey }) => pauseGeminiKey(apiKey, GEMINI_UNAVAILABLE_PAUSE_MINUTES),
+    release: ({ apiKey, leaseId }) => releaseGeminiKey(apiKey, leaseId),
+  });
 }

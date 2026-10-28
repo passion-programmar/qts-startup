@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import {
   defaultGeminiApiLimits,
   type GeminiApiLimits,
+  maxGeminiRequestsPerMinute,
   parseGeminiApiLimits,
 } from "@/server/gemini/gemini-api-limits";
 import { geminiModel } from "@/server/gemini/gemini-request";
@@ -108,7 +109,8 @@ export async function getGeminiApiLimits(): Promise<GeminiApiLimits> {
   if (!limits) {
     throw new Error("Saved Gemini API limits are invalid. Update them in Gemini Usage settings.");
   }
-  return limits;
+  // No key is called more than twice a minute, whatever was saved before this rule.
+  return { ...limits, requestsPerMinute: Math.min(limits.requestsPerMinute, maxGeminiRequestsPerMinute) };
 }
 
 export function getGeminiApiKeys(): string[] {
@@ -161,6 +163,20 @@ export async function reserveGeminiGeneration(
     ) as allowed
   `);
   return result.rows[0]?.allowed === true;
+}
+
+/**
+ * Leaves a key alone for some minutes (Gemini answered it "unavailable"): a lease of its own that
+ * the request releasing its key does not remove, so no request picks the key until it ends.
+ */
+export async function pauseGeminiKey(apiKey: string, minutes: number): Promise<void> {
+  await db.execute(sql`
+    insert into gemini_key_busy_leases (key_hash, lease_id, expires_at)
+    values (${getGeminiApiKeyHash(apiKey)}, gen_random_uuid(), now() + make_interval(mins => ${minutes}))
+    on conflict (key_hash) do update
+    set lease_id = excluded.lease_id,
+      expires_at = greatest(gemini_key_busy_leases.expires_at, excluded.expires_at)
+  `);
 }
 
 export async function releaseGeminiKey(

@@ -1,5 +1,8 @@
+/** No Gemini key is called more than this many times in any minute (every call counts). */
+export const maxGeminiRequestsPerMinute = 2;
+
 export const defaultGeminiApiLimits = {
-  requestsPerMinute: 9,
+  requestsPerMinute: maxGeminiRequestsPerMinute,
   requestsPerDay: 200,
   inputTokensPerMinute: 25_000,
 } as const;
