@@ -9,7 +9,7 @@ import {
   updateJobAction,
 } from "@/app/jobs/actions";
 import { initialRecordState, type RecordActionState } from "@/app/record-action-state";
-import type { ApplyRun } from "@/server/apply/apply-values";
+import { resumeFolderOf, type ApplyRun } from "@/server/apply/apply-values";
 import { DatePicker } from "@/app/components/date-picker";
 import { FormCard, openCardOfInvalidField } from "@/app/components/form-card";
 import { LoadingIcon } from "@/app/components/loading-icon";
@@ -418,7 +418,15 @@ function JobCards({ record, track }: { record: EditableJob; track?: JobTrack }) 
           {track?.jobReason && <TrackItem label="Job check" wide>{track.jobReason}</TrackItem>}
           <TrackItem label="Prompt">{track?.prompt ?? "—"}</TrackItem>
           <TrackItem label="Template">{track?.template ?? "—"}</TrackItem>
-          <TrackItem label="Resume path" wide><code className="break-all text-xs">{track?.resumeLocalPath ?? "—"}</code></TrackItem>
+          <TrackItem label="Job status"><span className="capitalize">{record.status.replaceAll("_", " ")}</span></TrackItem>
+          <TrackItem label="Job link">
+            <a className="break-all text-blue-700 hover:underline" href={record.url} rel="noopener noreferrer" target="_blank">{record.url}</a>
+          </TrackItem>
+          <TrackItem label="Résumé folder" wide>
+            {track?.resumeLocalPath
+              ? <OpenFolderButton folder={resumeFolderOf(track.resumeLocalPath)} savedOn={track.generationBrowserName} />
+              : "—"}
+          </TrackItem>
           {track?.googleDrivePath && <TrackItem label="Google Drive" wide><code className="break-all text-xs">{track.googleDrivePath}</code></TrackItem>}
           <TrackItem label="Apply" wide>
             {track?.applyStatus.length

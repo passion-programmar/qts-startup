@@ -11,13 +11,14 @@ import {
   type JobTrack,
 } from "@/app/components/record-forms";
 import { GenerationSetup } from "@/app/components/generation-setup";
+import { OpenFolderButton } from "@/app/components/open-folder";
 import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
 import { AnswerApplicationButtons, ApplyAgainButton } from "@/app/jobs/apply-buttons";
 import { jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
-import type { ApplyRun } from "@/server/apply/apply-values";
+import { resumeFolderOf, type ApplyRun } from "@/server/apply/apply-values";
 import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 
 export const instant = false;
@@ -137,19 +138,26 @@ export default async function JobsPage() {
         />
         <PaginatedTable
           columns={[
-            { label: "No", className: "w-[5%]" },
-            { label: "Candidate Name", className: "w-[11%]" },
-            { label: "Job Title", className: "w-[22%]" },
-            { label: "Status", className: "w-[9%]" },
-            { label: "Resume Path", className: "w-[14%]" },
-            { label: "Prompt · Template", className: "w-[12%]" },
-            { label: "Date", className: "w-[7%]" },
-            { label: "Edit", className: "w-[5%]" },
-            { label: "Delete", className: "w-[5%]" },
-            { label: "Queue", className: "w-[10%]" },
+            { label: "No", className: "w-[4%]" },
+            { label: "Name", className: "w-[12%]" },
+            { label: "Job title", className: "w-[22%]" },
+            { label: "Company", className: "w-[14%]" },
+            { label: "Résumé", className: "w-[9%]" },
+            { label: "Prompt · Template", className: "w-[15%]" },
+            { label: "Date", className: "w-[9%]" },
+            { label: "Actions", className: "w-[15%]" },
           ]}
           emptyMessage="No jobs saved yet"
+          searchFields={[
+            { key: "name", label: "Name" },
+            { key: "title", label: "Job title" },
+            { key: "company", label: "Company" },
+            { key: "setup", label: "Prompt · Template" },
+            { key: "date", label: "Date" },
+          ]}
           rows={rows.map((row, index) => {
+            const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
+            const date = row.date.replaceAll("-", "/");
             const editableJob = {
               id: row.id,
               candidateId: row.candidateId,
@@ -181,54 +189,29 @@ export default async function JobsPage() {
             };
             return {
               id: row.id,
+              search: {
+                name: candidateName,
+                title: row.title,
+                company: row.company,
+                setup: [track.prompt, track.template].filter(Boolean).join(" "),
+                date,
+              },
               cells: [
                 index + 1,
-                [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
-                <div key="job">
-                  <a
-                    className="font-medium text-blue-700 underline-offset-2 hover:underline"
-                    href={row.url}
-                    rel="noopener noreferrer"
-                    target="_blank"
-                  >
-                    {row.title}
-                  </a>
-                  <span className="mt-1 block text-xs text-slate-500">{row.company}</span>
-                  {row.jobReason && (
-                    <span className="mt-1 block text-xs text-slate-500">{row.jobReason}</span>
-                  )}
-                </div>,
-                <div key="status">
-                  <span className="capitalize">{row.status.replaceAll("_", " ")}</span>
-                  <span className="mt-1 block text-[10px] capitalize text-slate-500">
-                    Generation: {row.generationStatus.replaceAll("_", " ")}
-                    {row.generationStatus === "processing" && row.generationBrowserName && (
-                      <span className="normal-case"> on {row.generationBrowserName}</span>
-                    )}
-                  </span>
-                  {applyStatusLines(row.applyAttempt).map((line) => (
-                    <span className="mt-1 block" key={line.text}>
-                      <span className={`block text-[10px] font-semibold ${
-                        line.tone === "error" ? "text-rose-700" : line.tone === "warn" ? "text-amber-700" : "text-slate-600"
-                      }`}>
-                        {line.text}
-                      </span>
-                      {line.detail && <span className="block text-xs text-slate-500">{line.detail}</span>}
-                    </span>
-                  ))}
-                  {row.applyAttempt && ["waiting_confirmation", "submitting"].includes(row.applyAttempt.status) && (
-                    <AnswerApplicationButtons attemptId={row.applyAttempt.id} title={`${row.title} — ${row.company}`} />
-                  )}
-                  {canApplyAgain(row.applyAttempt, row.status) && <ApplyAgainButton jobId={row.id} />}
-                  {row.generationError && (
-                    // Only a failed job shows its note as an error; a requeued job's note is informational.
-                    <span className={`mt-1 block text-xs ${row.generationStatus === "failed" ? "text-rose-700" : "text-slate-500"}`}>
-                      {row.generationError}
-                    </span>
-                  )}
-                </div>,
+                candidateName,
+                <a
+                  className="font-medium text-blue-700 underline-offset-2 hover:underline"
+                  href={row.url}
+                  key="job"
+                  rel="noopener noreferrer"
+                  target="_blank"
+                  title={row.url}
+                >
+                  {row.title}
+                </a>,
+                row.company,
                 row.resumeLocalPath
-                  ? <code className="block max-w-full whitespace-normal break-all text-xs" key="resume-path" title={row.resumeLocalPath}>{row.resumeLocalPath}</code>
+                  ? <OpenFolderButton folder={resumeFolderOf(row.resumeLocalPath)} key="resume" label="Résumé" savedOn={row.generationBrowserName} />
                   : "—",
                 <GenerationSetup
                   key="generation-setup"
@@ -236,10 +219,19 @@ export default async function JobsPage() {
                   promptName={row.promptName}
                   promptVersion={row.promptVersion}
                 />,
-                row.date,
-                <JobEditAction candidates={candidateOptions} key="edit" record={editableJob} track={track} />,
-                <JobDeleteAction key="delete" record={editableJob} />,
-                <JobGenerationQueueAction key="queue" record={editableJob} />,
+                <span className="text-xs" key="date">{date}</span>,
+                // Status and the Apply story live in the edit window; only what needs an answer stays here.
+                <div key="actions">
+                  <div className="flex flex-wrap items-start gap-2">
+                    <JobEditAction candidates={candidateOptions} record={editableJob} track={track} />
+                    <JobDeleteAction record={editableJob} />
+                    <JobGenerationQueueAction record={editableJob} />
+                  </div>
+                  {row.applyAttempt && ["waiting_confirmation", "submitting"].includes(row.applyAttempt.status) && (
+                    <AnswerApplicationButtons attemptId={row.applyAttempt.id} title={`${row.title} — ${row.company}`} />
+                  )}
+                  {canApplyAgain(row.applyAttempt, row.status) && <ApplyAgainButton jobId={row.id} />}
+                </div>,
               ],
             };
           })}
