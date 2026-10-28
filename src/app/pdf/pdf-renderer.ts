@@ -99,8 +99,9 @@ async function renderResumePdf(
     }
     const projects = section.id === "projects";
     section.items.forEach((item, index) => {
+      // The role alone, so an ATS reads it as the job title; the skills are in the Skills section.
       pdf.entry(
-        projects ? item.heading ?? "" : [item.heading, ...(item.focus ?? [])].filter(Boolean).join(" | "),
+        item.heading ?? "",
         item.dateRange,
         projects
           ? (item.focus?.length ? `Technologies: ${item.focus.join(", ")}` : undefined)

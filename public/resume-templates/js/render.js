@@ -126,12 +126,21 @@
     return link;
   }
 
+  // Appends text, keeping each hyphenated word ("on-call") on one line: split
+  // at a line end, an ATS that joins lines with a space would read "on- call".
+  function unbroken(node, value) {
+    value.split(/(\S*\w-\w\S*)/g).forEach((part, index) => {
+      if (part) node.append(index % 2 ? el("span", "nowrap", part) : part);
+    });
+    return node;
+  }
+
   // Appends text, turning **keyword** into <strong class="keyword">.
   function rich(node, value) {
     value.split(/(\*\*[^*]+?\*\*)/g).forEach((part) => {
       if (!part) return;
       const keyword = /^\*\*([^*]+?)\*\*$/.exec(part);
-      node.append(keyword ? el("strong", "keyword", keyword[1]) : part);
+      node.append(keyword ? unbroken(el("strong", "keyword"), keyword[1]) : unbroken(document.createDocumentFragment(), part));
     });
     return node;
   }
@@ -526,14 +535,7 @@
   // entryLayout A-G (js/templates.js): the entry's parts arranged in lines. Every
   // separator is real text, so the extracted text reads "Role | Focus | Company".
   function entryLines(item, settings) {
-    const role = () => {
-      if (!item.heading) return [];
-      const heading = el("h3", "item-heading", item.heading);
-      if (settings.showFocus === "yes" && item.focus.length) {
-        return [heading, el("span", "item-focus", ` | ${item.focus.slice(0, 3).join(" | ")}`)];
-      }
-      return [heading];
-    };
+    const role = () => (item.heading ? [el("h3", "item-heading", item.heading)] : []);
     const company = () => (item.subheading ? [el("span", "item-company", item.subheading)] : []);
     const detail = (value) => el("span", "entry-detail", value);
     const dates = (prefix = "", suffix = "") => (item.dateRange ? [el("span", "item-date", `${prefix}${item.dateRange}${suffix}`)] : []);
@@ -577,6 +579,11 @@
   function renderEntryHeader(item, settings) {
     const header = el("div", "item-header");
     if (!item.heading && !item.subheading && !item.location && !item.dateRange) return null;
+    // The entry's key skills get a line of their own under the role, so an ATS
+    // reads the role line as the job title alone.
+    const focus = settings.showFocus === "yes" && item.heading && item.focus.length
+      ? el("p", "item-focus", item.focus.slice(0, 3).join(" · "))
+      : null;
     entryLines(item, settings).forEach(([main, aside]) => {
       if (!main.length && !aside.length) return;
       const line = el("div", "entry-line");
@@ -590,6 +597,7 @@
         line.append(end);
       }
       header.append(line);
+      if (focus && main.some((part) => part.localName === "h3")) header.append(focus);
     });
     return header;
   }
@@ -798,8 +806,9 @@
 
   // density "auto" (default) tightens spacing only when content runs past the
   // page budget, then steps a resume's bullets down through BULLET_SIZES
-  // (base.css section 12), keeping the largest size that saves the most pages.
-  // No other text shrinks; past that point content must be cut.
+  // (base.css section 12) until it fits. One that does not fit even at the
+  // smallest size keeps its bullets at full size and runs over. No other text
+  // shrinks.
   function fitToPages(article, density, warnings) {
     // The app's own preview (direct render) has no page view to measure with.
     const countPages = directRenderMode ? estimatePages : printedPages;
@@ -811,21 +820,15 @@
     }
     if (density === "auto" && pages > MAX_PAGES && DOCUMENT === "resume") {
       article.classList.add("doc--small-bullets");
-      let kept = "";
-      for (const size of BULLET_SIZES) {
+      const fits = BULLET_SIZES.some((size) => {
         article.style.setProperty("--text-bullet", size);
-        const smaller = countPages(article);
-        if (smaller < pages) {
-          pages = smaller;
-          kept = size;
-        }
-        if (pages <= MAX_PAGES) break;
-      }
-      if (kept) article.style.setProperty("--text-bullet", kept);
-      else {
+        return countPages(article) <= MAX_PAGES;
+      });
+      if (!fits) {
         article.classList.remove("doc--small-bullets");
         article.style.removeProperty("--text-bullet");
       }
+      pages = countPages(article);
     }
     if (pages > MAX_PAGES) {
       const what = DOCUMENT === "resume" ? "resume" : "cover letter";

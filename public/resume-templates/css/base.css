@@ -408,7 +408,8 @@ a {
   column-gap: 12pt;
 }
 
-.entry-line + .entry-line {
+.entry-line + .entry-line,
+.item-focus + .entry-line {
   margin-top: 1.5pt;
 }
 
@@ -423,10 +424,17 @@ a {
   color: var(--color-muted);
 }
 
+/* The role's key skills, on their own line under it (render.js). */
 .item-focus {
-  font-family: var(--font-item);
-  font-size: calc(var(--text-item) * var(--font-scale));
-  font-weight: var(--weight-item);
+  margin-top: 1pt;
+  font-family: var(--font-meta);
+  font-size: calc(var(--text-meta) * var(--font-scale));
+  color: var(--color-muted);
+}
+
+/* A hyphenated word in running text stays on one line (render.js). */
+.nowrap {
+  white-space: nowrap;
 }
 
 .item-company {
@@ -855,8 +863,9 @@ li {
    render.js adds .doc--compact when content runs past its page budget
    (density "auto") or when asked ("compact"): spacing only. When a resume
    still runs over, it adds .doc--small-bullets and sets --text-bullet on the
-   document, stepping down to 11pt; bullets take that size where the
-   template's body text is larger. No other text shrinks. */
+   document, stepping down to 11pt, but only when that brings it within its
+   pages; bullets take that size where the template's body text is larger.
+   No other text shrinks. */
 
 .doc--small-bullets .item-bullets li {
   font-size: calc(min(var(--text-body), var(--text-bullet)) * var(--font-scale));
