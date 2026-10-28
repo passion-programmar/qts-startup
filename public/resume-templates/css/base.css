@@ -727,6 +727,17 @@ a {
   border-block: var(--title-rule);
 }
 
+/* A header ruled underneath already sets off the first section, so its title
+   draws no top line of its own: the two would print as a double rule. */
+.doc:is([data-header-style="plain-rule"], [data-header-style="centered-rules"])[data-title-style="double"] .resume-body > .section:first-child .section-title {
+  border-top: 0;
+}
+
+.doc:is([data-header-style="plain-rule"], [data-header-style="centered-rules"])[data-title-style="topline"] .resume-body > .section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
 .doc[data-title-style="overbar"] :is(.section-title, .letter-subject)::before {
   content: "";
   display: block;
