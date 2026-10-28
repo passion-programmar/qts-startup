@@ -20,6 +20,7 @@ import { PaginatedTable } from "@/app/components/paginated-table";
 import { GeminiApiLimitsForm } from "./limits-form";
 import { TokenComparisonForm } from "./token-comparison-form";
 import { TokenCountModeForm } from "./token-count-mode-form";
+import { ResponseDetailsButton } from "./response-details";
 import { ZoneClock } from "@/app/components/zone-clock";
 import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
 
@@ -287,20 +288,30 @@ export default async function GeminiUsagePage({
           </div>
           <PaginatedTable
             columns={[
-              { label: "No", className: "w-[5%]" },
-              { label: "Time (Pacific)", className: "w-[15%]" },
+              { label: "No", className: "w-[4%]" },
+              { label: "Time (Pacific)", className: "w-[13%]" },
               { label: "API key", className: "w-[11%]" },
-              { label: "Operation", className: "w-[12%]" },
-              { label: "Result", className: "w-[14%]" },
-              { label: "Local tokens", className: "w-[9%]" },
-              { label: "Gemini tokens", className: "w-[11%]" },
+              { label: "Operation", className: "w-[11%]" },
+              { label: "Result / reason", className: "w-[23%]" },
+              { label: "Local tokens", className: "w-[8%]" },
+              { label: "Gemini tokens", className: "w-[9%]" },
               { label: "Duration", className: "w-[8%]" },
-              { label: "Google response / error", className: "w-[15%]" },
+              { label: "Details", className: "w-[13%]" },
             ]}
             emptyMessage={keys.length ? "No Google API requests recorded today." : "Configure a Gemini API key to see responses."}
             rows={recentApiCalls.map((call, index) => {
-              const responseText = call.responseBody ?? call.errorMessage ??
-                "No response body or error message was recorded.";
+              const startedDate = new Intl.DateTimeFormat("en-US", {
+                dateStyle: "medium",
+                timeZone: "America/Los_Angeles",
+              }).format(call.startedAt);
+              const startedTime = new Intl.DateTimeFormat("en-US", {
+                timeStyle: "medium",
+                timeZone: "America/Los_Angeles",
+              }).format(call.startedAt);
+              const keyLabel = `Key ${keyNumberByHash.get(call.keyHash) ?? "?"} · ${call.keyHash.slice(0, 10)}`;
+              const operationLabel = call.operation === "count_tokens" ? "CountTokens" : "GenerateContent";
+              const durationLabel = call.durationMs === null ? "—" : `${call.durationMs.toLocaleString()} ms`;
+              const reason = readCallReason(call);
               const statusLabel = call.status === "http_success"
                 ? `HTTP ${call.httpStatus} · success`
                 : call.status === "http_error"
@@ -313,51 +324,48 @@ export default async function GeminiUsagePage({
                 cells: [
                   <span className="text-xs text-slate-500" key="number">{index + 1}</span>,
                   <span key="time">
-                    {new Intl.DateTimeFormat("en-US", {
-                      dateStyle: "medium",
-                      timeZone: "America/Los_Angeles",
-                    }).format(call.startedAt)},{" "}
-                    <strong className="font-semibold text-slate-900">
-                      {new Intl.DateTimeFormat("en-US", {
-                        timeStyle: "medium",
-                        timeZone: "America/Los_Angeles",
-                      }).format(call.startedAt)}
-                    </strong>
+                    {startedDate},{" "}
+                    <strong className="font-semibold text-slate-900">{startedTime}</strong>
                   </span>,
-                  <span className="font-mono text-xs" key="key">
-                    Key {keyNumberByHash.get(call.keyHash) ?? "?"} · {call.keyHash.slice(0, 10)}
-                  </span>,
-                  call.operation === "count_tokens" ? "CountTokens" : "GenerateContent",
-                  <span
-                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
-                      call.status === "http_success"
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-rose-50 text-rose-700"
-                    }`}
-                    key="result"
-                  >
-                    {statusLabel}
-                  </span>,
+                  <span className="font-mono text-xs" key="key">{keyLabel}</span>,
+                  operationLabel,
+                  <div key="result">
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
+                        call.status === "http_success"
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-rose-50 text-rose-700"
+                      }`}
+                    >
+                      {statusLabel}
+                    </span>
+                    <p className="mt-1.5 break-words text-xs text-slate-600">{reason}</p>
+                  </div>,
                   <TokenCount key="local-tokens" value={call.localInputTokens} />,
                   <TokenCount
                     compareTo={call.localInputTokens}
                     key="gemini-tokens"
                     value={call.geminiInputTokens}
                   />,
-                  call.durationMs === null ? "—" : `${call.durationMs.toLocaleString()} ms`,
-                  <details className="max-w-full" key="response">
-                    <summary className="cursor-pointer text-xs font-medium text-indigo-700">
-                      View response details
-                    </summary>
-                    {call.responseTruncated ? (
-                      <p className="mt-2 text-xs text-amber-700">
-                        Response was truncated after 1 MB.
-                      </p>
-                    ) : null}
-                    <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-[11px] text-slate-700">
-                      {responseText}
-                    </pre>
-                  </details>,
+                  durationLabel,
+                  <ResponseDetailsButton
+                    call={{
+                      summary: [
+                        { label: "Time (Pacific)", value: `${startedDate}, ${startedTime}` },
+                        { label: "API key", value: keyLabel },
+                        { label: "Operation", value: operationLabel },
+                        { label: "Result", value: statusLabel },
+                        { label: "Duration", value: durationLabel },
+                        { label: "Local tokens", value: call.localInputTokens?.toLocaleString() ?? "—" },
+                        { label: "Gemini tokens", value: call.geminiInputTokens?.toLocaleString() ?? "—" },
+                      ],
+                      reason,
+                      responseBody: call.responseBody,
+                      responseTruncated: call.responseTruncated,
+                      errorMessage: call.errorMessage,
+                    }}
+                    key="response"
+                  />,
                 ],
               };
             })}
@@ -381,6 +389,61 @@ export default async function GeminiUsagePage({
     </main>
     </WorkspaceShell>
   );
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const finishReasonText: Record<string, string> = {
+  STOP: "Finished normally",
+  MAX_TOKENS: "Cut off at the output token limit",
+  SAFETY: "Blocked by safety filters",
+  RECITATION: "Blocked for recitation",
+  BLOCKLIST: "Blocked by a term blocklist",
+  PROHIBITED_CONTENT: "Blocked as prohibited content",
+  SPII: "Blocked for personal information",
+  MALFORMED_FUNCTION_CALL: "Malformed function call",
+  OTHER: "Stopped for another reason",
+};
+
+// One readable line saying why a call ended the way it did, so the JSON need not be opened.
+function readCallReason(call: {
+  status: string;
+  operation: string;
+  responseBody: string | null;
+  responseTruncated: boolean;
+  errorMessage: string | null;
+}): string {
+  if (call.status === "pending") return "Waiting for Google's reply.";
+  if (call.status === "network_error") return call.errorMessage ?? "The request failed before Google replied.";
+  let body: unknown;
+  try {
+    body = JSON.parse(call.responseBody ?? "");
+  } catch {
+    return call.responseTruncated
+      ? "Response was over 1 MB and cut off; open the details."
+      : "Response was not JSON; open the details.";
+  }
+  if (!isRecord(body)) return "Response was empty.";
+  if (isRecord(body.error)) {
+    const status = typeof body.error.status === "string" ? `${body.error.status}: ` : "";
+    const message = typeof body.error.message === "string" ? body.error.message : "No error message.";
+    return `${status}${message}`;
+  }
+  if (call.operation === "count_tokens") {
+    return typeof body.totalTokens === "number"
+      ? `Counted ${body.totalTokens.toLocaleString()} tokens`
+      : "No token count in the response.";
+  }
+  const blockReason = isRecord(body.promptFeedback) ? body.promptFeedback.blockReason : undefined;
+  if (typeof blockReason === "string") return `Prompt blocked (${blockReason})`;
+  const candidate = Array.isArray(body.candidates) ? body.candidates[0] : undefined;
+  const finishReason = isRecord(candidate) ? candidate.finishReason : undefined;
+  if (typeof finishReason !== "string") return "No reply candidate returned.";
+  const outputTokens = isRecord(body.usageMetadata) ? body.usageMetadata.candidatesTokenCount : undefined;
+  return `${finishReasonText[finishReason] ?? "Stopped"} (${finishReason})${
+    typeof outputTokens === "number" ? ` · ${outputTokens.toLocaleString()} output tokens` : ""
+  }`;
 }
 
 // A token count, with the local estimate's difference from Google's count when both exist.
