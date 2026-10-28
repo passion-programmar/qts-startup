@@ -323,6 +323,33 @@
   }
 
   /**
+   * The fixed start a box shows before it ("https://linkedin.com/in/", "github.com/", "@"): short
+   * text right before the box (or before the wrapper it sits in) that looks like an address.
+   */
+  function boxPrefix(element) {
+    for (const before of [element.previousElementSibling, element.parentElement?.previousElementSibling]) {
+      if (!before || before.tagName === 'LABEL' || before.querySelector?.('input, select, textarea, button')) continue;
+      const text = cleanText(before.textContent);
+      if (text && text.length <= 60 && /[/.@]/.test(text) && !/\s/.test(text)) return text;
+    }
+    return '';
+  }
+
+  /**
+   * A value without the box's fixed start: "linkedin.com/in/ana-pop" in a box after
+   * "https://linkedin.com/in/" is "ana-pop". Other values stay as they are.
+   */
+  function withoutBoxPrefix(element, value) {
+    const prefix = boxPrefix(element);
+    if (!prefix) return value;
+    const plain = (text) => String(text).trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').toLowerCase();
+    const start = plain(prefix);
+    const text = String(value).trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+    if (!start || !text.toLowerCase().startsWith(start)) return value;
+    return text.slice(start.length).replace(/\/+$/, '') || value;
+  }
+
+  /**
    * A phone box holding only a dialling code ("+49", "0049"), put there by its country picker: no
    * number yet, so it is empty and gets the candidate's number.
    */
@@ -1266,7 +1293,8 @@
       return { ok: picked.length > 0, value: picked.join(', ') };
     }
     // A phone box beside a country-code picker: the picker on the number's country, the rest typed.
-    const typed = await fitPhoneToPicker(element, String(value));
+    // A box after a fixed start ("https://linkedin.com/in/") takes only what follows it.
+    const typed = withoutBoxPrefix(element, await fitPhoneToPicker(element, String(value)));
     // Suggestions already showing (another field's list) are marked, so only this box's are used.
     markShownChoices();
     element.focus();

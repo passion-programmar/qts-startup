@@ -361,3 +361,21 @@ test('a phone box holding only its country\'s dialling code is empty and takes t
      empty, ok: filled.ok, value: document.getElementById('ph').value };`);
   assert.deepEqual(result, { ph: false, mb: false, own: true, age: true, empty: ['Phone number *'], ok: true, value: '+40264484948' });
 });
+
+test('a box after a fixed start ("https://linkedin.com/in/") takes only the handle; other boxes the whole value', { skip }, async () => {
+  const result = await onPage(`<form>
+      <label for="li">LinkedIn URL *</label><div class="group"><span class="addon">https://linkedin.com/in/</span><input id="li" placeholder="your-handle"></div>
+      <label for="gh">GitHub</label><div><div class="addon">github.com/</div><div><input id="gh"></div></div>
+      <label for="plain">LinkedIn</label><input id="plain">
+      <label for="other">Website</label><div><span>https://linkedin.com/in/</span><input id="other"></div>
+    </form>`,
+  `const fields = api.scanForm();
+   const idOf = (box) => fields.find((f) => document.querySelector('[data-qts-apply-field="' + f.id + '"]').id === box).id;
+   await api.fillField(idOf('li'), 'https://www.linkedin.com/in/ana-pop-123/');
+   await api.fillField(idOf('gh'), 'github.com/anapop');
+   await api.fillField(idOf('plain'), 'linkedin.com/in/ana-pop-123');
+   const other = await api.fillField(idOf('other'), 'https://ana.dev');
+   const value = (id) => document.getElementById(id).value;
+   return { li: value('li'), gh: value('gh'), plain: value('plain'), other: value('other'), otherOk: other.ok };`);
+  assert.deepEqual(result, { li: 'ana-pop-123', gh: 'anapop', plain: 'linkedin.com/in/ana-pop-123', other: 'https://ana.dev', otherOk: true });
+});

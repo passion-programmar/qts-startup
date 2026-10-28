@@ -802,7 +802,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
       today: new Date(),
       coverLetterText: application.job.coverLetterText,
     });
-    for (const entry of again.byHand || []) problem(entry.message, entry);
+    for (const entry of again.byHand || []) problem(entry.message, entry, assist ? 'profile' : 'field');
     const left = toAsk.filter((field) => !changed.includes(field));
     for (const field of plain) {
       const answer = again.answers[field.id];
@@ -963,7 +963,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     if (assist) for (const [id, answer] of Object.entries(answers)) if (!ASSIST_SOURCES.has(answer.source)) delete answers[id];
     diag('resolved', { step, round, answered: Object.keys(answers).length, toAi: resolved.open.length, byHand: (resolved.byHand || []).length });
     // A personal fact the profile lacks is the Manager's to fill, never the AI's to guess.
-    for (const entry of resolved.byHand || []) problem(entry.message, entry);
+    for (const entry of resolved.byHand || []) problem(entry.message, entry, assist ? 'profile' : 'field');
     // "Fill again" reuses this application's earlier answers instead of asking ChatGPT again.
     const open = resolved.open.filter((field) => {
       // What the site filled from the résumé is kept, not asked of the AI again.
@@ -1145,7 +1145,8 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   }
   if (assist) {
     stepAttempts = null;
-    return { used, problems: problems.filter((entry) => entry.kind === 'upload' || entry.kind === 'check'), met: [...metFields.values()] };
+    // What the Manager must do, and why: an upload, a value the site refused, a fact the profile lacks.
+    return { used, problems: problems.filter((entry) => ['upload', 'check', 'profile'].includes(entry.kind)), met: [...metFields.values()] };
   }
   const checksStarted = Date.now();
   const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);

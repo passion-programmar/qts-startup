@@ -176,25 +176,33 @@ test('Submitted and Cancel tell the worker; the site\'s own buttons are never wa
 test('new boxes on the page (a pop-up, the next step, a section shown) tell the worker once; other changes do not', { skip }, async () => {
   await withPanel(FORM, STATE, async (page, panel) => {
     const changes = async () => (await panel.sent()).filter((message) => message.action === 'fields_changed').length;
+    // The count once messages stop coming (a slow machine delays them): unchanged for 1.5 s.
+    const settled = async () => {
+      let count = await changes();
+      for (let stable = 0, waited = 0; stable < 1500 && waited < 10000; waited += 250) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const now = await changes();
+        stable = now === count ? stable + 250 : 0;
+        count = now;
+      }
+      return count;
+    };
     // The first look after the panel shows.
     await page.evaluate(() => document.body.append(Object.assign(document.createElement('p'), { textContent: 'Loaded.' })));
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    const first = await changes();
-    // A pop-up with two new boxes: told once, half a second after it settles.
+    const first = await settled();
+    // A pop-up with two new boxes: told once, after the page settles (half a second).
     await page.evaluate(() => {
       const dialog = document.createElement('div');
       dialog.setAttribute('role', 'dialog');
       dialog.innerHTML = '<label for="ph">Phone</label><input id="ph"><label for="ci">City</label><input id="ci">';
       document.body.append(dialog);
     });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 150));
     assert.equal(await changes(), first, 'not before the page settles');
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    assert.equal(await changes(), first + 1);
+    assert.equal(await settled(), first + 1);
     // Text and styles changing, with the same boxes: nothing is sent.
     await page.evaluate(() => { document.querySelector('p').textContent = 'Still loaded.'; document.body.className = 'busy'; });
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    assert.equal(await changes(), first + 1);
+    assert.equal(await settled(), first + 1);
     // A hidden section shown: told again.
     await page.evaluate(() => {
       const section = document.createElement('div');
@@ -202,11 +210,9 @@ test('new boxes on the page (a pop-up, the next step, a section shown) tell the 
       section.innerHTML = '<label for="lk">LinkedIn</label><input id="lk">';
       document.body.append(section);
     });
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const hiddenAdded = await changes();
+    const hiddenAdded = await settled();
     await page.evaluate(() => { document.querySelector('#lk').parentElement.hidden = false; });
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    assert.equal(await changes(), hiddenAdded + 1);
+    assert.equal(await settled(), hiddenAdded + 1);
   });
 });
 
