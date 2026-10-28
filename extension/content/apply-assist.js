@@ -66,6 +66,9 @@
     .folder:hover { background: #1a2438; }
     .status { margin: 12px 0 0; padding: 8px 10px; border: 1px solid rgb(16 185 129 / .3); border-radius: 10px; background: rgb(16 185 129 / .1); color: #6ee7b7; font-size: 12px; }
     .status.working { display: flex; align-items: center; gap: 8px; border-color: rgb(99 102 241 / .3); background: rgb(99 102 241 / .1); color: #a5b4fc; }
+    .status.idle { border-color: #243047; background: #0d1526; color: #94a3b8; }
+    .refill { margin-top: 6px; padding: 5px 10px; border: 1px solid rgb(99 102 241 / .5); border-radius: 8px; color: #c7d2fe; background: transparent; font: 600 12px/1.4 inherit; cursor: pointer; }
+    .refill:hover { background: rgb(99 102 241 / .18); }
     .spinner { flex: 0 0 12px; width: 12px; height: 12px; border: 2px solid rgb(99 102 241 / .3); border-top-color: #818cf8; border-radius: 50%; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .alert { margin: 12px 0 0; padding: 8px 10px; border: 1px solid rgb(244 63 94 / .3); border-radius: 10px; background: rgb(244 63 94 / .1); color: #fda4af; font-size: 12px; }
@@ -402,8 +405,17 @@
       const working = element('div', 'status working');
       working.append(element('span', 'spinner'), element('span', '', 'QTS is filling what it knows…'));
       scroll.append(working);
-    } else if (state.filled) {
-      scroll.append(element('div', 'status', `✓ QTS filled ${state.filled} answer${state.filled === 1 ? '' : 's'} (résumé, profile, reusable answers). Check them, fill the rest, then Submit.`));
+    } else {
+      scroll.append(state.filled
+        ? element('div', 'status', `✓ QTS filled ${state.filled} answer${state.filled === 1 ? '' : 's'} (résumé, profile, reusable answers). Check them, fill the rest, then Submit.`)
+        : element('div', 'status idle', 'Nothing filled on this page yet.'));
+      // Looks at this page again as if the job were new: boxes met before are filled again when
+      // empty (text already written stays), and an embedded job-board form is opened again.
+      const refill = element('button', 'refill', '↻ Fill again');
+      refill.type = 'button';
+      refill.title = 'Look at this page again and fill what QTS knows, as if the job were new';
+      refill.addEventListener('click', () => send('refill'));
+      scroll.append(refill);
     }
     if (state.problems?.length) {
       const box = element('div', 'alert');
@@ -530,7 +542,8 @@
   // New boxes on the page (the next step, a pop-up form, a section shown by an answer, a new
   // address in a single-page site): QTS is told half a second after the page settles, and only when
   // the boxes shown changed, so it fills them at once without reading the page for nothing.
-  const BOX_SELECTOR = 'input:not([type="hidden"]), select, textarea, [role="combobox"], [role="radiogroup"], [role="checkbox"], [contenteditable="true"]';
+  // A large frame counts too: a job board's form embedded after the page loaded (Ashby, Greenhouse).
+  const BOX_SELECTOR = 'input:not([type="hidden"]), select, textarea, [role="combobox"], [role="radiogroup"], [role="checkbox"], [contenteditable="true"], iframe';
   let boxesSeen = '';
   let changeTimer = null;
   // Each box by its own number (QTS's marks on the boxes change when it reads them; this does not).
@@ -542,6 +555,7 @@
   };
   const shownBoxes = () => [...document.querySelectorAll(BOX_SELECTOR)]
     .filter((box) => !host.contains(box) && box.getClientRects().length)
+    .filter((box) => box.tagName !== 'IFRAME' || (box.offsetWidth >= 300 && box.offsetHeight >= 200))
     .map(boxNumber)
     .join(',');
   function pageChanged() {

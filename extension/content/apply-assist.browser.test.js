@@ -255,3 +255,30 @@ test('an opened card moves to the top of the panel, and a redraw keeps where the
     assert.ok(after.scrollTop > 0);
   });
 });
+
+test('"Fill again" asks the worker to fill the page as if the job were new; with nothing filled the panel says so', { skip }, async () => {
+  await withPanel(FORM, { ...STATE, filled: 0 }, async (page, panel) => {
+    assert.ok((await panel.text()).includes('Nothing filled on this page yet.'));
+    await panel.click('.refill', 'Fill again');
+    assert.deepEqual((await panel.sent()).filter((message) => message.action !== 'fields_changed').map((message) => message.action), ['refill']);
+  });
+  await withPanel(FORM, { ...STATE, filling: true }, async (page, panel) => {
+    // While QTS fills, no second request.
+    assert.ok(!(await panel.text()).includes('Fill again'));
+  });
+});
+
+test('a large frame appearing (a job board\'s embedded form) tells the worker; a small one does not', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    const changes = async () => (await panel.sent()).filter((message) => message.action === 'fields_changed').length;
+    await page.evaluate(() => document.body.append(Object.assign(document.createElement('p'), { textContent: 'Loaded.' })));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const before = await changes();
+    await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<iframe srcdoc="ad" style="width:120px;height:60px"></iframe>'));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    assert.equal(await changes(), before);
+    await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<iframe srcdoc="form" style="width:700px;height:900px"></iframe>'));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    assert.equal(await changes(), before + 1);
+  });
+});

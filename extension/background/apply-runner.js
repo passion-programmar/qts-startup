@@ -1449,6 +1449,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       activeReviews.get(msg.attemptId)?.assistant?.poke(sender.tab?.id);
       return { ok: true };
     }
+    // "Fill again" on the panel: this page as if the job were new.
+    if (msg.action === 'refill') {
+      activeReviews.get(msg.attemptId)?.assistant?.refill(sender.tab?.id);
+      return { ok: true };
+    }
     if (msg.action === 'open_folder') {
       const review = activeReviews.get(msg.attemptId);
       return review?.resumeFolder ? openDownloadedFolder(review.resumeFolder) : { ok: false, error: 'No résumé folder for this job.' };
@@ -2062,6 +2067,17 @@ async function runAssistedApplication(application) {
     used: {}, handled: new Set(), tries: new Map(), problems: [], filling: false, stopped: false, keepAlive, show: null,
     // Pages whose embedded job-board form was opened in their tab (once each).
     openedForms: new Set(),
+    // "Fill again": the tab's boxes, uploads and embedded forms are forgotten, so the page is
+    // filled as if the job were new (text already in a box still stays), at once.
+    refill(tabId) {
+      if (assistant.stopped || tabId == null || !tabsOf(review).has(tabId)) return;
+      const ofTab = (key) => key.startsWith(`${tabId}|`);
+      for (const key of [...assistant.handled]) if (ofTab(key)) assistant.handled.delete(key);
+      for (const key of [...assistant.tries.keys()]) if (ofTab(key)) assistant.tries.delete(key);
+      for (const key of [...assistant.openedForms]) if (ofTab(key)) assistant.openedForms.delete(key);
+      assistant.problems = [];
+      assistant.poke(tabId);
+    },
     // Tabs with a fill pass on its way, and those to look at once more when it ends.
     looking: new Set(), lookAgain: new Set(),
     // Fills one of this application's tabs now (new boxes shown, a page loaded); a second request

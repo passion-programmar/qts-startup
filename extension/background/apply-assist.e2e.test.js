@@ -247,6 +247,11 @@ test('the assistant fills every page of each job\'s journey, and only Submitted 
     await second.click('#ok');
     await pause(5000);
     assert.equal((await read('/form/2', ['fn'])).fn, 'Rado');
+    // "Fill again": an answer QTS filled and the Manager emptied is filled again; what the Manager wrote stays.
+    await second.evaluate(() => { const box = document.getElementById('np'); box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true })); });
+    await panelSays('/form/2', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[1].attemptId, action: 'refill' });
+    await until('filled again', async () => (await read('/form/2', ['np']))?.np === 'Immediately', 20000);
+    assert.deepEqual(await read('/form/2', ['fn', 'why', 'cv']), { fn: 'Rado', why: 'I like Spark.', cv: 1 });
 
     // The site's own Submit is never watched: nothing is recorded.
     await second.click('button[type=submit]');
