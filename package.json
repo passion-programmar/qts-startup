@@ -12,7 +12,7 @@
     "test": "npm run test:server && npm run test:extension",
     "test:server": "node scripts/run-tsx-tests.cjs",
     "test:extension": "node --test extension/shared/*.test.js extension/content/*.test.js extension/content/extractors/*.test.js extension/popup/*.test.js",
-    "test:apply-e2e": "node --test extension/background/apply-runner.e2e.test.js",
+    "test:apply-e2e": "node --test extension/background/apply-runner.e2e.test.js extension/background/apply-assist.e2e.test.js",
     "db:generate": "node --require ./scripts/node-user-shim.cjs ./node_modules/drizzle-kit/bin.cjs generate",
     "db:migrate": "node --require ./scripts/node-user-shim.cjs ./node_modules/drizzle-kit/bin.cjs migrate",
     "db:seed:super-admin": "tsx scripts/seed-super-admin.ts",

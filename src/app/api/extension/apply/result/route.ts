@@ -4,11 +4,12 @@ import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { parseAppliedAnswers } from "@/server/apply/apply-values";
 
 // The Manager's answer to "Submitted successfully?" from the Chrome: Yes makes the bid and the job
-// Applied; No makes the job Failed. Only the Chrome holding the application may answer here.
+// Applied (removeJob: the job row is deleted instead, from the job page's panel); No makes the job
+// Failed. Only the Chrome holding the application may answer here.
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
-  const body = await request.json().catch(() => null) as { attemptId?: unknown; submitted?: unknown; appliedAnswers?: unknown } | null;
+  const body = await request.json().catch(() => null) as { attemptId?: unknown; submitted?: unknown; appliedAnswers?: unknown; removeJob?: unknown } | null;
   if (!isUuid(body?.attemptId) || typeof body.submitted !== "boolean") {
     return NextResponse.json({ success: false, message: "A valid attempt ID and Yes or No are required." }, { status: 400 });
   }
@@ -19,6 +20,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       browserId: auth.browser.id,
       submitted: body.submitted,
       answers: parseAppliedAnswers(body.appliedAnswers),
+      removeJob: body.removeJob === true,
     });
     return result
       ? NextResponse.json({ success: true, result })

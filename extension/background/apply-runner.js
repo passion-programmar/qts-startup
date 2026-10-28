@@ -102,11 +102,11 @@ async function applyWindowId() {
 }
 
 // The form is shown while Apply fills it. It opens next to the Manager's tab as its opener, so
-// Chrome shows that tab again when the form closes.
-async function openApplyTab(url) {
+// Chrome shows that tab again when the form closes. active: false opens it behind the Manager's tab.
+async function openApplyTab(url, { active = true } = {}) {
   const windowId = await applyWindowId();
   const [shown] = await chrome.tabs.query({ windowId, active: true }).catch(() => []);
-  const tab = await chrome.tabs.create({ windowId, url, active: true, ...(shown?.id != null ? { openerTabId: shown.id } : {}) });
+  const tab = await chrome.tabs.create({ windowId, url, active, ...(shown?.id != null ? { openerTabId: shown.id } : {}) });
   await tabOwnership.markTab(tab.id, 'apply');
   return tab;
 }
@@ -655,7 +655,8 @@ async function fetchApplyDocuments(attemptId, tabId) {
 // A site's "this field is required" message, in the languages forms use.
 const REQUIRED_MESSAGE = /required|mandatory|cannot be (empty|blank)|wymagane|obowi[aą]zkowe|pflicht|erforderlich|obligatoire|obligatorio|obrigat[oó]rio|obbligatorio/i;
 
-// The fill attempts of the step being filled, for its report (one application at a time per Chrome).
+// The fill attempts of the step being filled, for its report (one page is filled at a time per
+// Chrome: test mode runs one application, the assistant's pages take turns).
 let stepAttempts = null;
 
 async function fillAndCheck(tabId, field, answer, file, seen) {
@@ -727,8 +728,17 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
  * those answers revealed. Nothing here ends the application: what it cannot do becomes a problem
  * for the Manager's review. Returns { used, problems, canAskAgain }.
  */
-async function fillFormPage(tabId, application, keepAlive, step) {
+/**
+ * Fills one form page. options.assist (Apply as the Manager's assistant): only what QTS knows for
+ * sure (documents, cover letter, profile facts, reusable answers; no AI), never a box that already
+ * holds something, never a question in options.handled (met on an earlier pass), and no checks for
+ * the Manager (the panel lists what is still empty); only uploads and values the site refused are
+ * reported.
+ */
+async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   const helpers = self.__qtsApplyAnswers;
+  const assist = options.assist === true;
+  const handled = options.handled || null;
   const used = {};
   const problems = [];
   let canAskAgain = false;
@@ -790,7 +800,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     for (const field of plain) {
       const answer = again.answers[field.id];
       const reopened = again.open.find((entry) => entry.id === field.id);
-      if (answer && !answer.file) {
+      if (answer && !answer.file && (!assist || ASSIST_SOURCES.has(answer.source))) {
         const outcome = await fillAndCheck(tabId, field, answer, null, seen);
         if (outcome.ok) {
           used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
@@ -835,10 +845,10 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     return answersById;
   };
   for (let round = 0; round < APPLY_FILL_ROUNDS + 1; round += 1) {
-    const fields = round === 0
+    const fields = round === 0 && !assist
       ? await waitForFormFields(tabId)
       : await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm());
-    if (round === 0) {
+    if (round === 0 && !assist) {
       await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
       const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
       if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
@@ -866,6 +876,8 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     const fresh = [];
     for (const field of fields || []) {
       if (field.hidden || field.disabled || seen.has(field.id)) continue;
+      // The Manager's or the site's own text stays; a question met before is the Manager's now.
+      if (assist && (field.filled || handled?.has(assistFieldKey(field)))) continue;
       // Drawn again by the page after its answer was picked (a new element): kept as it is.
       if (await stillAnswered(field)) {
         seen.add(field.id);
@@ -919,7 +931,13 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     }
     for (const field of fresh) metFields.set(field.id, field);
     const discoveryStarted = Date.now();
-    const changedByLooking = await readComboboxOptions(tabId, fresh);
+    // The assistant opens only the lists it has an answer for: no list opens on the page for nothing.
+    const toDiscover = assist
+      ? fresh.filter((field) => ASSIST_SOURCES.has(helpers.resolveFields([field], application.candidate, application.savedAnswers, {
+        exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText,
+      }).answers[field.id]?.source))
+      : fresh;
+    const changedByLooking = await readComboboxOptions(tabId, toDiscover);
     timings.discovery += Date.now() - discoveryStarted;
     for (const field of changedByLooking) {
       problem(`Check "${field.label}": looking at its choices changed it; set it as it should be.`, field);
@@ -930,6 +948,9 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       coverLetterText: application.job.coverLetterText,
     });
     const { answers } = resolved;
+    // The assistant fills only the documents, the profile's facts, and reusable answers (no rules,
+    // no consent ticks): the rest is the Manager's.
+    if (assist) for (const [id, answer] of Object.entries(answers)) if (!ASSIST_SOURCES.has(answer.source)) delete answers[id];
     diag('resolved', { step, round, answered: Object.keys(answers).length, toAi: resolved.open.length, byHand: (resolved.byHand || []).length });
     // A personal fact the profile lacks is the Manager's to fill, never the AI's to guess.
     for (const entry of resolved.byHand || []) problem(entry.message, entry);
@@ -1017,6 +1038,10 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         }
         // The value that did not fit goes to ChatGPT with what it was (the profile's fact or a
         // reusable answer and its note), the site's reason, and the choices the field showed.
+        if (assist) {
+          problem(`Fill by hand: "${field.label}" — the site did not take ${answer.source === 'reusable' ? 'the reusable answer' : 'the profile\'s'} "${meant}".`, field, 'check');
+          continue;
+        }
         const was = answer.source === 'reusable'
           ? `The reusable answer for this question is "${answer.saved ?? answer.value}"${answer.note ? ` (note: ${answer.note})` : ''}`
           : `The candidate's profile says "${meant}"`;
@@ -1049,7 +1074,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       } else if (!outcome.gone) remaining.push(field);
     }
     toAsk = await refreshDependentChoices(remaining, position, lastFilledChoice);
-    if (toAsk.length) {
+    if (toAsk.length && !assist) {
       try {
         const aiStarted = Date.now();
         const aiAnswers = keepProfileMeaning(await askAiForAnswers(application, toAsk, keepAlive), toAsk);
@@ -1106,6 +1131,10 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     }
     // Let the page show the questions these answers unlock before looking again.
     await sleep(1000);
+  }
+  if (assist) {
+    stepAttempts = null;
+    return { used, problems: problems.filter((entry) => entry.kind === 'upload' || entry.kind === 'check'), met: [...metFields.values()] };
   }
   const checksStarted = Date.now();
   const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
@@ -1298,11 +1327,13 @@ function answerManager(attemptId, decision) {
   return true;
 }
 
+// The assistant's panel (state.assist: the job page with the profile) or the review panel.
 async function showReviewPanel(tabId, state) {
-  await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/apply-form.js', 'content/apply-review.js'] });
+  const panel = state?.assist ? 'content/apply-assist.js' : 'content/apply-review.js';
+  await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/apply-form.js', panel] });
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
-    func: (next) => globalThis.__qtsApplyReview?.render(next),
+    func: (next) => (next?.assist ? globalThis.__qtsApplyAssist : globalThis.__qtsApplyReview)?.render(next),
     args: [state],
   });
 }
@@ -1310,7 +1341,10 @@ async function showReviewPanel(tabId, state) {
 async function removeReviewPanel(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
-    func: () => globalThis.__qtsApplyReview?.remove(),
+    func: () => {
+      globalThis.__qtsApplyReview?.remove();
+      globalThis.__qtsApplyAssist?.remove();
+    },
   }).catch(() => {});
 }
 
@@ -1389,7 +1423,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (answerManager(msg.attemptId, { action: msg.action, answers: msg.answers || null, noticed: msg.noticed === true, tabId: sender.tab?.id })) {
       return { ok: true };
     }
-    return answerWithoutRunner(msg.attemptId, msg.action, sender.tab?.id);
+    return msg.assist
+      ? answerAssistWithoutRunner(msg, sender.tab?.id)
+      : answerWithoutRunner(msg.attemptId, msg.action, sender.tab?.id);
   })().then(sendResponse, (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Failed.' }));
   return true;
 });
@@ -1429,6 +1465,36 @@ async function answerWithoutRunner(attemptId, action, tabId) {
       await removeReviewPanel(tabId);
       if (action !== 'no') await chrome.tabs.remove(tabId).catch(() => {});
     }
+  }
+  return result?.success ? { ok: true } : { ok: false, error: result?.message || 'QTS did not record it.' };
+}
+
+/**
+ * The assistant's panel answered after the worker restarted (its application is no longer running
+ * here): Submitted / Yes saves the bid and deletes the job row, Cancel leaves the job in the list, No
+ * goes back to the form. The site's own Submit noticed then asks Yes/No on the Jobs page.
+ */
+async function answerAssistWithoutRunner(msg, tabId) {
+  const { attemptId, action } = msg;
+  const post = (path, body = {}) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
+  let result;
+  if ((action === 'submitted' && !msg.noticed) || action === 'yes') {
+    await post('submitted', { appliedAnswers: [] });
+    result = await post('result', { submitted: true, removeJob: true });
+  } else if (action === 'submitted') {
+    result = await post('submitted', { appliedAnswers: [] });
+    if (result?.success) await notifyApply('Answer "Submitted successfully?" on the Jobs page.');
+  } else if (action === 'cancel') {
+    result = await post('release', { mode: 'later', reason: 'Cancelled by the Manager; the job stays in the list.' });
+    if (result?.success) await noteCancelledJob(msg.jobId);
+  } else if (action === 'no' || action === 'back_to_review') {
+    result = await post('back-to-review');
+  } else {
+    return { ok: false, error: 'Apply restarted in this Chrome; click Submitted or Cancel.' };
+  }
+  if (result?.success && tabId != null && action !== 'no' && action !== 'back_to_review') {
+    await removeReviewPanel(tabId);
+    await chrome.tabs.remove(tabId).catch(() => {});
   }
   return result?.success ? { ok: true } : { ok: false, error: result?.message || 'QTS did not record it.' };
 }
@@ -1768,26 +1834,281 @@ async function waitForConfirmation(review, reviewState, answersUsed, current, re
   }
 }
 
+// ---- Apply as the Manager's assistant ----
+// Each Chrome keeps up to two job pages open, each with a panel: the candidate's profile,
+// experience, education, and Super Admin's reusable answers (every item copied with a click), and
+// two copy buttons (résumé + job description, and with the profile). QTS fills only what it knows
+// for sure (the résumé and cover letter, profile facts, reusable answers; never AI) and never clicks
+// the site's buttons. The Manager does the rest and clicks the site's Submit, then answers
+// "Submitted successfully?", or uses Submitted / Cancel at the bottom of the panel. Submitted saves
+// the bid and deletes the job row; Cancel closes the page and leaves the job as it was.
+const APPLY_TABS_PER_CHROME = 2;
+// Where the assistant's answers may come from: the résumé and cover letter, the profile, reusable answers.
+const ASSIST_SOURCES = new Set(['documents', 'profile', 'reusable']);
+// How often an open page is looked at for questions QTS has not met yet (the form, a next step, a follow-up).
+const ASSIST_LOOK_EVERY_MS = 4000;
+// Jobs cancelled in this Chrome since Apply was turned on: not opened again until Apply restarts.
+const APPLY_CANCELLED_KEY = 'qtsApplyCancelledJobs';
+// One page is filled at a time in this Chrome, so the open pages never fill over each other.
+let assistFillChain = Promise.resolve();
+
+/** A question's identity across passes: its kind and words (an element may be drawn anew), else its id. */
+function assistFieldKey(field) {
+  return HAS_WORDS.test(field.label || '') ? `${field.kind}|${field.label}` : field.id;
+}
+
+async function cancelledJobIds() {
+  const stored = (await chrome.storage.session.get(APPLY_CANCELLED_KEY))[APPLY_CANCELLED_KEY];
+  return Array.isArray(stored) ? stored : [];
+}
+
+async function noteCancelledJob(jobId) {
+  const ids = await cancelledJobIds();
+  if (jobId && !ids.includes(jobId)) await chrome.storage.session.set({ [APPLY_CANCELLED_KEY]: [...ids, jobId].slice(-200) });
+}
+
+// Apply turned off: the cancelled jobs may be opened again next time.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes[EXTENSION_STATUS_KEY] || changes[EXTENSION_STATUS_KEY].newValue === 'apply') return;
+  chrome.storage.session.remove(APPLY_CANCELLED_KEY).catch(() => {});
+});
+
+/**
+ * Looks at an open page and fills the questions QTS has not met yet: none while the Manager typed
+ * there in the last 3 seconds. Each question is met once; after that it is the Manager's.
+ */
+async function assistFillPass(tabId, application, assistant) {
+  const tab = await getTab(tabId);
+  if (!tab || tab.status !== 'complete') return;
+  const look = await inForm(tabId, () => ({
+    fields: globalThis.__qtsApplyForm.scanForm(),
+    typing: Date.now() - (globalThis.__qtsApplyAssist?.lastKeyAt?.() || 0) < 3000,
+  })).catch(() => null);
+  if (!look || look.typing) return;
+  const unmet = (look.fields || []).filter((field) => !field.hidden && !field.disabled && !field.filled && !assistant.handled.has(assistFieldKey(field)));
+  if (!unmet.length) return;
+  const pass = assistFillChain.then(async () => {
+    if (assistant.stopped) return;
+    assistant.filling = true;
+    await assistant.show();
+    try {
+      const filled = await fillFormPage(tabId, application, assistant.keepAlive, 1, { assist: true, handled: assistant.handled });
+      Object.assign(assistant.used, filled.used);
+      for (const field of [...unmet, ...(filled.met || [])]) assistant.handled.add(assistFieldKey(field));
+      const known = new Set(filled.problems.map((entry) => entry.message));
+      assistant.problems = [...assistant.problems.filter((entry) => !known.has(entry.message)), ...filled.problems];
+    } finally {
+      assistant.filling = false;
+      await assistant.show();
+    }
+  });
+  assistFillChain = pass.catch(() => {});
+  await pass;
+}
+
+/** The candidate's profile facts for the panel, in the order a form asks for them. */
+function panelProfile(candidate) {
+  const { candidateId: _candidateId, ...facts } = candidate || {};
+  return facts;
+}
+
+/**
+ * One job page with the Manager: opened (behind the Manager's tab when another is open), filled with
+ * what QTS knows whenever new questions show, and ended by the Manager: Submitted (or Yes after the
+ * site's Submit) saves the bid and deletes the job row; Cancel or a closed tab leaves the job in the
+ * list (not opened again in this Chrome until Apply restarts); No after the site's Submit goes back.
+ */
+async function runAssistedApplication(application) {
+  const { attemptId } = application;
+  let renewedAt = Date.now();
+  let leaseSeconds = 0;
+  const keepAlive = async () => {
+    if (Date.now() - renewedAt < self.__qtsIdlePacing.renewEveryMs(leaseSeconds)) return;
+    const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId });
+    if (renewed._httpStatus === 409) answerManager(attemptId, { action: 'lost' });
+    if (renewed.success === true) {
+      renewedAt = Date.now();
+      leaseSeconds = Number(renewed.leaseSeconds) || 0;
+    }
+  };
+  const heartbeat = setInterval(() => keepAlive().catch(() => {}), APPLY_HEARTBEAT_MS);
+  await loadApplyDebug();
+  diag('application', { attempt: String(attemptId).slice(0, 8), assist: true });
+  const candidate = [application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate';
+  const review = {
+    attemptId,
+    tabId: null,
+    assist: true,
+    chromeName: await browserName(),
+    candidate,
+    job: application.job,
+    resumeFolder: application.job.resumeFolder,
+    panel: null,
+  };
+  activeReviews.set(attemptId, review);
+  const assistant = { used: {}, handled: new Set(), problems: [], filling: false, stopped: false, keepAlive, show: null };
+  const panelState = (mode, extra = {}) => ({
+    assist: true,
+    attemptId,
+    jobId: application.job.id,
+    mode,
+    chromeName: review.chromeName,
+    candidate,
+    job: {
+      title: application.job.title,
+      company: application.job.company,
+      location: application.job.location,
+      workType: application.job.workType,
+      salary: application.job.salary,
+      url: application.job.url,
+      description: application.job.description || '',
+    },
+    resumeText: application.job.resumeText || '',
+    resumeFolder: application.job.resumeFolder,
+    profile: panelProfile(application.candidate),
+    experiences: application.profileDetails?.experiences || [],
+    educations: application.profileDetails?.educations || [],
+    reusable: (application.savedAnswers || []).map((entry) => ({ question: entry.questionText, answer: entry.answer, note: entry.note || null })),
+    filled: Object.keys(assistant.used).length,
+    filling: assistant.filling,
+    problems: assistant.problems,
+    ...extra,
+  });
+  const showPanel = (mode, extra) => {
+    review.panel = panelState(mode, extra);
+    return review.tabId == null ? Promise.resolve() : showReviewPanel(review.tabId, review.panel).catch(() => {});
+  };
+  assistant.show = () => showPanel(review.panel?.mode === 'confirm' ? 'confirm' : 'assist');
+  const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
+  const release = (mode, reason) => report('release', { mode, reason, appliedAnswers: appliedAnswers(assistant.used) });
+  let tab = null;
+  let submitted = false;
+  let answersAtSubmit = [];
+  const startFiller = () => {
+    assistant.stopped = false;
+    (async () => {
+      while (!assistant.stopped && activeReviews.has(attemptId)) {
+        if (review.tabId != null) await assistFillPass(review.tabId, application, assistant).catch(() => {});
+        await sleep(ASSIST_LOOK_EVERY_MS);
+      }
+    })();
+  };
+  try {
+    const othersOpen = [...activeReviews.values()].some((entry) => entry !== review && entry.assist && entry.tabId != null);
+    tab = await openApplyTab(application.job.url, { active: !othersOpen });
+    review.tabId = tab.id;
+    // Held for the Manager from the start (the longer hold): the page waits for them.
+    await report('review', { review: true, appliedAnswers: [] });
+    await waitForTabComplete(tab.id, 45 * 1000).catch(() => {});
+    await showPanel('assist');
+    startFiller();
+    for (;;) {
+      const decision = await waitForManager(attemptId);
+      if (decision.action === 'submitted' || decision.action === 'yes') {
+        if (!submitted) {
+          const current = decision.answers || await inForm(tab.id, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []);
+          answersAtSubmit = submittedAnswers(assistant.used, current || []);
+          const marked = await report('submitted', { appliedAnswers: answersAtSubmit, learned: learnedAnswers(assistant.used, current || []) });
+          if (!marked.success) {
+            await showPanel('assist', { message: marked.message || 'QTS did not record it; try again.' });
+            continue;
+          }
+          submitted = true;
+          assistant.stopped = true;
+        }
+        // The site's own Submit: whether it went through is the Manager's to say.
+        if (decision.action === 'submitted' && decision.noticed) {
+          await showPanel('confirm');
+          continue;
+        }
+        const answered = await report('result', { submitted: true, removeJob: true, appliedAnswers: answersAtSubmit });
+        if (!answered.success) {
+          await showPanel('confirm', { message: answered.message || 'QTS did not save the bid; try again.' });
+          continue;
+        }
+        await chrome.tabs.remove(tab.id).catch(() => {});
+        return;
+      }
+      if (decision.action === 'no' || decision.action === 'back_to_review') {
+        // The site did not take it (a field error): back to the form.
+        if (submitted) {
+          const back = await report('back-to-review', {});
+          if (!back.success) {
+            await showPanel('confirm', { message: back.message || 'QTS could not go back; try again.' });
+            continue;
+          }
+          submitted = false;
+        }
+        await showPanel('assist');
+        startFiller();
+        continue;
+      }
+      if (decision.action === 'lost') return;
+      // Cancel, a closed tab, or Apply turned off.
+      if (submitted) {
+        await notifyApply(`${application.job.company}: answer "Submitted successfully?" on the Jobs page.`);
+        return;
+      }
+      await release('later', decision.action === 'cancel' ? 'Cancelled by the Manager; the job stays in the list.'
+        : decision.action === 'closed' ? 'The job page was closed; the job stays in the list.'
+          : 'Apply was turned off; the job went back to the list.').catch(() => {});
+      if (decision.action === 'cancel' || decision.action === 'closed') await noteCancelledJob(application.job.id);
+      if (decision.action !== 'closed') await chrome.tabs.remove(tab.id).catch(() => {});
+      return;
+    }
+  } catch (error) {
+    if (submitted) {
+      await notifyApply(`${application.job.company}: answer "Submitted successfully?" on the Jobs page.`);
+    } else {
+      await release('error', error instanceof Error ? error.message.slice(0, 400) : 'Apply could not open the job.').catch(() => {});
+    }
+  } finally {
+    assistant.stopped = true;
+    clearInterval(heartbeat);
+    activeReviews.delete(attemptId);
+    reviewWaiters.delete(attemptId);
+    if (tab?.id != null) {
+      await removeReviewPanel(tab.id);
+      await releaseDebugger(tab.id);
+    }
+  }
+}
+
 /** Applies to ready jobs while Apply is on in this Chrome; the alarm calls it again when idle. */
 async function processApplyQueue() {
   if (applyLoopRunning) return;
   applyLoopRunning = true;
+  // The applications open in this Chrome: up to two job pages with the Manager's panel (one
+  // automatic application at a time in test mode).
+  const running = new Set();
   try {
     while (await isApplyOn()) {
-      const claim = await workerApiRequest('POST', '/api/extension/apply/claim', {});
+      const testMode = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
+      if (running.size >= (testMode ? 1 : APPLY_TABS_PER_CHROME)) {
+        await Promise.race(running);
+        continue;
+      }
+      const claim = await workerApiRequest('POST', '/api/extension/apply/claim', { skipJobIds: await cancelledJobIds() });
       if (claim.success !== true) {
         if ([401, 403, 426].includes(claim._httpStatus)) {
           await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
           await notifyApply(claim.message || 'Apply stopped.');
+          break;
         }
-        return;
+        if (!running.size) break;
       }
-      const application = claim.application;
-      if (!application) return;
+      const application = claim.success === true ? claim.application : null;
+      if (!application) {
+        if (!running.size) break;
+        // Nothing ready now: looked for again in a minute, or when one of the open jobs ends.
+        await Promise.race([...running, sleep(60 * 1000)]);
+        continue;
+      }
       // Work found: this Chrome is not idle (shared/idle-pacing.js), until the queue is empty for a while.
       await self.__qtsIdlePacing.noteActivity();
       const recipe = self.__qtsApplyRecipes.recipeFor(application.job.url);
-      if (recipe.unsupported) {
+      // The Manager signs in to a site that needs an account; only a link that is no web page is skipped.
+      if (recipe.unsupported && (testMode || recipe.site !== 'account')) {
         await workerApiRequest('POST', '/api/extension/apply/release', {
           attemptId: application.attemptId,
           mode: 'skip',
@@ -1795,10 +2116,16 @@ async function processApplyQueue() {
         });
         continue;
       }
-      await runApplication(application, recipe);
-      await self.__qtsIdlePacing.noteActivity();
+      const run = (testMode ? runApplication(application, recipe) : runAssistedApplication(application, recipe))
+        .catch(() => {})
+        .finally(() => {
+          running.delete(run);
+          self.__qtsIdlePacing.noteActivity().catch(() => {});
+        });
+      running.add(run);
     }
   } finally {
+    await Promise.allSettled([...running]);
     applyLoopRunning = false;
   }
 }

@@ -1,8 +1,8 @@
 // Values and rules shared by the Apply and Chrome-registry routes. Pure, so they are testable
 // without a database.
 
-/** Applications in progress at once per Manager, across all Chromes (each Chrome holds one). */
-export const APPLY_PARALLEL_LIMIT = 3;
+/** Job pages open at once per Chrome (any number of Chromes may work at the same time). */
+export const APPLY_PARALLEL_LIMIT = 2;
 /** A claim being filled lives this long without a heartbeat; Chromes renew it every 30 seconds. */
 export const APPLY_LEASE_SECONDS = 120;
 /** An application waiting for the Manager (review, or Yes/No in an open tab) is held this long without a heartbeat. */

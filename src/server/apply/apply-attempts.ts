@@ -1,9 +1,11 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   applyAttempts,
   bids,
+  educations,
+  experiences,
   extensionBrowsers,
   jobs,
   profiles,
@@ -62,6 +64,8 @@ export type ClaimedApplication = {
     coverLetterText: string | null;
   };
   candidate: Record<string, string | number | boolean | null>;
+  // The candidate's experience and education, for the panel on the job page (copied by the Manager).
+  profileDetails: { experiences: ProfileExperience[]; educations: ProfileEducation[] };
   // Super Admin's reusable answers, the same for every candidate.
   savedAnswers: { questionKey: string; questionText: string; answer: string; note: string | null; scope: "everyone" }[];
   // For salary questions in another currency; null when the ECB is unreachable.
@@ -71,6 +75,40 @@ export type ClaimedApplication = {
   // Super Admin's default answer prompt for the Manager's AI mode; null means Apply's built-in one.
   answerPrompt: { id: string; template: string } | null;
 };
+
+type ProfileExperience = {
+  jobTitle: string; companyName: string; location: string | null; workMode: string | null;
+  startDate: string | null; endDate: string | null; isCurrent: boolean; description: string | null;
+};
+type ProfileEducation = {
+  institution: string; degree: string | null; fieldOfStudy: string | null;
+  startDate: string | null; endDate: string | null; isCurrent: boolean; description: string | null;
+};
+
+/** The candidate's experience and education in the profile's order. */
+async function profileDetailsOf(candidateId: string): Promise<ClaimedApplication["profileDetails"]> {
+  const [experienceRows, educationRows] = await db.batch([
+    db
+      .select({
+        jobTitle: experiences.jobTitle, companyName: experiences.companyName, location: experiences.location,
+        workMode: experiences.workMode, startDate: experiences.startDate, endDate: experiences.endDate,
+        isCurrent: experiences.isCurrent, description: experiences.description,
+      })
+      .from(experiences)
+      .where(eq(experiences.profileUserId, candidateId))
+      .orderBy(asc(experiences.sortOrder), desc(experiences.startDate)),
+    db
+      .select({
+        institution: educations.institution, degree: educations.degree, fieldOfStudy: educations.fieldOfStudy,
+        startDate: educations.startDate, endDate: educations.endDate, isCurrent: educations.isCurrent,
+        description: educations.description,
+      })
+      .from(educations)
+      .where(eq(educations.profileUserId, candidateId))
+      .orderBy(asc(educations.sortOrder), desc(educations.startDate)),
+  ]);
+  return { experiences: experienceRows, educations: educationRows };
+}
 
 /**
  * Super Admin's default prompt for Apply answers (Settings) for the Manager's AI mode: the ChatGPT
@@ -104,13 +142,18 @@ function deliveredDocument(part: "resume" | "coverLetter") {
 const templateLabel = (template: string | null) =>
   template ? (isPdfTemplate(template) ? pdfTemplateLabels[template] : template) : null;
 
-/** The next application for this Chrome, or null when none is ready, this Chrome holds one, or the limit is reached. */
+/**
+ * The next application for this Chrome, or null when none is ready or this Chrome has its limit
+ * open. skipJobIds (UUIDs, checked by the route): jobs this Chrome cancelled, not handed back to it.
+ */
 export async function claimNextApplication(
   managerId: string,
   browser: ExtensionBrowser,
+  skipJobIds: string[] = [],
 ): Promise<ClaimedApplication | null> {
   const claim = await db.execute<{ attemptId: string | null }>(sql`
-    select claim_apply_attempt(${managerId}, ${browser.id}, ${APPLY_PARALLEL_LIMIT}, ${APPLY_LEASE_SECONDS})::text as "attemptId"
+    select claim_apply_attempt(${managerId}, ${browser.id}, ${APPLY_PARALLEL_LIMIT}, ${APPLY_LEASE_SECONDS},
+      ${`{${skipJobIds.join(",")}}`}::uuid[])::text as "attemptId"
   `);
   const attemptId = claim.rows[0]?.attemptId;
   if (!attemptId) return null;
@@ -216,6 +259,7 @@ export async function claimNextApplication(
       coverLetterText: savedCoverLetterText ?? coverLetterText(deliveredCoverLetter),
     },
     candidate,
+    profileDetails: await profileDetailsOf(candidate.candidateId),
     savedAnswers,
     // A reusable salary answer may need converting to another currency.
     exchangeRates: await loadExchangeRates(),
@@ -422,6 +466,8 @@ export async function answerApplication(input: {
   browserId: string | null;
   submitted: boolean;
   answers?: AppliedAnswer[];
+  // Yes from the job page's panel: the job row is deleted instead of becoming Applied.
+  removeJob?: boolean;
 }): Promise<"confirmed" | "failed" | null> {
   const { attemptId, managerId, browserId, submitted } = input;
   const [attempt] = await db
@@ -503,10 +549,13 @@ export async function answerApplication(input: {
       answers,
       appliedAt: now,
     }).onConflictDoNothing(),
-    db.update(jobs).set({ status: "applied", failureReason: null, updatedAt: now }).where(eq(jobs.id, attempt.jobId)),
+    // The panel's Submitted: the job row goes at once (its Apply history with it); the bid stays.
+    input.removeJob
+      ? db.delete(jobs).where(and(eq(jobs.id, attempt.jobId), sql`${jobs.generationStatus} <> 'processing'`))
+      : db.update(jobs).set({ status: "applied", failureReason: null, updatedAt: now }).where(eq(jobs.id, attempt.jobId)),
   ]);
   if (!done) return null;
-  await recordApplyRun(attempt.jobId, "confirmed", null, answers);
+  if (!input.removeJob) await recordApplyRun(attempt.jobId, "confirmed", null, answers);
   // A confirmed application teaches Apply's question memory (suggestions, remembered choices,
   // and safe reusable answers added by themselves).
   await recordLearnedAnswers(attempt.candidateId, learnedOf(attempt.evidence)).catch((error) => {
