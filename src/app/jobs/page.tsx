@@ -17,6 +17,7 @@ import { AnswerApplicationButtons, ApplyAgainButton } from "@/app/jobs/apply-but
 import { jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { jobHasBid } from "@/server/jobs/job-bids";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
 import { resumeFolderOf, type ApplyRun } from "@/server/apply/apply-values";
 import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
@@ -114,7 +115,8 @@ export default async function JobsPage() {
     .from(jobs)
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
     .leftJoin(prompts, eq(prompts.id, jobs.promptId))
-    .where(eq(jobs.managerId, currentUser.id))
+    // A job that already has a bid lives on the Bids page, so it is left out here.
+    .where(and(eq(jobs.managerId, currentUser.id), sql`not ${jobHasBid()}`))
     .orderBy(desc(jobs.date), desc(jobs.createdAt));
   const candidateRows = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
     .from(profiles).innerJoin(users, eq(users.id, profiles.userId))
@@ -133,25 +135,27 @@ export default async function JobsPage() {
               <span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">{rows.length} saved</span>
             </div>
           }
-          description="Jobs saved for your candidate accounts."
+          description="Jobs saved for your candidate accounts. Jobs already applied to are on the Bids page."
           title="Jobs"
         />
         <PaginatedTable
           columns={[
             { label: "No", className: "w-[4%]" },
-            { label: "Name", className: "w-[12%]" },
-            { label: "Job title", className: "w-[22%]" },
-            { label: "Company", className: "w-[14%]" },
+            { label: "Name", className: "w-[11%]" },
+            { label: "Job title", className: "w-[17%]" },
+            { label: "Company", className: "w-[12%]" },
+            { label: "Job URL", className: "w-[12%]" },
             { label: "Résumé", className: "w-[9%]" },
-            { label: "Prompt · Template", className: "w-[15%]" },
+            { label: "Prompt · Template", className: "w-[13%]" },
             { label: "Date", className: "w-[9%]" },
-            { label: "Actions", className: "w-[15%]" },
+            { label: "Actions", className: "w-[14%]" },
           ]}
           emptyMessage="No jobs saved yet"
           searchFields={[
             { key: "name", label: "Name" },
             { key: "title", label: "Job title" },
             { key: "company", label: "Company" },
+            { key: "url", label: "Job URL" },
             { key: "setup", label: "Prompt · Template" },
             { key: "date", label: "Date" },
           ]}
@@ -193,6 +197,7 @@ export default async function JobsPage() {
                 name: candidateName,
                 title: row.title,
                 company: row.company,
+                url: row.url,
                 setup: [track.prompt, track.template].filter(Boolean).join(" "),
                 date,
               },
@@ -210,6 +215,9 @@ export default async function JobsPage() {
                   {row.title}
                 </a>,
                 row.company,
+                <a className="break-all text-xs text-blue-700 hover:underline" href={row.url} key="url" rel="noopener noreferrer" target="_blank">
+                  {row.url.replace(/^https?:\/\/(www\.)?/, "")}
+                </a>,
                 row.resumeLocalPath
                   ? <OpenFolderButton folder={resumeFolderOf(row.resumeLocalPath)} key="resume" label="Résumé" savedOn={row.generationBrowserName} />
                   : "—",

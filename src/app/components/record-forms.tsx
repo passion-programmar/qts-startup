@@ -2,7 +2,7 @@
 
 import { Activity, AlertTriangle, Briefcase, FileText, ListChecks, ListPlus, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { useActionState, useId, useRef, useState } from "react";
-import { deleteBidAction, updateBidAction } from "@/app/bids/actions";
+import { updateBidAction } from "@/app/bids/actions";
 import {
   deleteJobAction,
   setJobGenerationQueueAction,
@@ -57,7 +57,8 @@ export function JobGenerationQueueAction({ record }: { record: EditableJob }) {
   return <GenerationQueueAction record={record} />;
 }
 export function BidActions({ record, candidates }: { record: EditableBid; candidates: CandidateOption[] }) {
-  return <RecordActions kind="bid" record={record} candidates={candidates} />;
+  // Bids are permanent: they can be edited, never deleted.
+  return <RecordActions kind="bid" record={record} candidates={candidates} showDelete={false} />;
 }
 
 const jobStatusOptions = [["todo", "To do"], ["pending", "Pending"], ["applied", "Applied"], ["failed", "Failed"]] as const;
@@ -127,7 +128,8 @@ function RecordActions({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const deleteDialogId = useId();
   const updateAction = kind === "job" ? updateJobAction : updateBidAction;
-  const deleteAction = kind === "job" ? deleteJobAction : deleteBidAction;
+  // Only jobs can be deleted; a bid never shows the Delete button.
+  const deleteAction = deleteJobAction;
   const [updateState, updateFormAction, updating] = useActionState(
     async (previous: RecordActionState, formData: FormData) => {
       const result = await updateAction(previous, formData);

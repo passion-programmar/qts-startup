@@ -9,8 +9,8 @@ import { computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import type { RecordActionState } from "@/app/record-action-state";
 
-// A bid is an independent record of one confirmed application: editing or deleting it never
-// changes a jobs row. Its submitted answers and applied time stay as they were.
+// A bid is an independent, permanent record of one confirmed application: it can be edited but not
+// deleted, and editing it never changes a jobs row. Its submitted answers and applied time stay as they were.
 
 export async function updateBidAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
   const manager = await requireUser();
@@ -61,17 +61,6 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   }
   revalidatePath("/bids");
   return { error: null, success: "Bid updated." };
-}
-
-export async function deleteBidAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
-  const manager = await requireUser();
-  if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
-  const id = text(formData, "id", 36);
-  if (!uuid(id)) return { error: "Invalid bid.", success: null };
-  const deleted = await db.delete(bids).where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).returning({ id: bids.id });
-  if (!deleted.length) return { error: "Bid was not found.", success: null };
-  revalidatePath("/bids");
-  return { error: null, success: "Bid deleted." };
 }
 
 function text(data: FormData, name: string, max: number): string { const value = data.get(name); return typeof value === "string" ? value.trim().slice(0, max) : ""; }

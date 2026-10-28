@@ -4,6 +4,7 @@ import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { DeleteManagerPromptForm, ManagerPromptForm } from "@/app/prompts/prompt-forms";
 import { groupVersions } from "@/app/prompts/prompt-groups";
+import { PromptCards } from "@/app/prompts/prompt-cards";
 import { PromptVersionPicker } from "@/app/settings/prompt-forms";
 import { prompts } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -60,24 +61,27 @@ export default async function ManagerPromptsPage() {
             title="My AI prompts"
           />
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-800">
-              My prompts ({myPrompts.length})
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              {myPrompts.length === 0
-                ? "You have no prompts yet, so Generation uses the default prompt below."
-                : myPrompts.length === 1
-                  ? "Generation uses this prompt for every job."
-                  : `Generation uses these ${myPrompts.length} prompts in turn, the one used longest ago first.`}
-              {" "}Saving a change adds a version; earlier versions are kept and can be put back in use.
-            </p>
-            <div className="mt-5 space-y-6">
-              {myPrompts.map((prompt) => (
-                <article className="space-y-3 border-t border-slate-100 pt-5" key={prompt.promptGroupId}>
+          <p className="text-xs text-slate-500">
+            {myPrompts.length === 0
+              ? "You have no prompts yet, so Generation uses the default prompt. Click + to add one."
+              : myPrompts.length === 1
+                ? "Generation uses your prompt for every job."
+                : `Generation uses your ${myPrompts.length} prompts in turn, the one used longest ago first.`}
+            {" "}Click a prompt to open it. Saving a change adds a version; earlier versions are kept and can be put back in use.
+          </p>
+
+          <PromptCards
+            create={<ManagerPromptForm />}
+            tabs={myPrompts.map((prompt) => ({
+              id: prompt.promptGroupId,
+              label: prompt.name,
+              meta: `Version ${prompt.version} in use`,
+              preview: prompt.promptTemplate.slice(0, 200),
+              content: (
+                <div className="space-y-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
-                      <h3 className="text-xs font-semibold text-slate-800">{prompt.name}</h3>
+                      <h2 className="text-sm font-semibold text-slate-800">{prompt.name}</h2>
                       <p className="mt-1 text-[11px] text-slate-500">Version {prompt.version} in use</p>
                     </div>
                     <DeleteManagerPromptForm name={prompt.name} promptGroupId={prompt.promptGroupId} />
@@ -90,35 +94,38 @@ export default async function ManagerPromptsPage() {
                     promptTemplate={prompt.promptTemplate}
                   />
                   {prompt.versions.length > 1 && <PromptVersionPicker versions={prompt.versions} />}
-                </article>
-              ))}
-            </div>
-            <details className="mt-6 rounded-lg border border-dashed border-slate-300 p-4" open={myPrompts.length === 0}>
-              <summary className="cursor-pointer text-xs font-semibold text-indigo-700">Add a prompt</summary>
-              <div className="mt-4">
-                <ManagerPromptForm />
-              </div>
-            </details>
-          </section>
-
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-800">Default prompt</h2>
-            {defaultPrompt ? (
-              <>
-                <p className="mt-1 text-xs text-slate-500">
-                  {defaultPrompt.name} · Version {defaultPrompt.version} · set by Super Admin.
-                  {myPrompts.length > 0 ? " Not used while you have prompts of your own." : " Used for all your jobs now."}
-                </p>
-                <pre className="mt-4 max-h-[40vh] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-5 text-slate-700">
-                  {defaultPrompt.promptTemplate}
-                </pre>
-              </>
-            ) : (
-              <p className="mt-1 text-xs text-amber-700">
-                Super Admin has not set a default prompt. Add a prompt of your own before starting Generation.
-              </p>
-            )}
-          </section>
+                </div>
+              ),
+            }))}
+            trailing={[{
+              id: "default",
+              label: "Default prompt",
+              meta: defaultPrompt
+                ? `Super Admin · ${myPrompts.length > 0 ? "not used while you have your own" : "in use now"}`
+                : "Not set by Super Admin",
+              preview: defaultPrompt?.promptTemplate.slice(0, 200),
+              content: (
+                <>
+                  <h2 className="text-sm font-semibold text-slate-800">Default prompt</h2>
+                  {defaultPrompt ? (
+                    <>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {defaultPrompt.name} · Version {defaultPrompt.version} · set by Super Admin.
+                        {myPrompts.length > 0 ? " Not used while you have prompts of your own." : " Used for all your jobs now."}
+                      </p>
+                      <pre className="mt-4 max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-5 text-slate-700">
+                        {defaultPrompt.promptTemplate}
+                      </pre>
+                    </>
+                  ) : (
+                    <p className="mt-1 text-xs text-amber-700">
+                      Super Admin has not set a default prompt. Add a prompt of your own before starting Generation.
+                    </p>
+                  )}
+                </>
+              ),
+            }]}
+          />
         </div>
       </main>
     </WorkspaceShell>

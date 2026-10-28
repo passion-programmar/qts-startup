@@ -73,7 +73,7 @@ export default async function BidsPage() {
             { label: "Company", className: "w-[15%]" },
             { label: "Résumé", className: "w-[9%]" },
             { label: "Created", className: "w-[12%]" },
-            { label: "Actions", className: "w-[11%]" },
+            { label: "View", className: "w-[11%]" },
           ]}
           emptyMessage="No applications confirmed yet"
           searchFields={[

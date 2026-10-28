@@ -368,7 +368,10 @@ export async function stopAllAction(
   };
 }
 
-/** The Manager's answer to "Submitted successfully?" from the Jobs page: Yes makes the bid, No marks the job Failed. */
+/**
+ * The Manager's answer to "Submitted successfully?" from the Jobs page: Yes makes the bid and deletes
+ * the job row (the bid is the record from then on), No marks the job Failed.
+ */
 export async function answerApplicationAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
   const manager = await requireUser();
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
@@ -377,9 +380,18 @@ export async function answerApplicationAction(_state: RecordActionState, formDat
   if (!uuid(attemptId) || !["yes", "no"].includes(answer)) return { error: "Choose Yes or No.", success: null };
   const result = await answerApplication({ attemptId, managerId: manager.id, browserId: null, submitted: answer === "yes" });
   if (!result) return { error: "This application is no longer waiting for your answer. Refresh the page.", success: null };
+  if (result === "confirmed") {
+    // The job's Apply history goes with it; a row Generation is still writing stays for the daily clean-up.
+    await db.delete(jobs).where(and(
+      eq(jobs.managerId, manager.id),
+      eq(jobs.status, "applied"),
+      sql`${jobs.generationStatus} <> 'processing'`,
+      sql`${jobs.id} = (select ${applyAttempts.jobId} from ${applyAttempts} where ${applyAttempts.id} = ${attemptId})`,
+    ));
+  }
   revalidatePath("/jobs");
   revalidatePath("/bids");
-  return { error: null, success: result === "confirmed" ? "Applied: the bid was created." : "Marked Failed." };
+  return { error: null, success: result === "confirmed" ? "Applied: the bid was created and the job moved to Bids." : "Marked Failed." };
 }
 
 /** "Apply again": a Failed, skipped, or twice-returned job is offered to Apply once more. */

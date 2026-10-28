@@ -42,13 +42,13 @@ export function ManagerPromptForm({
         Resume and cover-letter prompt
       </label>
       <textarea
-        className="min-h-48 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+        className="min-h-80 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
         defaultValue={promptTemplate}
         id={`managerPromptText-${fieldKey}`}
         maxLength={50000}
         name="promptTemplate"
         required
-        rows={8}
+        rows={16}
       />
       <ActionFeedback state={state} />
       <button

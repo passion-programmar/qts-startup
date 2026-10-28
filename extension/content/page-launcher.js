@@ -216,7 +216,7 @@ async function initializeQtsPageLauncher() {
   const signInHeading = document.createElement('strong');
   signInHeading.textContent = 'QTS Manager';
   const signInSubtitle = document.createElement('span');
-  signInSubtitle.textContent = 'Sign in to activate the launcher';
+  signInSubtitle.textContent = '';
   signInTitle.append(signInHeading, signInSubtitle);
   const signInClose = document.createElement('button');
   signInClose.className = 'close';
