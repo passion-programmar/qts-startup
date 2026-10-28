@@ -3,6 +3,7 @@ import "server-only";
 import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { jobs, users } from "@/db/schema";
 import { db } from "@/lib/db";
+import { generationHeldSql } from "@/server/generation/generation-hold";
 import { romaniaClock } from "@/lib/romania-time";
 
 // The daily clean-up: the first Get JD start after 4:00 PM Romania time, in any of the Manager's
@@ -42,7 +43,7 @@ export async function clearAppliedJobs(managerId: string): Promise<number> {
     .where(and(
       eq(jobs.managerId, managerId),
       eq(jobs.status, "applied"),
-      sql`${jobs.generationStatus} <> 'processing'`,
+      sql`not ${generationHeldSql()}`,
     ))
     .returning({ id: jobs.id });
   return deleted.length;

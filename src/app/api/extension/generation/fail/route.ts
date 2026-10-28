@@ -1,8 +1,9 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { generationRuns, jobs } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
+import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { isRecord, readText } from "@/server/generation/generation-values";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -43,57 +44,38 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    // A failure or a cancel records nothing (the reason is the Chrome's notice): the run that did
+    // not finish goes, and this Chrome's hold, so the job stays ready for the next Generation.
     if (generationId) {
       await db
-        .update(generationRuns)
-        .set({ status: "failed", failureReason: reason, updatedAt: new Date() })
+        .delete(generationRuns)
         .where(and(
           eq(generationRuns.id, generationId),
           eq(generationRuns.jobId, jobId),
           eq(generationRuns.managerId, manager.id),
-          inArray(generationRuns.status, ["pending", "completed"]),
+          inArray(generationRuns.status, ["pending", "completed", "failed"]),
         ));
     }
-    if (cancelled) {
-      await db
-        .update(jobs)
-        .set({
-          generationStatus: "cancelled",
-          generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)`,
-          generationError: null,
-          generationLeaseExpiresAt: null,
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(jobs.id, jobId),
-          eq(jobs.managerId, manager.id),
-          eq(jobs.generationStatus, "processing"),
-        ));
-      return NextResponse.json({ success: true, jobId, cancelled: true });
-    }
-    // "failed" too: saving the failed run (generation/complete) may already have marked the job.
-    const [failed] = await db
+    const browser = await resolveExtensionBrowser(manager.id, request);
+    const [job] = await db
       .update(jobs)
-      .set({
-        generationStatus: "failed",
-        generationError: reason,
-        generationLeaseExpiresAt: null,
-        updatedAt: new Date(),
-      })
+      .set({ generationLeaseExpiresAt: null })
       .where(and(
         eq(jobs.id, jobId),
         eq(jobs.managerId, manager.id),
-        inArray(jobs.generationStatus, ["processing", "failed"]),
+        ne(jobs.generationStatus, "completed"),
+        ...(browser ? [or(isNull(jobs.generationBrowserId), eq(jobs.generationBrowserId, browser.id))] : []),
       ))
-      .returning({ id: jobs.id, attempts: jobs.generationAttemptCount });
-    if (!failed) {
+      .returning({ id: jobs.id });
+    if (cancelled) return NextResponse.json({ success: true, jobId, cancelled: true });
+    if (!job) {
       return NextResponse.json(
         { success: false, message: "The queued job is not currently processing." },
         { status: 409 },
       );
     }
-    // Claims allow two attempts; the extension retries a failed job only while one is left.
-    return NextResponse.json({ success: true, jobId, canRetry: failed.attempts < 2 });
+    // The extension tries a failed job once more in the same run, then leaves it for the next run.
+    return NextResponse.json({ success: true, jobId, canRetry: true });
   } catch (error) {
     console.error("Could not record queued Generation failure.", error);
     return NextResponse.json(

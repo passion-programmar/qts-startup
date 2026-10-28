@@ -124,6 +124,9 @@
   let lastKeyAt = 0;
   // Which cards are open; the profile is open first.
   const openCards = new Set(['profile']);
+  // Where the panel was scrolled, kept on every redraw; a card just opened is brought to the top.
+  let scrollTop = 0;
+  let bringToTop = null;
 
   const element = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -280,12 +283,17 @@
 
   function card(key, title, count, fill) {
     const node = element('div', `card${openCards.has(key) ? '' : ' closed'}`);
+    node.dataset.card = key;
     const head = element('button', 'card-head');
     head.type = 'button';
     head.append(element('span', '', `${openCards.has(key) ? '▾' : '▸'}  ${title}`), element('span', 'count', count));
     head.addEventListener('click', () => {
-      if (openCards.has(key)) openCards.delete(key);
-      else openCards.add(key);
+      if (openCards.has(key)) {
+        openCards.delete(key);
+      } else {
+        openCards.add(key);
+        bringToTop = key;
+      }
       render();
     });
     const body = element('div', 'card-body');
@@ -338,6 +346,8 @@
   }
 
   function render() {
+    const previous = panel.querySelector('.scroll');
+    if (previous) scrollTop = previous.scrollTop;
     panel.replaceChildren();
     if (!state) return;
     panel.hidden = hidden;
@@ -484,6 +494,11 @@
     }
     foot.append(actions);
     panel.append(brandHeader(), scroll, foot);
+    scroll.scrollTop = scrollTop;
+    const opened = bringToTop && scroll.querySelector(`[data-card="${bringToTop}"]`);
+    bringToTop = null;
+    if (opened) scroll.scrollTop += opened.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 8;
+    scrollTop = scroll.scrollTop;
   }
 
   tab.addEventListener('click', () => {

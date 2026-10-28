@@ -3,7 +3,7 @@ import { releaseApplyAttempt, type ReleaseMode } from "@/server/apply/apply-atte
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { parseAppliedAnswers } from "@/server/apply/apply-values";
 
-const MODES = new Set<ReleaseMode>(["error", "skip", "later", "test"]);
+const MODES = new Set<ReleaseMode>(["error", "skip", "later", "test", "drop"]);
 
 // Ends a claimed application before Submit: an error returns it to the list, Skip keeps it from
 // being offered again, Later (and test mode) gives it back without counting as a return.

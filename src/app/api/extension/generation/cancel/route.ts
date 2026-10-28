@@ -1,6 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { jobs } from "@/db/schema";
+import { generationRuns, jobs } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
@@ -45,29 +45,29 @@ export async function POST(request: Request): Promise<NextResponse> {
       .from(jobs)
       .where(and(eq(jobs.id, jobId), eq(jobs.managerId, manager.id)))
       .limit(1);
-    if (!job || !["queued", "processing"].includes(job.generationStatus)) {
+    if (!job || job.generationStatus === "completed") {
       return NextResponse.json(
-        { success: false, message: "The job is no longer queued or processing." },
+        { success: false, message: "The job is already generated." },
         { status: 409 },
       );
     }
+    // A cancel records nothing: the hold and the unfinished run go, the job stays ready.
     const [cancelled] = await db
       .update(jobs)
-      .set({
-        generationStatus: "cancelled",
-        ...(job.generationStatus === "processing"
-          ? { generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)` }
-          : {}),
-        generationError: null,
-        generationLeaseExpiresAt: null,
-        updatedAt: new Date(),
-      })
+      .set({ generationLeaseExpiresAt: null })
       .where(and(
         eq(jobs.id, jobId),
         eq(jobs.managerId, manager.id),
-        eq(jobs.generationStatus, job.generationStatus),
+        ne(jobs.generationStatus, "completed"),
       ))
       .returning({ id: jobs.id });
+    await db
+      .delete(generationRuns)
+      .where(and(
+        eq(generationRuns.jobId, jobId),
+        eq(generationRuns.managerId, manager.id),
+        inArray(generationRuns.status, ["pending", "completed", "failed"]),
+      ));
     if (!cancelled) {
       return NextResponse.json(
         { success: false, message: "The job changed before it could be cancelled." },

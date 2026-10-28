@@ -3,6 +3,7 @@ import "server-only";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { bids, jobs, profiles } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
+import { generationHeldSql } from "@/server/generation/generation-hold";
 import { jobHasBid } from "@/server/jobs/job-bids";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { getJobRecordDate } from "@/server/jobs/job-record-time-zone";
@@ -213,7 +214,8 @@ export async function findGetJdDuplicateDetails(
         id: jobs.id,
         candidateId: jobs.candidateId,
         status: jobs.status,
-        generationStatus: jobs.generationStatus,
+        // "processing" while a Chrome holds the job (Generation records nothing else until it is done).
+        generationStatus: sql<string>`case when ${generationHeldSql()} then 'processing' else ${jobs.generationStatus} end`,
       })
       .from(jobs)
       .where(
@@ -413,7 +415,7 @@ export async function removeGetJdJobAccount(
       eq(jobs.id, rowId),
       eq(jobs.managerId, managerId),
       sql`${jobs.status} <> 'applied'`,
-      sql`${jobs.generationStatus} <> 'processing'`,
+      sql`not ${generationHeldSql()}`,
       ...(options.autoSavedOnly ? [eq(jobs.autoSavedByGetJd, true)] : []),
       sql`not ${jobHasBid()}`,
     ))

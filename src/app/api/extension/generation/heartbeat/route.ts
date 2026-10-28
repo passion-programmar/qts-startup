@@ -1,13 +1,13 @@
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
+import { holdUntil } from "@/server/generation/generation-hold";
 import { isRecord, readText } from "@/server/generation/generation-values";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const leaseDurationMs = 20 * 60 * 1000;
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -36,19 +36,18 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    // Only the Chrome processing the job renews it.
+    // Only the Chrome holding the job renews its hold (also one that lapsed for a moment, while no
+    // other Chrome took the job and nobody cancelled it). Nothing else on the job changes.
     const browser = await resolveExtensionBrowser(manager.id, request);
     const now = new Date();
     const [renewed] = await db
       .update(jobs)
-      .set({
-        generationLeaseExpiresAt: new Date(now.getTime() + leaseDurationMs),
-        updatedAt: now,
-      })
+      .set({ generationLeaseExpiresAt: holdUntil(now) })
       .where(and(
         eq(jobs.id, jobId),
         eq(jobs.managerId, manager.id),
-        eq(jobs.generationStatus, "processing"),
+        ne(jobs.generationStatus, "completed"),
+        isNotNull(jobs.generationLeaseExpiresAt),
         ...(browser ? [or(isNull(jobs.generationBrowserId), eq(jobs.generationBrowserId, browser.id))] : []),
       ))
       .returning({ id: jobs.id });

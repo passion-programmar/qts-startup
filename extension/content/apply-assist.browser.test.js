@@ -177,3 +177,27 @@ test('the panel lists the required questions still empty as the Manager fills th
     assert.equal(await page.evaluate(() => document.documentElement.dataset.qtsApplyDocked), 'true');
   });
 });
+
+test('an opened card moves to the top of the panel, and a redraw keeps where the panel was', { skip }, async () => {
+  const many = { ...STATE, reusable: Array.from({ length: 18 }, (_, index) => ({ question: `Question ${index + 1}`, answer: `Answer ${index + 1}`, note: null })) };
+  await withPanel(FORM, many, async (page, panel) => {
+    await page.setViewport({ width: 1366, height: 600 });
+    const where = () => page.evaluate(() => {
+      const shadow = document.querySelector('[data-qts-apply-assist]').shadowRoot;
+      const scroll = shadow.querySelector('.scroll');
+      const card = shadow.querySelector('[data-card="reusable"]');
+      return { scrollTop: scroll.scrollTop, offset: Math.round(card.getBoundingClientRect().top - scroll.getBoundingClientRect().top) };
+    });
+    await panel.click('.card-head', 'Reusable answers');
+    const opened = await where();
+    assert.ok(opened.scrollTop > 0, 'the panel scrolled to the card');
+    assert.ok(opened.offset >= 0 && opened.offset <= 12, `the card is at the top (${opened.offset}px)`);
+    // A redraw (the worker's next state, the still-empty list) keeps the place.
+    await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), { ...many, filled: 4 });
+    assert.equal((await where()).scrollTop, opened.scrollTop);
+    // Closing a card leaves the panel where it is.
+    await panel.click('.card-head', 'Profile');
+    const after = await where();
+    assert.ok(after.scrollTop > 0);
+  });
+});

@@ -1,13 +1,12 @@
-import { and, asc, eq, gte, gt, inArray, isNull, lte, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { MIN_WORK_EXTENSION_VERSION } from "@/server/apply/apply-values";
 import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
+import { generationFree, generationHeld, holdUntil } from "@/server/generation/generation-hold";
 import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
-
-const leaseDurationMs = 20 * 60 * 1000;
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -50,39 +49,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
+    // Nothing is recorded on a job until its files are downloaded (server/generation/generation-hold.ts):
+    // a job not completed, with no résumé and no live hold, is ready, whatever an older release wrote.
     const now = new Date();
-    const expiredLease = or(
-      isNull(jobs.generationLeaseExpiresAt),
-      lte(jobs.generationLeaseExpiresAt, now),
-    );
-    await db
-      .update(jobs)
-      .set({
-        generationStatus: "queued",
-        generationLeaseExpiresAt: null,
-        generationError: "Generation was interrupted and has been queued again.",
-        updatedAt: now,
-      })
-      .where(and(
-        eq(jobs.managerId, manager.id),
-        eq(jobs.generationStatus, "processing"),
-        lt(jobs.generationAttemptCount, 2),
-        expiredLease,
-      ));
-    await db
-      .update(jobs)
-      .set({
-        generationStatus: "failed",
-        generationLeaseExpiresAt: null,
-        generationError: "Generation was interrupted on its final attempt. Use Reset Generation to retry.",
-        updatedAt: now,
-      })
-      .where(and(
-        eq(jobs.managerId, manager.id),
-        eq(jobs.generationStatus, "processing"),
-        gte(jobs.generationAttemptCount, 2),
-        expiredLease,
-      ));
 
     // Each Chrome processes one job at a time; an extension that sends no Chrome identity keeps the
     // older rule of one job per Manager.
@@ -100,8 +69,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         .from(jobs)
         .where(and(
           eq(jobs.managerId, manager.id),
-          eq(jobs.generationStatus, "processing"),
-          gt(jobs.generationLeaseExpiresAt, now),
+          generationHeld(now),
           ...sameChrome,
         ))
         .limit(1);
@@ -127,8 +95,8 @@ export async function POST(request: Request): Promise<NextResponse> {
           .innerJoin(users, eq(users.id, profiles.userId))
           .where(and(
             eq(jobs.managerId, manager.id),
-            inArray(jobs.generationStatus, ["queued", "not_queued", "failed"]),
-            lt(jobs.generationAttemptCount, 2),
+            ne(jobs.generationStatus, "completed"),
+            generationFree(now),
             isNull(jobs.resumeLocalPath),
             hasEffectiveJobDescription(),
             sql`length(btrim(${profiles.jdMatching})) > 0`,
@@ -145,19 +113,17 @@ export async function POST(request: Request): Promise<NextResponse> {
 
         const [claimed] = await db
           .update(jobs)
+          // Only the hold: the job's status, error and dates stay as they are.
           .set({
-            generationStatus: "processing",
-            generationAttemptCount: sql`${jobs.generationAttemptCount} + 1`,
-            generationError: null,
-            generationLeaseExpiresAt: new Date(now.getTime() + leaseDurationMs),
+            generationLeaseExpiresAt: holdUntil(now),
             generationBrowserId: browser?.id ?? null,
-            updatedAt: now,
           })
           .where(and(
             eq(jobs.id, candidate.id),
             eq(jobs.managerId, manager.id),
-            inArray(jobs.generationStatus, ["queued", "not_queued", "failed"]),
-            lt(jobs.generationAttemptCount, 2),
+            ne(jobs.generationStatus, "completed"),
+            generationFree(now),
+            isNull(jobs.resumeLocalPath),
           ))
           .returning({ id: jobs.id });
         if (!claimed) {
@@ -166,8 +132,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             .from(jobs)
             .where(and(
               eq(jobs.managerId, manager.id),
-              eq(jobs.generationStatus, "processing"),
-              gt(jobs.generationLeaseExpiresAt, now),
+              generationHeld(now),
               ...sameChrome,
             ))
             .limit(1);

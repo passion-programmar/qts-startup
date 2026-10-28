@@ -63,8 +63,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const eligibleRows = rows.filter((row) =>
-      ["not_queued", "queued", "processing", "failed", "cancelled"].includes(row.generationStatus)
-      && row.generationAttemptCount < 2
+      // Every job not generated yet can be generated (failures and cancels record nothing).
+      row.generationStatus !== "completed"
       && Boolean(row.description?.trim())
       && Boolean(row.jdMatching?.trim())
       && row.resumeLocalPath === null,

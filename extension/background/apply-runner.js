@@ -1471,8 +1471,8 @@ async function answerWithoutRunner(attemptId, action, tabId) {
 
 /**
  * The assistant's panel answered after the worker restarted (its application is no longer running
- * here): Submitted / Yes saves the bid and deletes the job row, Cancel leaves the job in the list, No
- * goes back to the form. The site's own Submit noticed then asks Yes/No on the Jobs page.
+ * here). Only Submitted or Yes records anything: the bid, and the job row deleted. Cancel lets the
+ * job go with nothing recorded. The site's own Submit noticed is answered with Submitted here.
  */
 async function answerAssistWithoutRunner(msg, tabId) {
   const { attemptId, action } = msg;
@@ -1481,18 +1481,13 @@ async function answerAssistWithoutRunner(msg, tabId) {
   if ((action === 'submitted' && !msg.noticed) || action === 'yes') {
     await post('submitted', { appliedAnswers: [] });
     result = await post('result', { submitted: true, removeJob: true });
-  } else if (action === 'submitted') {
-    result = await post('submitted', { appliedAnswers: [] });
-    if (result?.success) await notifyApply('Answer "Submitted successfully?" on the Jobs page.');
   } else if (action === 'cancel') {
-    result = await post('release', { mode: 'later', reason: 'Cancelled by the Manager; the job stays in the list.' });
+    result = await post('release', { mode: 'drop', reason: 'Cancelled by the Manager.' });
     if (result?.success) await noteCancelledJob(msg.jobId);
-  } else if (action === 'no' || action === 'back_to_review') {
-    result = await post('back-to-review');
   } else {
-    return { ok: false, error: 'Apply restarted in this Chrome; click Submitted or Cancel.' };
+    return { ok: false, error: 'Apply restarted in this Chrome: if the site took the application, click Submitted; else Cancel.' };
   }
-  if (result?.success && tabId != null && action !== 'no' && action !== 'back_to_review') {
+  if (result?.success && tabId != null) {
     await removeReviewPanel(tabId);
     await chrome.tabs.remove(tabId).catch(() => {});
   }
@@ -1503,10 +1498,13 @@ async function answerAssistWithoutRunner(msg, tabId) {
 // page reloads or moves to the site's next step.
 const activeReviews = new Map();
 
+/** The tabs an application lives in: the assistant's job page and the tabs opened from it. */
+const tabsOf = (review) => review.tabIds || new Set(review.tabId != null ? [review.tabId] : []);
+
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status !== 'complete') return;
   for (const review of activeReviews.values()) {
-    if (review.tabId !== tabId || !review.panel) continue;
+    if (!tabsOf(review).has(tabId) || !review.panel) continue;
     if (review.panel.mode === 'review') {
       // The page changed under a review: the Manager clicked the site's Next (go on to the next
       // step) or Submit (ask Yes/No) themselves.
@@ -1525,9 +1523,34 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+// An assistant's page ends only when all its tabs are closed; the latest one left is worked in.
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const review of activeReviews.values()) {
-    if (review.tabId === tabId) answerManager(review.attemptId, { action: 'closed' });
+    if (!review.tabIds) {
+      if (review.tabId === tabId) answerManager(review.attemptId, { action: 'closed' });
+      continue;
+    }
+    if (!review.tabIds.delete(tabId)) continue;
+    if (!review.tabIds.size) answerManager(review.attemptId, { action: 'closed' });
+    else if (review.tabId === tabId) review.tabId = [...review.tabIds].pop();
+  }
+});
+
+// A tab the job page opens ("Apply on the employer's site", a next step) joins its application: the
+// panel shows there, QTS fills there, and its Submit counts.
+chrome.tabs.onCreated.addListener((tab) => {
+  for (const review of activeReviews.values()) {
+    if (!review.tabIds || tab.openerTabId == null || !review.tabIds.has(tab.openerTabId)) continue;
+    review.tabIds.add(tab.id);
+    review.tabId = tab.id;
+    tabOwnership.markTab(tab.id, 'apply').catch(() => {});
+  }
+});
+
+// The tab the Manager looks at is the one QTS fills.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  for (const review of activeReviews.values()) {
+    if (review.tabIds?.has(tabId)) review.tabId = tabId;
   }
 });
 
@@ -1913,10 +1936,11 @@ function panelProfile(candidate) {
 }
 
 /**
- * One job page with the Manager: opened (behind the Manager's tab when another is open), filled with
- * what QTS knows whenever new questions show, and ended by the Manager: Submitted (or Yes after the
- * site's Submit) saves the bid and deletes the job row; Cancel or a closed tab leaves the job in the
- * list (not opened again in this Chrome until Apply restarts); No after the site's Submit goes back.
+ * One job page with the Manager: opened (behind the Manager's tab when another is open), followed
+ * into the tabs it opens, filled with what QTS knows whenever new questions show, and ended by the
+ * Manager. Only Submitted (or Yes after the site's Submit) records anything: the bid, and the job row
+ * deleted. Cancel, closing all its tabs, Apply turned off, or an error record nothing: the job stays
+ * as it was (not opened again in this Chrome until Apply restarts). No goes back to the form.
  */
 async function runAssistedApplication(application) {
   const { attemptId } = application;
@@ -1974,16 +1998,23 @@ async function runAssistedApplication(application) {
     problems: assistant.problems,
     ...extra,
   });
+  // The panel shows in every tab of the application.
   const showPanel = (mode, extra) => {
     review.panel = panelState(mode, extra);
-    return review.tabId == null ? Promise.resolve() : showReviewPanel(review.tabId, review.panel).catch(() => {});
+    return Promise.all([...tabsOf(review)].map((tabId) => showReviewPanel(tabId, review.panel).catch(() => {})));
   };
   assistant.show = () => showPanel(review.panel?.mode === 'confirm' ? 'confirm' : 'assist');
   const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
-  const release = (mode, reason) => report('release', { mode, reason, appliedAnswers: appliedAnswers(assistant.used) });
+  // Nothing is recorded unless the Manager says the site took it (Submitted, or Yes after the site's
+  // Submit): any other end lets the job go exactly as it was.
+  const drop = (reason) => report('release', { mode: 'drop', reason });
+  const closeTabs = () => Promise.all([...tabsOf(review)].map((tabId) => chrome.tabs.remove(tabId).catch(() => {})));
   let tab = null;
-  let submitted = false;
-  let answersAtSubmit = [];
+  // The form's answers when the site's Submit was clicked (the page may change right after).
+  let answersAtSubmit = null;
+  let learnedAtSubmit = [];
+  // The bid's first step reached QTS (the Manager answered; only saving the bid is left).
+  let marked = false;
   const startFiller = () => {
     assistant.stopped = false;
     (async () => {
@@ -1993,10 +2024,15 @@ async function runAssistedApplication(application) {
       }
     })();
   };
+  const readAnswers = async (given) => {
+    const current = given || await inForm(review.tabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) || [];
+    return { answers: submittedAnswers(assistant.used, current), learned: learnedAnswers(assistant.used, current) };
+  };
   try {
     const othersOpen = [...activeReviews.values()].some((entry) => entry !== review && entry.assist && entry.tabId != null);
     tab = await openApplyTab(application.job.url, { active: !othersOpen });
     review.tabId = tab.id;
+    review.tabIds = new Set([tab.id]);
     // Held for the Manager from the start (the longer hold): the page waits for them.
     await report('review', { review: true, appliedAnswers: [] });
     await waitForTabComplete(tab.id, 45 * 1000).catch(() => {});
@@ -2004,72 +2040,66 @@ async function runAssistedApplication(application) {
     startFiller();
     for (;;) {
       const decision = await waitForManager(attemptId);
+      // The site's own Submit: only the question "Submitted successfully?"; nothing is recorded yet.
+      if (decision.action === 'submitted' && decision.noticed) {
+        ({ answers: answersAtSubmit, learned: learnedAtSubmit } = await readAnswers(decision.answers));
+        assistant.stopped = true;
+        await showPanel('confirm');
+        continue;
+      }
       if (decision.action === 'submitted' || decision.action === 'yes') {
-        if (!submitted) {
-          const current = decision.answers || await inForm(tab.id, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []);
-          answersAtSubmit = submittedAnswers(assistant.used, current || []);
-          const marked = await report('submitted', { appliedAnswers: answersAtSubmit, learned: learnedAnswers(assistant.used, current || []) });
-          if (!marked.success) {
-            await showPanel('assist', { message: marked.message || 'QTS did not record it; try again.' });
+        if (!answersAtSubmit) ({ answers: answersAtSubmit, learned: learnedAtSubmit } = await readAnswers(decision.answers));
+        assistant.stopped = true;
+        if (!marked) {
+          const sent = await report('submitted', { appliedAnswers: answersAtSubmit, learned: learnedAtSubmit });
+          if (!sent.success) {
+            await showPanel(review.panel?.mode === 'confirm' ? 'confirm' : 'assist', { message: sent.message || 'QTS did not save the bid; try again.' });
             continue;
           }
-          submitted = true;
-          assistant.stopped = true;
+          marked = true;
         }
-        // The site's own Submit: whether it went through is the Manager's to say.
-        if (decision.action === 'submitted' && decision.noticed) {
-          await showPanel('confirm');
+        const saved = await report('result', { submitted: true, removeJob: true, appliedAnswers: answersAtSubmit });
+        if (!saved.success) {
+          await showPanel('confirm', { message: saved.message || 'QTS did not save the bid; try again.' });
           continue;
         }
-        const answered = await report('result', { submitted: true, removeJob: true, appliedAnswers: answersAtSubmit });
-        if (!answered.success) {
-          await showPanel('confirm', { message: answered.message || 'QTS did not save the bid; try again.' });
-          continue;
-        }
-        await chrome.tabs.remove(tab.id).catch(() => {});
+        await closeTabs();
         return;
       }
       if (decision.action === 'no' || decision.action === 'back_to_review') {
-        // The site did not take it (a field error): back to the form.
-        if (submitted) {
-          const back = await report('back-to-review', {});
-          if (!back.success) {
-            await showPanel('confirm', { message: back.message || 'QTS could not go back; try again.' });
-            continue;
-          }
-          submitted = false;
-        }
+        // The site did not take it (a field error): back to the form, nothing recorded.
+        answersAtSubmit = null;
         await showPanel('assist');
         startFiller();
         continue;
       }
       if (decision.action === 'lost') return;
-      // Cancel, a closed tab, or Apply turned off.
-      if (submitted) {
+      // Cancel, all its tabs closed, or Apply turned off: nothing recorded.
+      if (marked) {
         await notifyApply(`${application.job.company}: answer "Submitted successfully?" on the Jobs page.`);
         return;
       }
-      await release('later', decision.action === 'cancel' ? 'Cancelled by the Manager; the job stays in the list.'
-        : decision.action === 'closed' ? 'The job page was closed; the job stays in the list.'
-          : 'Apply was turned off; the job went back to the list.').catch(() => {});
+      await drop(decision.action === 'cancel' ? 'Cancelled by the Manager.' : decision.action === 'closed' ? 'The job page was closed.' : 'Apply was turned off.').catch(() => {});
       if (decision.action === 'cancel' || decision.action === 'closed') await noteCancelledJob(application.job.id);
-      if (decision.action !== 'closed') await chrome.tabs.remove(tab.id).catch(() => {});
+      if (decision.action !== 'closed') await closeTabs();
       return;
     }
   } catch (error) {
-    if (submitted) {
+    if (marked) {
       await notifyApply(`${application.job.company}: answer "Submitted successfully?" on the Jobs page.`);
     } else {
-      await release('error', error instanceof Error ? error.message.slice(0, 400) : 'Apply could not open the job.').catch(() => {});
+      // Nothing recorded; not opened again in this Chrome until Apply restarts, so it cannot loop.
+      await drop(error instanceof Error ? error.message.slice(0, 400) : 'Apply could not open the job.').catch(() => {});
+      await noteCancelledJob(application.job.id);
     }
   } finally {
     assistant.stopped = true;
     clearInterval(heartbeat);
     activeReviews.delete(attemptId);
     reviewWaiters.delete(attemptId);
-    if (tab?.id != null) {
-      await removeReviewPanel(tab.id);
-      await releaseDebugger(tab.id);
+    for (const tabId of tabsOf(review)) {
+      await removeReviewPanel(tabId);
+      await releaseDebugger(tabId);
     }
   }
 }

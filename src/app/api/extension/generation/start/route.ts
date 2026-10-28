@@ -9,6 +9,7 @@ import {
   getManagerGenerationSetup,
   MissingDocumentPromptError,
 } from "@/server/generation/manager-prompt";
+import { generationHeld } from "@/server/generation/generation-hold";
 import { normalizeJobUrl } from "@/server/jobs/job-values";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
 
@@ -74,7 +75,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         .where(and(
           eq(jobs.id, jobId),
           eq(jobs.managerId, manager.id),
-          eq(jobs.generationStatus, "processing"),
+          generationHeld(),
           eq(users.parentUserId, manager.id),
           eq(users.role, "account"),
           isNull(users.blockedAt),
@@ -168,13 +169,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     // The rotation is read from past runs, so it moves on only when the run below is saved.
     const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);
     const composedPrompt = composeGenerationPrompt(promptTemplate, normalizedJob, candidateProfile);
+    // An earlier unfinished run of this job goes: only delivered runs are kept.
     await db
-      .update(generationRuns)
-      .set({
-        status: "failed",
-        failureReason: "Superseded by a new Generation attempt.",
-        updatedAt: new Date(),
-      })
+      .delete(generationRuns)
       .where(and(
         eq(generationRuns.jobId, jobId),
         eq(generationRuns.managerId, manager.id),

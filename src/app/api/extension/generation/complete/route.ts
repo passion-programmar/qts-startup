@@ -163,20 +163,9 @@ export async function POST(request: Request): Promise<NextResponse> {
         { status: 404 },
       );
     }
-    if (updated.jobId && !completed) {
-      await db
-        .update(jobs)
-        .set({
-          generationStatus: "failed",
-          generationError: failureReason,
-          generationLeaseExpiresAt: null,
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(jobs.id, updated.jobId),
-          eq(jobs.managerId, manager.id),
-          eq(jobs.generationStatus, "processing"),
-        ));
+    // A reply that could not be used records nothing on the job: the run goes, the job stays ready.
+    if (!completed) {
+      await db.delete(generationRuns).where(and(eq(generationRuns.id, updated.id), eq(generationRuns.managerId, manager.id)));
     }
     return NextResponse.json({
       success: true,

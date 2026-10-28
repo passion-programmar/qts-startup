@@ -377,23 +377,27 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(serviceWorker.includes('notifyGenerationManager'));
   assert.ok(serviceWorker.includes('ACTIVE_GENERATION_JOB_KEY'));
   assert.ok(serviceWorker.includes('removeQueuedGenerationDownloads(downloadIds)'));
-  assert.ok(cancelAllRoute.includes('generationStatus: "cancelled"'));
-  assert.ok(cancelAllRoute.includes('eq(jobs.generationStatus, "processing")'));
-  assert.ok(cancelAllRoute.includes('generationAttemptCount: sql`greatest'));
+  // Cancel all lets go of the holds only: the jobs stay ready.
+  assert.ok(cancelAllRoute.includes('.set({ generationLeaseExpiresAt: null })'));
+  assert.equal(cancelAllRoute.includes('generationStatus: "cancelled"'), false);
   assert.equal(cancelAllRoute.includes('status: sql`case when'), false);
   assert.equal(cancelAllRoute.includes('resumeLocalPath: sql`case when'), false);
   assert.ok(manifest.permissions.includes('notifications'));
-  assert.ok(releaseRoute.includes('generationStatus: "queued"'));
-  assert.ok(releaseRoute.includes('generationAttemptCount: sql`greatest'));
+  assert.ok(releaseRoute.includes('.set({ generationLeaseExpiresAt: null })'));
+  assert.equal(releaseRoute.includes('generationStatus: "queued"'), false);
   assert.ok(claimRoute.includes('.orderBy(asc(jobs.createdAt), asc(jobs.id))'));
   assert.equal(claimRoute.includes('jobs.status'), false);
   assert.ok(claimRoute.includes('sql`length(btrim(${profiles.jdMatching})) > 0`'));
   assert.ok(claimRoute.includes('isNull(jobs.resumeLocalPath)'));
-  assert.ok(claimRoute.includes('lt(jobs.generationAttemptCount, 2)'));
+  // Any job not generated yet and not held by a Chrome; the claim writes only the hold.
+  assert.ok(claimRoute.includes('ne(jobs.generationStatus, "completed")'));
+  assert.ok(claimRoute.includes('generationFree(now)'));
+  assert.equal(claimRoute.includes('generationAttemptCount'), false);
+  assert.equal(claimRoute.includes('generationStatus: "processing"'), false);
   assert.ok(claimRoute.includes('if (activeJob)'));
 });
 
-test('cancelled Generation jobs stay out of the queue until queued again', () => {
+test('Generation records nothing until the files are downloaded: a failed, cancelled or interrupted job stays ready', () => {
   const routeSource = (name) => fs.readFileSync(
     path.join(extensionRoot, '..', 'src', 'app', 'api', 'extension', 'generation', name, 'route.ts'),
     'utf8',
@@ -401,12 +405,19 @@ test('cancelled Generation jobs stay out of the queue until queued again', () =>
   const schema = fs.readFileSync(path.join(extensionRoot, '..', 'src', 'db', 'schema.ts'), 'utf8');
   const jobActions = fs.readFileSync(path.join(extensionRoot, '..', 'src', 'app', 'jobs', 'actions.ts'), 'utf8');
 
+  const hold = fs.readFileSync(path.join(extensionRoot, '..', 'src', 'server', 'generation', 'generation-hold.ts'), 'utf8');
   assert.ok(schema.includes('"cancelled",'));
-  assert.ok(routeSource('cancel').includes('generationStatus: "cancelled"'));
-  assert.ok(routeSource('fail').includes('generationStatus: "cancelled"'));
-  assert.ok(jobActions.includes('generationStatus: "cancelled"'));
-  assert.equal(routeSource('claim').includes('"cancelled"'), false);
-  assert.ok(routeSource('queue').includes('["not_queued", "failed", "cancelled"]'));
+  assert.ok(jobActions.length > 0);
+  for (const name of ['cancel', 'fail', 'complete', 'release', 'cancel-all']) {
+    assert.equal(/generationStatus: "(cancelled|failed|queued|processing)"/.test(routeSource(name)), false, name);
+  }
+  // The heartbeat renews the hold only (its reply still says "processing", as the extension expects).
+  assert.ok(routeSource('heartbeat').includes('.set({ generationLeaseExpiresAt: holdUntil(now) })'));
+  assert.ok(routeSource('fail').includes('.delete(generationRuns)'));
+  assert.ok(routeSource('complete').includes('db.delete(generationRuns)'));
+  assert.ok(routeSource('finalize').includes('generationStatus: "completed"'));
+  assert.ok(hold.includes('GENERATION_HOLD_MS = 5 * 60 * 1000'));
+  assert.ok(routeSource('queue').includes('row.generationStatus !== "completed"'));
 });
 
 test('queued Generation recovers from restarts, lost finalize responses, and sign-out', () => {
@@ -575,7 +586,7 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   const remover = duplicateHelper.slice(duplicateHelper.indexOf('export async function removeGetJdJobAccount'));
   assert.ok(remover.includes('eq(jobs.autoSavedByGetJd, true)'));
   assert.ok(remover.includes('eq(jobs.managerId, managerId)'));
-  assert.ok(remover.includes("sql`${jobs.generationStatus} <> 'processing'`"));
+  assert.ok(remover.includes('sql`not ${generationHeldSql()}`'));
   assert.ok(apiWorker.includes(String.raw`get-jd\/job-accounts\/`));
   assert.ok(review.includes("profile.autoSaved === true ? 'Saved automatically' : ''"));
   assert.equal(serviceWorker.includes('result.exists === true || result.allCandidatesAssigned === true'), false);

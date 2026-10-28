@@ -14,6 +14,7 @@ import {
   users,
 } from "@/db/schema";
 import { db } from "@/lib/db";
+import { generationHeldSql } from "@/server/generation/generation-hold";
 import { jobHasBid } from "@/server/jobs/job-bids";
 import type { ExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
@@ -344,8 +345,10 @@ async function recordApplyRun(jobId: string, outcome: string, reason: string | n
  * - "skip": the Manager skipped it, or the site needs a person; it is never offered again.
  * - "later": the Manager will come back to it; it returns to the list without counting as a return.
  * - "test": test mode stopped before Submit on purpose; like "later".
+ * - "drop": the assistant's page ended without a bid (Cancel, a closed page, Apply turned off, an
+ *   error): nothing is recorded; the job is exactly as it was before it was opened.
  */
-export type ReleaseMode = "error" | "skip" | "later" | "test";
+export type ReleaseMode = "error" | "skip" | "later" | "test" | "drop";
 
 export async function releaseApplyAttempt(
   attemptId: string,
@@ -356,6 +359,10 @@ export async function releaseApplyAttempt(
   answers: AppliedAnswer[] = [],
 ): Promise<boolean> {
   const before = and(ownedBy(attemptId, managerId, browserId), inArray(applyAttempts.status, ["claimed", "waiting_review"]));
+  if (mode === "drop") {
+    const removed = await db.delete(applyAttempts).where(before).returning({ id: applyAttempts.id });
+    return removed.length > 0;
+  }
   if (mode === "later" || mode === "test") {
     const removed = await db
       .delete(applyAttempts)
@@ -551,7 +558,7 @@ export async function answerApplication(input: {
     }).onConflictDoNothing(),
     // The panel's Submitted: the job row goes at once (its Apply history with it); the bid stays.
     input.removeJob
-      ? db.delete(jobs).where(and(eq(jobs.id, attempt.jobId), sql`${jobs.generationStatus} <> 'processing'`))
+      ? db.delete(jobs).where(and(eq(jobs.id, attempt.jobId), sql`not ${generationHeldSql()}`))
       : db.update(jobs).set({ status: "applied", failureReason: null, updatedAt: now }).where(eq(jobs.id, attempt.jobId)),
   ]);
   if (!done) return null;

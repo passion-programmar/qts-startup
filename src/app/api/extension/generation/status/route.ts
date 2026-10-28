@@ -24,7 +24,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   try {
     const [job] = await db
-      .select({ generationStatus: jobs.generationStatus })
+      .select({ generationStatus: jobs.generationStatus, heldUntil: jobs.generationLeaseExpiresAt })
       .from(jobs)
       .where(and(
         eq(jobs.id, jobId),
@@ -37,9 +37,12 @@ export async function GET(request: Request): Promise<NextResponse> {
         { status: 404 },
       );
     }
+    // Nothing but the end is recorded: done, still held by a Chrome ("processing"), or let go
+    // ("cancelled": a cancel, or a hold nobody renewed); the job itself stays ready to generate.
+    const generationStatus = job.generationStatus === "completed" ? "completed" : job.heldUntil ? "processing" : "cancelled";
     return NextResponse.json({
       success: true,
-      generationStatus: job.generationStatus,
+      generationStatus,
     }, {
       headers: { "Cache-Control": "no-store" },
     });

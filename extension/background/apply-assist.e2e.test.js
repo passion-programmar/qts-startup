@@ -24,7 +24,7 @@ const pdf = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 
 const log = { claims: [], submitted: [], results: [], released: [], reviews: 0 };
 
 const JOB_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Data Engineer at Acme</title></head><body>
-<main><h1>Data Engineer</h1><p>About the job: Spark, Airflow.</p><a href="/form/1" class="button">Apply now</a></main></body></html>`;
+<main><h1>Data Engineer</h1><p>About the job: Spark, Airflow.</p><a href="/form/1" class="button" target="_blank">Apply now</a></main></body></html>`;
 
 const form = (number) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Apply ${number}</title></head><body>
 <form id="app" onsubmit="event.preventDefault(); window.submitted = true;">
@@ -165,14 +165,28 @@ test('the assistant keeps two job pages open, fills only what it knows, and ends
     });
     assert.equal(log.aiAsked, undefined);
 
-    // The job page has nothing to fill; its Apply button opens the form, which is not a Submit.
+    // The job page has nothing to fill; its Apply button opens the form in a new tab, which joins
+    // the application: the panel shows there and QTS fills it. The click is not a Submit.
     const first = await pageFor('/job/1');
     await first.click('a.button');
     await until('the first form filled', async () => {
       const page = await values('/form/1');
       return page?.fn === 'Radu' && page.cv === 1;
     });
+    const panelIn = async (part) => {
+      const [frame] = await worker.evaluate(async (tabId) => chrome.scripting.executeScript({
+        target: { tabId }, func: () => Boolean(globalThis.__qtsApplyAssist),
+      }), (await tabFor(part)).id);
+      return frame.result;
+    };
+    assert.equal(await panelIn('/form/1'), true);
+    assert.equal(await panelIn('/job/1'), true);
     assert.equal(log.submitted.length, 0);
+    // Closing the job page leaves the application open in the form's tab.
+    await worker.evaluate(async (tabId) => chrome.tabs.remove(tabId), (await tabFor('/job/1')).id);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal(log.released.length, 0);
+    assert.ok(await tabFor('/form/1'));
 
     // What the Manager types stays: QTS never fills a question twice (typed in the tab brought to the front).
     await second.bringToFront();
@@ -184,17 +198,18 @@ test('the assistant keeps two job pages open, fills only what it knows, and ends
     await new Promise((resolve) => setTimeout(resolve, 6000));
     assert.equal((await values('/form/2')).fn, 'Rado');
 
-    // The site's own Submit asks Yes / No; Yes saves the bid and deletes the job row.
+    // The site's own Submit only asks Yes / No: nothing is recorded until Yes, which saves the bid
+    // (with the form's answers at Submit) and deletes the job row.
     const shot = process.env.QTS_E2E_SHOTS;
     if (shot) await second.screenshot({ path: path.join(shot, 'assist-panel.png') });
     await second.click('button[type=submit]');
-    await until('the Submit noticed', () => log.submitted.length === 1);
-    assert.equal(log.submitted[0].attemptId, jobs[1].attemptId);
-    assert.ok(log.submitted[0].appliedAnswers.some((answer) => /First name/.test(answer.question) && answer.answer === 'Rado'));
-    assert.equal(log.results.length, 0);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    assert.deepEqual([log.submitted.length, log.results.length, log.released.length], [0, 0, 0]);
     if (shot) await second.screenshot({ path: path.join(shot, 'assist-confirm.png') });
     await panelSays('/form/2', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[1].attemptId, action: 'yes' });
     await until('the bid saved', () => log.results.length === 1);
+    assert.equal(log.submitted[0].attemptId, jobs[1].attemptId);
+    assert.ok(log.submitted[0].appliedAnswers.some((answer) => /First name/.test(answer.question) && answer.answer === 'Rado'));
     assert.deepEqual([log.results[0].attemptId, log.results[0].submitted, log.results[0].removeJob], [jobs[1].attemptId, true, true]);
     await until('the second page closed', async () => !(await tabFor('/form/2')));
 
@@ -202,10 +217,10 @@ test('the assistant keeps two job pages open, fills only what it knows, and ends
     await until('the third page', async () => Boolean(await tabFor('/form/3')));
     assert.equal((await tabFor('/form/3')).active, false);
 
-    // Cancel: the page closes, the job stays in the list, and is not opened again here; the fourth opens.
+    // Cancel: the page closes, nothing is recorded, and it is not opened again here; the fourth opens.
     await panelSays('/form/3', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[2].attemptId, jobId: jobs[2].job.id, action: 'cancel' });
     await until('the cancel recorded', () => log.released.length === 1);
-    assert.deepEqual([log.released[0].attemptId, log.released[0].mode], [jobs[2].attemptId, 'later']);
+    assert.deepEqual([log.released[0].attemptId, log.released[0].mode], [jobs[2].attemptId, 'drop']);
     await until('the third page closed', async () => !(await tabFor('/form/3')));
     await until('the fourth page', async () => Boolean(await tabFor('/form/4')));
     assert.deepEqual(log.claims[3], [jobs[2].job.id]);
@@ -220,10 +235,10 @@ test('the assistant keeps two job pages open, fills only what it knows, and ends
     await until('the empty list asked', () => log.claims.length >= 5);
     assert.deepEqual((await tabs()).filter((tab) => tab.url.startsWith(BASE)).map((tab) => new URL(tab.url).pathname), ['/form/4']);
 
-    // Apply turned off: the last page gives its job back and closes.
+    // Apply turned off: the last page closes and its job is left as it was.
     await worker.evaluate(() => chrome.storage.local.set({ qtsExtensionStatus: null }));
     await until('the last release', () => log.released.length === 2);
-    assert.deepEqual([log.released[1].attemptId, log.released[1].mode], [jobs[3].attemptId, 'later']);
+    assert.deepEqual([log.released[1].attemptId, log.released[1].mode], [jobs[3].attemptId, 'drop']);
     await until('the last page closed', async () => !(await tabFor('/form/4')));
   } finally {
     await browser.close();

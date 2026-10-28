@@ -4134,7 +4134,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             // Work just ended: the idle back-off counts from now.
             await self.__qtsIdlePacing.noteActivity();
             await notifyGenerationManager(
-              `Generation finished ${completedCount} job(s) and ${failedCount} failed job(s). It stays on and takes new jobs as they are saved. Each failed job was tried twice; use Reset Generation on the Jobs page to try it again.`,
+              `Generation finished ${completedCount} job(s) and ${failedCount} failed job(s). It stays on and takes new jobs as they are saved. A failed job was tried twice and stays ready: it is tried again the next time Generation is turned on.`,
             );
           } else {
             const idle = await chrome.storage.local.get(GENERATION_IDLE_NOTICE_KEY);
@@ -4277,7 +4277,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             );
             excludedJobIds.add(queuedJob.id);
             await persistGenerationQueueRun(runId, excludedJobIds);
-            await notifyGenerationManager('Generation was cancelled. Queue the job again from the Jobs page to retry it.');
+            await notifyGenerationManager('Generation was cancelled. The job stays ready: it is tried again the next time Generation is turned on.');
           }
           if (jobTabId != null) {
             await showGenerationPageStatus(

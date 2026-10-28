@@ -1,4 +1,4 @@
-import { and, eq, exists } from "drizzle-orm";
+import { and, eq, exists, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -91,7 +91,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         .where(and(
           eq(jobs.id, jobId),
           eq(jobs.managerId, manager.id),
-          eq(jobs.generationStatus, "processing"),
+          // The one record Generation makes: the files are downloaded, the job is completed.
+          ne(jobs.generationStatus, "completed"),
           exists(db.select({ id: generationRuns.id }).from(generationRuns).where(and(
             eq(generationRuns.id, generationId),
             eq(generationRuns.jobId, jobId),

@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -20,16 +20,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     const browser = await resolveExtensionBrowser(manager.id, request);
     const cancelled = await db
       .update(jobs)
-      .set({
-        generationStatus: "cancelled",
-        generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)`,
-        generationError: null,
-        generationLeaseExpiresAt: null,
-        updatedAt: new Date(),
-      })
+      // Only the holds go: the jobs stay as they were, ready for the next Generation.
+      .set({ generationLeaseExpiresAt: null })
       .where(and(
         eq(jobs.managerId, manager.id),
-        eq(jobs.generationStatus, "processing"),
+        ne(jobs.generationStatus, "completed"),
+        isNotNull(jobs.generationLeaseExpiresAt),
         ...(browser ? [eq(jobs.generationBrowserId, browser.id)] : []),
       ))
       .returning({ id: jobs.id });
