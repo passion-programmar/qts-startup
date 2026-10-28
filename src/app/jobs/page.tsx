@@ -12,10 +12,12 @@ import {
 } from "@/app/components/record-forms";
 import { GenerationSetup } from "@/app/components/generation-setup";
 import { OpenFolderButton } from "@/app/components/open-folder";
+import { ExportUrlsButton } from "@/app/components/export-urls";
 import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
 import { AnswerApplicationButtons, ApplyAgainButton } from "@/app/jobs/apply-buttons";
 import { jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
+import { romaniaClock } from "@/lib/romania-time";
 import { requireUser } from "@/lib/session";
 import { jobHasBid } from "@/server/jobs/job-bids";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
@@ -151,6 +153,7 @@ export default async function JobsPage() {
             { label: "Actions", className: "w-[14%]" },
           ]}
           emptyMessage="No jobs saved yet"
+          toolbar={<ExportUrlsButton entries={rows.map((row) => ({ url: row.url, date: row.date }))} fileLabel="jobs" today={romaniaClock().day} />}
           searchFields={[
             { key: "name", label: "Name" },
             { key: "title", label: "Job title" },

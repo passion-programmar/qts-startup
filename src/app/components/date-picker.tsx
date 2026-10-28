@@ -32,6 +32,7 @@ export function DatePicker({
   defaultValue = "",
   required = false,
   className,
+  onChange,
 }: {
   id: string;
   label: string;
@@ -39,9 +40,15 @@ export function DatePicker({
   defaultValue?: string;
   required?: boolean;
   className?: string;
+  /** Called with each complete date (YYYY-MM-DD), or "" when cleared; half-typed text is not reported. */
+  onChange?: (value: string) => void;
 }) {
   const initialDate = parseDateValue(defaultValue) ?? new Date();
-  const [value, setValue] = useState(defaultValue);
+  const [value, setStoredValue] = useState(defaultValue);
+  const setValue = (nextValue: string) => {
+    setStoredValue(nextValue);
+    if (nextValue === "" || parseDateValue(nextValue)) onChange?.(nextValue);
+  };
   const [viewYear, setViewYear] = useState(initialDate.getFullYear());
   const [viewMonth, setViewMonth] = useState(initialDate.getMonth());
   const [open, setOpen] = useState(false);

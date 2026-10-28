@@ -13,6 +13,8 @@ type PaginatedTableProps = {
   embedded?: boolean;
   /** Shows a search bar above the table that matches one chosen field, or all of them. */
   searchFields?: { key: string; label: string }[];
+  /** Extra controls at the right end of the search bar, such as an Export button. */
+  toolbar?: ReactNode;
 };
 
 export function PaginatedTable({
@@ -22,6 +24,7 @@ export function PaginatedTable({
   pageSize: initialPageSize = 10,
   embedded = false,
   searchFields,
+  toolbar,
 }: PaginatedTableProps) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(initialPageSize);
@@ -79,6 +82,7 @@ export function PaginatedTable({
               value={query}
             />
           </label>
+          {toolbar}
         </div>
       )}
       <div

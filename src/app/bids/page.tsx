@@ -5,10 +5,11 @@ import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { BidActions } from "@/app/components/record-forms";
 import { OpenFolderButton } from "@/app/components/open-folder";
+import { ExportUrlsButton } from "@/app/components/export-urls";
 import type { SubmittedAnswer } from "@/app/components/submitted-answers";
 import { bids, categories, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
-import { formatRomaniaDate, formatRomaniaTime } from "@/lib/romania-time";
+import { formatRomaniaDate, formatRomaniaTime, romaniaClock } from "@/lib/romania-time";
 import { requireUser } from "@/lib/session";
 
 export const instant = false;
@@ -76,6 +77,7 @@ export default async function BidsPage() {
             { label: "View", className: "w-[11%]" },
           ]}
           emptyMessage="No applications confirmed yet"
+          toolbar={<ExportUrlsButton entries={rows.map((row) => ({ url: row.url, date: romaniaClock(row.createdAt).day }))} fileLabel="bids" today={romaniaClock().day} />}
           searchFields={[
             { key: "candidate", label: "Candidate" },
             { key: "source", label: "Source URL" },
