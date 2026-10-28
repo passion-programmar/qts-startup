@@ -853,8 +853,14 @@ li {
 
 /* 12. Density ---------------------------------------------------------------------
    render.js adds .doc--compact when content runs past its page budget
-   (density "auto") or when asked ("compact"). Spacing only; font sizes never
-   shrink. */
+   (density "auto") or when asked ("compact"): spacing only. When a resume
+   still runs over, it adds .doc--small-bullets and sets --text-bullet on the
+   document, stepping down to 11pt; bullets take that size where the
+   template's body text is larger. No other text shrinks. */
+
+.doc--small-bullets .item-bullets li {
+  font-size: calc(min(var(--text-body), var(--text-bullet)) * var(--font-scale));
+}
 
 .doc--compact {
   --leading-body: 1.27;

@@ -74,6 +74,32 @@ test("generated JSON must have the summary and the skills, experience and educat
   assert.doesNotThrow(() => parsePdfPackage(JSON.stringify(withoutEducation)));
 });
 
+test("a required section whose entries print nothing counts as missing", () => {
+  const withSection = (id: string, items: unknown[]) => ({
+    ...generatedPackage,
+    resume: {
+      ...generatedPackage.resume,
+      sections: generatedPackage.resume.sections.map((section) => (section.id === id ? { ...section, items } : section)),
+    },
+  });
+  // Education bullets are never printed, so a degree written only as a bullet leaves Education empty.
+  assert.throws(
+    () => parsePdfPackage(JSON.stringify(withSection("education", [{ bullets: ["BSc Computer Science, MIT"] }])), { requireCoreSections: true }),
+    /must include education/,
+  );
+  assert.throws(
+    () => parsePdfPackage(JSON.stringify(withSection("skills", [{ heading: "Cloud", bullets: [] }])), { requireCoreSections: true }),
+    /must include skills/,
+  );
+  assert.throws(
+    () => parsePdfPackage(JSON.stringify(withSection("experience", [{ location: "Berlin", focus: ["Go"] }])), { requireCoreSections: true }),
+    /must include experience/,
+  );
+  assert.doesNotThrow(
+    () => parsePdfPackage(JSON.stringify(withSection("education", [{ subheading: "MIT", startDate: "2015-09" }])), { requireCoreSections: true }),
+  );
+});
+
 test("each template shows its own sections in its own order, with its own layout", () => {
   const parsed = parsePdfPackage(JSON.stringify(generatedPackage));
   const technical = toResumeTemplateData(parsed, "technical");

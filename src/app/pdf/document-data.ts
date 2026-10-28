@@ -1,5 +1,6 @@
 import {
   orderResumeSections,
+  printsInSection,
   requiredResumeSectionIds,
   resumeSectionId,
 } from "@/app/pdf/resume-sections";
@@ -99,7 +100,8 @@ export type PdfPackage = {
  * Reads the one resume and cover-letter JSON format every template prints from. Sections get
  * their fixed id (see resume-sections.ts); Languages, Volunteering, unrecognised and empty
  * sections are dropped. requireCoreSections, for newly generated JSON, also demands the summary
- * and the Skills, Experience and Education sections; stored packages print without it.
+ * and the Skills, Experience and Education sections, each with an entry that prints; stored
+ * packages print without it.
  */
 export function parsePdfPackage(
   source: string,
@@ -165,11 +167,15 @@ export function parsePdfPackage(
     if (typeof resume.summary !== "string" || !resume.summary.trim()) {
       throw new Error("resume.summary is required.");
     }
-    const missing = requiredResumeSectionIds.filter(
-      (sectionId) => !sections.some((section) => section.id === sectionId),
-    );
+    // A section whose entries all print empty is as missing as one left out.
+    const missing = requiredResumeSectionIds.filter((sectionId) => !sections.some(
+      (section) => section.id === sectionId && section.items.some((item) => printsInSection(sectionId, item)),
+    ));
     if (missing.length > 0) {
-      throw new Error(`resume.sections must include ${missing.join(", ")}, each with at least one item.`);
+      throw new Error(
+        `resume.sections must include ${missing.join(", ")}, each with at least one filled item `
+        + "(education: degree in heading and school in subheading, no bullets; skills: skill names in bullets).",
+      );
     }
   }
 

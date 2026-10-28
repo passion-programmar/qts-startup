@@ -101,6 +101,27 @@ export function orderResumeSections<T extends { id?: string; items: PrintableIte
     .map((section) => ({ ...section, items: section.items.map((item) => printableItem(sectionId, item)) })));
 }
 
+/**
+ * Whether an entry prints anything once the rules above apply, as render.js decides it: an
+ * education entry made only of bullets, or a skills group without a skill, prints nothing.
+ */
+export function printsInSection(
+  sectionId: ResumeSectionId,
+  item: PrintableItem & { heading?: string; description?: string; link?: string },
+): boolean {
+  const printed = printableItem(sectionId, item);
+  const bullets = (printed.bullets ?? []).some((bullet) => (typeof bullet === "string" ? bullet : bullet.name).trim());
+  if (sectionId === "skills") return bullets;
+  return Boolean(
+    printed.heading?.trim()
+    || printed.subheading?.trim()
+    || printed.dateRange?.trim()
+    || printed.description?.trim()
+    || (sectionId !== "projects" && printed.link?.trim())
+    || bullets,
+  );
+}
+
 function printableItem<I extends PrintableItem>(sectionId: ResumeSectionId, item: I): I {
   switch (sectionId) {
     case "projects":

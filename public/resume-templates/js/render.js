@@ -35,6 +35,8 @@
   const SKILL_MAX_LENGTH = 40;
   const FONT_SCALE_MIN = 0.95;
   const FONT_SCALE_MAX = 1.15;
+  // The sizes a resume's bullets step down to when it runs past its pages.
+  const BULLET_SIZES = ["11.5pt", "11pt"];
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
   let MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
@@ -787,14 +789,43 @@
     return pageHeight > 0 ? Math.max(1, Math.ceil((contentHeight - 1) / pageHeight)) : 1;
   }
 
+  // The pages the document prints on, from the page view's columns (see "Filling
+  // pages"), which also count the space a block leaves when it moves on whole.
+  // estimatePages adds up the content alone and can be a page short.
+  function printedPages(article) {
+    return inPageFlow(article, () => Math.max(1, article.getClientRects().length));
+  }
+
   // density "auto" (default) tightens spacing only when content runs past the
-  // page budget. Font sizes never shrink; past that point content must be cut.
+  // page budget, then steps a resume's bullets down through BULLET_SIZES
+  // (base.css section 12), keeping the largest size that saves the most pages.
+  // No other text shrinks; past that point content must be cut.
   function fitToPages(article, density, warnings) {
+    // The app's own preview (direct render) has no page view to measure with.
+    const countPages = directRenderMode ? estimatePages : printedPages;
     article.classList.toggle("doc--compact", density === "compact");
-    let pages = estimatePages(article);
+    let pages = countPages(article);
     if (density === "auto" && pages > MAX_PAGES) {
       article.classList.add("doc--compact");
-      pages = estimatePages(article);
+      pages = countPages(article);
+    }
+    if (density === "auto" && pages > MAX_PAGES && DOCUMENT === "resume") {
+      article.classList.add("doc--small-bullets");
+      let kept = "";
+      for (const size of BULLET_SIZES) {
+        article.style.setProperty("--text-bullet", size);
+        const smaller = countPages(article);
+        if (smaller < pages) {
+          pages = smaller;
+          kept = size;
+        }
+        if (pages <= MAX_PAGES) break;
+      }
+      if (kept) article.style.setProperty("--text-bullet", kept);
+      else {
+        article.classList.remove("doc--small-bullets");
+        article.style.removeProperty("--text-bullet");
+      }
     }
     if (pages > MAX_PAGES) {
       const what = DOCUMENT === "resume" ? "resume" : "cover letter";
@@ -825,7 +856,9 @@
   const FILL_SHARES = [1, 0.9, 0.75, 0.5, 0.25];
   const FILL_SPARE_PX = 1;
 
-  function fillPages(article) {
+  // Runs measure() with the document flowed through the page columns, out of
+  // sight, then puts it back.
+  function inPageFlow(article, measure) {
     const home = article.parentNode;
     const next = article.nextSibling;
     const flow = el("div", "page-flow");
@@ -833,6 +866,15 @@
     flow.append(article);
     document.body.append(flow);
     try {
+      return measure();
+    } finally {
+      home.insertBefore(article, next);
+      flow.remove();
+    }
+  }
+
+  function fillPages(article) {
+    inPageFlow(article, () => {
       let layout = pageLayout(article);
       for (let page = 0; page < layout.columns.length - 1; page += 1) {
         const room = layout.columns[page].bottom - layout.bottoms[page] - FILL_SPARE_PX;
@@ -850,10 +892,7 @@
           gaps.forEach((gap) => gap.node.style.removeProperty(gap.property));
         }
       }
-    } finally {
-      home.insertBefore(article, next);
-      flow.remove();
-    }
+    });
   }
 
   // The document's pages (one column each), how far down each page's content
