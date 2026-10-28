@@ -92,7 +92,9 @@ async function workerBrowserHeaders() {
   }
 }
 
-async function workerApiRequest(method, path, body) {
+// options.timeoutMs: give up after that long (a request that never answers would otherwise wait
+// forever); left out, a request waits as long as the browser lets it.
+async function workerApiRequest(method, path, body, options = {}) {
   if (!workerSupportedApiPath(path) && !workerExperimentalApisEnabled()) {
     return workerUnavailableResponse();
   }
@@ -109,6 +111,7 @@ async function workerApiRequest(method, path, body) {
         ...await workerBrowserHeaders(),
       },
       body: body != null ? JSON.stringify(body) : undefined,
+      ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
     });
     let data;
     try {
@@ -132,7 +135,8 @@ async function workerApiRequest(method, path, body) {
       data._sessionExpired = true;
     }
     return data;
-  } catch {
+  } catch (error) {
+    if (error?.name === 'TimeoutError') return { success: false, message: 'The QTS server did not answer in time.' };
     return { success: false, message: 'Cannot connect to the server.' };
   }
 }

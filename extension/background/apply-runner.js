@@ -22,19 +22,42 @@ const APPLY_MAX_FORM_PAGES = 5;
 // Questions a page shows only after earlier answers (Teamtailor unlocks its form after the requirement
 // questions) are filled in further rounds, until no new question appears.
 const APPLY_FILL_ROUNDS = 5;
+// The longest Apply waits for the AI's answers through the QTS server.
+const APPLY_AI_TIMEOUT_MS = 120 * 1000;
 // Clicks to reach the form from a job page: "Apply for this job", then perhaps "Apply manually".
 const APPLY_START_STEPS = 3;
 const APPLY_START_WAIT_MS = 15 * 1000;
 let applyLoopRunning = false;
 
+// Development diagnostics: off unless chrome.storage.local has qtsApplyDebug: true (set it from the
+// service worker's console). Shown in that console only. Never the candidate's facts, the résumé,
+// or written answers: those appear as their source and length.
+const APPLY_DEBUG_KEY = 'qtsApplyDebug';
+let applyDebug = false;
+async function loadApplyDebug() {
+  applyDebug = (await chrome.storage.local.get(APPLY_DEBUG_KEY))[APPLY_DEBUG_KEY] === true;
+}
+function diag(event, data) {
+  if (applyDebug) console.debug(`[QTS Apply] ${event}`, data);
+}
+/** An answer as diagnostics show it: an AI's pick from a list as its option text; anything else redacted. */
+function redacted(answer, field) {
+  const value = answerText(answer?.value);
+  if (typeof answer?.value === 'boolean') return value;
+  if (answer?.source === 'ai' && !answer?.fact && field?.options?.length) return value.slice(0, 80);
+  return `[${answer?.source || 'value'}, ${value.length} characters]`;
+}
+
 class ApplyStop extends Error {
   // A reason to give the job back before Submit: skip=true leaves it for the Manager for good.
-  constructor(message, { skip = true, keepTab = true, dryRun = false } = {}) {
+  // pageType: what the page was (classifyPage) when that is why Apply stopped.
+  constructor(message, { skip = true, keepTab = true, dryRun = false, pageType = null } = {}) {
     super(message);
     this.name = 'ApplyStop';
     this.skip = skip;
     this.dryRun = dryRun;
     this.keepTab = keepTab;
+    this.pageType = pageType;
   }
 }
 
@@ -133,7 +156,7 @@ async function waitForFormFields(tabId) {
     previous = visible.length;
     await sleep(1000);
   }
-  throw new ApplyStop('The application form did not appear on the page.');
+  throw await pageStop(tabId, 'The application form did not appear on the page.');
 }
 
 /** An application form is showing: an email field next to a name field or an upload. */
@@ -160,6 +183,12 @@ async function reachApplicationForm(tab, onTab) {
     }
     const blockers = await inForm(tab.id, () => globalThis.__qtsApplyForm.detectBlockers()).catch(() => []);
     if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
+    // An email-first step's "Apply"/"Continue" would send the email on (maybe into a sign-in): never
+    // clicked by Apply; the Manager is asked instead.
+    const page = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+    if (['email_first_application', 'authentication_required', 'registration_required', 'verification_required'].includes(page?.type)) {
+      throw await pageStop(tab.id, 'The site asks to sign in or create an account.');
+    }
     const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
     const start = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip), [clicked]).catch(() => null);
     if (start?.email) throw new ApplyStop('This job takes applications by email; apply by hand.');
@@ -203,7 +232,27 @@ async function reachApplicationForm(tab, onTab) {
   if (closed) throw new ApplyStop(`The job is closed on the site ("${closed}").`);
   const blockers = await inForm(tab.id, () => globalThis.__qtsApplyForm.detectBlockers()).catch(() => []);
   if (blockers?.includes('captcha')) throw new ApplyStop('The site shows a security check (CAPTCHA) before the job page; open it in the Apply window and apply by hand.');
-  throw new ApplyStop('No application form or Apply button was found on the job page; apply by hand.');
+  throw await pageStop(tab.id, 'No application form or Apply button was found on the job page; apply by hand.');
+}
+
+/**
+ * Why a page is not an application form Apply fills, as a stop with the reason: an email-first step
+ * (its Continue may send a sign-in code or open an account page: never followed by Apply), a sign-in
+ * page, or the given reason. Apply never signs in, creates accounts, or continues such steps itself.
+ */
+async function pageStop(tabId, otherwise) {
+  const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+  diag('page', page);
+  const reasons = {
+    email_first_application: 'The site asks for an email first; its next step may be a sign-in or a code sent by email. Apply by hand.',
+    authentication_required: 'The site asks to sign in or create an account.',
+    registration_required: 'The site asks to create an account; apply by hand.',
+    verification_required: 'The site asks for a code sent by email or text; apply by hand.',
+    captcha_required: 'The site shows a security check (CAPTCHA); open it in the Apply window and apply by hand.',
+    application_closed: 'The job is closed on the site.',
+    application_submitted: 'The site says an application was already sent.',
+  };
+  return new ApplyStop(reasons[page?.type] || otherwise, { pageType: page?.type || null });
 }
 
 // Real input through Chrome's debugger, for dropdowns that ignore simulated events (Greenhouse's
@@ -373,6 +422,7 @@ async function readComboboxOptions(tabId, fields) {
   // Fields whose box looking at the choices changed (a tag a site created): checked by the Manager.
   const changed = [];
   const keepChoices = (field, read, source) => {
+    diag('discovery', { id: field.id, question: String(field.label || '').slice(0, 80), source, options: read?.options?.length || 0, partial: Boolean(read?.partial), changed: Boolean(read?.changed) });
     if (read?.changed) changed.push(field);
     if (!read?.options?.length) return false;
     field.options = read.options;
@@ -422,19 +472,25 @@ function answerPromptFor(application, fields) {
 const aiName = (application) => (application.aiMode === 'gemini' ? 'Gemini' : 'ChatGPT');
 
 async function askAiForAnswers(application, fields, keepAlive) {
+  application.aiCalls = (application.aiCalls || 0) + 1;
+  diag('ai-request', { questions: fields.length, mode: application.aiMode });
   return application.aiMode === 'gemini'
     ? askGeminiForAnswers(application, fields)
     : askChatGptForAnswers(application, fields, keepAlive);
 }
 
 async function askAiToFix(application, problems, fields, keepAlive) {
+  application.aiCalls = (application.aiCalls || 0) + 1;
   return application.aiMode === 'gemini'
     ? askGeminiToFix(application, problems, fields)
     : askChatGptToFix(application, problems, fields, keepAlive);
 }
 
 async function askGemini(application, turns) {
-  const result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns });
+  diag('ai-send', { turns: turns.length, characters: turns.reduce((sum, turn) => sum + String(turn.text || '').length, 0) });
+  // A reply that never comes ends as "did not answer" (the Manager writes it, or asks again), never a stall.
+  const result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, { timeoutMs: APPLY_AI_TIMEOUT_MS });
+  diag('ai-reply', { ok: result.success === true, characters: String(result.reply || '').length });
   if (result.success !== true) throw new Error(result.message || 'Gemini did not answer.');
   return String(result.reply || '');
 }
@@ -445,7 +501,8 @@ async function askGeminiForAnswers(application, fields) {
   const first = answerPromptFor(application, fields);
   const reply = await askGemini(application, [{ role: 'user', text: first }]);
   application.geminiTurns = [{ role: 'user', text: first }, { role: 'model', text: reply }];
-  const { answers, invalid } = helpers.parseAnswerReply(reply, fields);
+  const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields);
+  noteForReview(application, review, fields);
   const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
   if (!needed.length) return answers;
   return { ...answers, ...(await askGeminiToFix(application, needed, fields)) };
@@ -459,6 +516,7 @@ async function askGeminiToFix(application, problems, fields) {
     { role: 'user', text: helpers.buildFixPrompt(problems, retryFields) },
   ]);
   const retried = helpers.parseAnswerReply(reply, retryFields);
+  noteForReview(application, retried.review, retryFields);
   noteUnanswered(application, retried.invalid, retryFields);
   return retried.answers;
 }
@@ -474,7 +532,8 @@ async function askChatGptForAnswers(application, fields, keepAlive) {
   const helpers = self.__qtsApplyAnswers;
   const first = answerPromptFor(application, fields);
   const reply = await askChatGpt(chatTabId, application, first, keepAlive);
-  const { answers, invalid } = helpers.parseAnswerReply(reply, fields);
+  const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields);
+  noteForReview(application, review, fields);
   const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
   if (!needed.length) return answers;
   return { ...answers, ...(await askChatGptToFix(application, needed, fields, keepAlive)) };
@@ -513,6 +572,7 @@ async function askChatGptToFix(application, problems, fields, keepAlive) {
   const retryFields = fields.filter((field) => problems.some((entry) => entry.id === field.id));
   const reply = await askChatGpt(application.chatTabId, application, helpers.buildFixPrompt(problems, retryFields), keepAlive);
   const retried = helpers.parseAnswerReply(reply, retryFields);
+  noteForReview(application, retried.review, retryFields);
   noteUnanswered(application, retried.invalid, retryFields);
   return retried.answers;
 }
@@ -521,6 +581,13 @@ async function askChatGptToFix(application, problems, fields, keepAlive) {
  * Required questions the AI still could not answer in a form their field takes (not one of the
  * choices, twice): left for the Manager, never a reason to stop the whole application.
  */
+function noteForReview(application, review, fields) {
+  // Questions the AI found nothing to answer with (status "review"): required ones go to the
+  // Manager; optional ones are left empty.
+  const required = (review || []).filter((entry) => fields.find((field) => field.id === entry.id)?.required);
+  (application.aiReview ||= []).push(...required);
+}
+
 function noteUnanswered(application, invalid, fields) {
   const required = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
   (application.aiUnanswered ||= []).push(...required);
@@ -588,7 +655,33 @@ async function fetchApplyDocuments(attemptId, tabId) {
 // A site's "this field is required" message, in the languages forms use.
 const REQUIRED_MESSAGE = /required|mandatory|cannot be (empty|blank)|wymagane|obowi[aą]zkowe|pflicht|erforderlich|obligatoire|obligatorio|obrigat[oó]rio|obbligatorio/i;
 
+// The fill attempts of the step being filled, for its report (one application at a time per Chrome).
+let stepAttempts = null;
+
 async function fillAndCheck(tabId, field, answer, file, seen) {
+  const outcome = await fillAndCheckField(tabId, field, answer, file, seen);
+  stepAttempts?.push({
+    fieldId: field.id,
+    action: file ? 'upload' : field.kind === 'file' ? 'upload' : 'fill',
+    source: answer?.source || (file ? 'documents' : 'unknown'),
+    verified: Boolean(outcome.ok),
+    ...(outcome.gone ? { gone: true } : {}),
+    ...(outcome.error ? { error: String(outcome.error).slice(0, 160) } : {}),
+  });
+  diag('fill', {
+    id: field.id,
+    question: String(field.label || '').slice(0, 80),
+    type: field.kind,
+    source: answer?.source || (file ? 'documents' : 'unknown'),
+    intended: file ? `[file ${answer?.file}]` : redacted(answer, field),
+    verified: Boolean(outcome.ok),
+    ...(outcome.gone ? { gone: true } : {}),
+    ...(outcome.error ? { error: String(outcome.error).slice(0, 160) } : {}),
+  });
+  return outcome;
+}
+
+async function fillAndCheckField(tabId, field, answer, file, seen) {
   const fill = (fieldId) => inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file]);
   let fieldId = field.id;
   let result = await fill(fieldId);
@@ -643,6 +736,12 @@ async function fillFormPage(tabId, application, keepAlive, step) {
   const uploaded = new Set();
   let documents = null;
   let rechecked = false;
+  // The step's report: every question met, how long each stage took, how many AI requests.
+  stepAttempts = [];
+  const metFields = new Map();
+  const timings = { discovery: 0, ai: 0, checks: 0 };
+  const stepStarted = Date.now();
+  const aiCallsBefore = application.aiCalls || 0;
   const problem = (message, field = null, kind = 'field') => {
     if (!problems.some((entry) => entry.message === message)) problems.push({ message, fieldId: field?.id ?? null, kind });
   };
@@ -667,6 +766,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         partial = Boolean(read?.partial);
       }
       if (!options || JSON.stringify(options) === JSON.stringify(field.options || [])) continue;
+      diag('dependent', { id: field.id, question: String(field.label || '').slice(0, 80), before: (field.options || []).length, after: options.length });
       field.options = options;
       field.optionsPartial = partial || options.length >= 300 || undefined;
       changed.push(field);
@@ -718,6 +818,9 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     for (const entry of (application.aiUnanswered || []).splice(0)) {
       problem(`Fill by hand: "${entry.label}" — ${aiName(application)} gave no answer this field takes (${entry.reason}).`, entry);
     }
+    for (const entry of (application.aiReview || []).splice(0)) {
+      problem(`Fill by hand: "${entry.label}" — ${aiName(application)} found nothing in the profile, résumé, or job description to answer it.`, entry);
+    }
     for (const field of fields) {
       const answer = answersById[field.id];
       if (!answer) continue;
@@ -739,6 +842,26 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
       const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
       if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
+    }
+    if (applyDebug) {
+      diag('round', { step, round, fields: (fields || []).length, seen: seen.size });
+      if (round === 0) {
+        const schema = await inForm(tabId, () => globalThis.__qtsApplyForm.formSchema()).catch(() => null);
+        diag('form', schema && {
+          schemaVersion: schema.schemaVersion,
+          pageType: schema.page.type,
+          revision: schema.page.revision,
+          discoveryStatus: schema.discoveryStatus,
+          unresolvedFields: schema.unresolvedFields,
+          actions: schema.actions,
+          fields: schema.fields.map((entry) => ({
+            id: entry.id, question: entry.question.slice(0, 80), elementType: entry.elementType, inputType: entry.inputType,
+            valueType: entry.valueType, required: entry.required, options: entry.options.length,
+            optionsStatus: entry.optionsDiscovery.status, labelConfidence: entry.labelConfidence, lifecycle: entry.lifecycle,
+            filled: Boolean(entry.currentValue),
+          })),
+        });
+      }
     }
     const fresh = [];
     for (const field of fields || []) {
@@ -794,7 +917,11 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         }
       }
     }
-    for (const field of await readComboboxOptions(tabId, fresh)) {
+    for (const field of fresh) metFields.set(field.id, field);
+    const discoveryStarted = Date.now();
+    const changedByLooking = await readComboboxOptions(tabId, fresh);
+    timings.discovery += Date.now() - discoveryStarted;
+    for (const field of changedByLooking) {
       problem(`Check "${field.label}": looking at its choices changed it; set it as it should be.`, field);
     }
     const resolved = helpers.resolveFields(fresh, application.candidate, application.savedAnswers, {
@@ -803,6 +930,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       coverLetterText: application.job.coverLetterText,
     });
     const { answers } = resolved;
+    diag('resolved', { step, round, answered: Object.keys(answers).length, toAi: resolved.open.length, byHand: (resolved.byHand || []).length });
     // A personal fact the profile lacks is the Manager's to fill, never the AI's to guess.
     for (const entry of resolved.byHand || []) problem(entry.message, entry);
     // "Fill again" reuses this application's earlier answers instead of asking ChatGPT again.
@@ -852,8 +980,13 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         if (field.required) problem(`Upload the ${answer.file === 'coverLetter' ? 'cover letter' : 'résumé'} by hand: "${field.label}".`, field, 'upload');
         continue;
       }
-      // Each document goes up once per step; a site may redraw its upload field after taking it.
-      if (answer.file && uploaded.has(answer.file)) continue;
+      // Each document goes up once per step; a site may redraw its upload field after taking it. A
+      // page that reloaded (a language switch) has lost it: then it goes up again.
+      if (answer.file && uploaded.has(answer.file)) {
+        const holds = await inForm(tabId, (id) => globalThis.__qtsApplyForm.uploadHolds(id), [field.id]).catch(() => true);
+        if (holds) continue;
+        uploaded.delete(answer.file);
+      }
       const outcome = await fillAndCheck(tabId, field, answer, file, seen);
       if (outcome.gone) continue;
       if (outcome.ok) {
@@ -918,7 +1051,9 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     toAsk = await refreshDependentChoices(remaining, position, lastFilledChoice);
     if (toAsk.length) {
       try {
+        const aiStarted = Date.now();
         const aiAnswers = keepProfileMeaning(await askAiForAnswers(application, toAsk, keepAlive), toAsk);
+        timings.ai += Date.now() - aiStarted;
         const issues = [];
         const fillAnswers = async (answersById, fieldsToFill, onRejected) => {
           for (const field of fieldsToFill) {
@@ -972,6 +1107,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     // Let the page show the questions these answers unlock before looking again.
     await sleep(1000);
   }
+  const checksStarted = Date.now();
   const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
   // A question already listed with its reason (a fact the profile lacks) is not listed again.
   const listed = (entry) => problems.some((known) => known.fieldId && known.fieldId === entry.id);
@@ -981,17 +1117,71 @@ async function fillFormPage(tabId, application, keepAlive, step) {
   for (const entry of (unread || []).filter((item) => !listed(item))) {
     problem(entry.kind === 'unread' ? `QTS couldn't read this question — check it: "${entry.label}".` : `Still empty: "${entry.label}".`, entry);
   }
+  // A required upload left empty (lost to a reload, refused by the site) is never assumed done.
+  const emptyUploads = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequiredUploads()).catch(() => []);
+  for (const entry of (emptyUploads || []).filter((item) => !listed(item))) {
+    problem(`Upload by hand: "${entry.label}" is required and still empty (the files are in the folder above).`, entry, 'upload');
+  }
   // A frame from another site the browser does not let QTS read may hold questions: the Manager is told.
   const frames = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadableFrames()).catch(() => []);
   for (const host of [...new Set(frames || [])]) problem(`Part of this page comes from ${host}, which QTS cannot read: check it for questions to answer.`);
   const errors = await inForm(tabId, () => globalThis.__qtsApplyForm.fieldErrors()).catch(() => []);
   for (const text of errors || []) problem(`The form shows: ${text}`);
-  return { used, problems, canAskAgain };
+  timings.checks = Date.now() - checksStarted;
+  const report = stepReport(step, metFields, used, problems, stepAttempts, {
+    ...timings, total: Date.now() - stepStarted,
+  }, (application.aiCalls || 0) - aiCallsBefore);
+  diag('step-report', report);
+  stepAttempts = null;
+  return { used, problems, canAskAgain, report };
 }
 
 async function browserName() {
   const stored = await chrome.storage.local.get('qtsBrowserName');
   return stored.qtsBrowserName || `Chrome · ${String(await self.__qtsApiWorker.workerBrowserKey()).slice(0, 4).toUpperCase()}`;
+}
+
+/**
+ * A form step's report, from what the runner already keeps (no second record): the answer plan
+ * (each question met: its type, the source and status of its answer) and the execution results
+ * (each fill attempt: verified or why not), with totals, stage times, and AI requests. Values are
+ * never in it: questions and sources only.
+ */
+function stepReport(step, metFields, used, problems, attempts, timings, aiCalls) {
+  const answered = new Map(Object.values(used).filter((entry) => entry.fieldId).map((entry) => [entry.fieldId, entry]));
+  // Uploads are not kept with the typed answers: a verified upload attempt counts as answered.
+  for (const attempt of attempts) {
+    if (attempt.action === 'upload' && attempt.verified && !answered.has(attempt.fieldId)) answered.set(attempt.fieldId, { source: attempt.source });
+  }
+  const flagged = new Map(problems.filter((entry) => entry.fieldId).map((entry) => [entry.fieldId, entry.message]));
+  const plan = [...metFields.values()].map((field) => {
+    const answer = answered.get(field.id);
+    return {
+      fieldId: field.id,
+      question: String(field.label || '').slice(0, 80),
+      type: field.kind,
+      options: (field.options || []).length,
+      optionsStatus: !CHOICE_KINDS.has(field.kind) ? 'not_applicable' : !(field.options || []).length ? 'unknown' : field.optionsPartial ? 'partial' : 'complete',
+      source: answer?.source || null,
+      status: answer ? 'verified' : flagged.has(field.id) ? 'needs_review' : field.labelUnresolved ? 'unresolved' : 'left',
+      ...(flagged.has(field.id) ? { reason: String(flagged.get(field.id)).slice(0, 160) } : {}),
+    };
+  });
+  const count = (status) => plan.filter((entry) => entry.status === status).length;
+  return {
+    step,
+    fields: plan.length,
+    verified: count('verified'),
+    needsReview: count('needs_review'),
+    unresolved: count('unresolved'),
+    left: count('left'),
+    attempts: attempts.length,
+    failedAttempts: attempts.filter((entry) => !entry.verified && !entry.gone).length,
+    aiCalls,
+    timingsMs: timings,
+    plan,
+    execution: attempts,
+  };
 }
 
 /**
@@ -1304,6 +1494,8 @@ async function runApplication(application, recipe) {
   const answersUsed = {};
   application.answerCache = new Map();
   const dryRun = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
+  await loadApplyDebug();
+  diag('application', { attempt: String(application.attemptId).slice(0, 8), site: recipe.site, aiMode: application.aiMode });
   const review = {
     attemptId: application.attemptId,
     tabId: null,
@@ -1347,6 +1539,20 @@ async function runApplication(application, recipe) {
   const release = (mode, reason) => report('release', { mode, reason: reason.slice(0, 480), appliedAnswers: appliedAnswers(answersUsed) });
   let tab = null;
   let submitted = false;
+  // An email-first step (only an email and a Continue): QTS types the profile's email; the Manager
+  // clicks the site's Continue, whose next page may be a sign-in, an account, or a code sent by email
+  // (never Apply's to take), then Continue here. Asked once per application.
+  let emailFirstAsked = false;
+  const emailFirstStep = async (tabId, stepNumber) => {
+    const email = application.candidate.email || '';
+    const typed = email && await inForm(tabId, async (value) => {
+      const api = globalThis.__qtsApplyForm;
+      const box = api.scanForm().find((field) => !field.hidden && !field.disabled && (field.kind === 'email' || /e-?mail/i.test(field.label)));
+      return box ? (await api.fillField(box.id, value)).ok === true : false;
+    }, [email]).catch(() => false);
+    const message = `This site asks for the email first${typed ? ' (QTS typed the profile\'s email)' : ''}. Click the site's Continue yourself; if it then asks to sign in, create an account, or enter a code, do that or Skip. When the application form shows, press Continue here.`;
+    return askManager(review, reviewState('review', { step: stepNumber, final: false, problems: [{ message, fieldId: null }] }), 'problem', 'The site asks for an email first.');
+  };
   try {
     tab = await openApplyTab(recipe.formUrl);
     review.tabId = tab.id;
@@ -1355,13 +1561,20 @@ async function runApplication(application, recipe) {
       try {
         tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
       } catch (error) {
-        // A security check before the job page goes to the Manager: solve it, then Continue.
-        if (!(error instanceof ApplyStop) || !/CAPTCHA|security check/i.test(error.message)) throw error;
-        const decision = await askManager(review, reviewState('review', {
-          step: 1, final: false, problems: [{ message: 'Solve the security check (CAPTCHA) on this page, then Continue.', fieldId: null }],
-        }), 'problem', 'Solve the CAPTCHA, then Continue.');
-        if (decision.action !== 'continue') return await finishBeforeSubmit(decision.action);
-        tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
+        if (error instanceof ApplyStop && error.pageType === 'email_first_application') {
+          emailFirstAsked = true;
+          const decision = await emailFirstStep(tab.id, 1);
+          if (decision.action !== 'continue') return await finishBeforeSubmit(decision.action);
+          tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
+        } else {
+          // A security check before the job page goes to the Manager: solve it, then Continue.
+          if (!(error instanceof ApplyStop) || !/CAPTCHA|security check/i.test(error.message)) throw error;
+          const decision = await askManager(review, reviewState('review', {
+            step: 1, final: false, problems: [{ message: 'Solve the security check (CAPTCHA) on this page, then Continue.', fieldId: null }],
+          }), 'problem', 'Solve the CAPTCHA, then Continue.');
+          if (decision.action !== 'continue') return await finishBeforeSubmit(decision.action);
+          tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
+        }
       }
     }
 
@@ -1373,7 +1586,17 @@ async function runApplication(application, recipe) {
       await report('review', { review: false, appliedAnswers: appliedAnswers(answersUsed) });
       review.panel = reviewState('working', { step, workingText: fillAgain ? 'Filling again…' : `Filling step ${step}…` });
       await showReviewPanel(tab.id, review.panel).catch(() => {});
-      const filled = await fillFormPage(tab.id, application, keepAlive, step);
+      let filled;
+      try {
+        filled = await fillFormPage(tab.id, application, keepAlive, step);
+      } catch (error) {
+        // A form address that opened on an email-first step: the Manager goes past it (once).
+        if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application' || emailFirstAsked) throw error;
+        emailFirstAsked = true;
+        const decision = await emailFirstStep(tab.id, step);
+        if (decision.action !== 'continue') return await finishBeforeSubmit(decision.action);
+        continue;
+      }
       Object.assign(answersUsed, filled.used);
       for (const [label, answer] of Object.entries(filled.used)) {
         if (!answer.file) application.answerCache.set(label, answer);

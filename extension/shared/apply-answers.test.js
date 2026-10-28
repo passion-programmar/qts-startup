@@ -861,3 +861,31 @@ test('a list read only in part takes the AI\'s own wording; a complete one does 
   assert.deepEqual(invalid.map((entry) => entry.id), [complete.id]);
   assert.match(answers.buildAnswerPrompt({ job: {}, candidate, fields: [partial] }), /"optionsPartial":true/);
 });
+
+test('the AI may say nothing supports an answer: that question is neither filled nor asked again', () => {
+  const fields = [
+    field('GitHub username', { required: true }),
+    field('Years of Python?', { kind: 'select', options: ['0-2', '3-5', '6+'] }),
+    field('Your city', { labelConfidence: 'low' }),
+  ];
+  const prompt = answers.buildAnswerPrompt({ job: {}, candidate, fields });
+  assert.match(prompt, /"status":"ready"/);
+  assert.match(prompt, /status "review" with value null and a short "reason"/);
+  assert.match(prompt, /"labelUncertain":true/);
+  const reply = JSON.stringify({ answers: [
+    { id: 'GitHub username', value: null, status: 'review' },
+    { id: 'Years of Python?', value: '6+', status: 'ready' },
+    { id: 'Your city', value: 'Warsaw' },
+  ] });
+  const parsed = answers.parseAnswerReply(reply, fields);
+  assert.deepEqual(parsed.review, [{ id: 'GitHub username', label: 'GitHub username' }]);
+  assert.deepEqual(parsed.invalid, []);
+  assert.equal(parsed.answers['Years of Python?'].value, '6+');
+  assert.equal(parsed.answers['GitHub username'], undefined);
+  // A reply that is not JSON at all: every question is invalid, nothing is filled.
+  const broken = answers.parseAnswerReply('Sure! Here are the answers: years 6+', fields);
+  assert.deepEqual(Object.keys(broken.answers), []);
+  assert.equal(broken.invalid.length, 3);
+  // An answer that is not one of a complete list's options is refused, never matched loosely.
+  assert.match(answers.parseAnswerReply(JSON.stringify({ answers: [{ id: 'Years of Python?', value: '6' }] }), [fields[1]]).invalid[0].reason, /"6" is not one of the options/);
+});

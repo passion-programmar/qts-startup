@@ -80,6 +80,141 @@ test('labels as real sites write them: aria-labelledby first, a label for a miss
   assert.deepEqual(fields, ['Gender:', 'Location', 'Your city']);
 });
 
+test('a page like PeopleForce: rich-text cover letter, editor toolbar, language switcher, CSS required marks', { skip }, async () => {
+  const result = await onPage(`<select id="lang" onchange="window.navigated = true"><option>English</option><option>Українська</option><option>Polski</option><option>Deutsch</option></select>
+    <form>
+      <div><label class="required" for="name">Full name</label><input id="name"></div>
+      <div><label for="cl">Cover letter</label>
+        <div class="fr-toolbar"><button type="button" aria-pressed="false">Bold</button><button type="button" aria-pressed="false">Italic</button></div>
+        <div class="fr-element" contenteditable="true"><br></div>
+        <textarea id="cl" name="cover_letter" class="hidden" style="display:none"></textarea></div>
+    </form>`,
+  `const fields = api.scanForm();
+   const letter = fields.find((f) => f.label === 'Cover letter');
+   const fill = await api.fillField(letter.id, 'Dear Hiring Manager,\\nI am writing to apply.');
+   return { fields: fields.map((f) => [f.label, f.kind, f.required]), fill: fill.ok,
+     editor: document.querySelector('.fr-element').textContent, hidden: document.getElementById('cl').value.includes('I am writing to apply'),
+     navigated: Boolean(window.navigated) };`);
+  assert.deepEqual(result.fields, [['Full name', 'text', true], ['Cover letter', 'textarea', false]]);
+  assert.equal(result.fill, true);
+  assert.match(result.editor, /Dear Hiring Manager,\s*I am writing to apply\./);
+  assert.equal(result.hidden, true);
+  assert.equal(result.navigated, false);
+});
+
+test('an upload that lost its file is seen as empty; one showing its file name is not', { skip }, async () => {
+  const result = await onPage(`<form>
+      <div><label for="a">Resume *</label><input id="a" type="file" required><div>Allowed formats: .doc, .docx, .pdf</div></div>
+      <div><label for="b">CV *</label><input id="b" type="file" required><div>Radu_Star_CV.pdf uploaded</div></div>
+    </form>`,
+  `const [a, b] = api.scanForm(); return { a: api.uploadHolds(a.id), b: api.uploadHolds(b.id), empty: api.emptyRequiredUploads().map((e) => e.label) };`);
+  assert.deepEqual(result, { a: false, b: true, empty: ['Resume'] });
+});
+
+test('the form as structured data (schema 1.0): types, values, option details, discovery status, sections, actions', { skip }, async () => {
+  const result = await onPage(`<html lang="en"><body><form>
+      <h2>Personal information</h2>
+      <div><label for="em">Email *</label><input id="em" type="email" required value="x@example.com"></div>
+      <div><label for="yr">Years of experience? *</label><select id="yr" required><option value="">Select…</option><option value="a">0-2 years</option><option value="b" disabled>3-5 years</option><optgroup label="Senior"><option value="c" selected>6+ years</option></optgroup></select></div>
+      <div><label for="sal">Salary expectation</label><input id="sal" type="number" step="0.01" min="0"></div>
+      <div><label for="lv">Level</label><input id="lv" role="combobox" aria-controls="lv-l"><ul id="lv-l" role="listbox" hidden><li role="option" id="o1" data-value="jr">Junior</li></ul></div>
+      <div><label for="sk">Skill</label><input id="sk" role="combobox"></div>
+      <div><label for="un">University</label><input id="un" list="unis"><datalist id="unis"><option value="TU Cluj"></option></datalist></div>
+      <h2>More</h2>
+      <div><label for="co">Country</label><select id="co"><option value="">Select…</option><option>Romania</option></select></div>
+      <div><label for="rg">Region</label><select id="rg"><option value="">Select a country first</option></select></div>
+      <div><input id="ct" placeholder="Your city"></div>
+      <div><input id="q9" name="q_9"></div>
+      <div><label for="cv">Resume *</label><input id="cv" type="file" accept=".pdf" required></div>
+      <button type="button">Continue</button><button type="submit">Submit application</button><a href="/login">Sign in</a>
+    </form></body></html>`,
+  'const schema = api.formSchema(2); return { schema, problems: api.checkFormSchema(schema) };');
+  const { schema, problems } = result;
+  const by = (question) => schema.fields.find((entry) => entry.question === question);
+  assert.deepEqual(problems, []);
+  assert.equal(schema.schemaVersion, '1.0');
+  assert.deepEqual([schema.page.type, schema.page.step, schema.page.language, schema.page.forms], ['application_form', 2, 'en', 1]);
+  assert.deepEqual(schema.sections.map((section) => section.title), ['Personal information', 'More']);
+  const email = by('Email *');
+  assert.deepEqual([email.elementType, email.inputType, email.valueType, email.required, email.currentValue, email.optionsDiscovery.status, email.sectionId], ['input', 'email', 'string', true, 'x@example.com', 'not_applicable', 'section_1']);
+  const years = by('Years of experience? *');
+  assert.deepEqual([years.elementType, years.inputType, years.valueType, years.optionsDiscovery], ['select', 'single_select', 'enum', { method: 'dom', status: 'complete' }]);
+  assert.deepEqual(years.options, [
+    { label: '0-2 years', value: 'a', disabled: false, selected: false },
+    { label: '3-5 years', value: 'b', disabled: true, selected: false },
+    { label: '6+ years', value: 'c', disabled: false, selected: true, group: 'Senior' },
+  ]);
+  assert.deepEqual([by('Salary expectation').valueType, by('Salary expectation').constraints], ['decimal', { min: 0 }]);
+  assert.deepEqual(by('Level').options, [{ label: 'Junior', value: 'jr', disabled: false, selected: false, optionId: 'o1' }]);
+  assert.deepEqual([by('Level').inputType, by('Level').lifecycle], ['searchable_select', 'options_ready']);
+  assert.deepEqual([by('Skill').optionsDiscovery.status, by('Skill').lifecycle], ['unknown', 'discovered']);
+  assert.equal(by('University').optionsDiscovery.status, 'partial');
+  assert.deepEqual([by('Region').optionsDiscovery.status, by('Region').lifecycle, by('Region').sectionId], ['pending_dependency', 'waiting_dependency', 'section_2']);
+  assert.equal(by('Your city').labelConfidence, 'low');
+  assert.deepEqual([by('q 9').labelConfidence, by('q 9').lifecycle], ['unresolved', 'unresolved']);
+  assert.deepEqual(schema.unresolvedFields, [by('q 9').id]);
+  assert.deepEqual([by('Resume').inputType, by('Resume').valueType, by('Resume').constraints, by('Resume').required], ['file_upload', 'file', { accept: '.pdf' }, true]);
+  assert.deepEqual(schema.actions.map((action) => [action.type, action.text, action.safetyStatus]), [
+    ['next', 'Continue', 'unverified'], ['submit', 'Submit application', 'final_submit'], ['sign_in', 'Sign in', 'never_automatic'],
+  ]);
+  assert.equal(schema.discoveryStatus, 'complete_for_current_state');
+});
+
+test('the form record is well formed, and its revision grows only when questions or choices change', { skip }, async () => {
+  const result = await onPage(`<form><label for="co">Country</label><select id="co"><option>Romania</option><option>Poland</option></select>
+      <label for="rg">Region</label><select id="rg"><option>Mazowieckie</option></select></form>`,
+  `const one = api.formSchema(); const two = api.formSchema();
+   document.getElementById('rg').innerHTML = '<option>Cluj</option><option>Bihor</option>';
+   const three = api.formSchema();
+   return { problems: api.checkFormSchema(one), broken: api.checkFormSchema({ schemaVersion: '1.0', page: {}, fields: [{ id: 'x' }], actions: [] }), revisions: [one.page.revision, two.page.revision, three.page.revision] };`);
+  assert.deepEqual(result.problems, []);
+  assert.ok(result.broken.length >= 5);
+  assert.equal(result.revisions[1], result.revisions[0]);
+  assert.equal(result.revisions[2], result.revisions[0] + 1);
+});
+
+test('pages are told apart: form, partial form, email-first, sign-in, account, code, CAPTCHA, closed, sent, job page, nothing', { skip }, async () => {
+  const kind = (html) => onPage(html, 'return api.classifyPage().type;');
+  assert.equal(await kind(`<form><label for="a">Full name</label><input id="a"><label for="b">Email</label><input id="b" type="email"><label for="c">CV</label><input id="c" type="file"></form>`), 'application_form');
+  assert.equal(await kind(`<form><label for="q1">Why us?</label><textarea id="q1"></textarea><label for="q2">Years?</label><input id="q2" type="number"></form>`), 'partial_application_form');
+  assert.equal(await kind(`<form><label for="e">Email address</label><input id="e" type="email"><button type="submit">Continue</button><button type="button">Continue with Google</button></form>`), 'email_first_application');
+  assert.equal(await kind(`<form><label for="e">Email</label><input id="e" type="email"><label for="p">Password</label><input id="p" type="password"><button>Sign in</button></form>`), 'authentication_required');
+  assert.equal(await kind(`<h1>Create your account</h1><form><label for="e">Email</label><input id="e" type="email"><label for="p">Password</label><input id="p" type="password"><label for="p2">Confirm password</label><input id="p2" type="password"><button>Sign up</button></form>`), 'registration_required');
+  assert.equal(await kind(`<p>We sent a code to your email.</p><form><label for="c">Verification code</label><input id="c" autocomplete="one-time-code"><button>Verify</button></form>`), 'verification_required');
+  assert.equal(await kind(`<form><label for="k">Type below image text</label><input id="k"><img alt="captcha"></form>`), 'captcha_required');
+  assert.equal(await kind(`<main><h1>Data Scientist</h1><p>This job has expired.</p></main>`), 'application_closed');
+  assert.equal(await kind(`<main><h1>Thank you for applying!</h1><p>We have received your application.</p></main>`), 'application_submitted');
+  assert.equal(await kind(`<main><h1>Data Scientist</h1><p>About the role…</p><button>Apply now</button></main>`), 'application_navigation');
+  assert.equal(await kind(`<main><h1>Welcome</h1></main>`), 'unsupported_page');
+});
+
+test('a list that says it is loading is waited for, within a limit', { skip }, async () => {
+  const result = await onPage(`<form><label for="of">Office *</label><input id="of" role="combobox" aria-controls="ol"><ul id="ol" role="listbox"></ul></form>
+    <script>const i = document.getElementById('of'), l = document.getElementById('ol');
+      i.addEventListener('focus', () => { l.setAttribute('aria-busy', 'true'); l.textContent = 'Loading…';
+        setTimeout(() => { l.removeAttribute('aria-busy'); l.innerHTML = '<li role="option">Bucharest</li><li role="option">Cluj</li>'; }, 2000); });</script>`,
+  'const f = api.scanForm()[0]; const read = await api.discoverComboboxChoices(f.id); return read.options;');
+  assert.deepEqual(result, ['Bucharest', 'Cluj']);
+});
+
+test('a list beside its box never makes the box look answered; a choice counts only once the box shows it', { skip }, async () => {
+  const result = await onPage(`<form><div><label for="y">Years of experience? *</label><input id="y" role="combobox" aria-controls="yl" required><ul id="yl" role="listbox" hidden></ul></div>
+      <div><label for="z">Seniority *</label><input id="z" role="combobox" aria-controls="zl"><ul id="zl" role="listbox"><li role="option">Senior</li></ul></div></form>
+    <script>const y = document.getElementById('y'), yl = document.getElementById('yl');
+      y.addEventListener('focus', () => { yl.innerHTML = '<li role="option">0-2 years</li><li role="option">6+ years</li>'; yl.hidden = false; });
+      yl.addEventListener('click', (e) => { if (e.target.getAttribute('role') === 'option') { y.value = e.target.textContent; yl.hidden = true; } });</script>`,
+  `const [years, seniority] = api.scanForm();
+   await api.discoverComboboxChoices(years.id);
+   const before = { unanswered: api.isUnanswered(years), shown: api.shownValue(years.id) };
+   const fill = await api.fillField(years.id, '6+ years');
+   // A list whose choice does nothing when clicked: the fill must not report success.
+   const stuck = await api.fillField(seniority.id, 'Senior');
+   return { before, fill, value: document.getElementById('y').value, stuck: stuck.ok, stuckValue: document.getElementById('z').value };`);
+  assert.deepEqual(result.before, { unanswered: true, shown: '' });
+  assert.deepEqual([result.fill.ok, result.value], [true, '6+ years']);
+  assert.deepEqual([result.stuck, result.stuckValue], [false, '']);
+});
+
 test('an unlabeled dialing-code dropdown beside a phone box is the phone\'s country code', { skip }, async () => {
   const fields = await onPage(`<form><label for="p">Telephone *</label><select id="cc"><option>+48</option><option>+40</option></select><input id="p" type="tel"></form>`,
   'return api.scanForm().map((f) => [f.label, f.kind, Boolean(f.labelUnresolved)]);');

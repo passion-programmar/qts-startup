@@ -234,7 +234,14 @@
   function isRequired(control, label) {
     return control.required
       || control.getAttribute('aria-required') === 'true'
-      || /[*✱]\s*$|[*✱]\s|\(required\)|^[*✱]|^required\b/i.test(label);
+      || /[*✱]\s*$|[*✱]\s|\(required\)|^[*✱]|^required\b/i.test(label)
+      || labelMarkedRequired(control);
+  }
+
+  /** A <label for> styled "required" (Rails forms draw its asterisk with CSS). */
+  function labelMarkedRequired(control) {
+    const own = control.id ? control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`) : null;
+    return Boolean(own && /(^|\s)required(\s|$)/i.test(String(own.className || '')));
   }
 
   /** The unit a number or slider counts in (Teamtailor's notice slider says data-unit="Weeks"). */
@@ -303,6 +310,50 @@
   /** Choices that are mostly dialing codes ("+40", "Romania (+40)"). */
   function dialCodeList(options) {
     return options.length >= 2 && options.filter((text) => /\+\s?\d{1,4}\b/.test(text)).length >= options.length / 2;
+  }
+
+  /** An editable box that is a field: the outermost editable element (an editor's writing area). */
+  function isEditorHost(element) {
+    const editable = element.getAttribute?.('contenteditable');
+    return editable !== null && editable !== undefined && editable !== 'false' && element.isContentEditable
+      && !element.parentElement?.isContentEditable && !insideQtsUi(element);
+  }
+
+  /** The hidden textarea an editor writes into for the page (Froala, Quill keep the original). */
+  function editorPartner(editor) {
+    for (let node = editor.parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
+      const textarea = [...node.querySelectorAll('textarea')].find((element) => !isShown(element));
+      if (textarea) return textarea;
+    }
+    return null;
+  }
+
+  /** The editor shown in place of a hidden textarea, if any. */
+  function editorOf(textarea) {
+    for (let node = textarea.parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
+      const editor = deepQuery(node, '[contenteditable]').find((element) => isEditorHost(element) && isShown(element));
+      if (editor) return editor;
+    }
+    return null;
+  }
+
+  /** Whether a control sits in a <form>, out of page components too. */
+  function insideForm(control) {
+    for (let node = control; node; node = node.parentElement || node.getRootNode?.()?.host || null) {
+      if (node.tagName === 'FORM') return true;
+    }
+    return false;
+  }
+
+  // Languages as each names itself: a dropdown of these is the page's language switcher.
+  const LANGUAGE_NAMES = /^(english|deutsch|français|francais|español|espanol|polski|português|portugues|italiano|nederlands|українська|русский|čeština|cestina|slovenčina|slovencina|magyar|română|romana|svenska|dansk|norsk|suomi|türkçe|turkce|ελληνικά|български|hrvatski|srpski|lietuvių|latviešu|eesti|日本語|中文|한국어|简体中文|繁體中文)$/i;
+
+  /** The page's own language switcher: a dropdown of languages named in their own words, with no question of its own. */
+  function languageSwitcher(select) {
+    const options = [...select.options].map(optionText).filter(Boolean);
+    if (options.length < 3 || options.filter((text) => LANGUAGE_NAMES.test(text)).length < options.length * 0.6) return false;
+    const label = labelFor(select);
+    return !label || options.every((text) => label.includes(text)) || !/\?|language|speak|interview/i.test(label);
   }
 
   /** An upload's label texts as the page writes them ("Resume/CV *"), for its required mark. */
@@ -397,6 +448,8 @@
   /** Two or more short pressable buttons in a question's block are one choice question. */
   function isPressGroup(element) {
     if (element.tagName === 'BUTTON' || element.hasAttribute('role')) return false;
+    // A text editor's toolbar (Bold, Italic, Underline) is not a question.
+    if (element.closest('[role="toolbar"], [class*="toolbar" i]')) return false;
     const buttons = pressButtons(element);
     return buttons.length >= 2 && buttons.every((button) => { const text = itemText(button); return text && text.length <= 40; })
       && Boolean(blockQuestion(element).text);
@@ -482,6 +535,30 @@
     for (const control of allElements()) {
       const tag = control.tagName;
       const type = (control.getAttribute('type') || '').toLowerCase();
+      // A rich-text editor (Froala, Quill, ProseMirror, Trix): an editable box, often over a hidden
+      // textarea the page sends; answered as a text box (a cover letter, a message).
+      if (isEditorHost(control)) {
+        const partner = editorPartner(control);
+        const label = (partner && labelFor(partner)) || labelFor(control) || blockQuestion(control).text;
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'textarea',
+          richEditor: true,
+          required: isRequired(control, label) || Boolean(partner && isRequired(partner, label)),
+          hidden: !isShown(control),
+          disabled: control.getAttribute('aria-disabled') === 'true',
+          ...(partner?.maxLength > 0 ? { maxLength: partner.maxLength } : {}),
+          ...(textOf(control) ? { filled: true } : {}),
+        });
+        continue;
+      }
+      // The hidden textarea behind such an editor is the editor's, not a question of its own.
+      if (tag === 'TEXTAREA' && !isShown(control) && editorOf(control)) continue;
+      // The page's own controls are not questions: its language switcher, or a dropdown in its
+      // header, navigation, or footer outside any form.
+      if (tag === 'SELECT' && (languageSwitcher(control)
+        || (!insideForm(control) && control.closest('header, nav, footer, [role="banner"], [role="navigation"], [role="contentinfo"]')))) continue;
       // Pressable choice buttons (Ashby's Yes / No) are one question, answered like a radio group;
       // the tick box the page keeps hidden beside them is not a question of its own.
       if (isPressGroup(control)) {
@@ -669,6 +746,8 @@
         disabled: control.disabled || (control.readOnly && !readOnlyPicker(control)),
         ...(control.readOnly && readOnlyPicker(control) ? { readOnlyPicker: true } : {}),
         ...(labelUnresolved ? { labelUnresolved: true } : {}),
+        // Named only by its placeholder ("Your city"): usable, but the question text is less sure.
+        ...(named && type !== 'file' && cleanText(control.placeholder) === named ? { labelConfidence: 'low' } : {}),
         ...(tag === 'SELECT' && control.multiple ? { multiple: true } : {}),
         ...(control.maxLength > 0 ? { maxLength: control.maxLength } : {}),
         // What an upload takes ("image/*" for a photo), so Apply never puts a document there.
@@ -923,8 +1002,10 @@
       await sleep(300);
       list = listFor(input, before);
     }
-    // A list that opened empty may still be loading its choices: waited for, up to 1.5 seconds more.
-    for (let waited = 0; list && !deepQuery(list, '[role="option"]').length && waited < 1500; waited += 300) {
+    // A list that opened empty, or says it is loading (aria-busy, "Loading…"), is waited for while it
+    // loads: up to 1.5 seconds when it gives no sign, 3 seconds while it says it is loading.
+    const loading = (element) => element?.getAttribute('aria-busy') === 'true' || /^(loading|searching|please wait)\b/i.test(textOf(element));
+    for (let waited = 0; list && (!deepQuery(list, '[role="option"]').length || loading(list)) && waited < (loading(list) ? 3000 : 1500); waited += 300) {
       await sleep(300);
       list = listFor(input, before) || list;
     }
@@ -1072,6 +1153,7 @@
     if (!element) return { ok: false, error: 'The field is no longer on the page.' };
     if (element.hasAttribute(DROP_ATTRIBUTE)) return dropFile(element, file);
     if (element.hasAttribute(MENU_ATTRIBUTE)) return pickMenuChoice(element, value);
+    if (isEditorHost(element)) return fillEditor(element, value);
     if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
       const wanted = cleanText(value).toLowerCase();
       const item = groupItems(element).find((entry) => itemText(entry).toLowerCase() === wanted);
@@ -1100,7 +1182,19 @@
       const wanted = [].concat(value).map((entry) => cleanText(entry).toLowerCase());
       for (const control of controlsOfGroup(element)) {
         const shouldBeChecked = wanted.includes(choiceText(control).toLowerCase());
-        if (control.checked !== shouldBeChecked && (type === 'radio' ? shouldBeChecked : true)) control.click();
+        if (control.checked !== shouldBeChecked && (type === 'radio' ? shouldBeChecked : true)) {
+          control.click();
+          // A page that draws its own box around a hidden input (role="radio", Workable) takes the
+          // click on that box when the input ignores it (React may undo the input's own click a moment later).
+          const box = control.closest('[role="radio"], [role="checkbox"]');
+          if (box) {
+            await sleep(100);
+            if (control.checked !== shouldBeChecked) {
+              box.click();
+              await sleep(100);
+            }
+          }
+        }
       }
       const checked = controlsOfGroup(element).filter((control) => control.checked).map(choiceText);
       return { ok: checked.length > 0, value: checked.join(', ') };
@@ -1191,16 +1285,22 @@
         // "Warsaw" (what was typed) in "Warsaw, Masovian Voivodeship, Poland".
         || options.find((option) => closeChoice(itemText(option), search));
     };
+    // A choice counts only when the box shows it after the click: a click alone is not an answer.
+    const take = async (choice) => {
+      const picked = itemText(choice);
+      choice.click();
+      await sleep(200);
+      const id = element.getAttribute(FIELD_ATTRIBUTE);
+      return sameWords(element.value, picked) || closeChoice(element.value, picked) || (id && choiceShown(id, picked))
+        ? { ok: true, value: picked }
+        : { ok: false, error: `The list did not take "${picked}".`, choices: [...new Set(seen)].slice(0, 300) };
+    };
     // Click first: a list that shows its choices when opened is picked from, with nothing typed.
     element.focus();
     element.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     element.click?.();
     let match = await findMatch(1200, true);
-    if (match) {
-      match.click();
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      return { ok: true, value: textOf(match) };
-    }
+    if (match) return take(match);
     // No choices shown, or not this one among them: typed to search.
     setNativeValue(element, search);
     match = await findMatch(3000);
@@ -1213,9 +1313,7 @@
       setNativeValue(element, '');
       return { ok: false, error: `No option matching "${value}".`, choices: [...new Set(seen)].slice(0, 300) };
     }
-    match.click();
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    return { ok: true, value: textOf(match) };
+    return take(match);
   }
 
   /**
@@ -1293,6 +1391,51 @@
     }
     const now = dialPicker(element);
     return now && digits.startsWith(now.code) ? afterCode(number, now.code) || value : value;
+  }
+
+  /**
+   * A rich-text editor takes text as typing gives it: everything in it selected, then the text
+   * inserted through the browser's editing, so the editor's own model updates. Its hidden textarea
+   * gets the editor's content too. ok when the editor shows the text.
+   */
+  async function fillEditor(editor, value) {
+    const text = String(value ?? '');
+    const owner = editor.ownerDocument;
+    editor.focus();
+    owner.getSelection()?.selectAllChildren(editor);
+    if (!owner.execCommand('insertText', false, text)) {
+      editor.textContent = text;
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    await sleep(200);
+    const partner = editorPartner(editor);
+    if (partner) setNativeValue(partner, editor.innerHTML);
+    editor.blur();
+    const shown = textOf(editor);
+    const start = cleanText(text).slice(0, 40);
+    return { ok: Boolean(start) && cleanText(shown).includes(start), value: shown.slice(0, 2000) };
+  }
+
+  // A file's name as a site shows it once attached ("Radu_Star_CV.pdf"), not an allowed-types note (".pdf").
+  const SHOWN_FILE_NAME = /[\p{L}\p{N}_()-][\p{L}\p{N}_ ()-]*\.(pdf|docx?|rtf|odt|txt)\b/iu;
+
+  /** Whether an upload holds a file: its input has one, or its block shows a file's name. */
+  function uploadHolds(id) {
+    const element = findField(id);
+    if (!element) return false;
+    if (element.files?.length) return true;
+    const { block } = blockQuestion(element);
+    return SHOWN_FILE_NAME.test(textOf(block));
+  }
+
+  /**
+   * Required uploads left empty (a page that reloaded loses its files): for the Manager, never
+   * assumed done. Photo uploads count too; Apply never fills those.
+   */
+  function emptyRequiredUploads() {
+    return scanForm()
+      .filter((field) => field.kind === 'file' && !field.drop && field.required && !field.hidden && !field.disabled && !uploadHolds(field.id))
+      .map((field) => ({ id: field.id, label: field.label }));
   }
 
   /** Types a text letter by letter with key events, as a person does, after emptying the box. */
@@ -1637,6 +1780,7 @@
     if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return !groupItems(element).some(isChosen);
     if (field.kind === 'radio' || field.kind === 'checkbox-group') return !controlsOfGroup(element).some((control) => control.checked);
     if (field.kind === 'checkbox') return element.tagName === 'INPUT' ? !element.checked : element.getAttribute('aria-checked') !== 'true';
+    if (isEditorHost(element)) return !textOf(element);
     if (field.kind === 'select') return !element.value || PLACEHOLDER.test(optionText(element.selectedOptions?.[0] || {}));
     if (field.kind === 'menu' || field.kind === 'combobox') {
       const shown = shownValue(field.id).replace(/[×✕]/g, '').trim();
@@ -1778,7 +1922,16 @@
     // Only a box around this field alone: a wrapper of several questions holds their answers too.
     const container = element.closest('[class*="container" i]');
     const box = ownBox(element) || (container && holdsOnly(container, element) ? container : null) || element.parentElement;
-    return cleanText(`${element.value || ''} ${textOf(box)}`);
+    // The box's own words only: never the question's label, nor a list of choices open in it
+    // (which would make every choice look chosen).
+    let text = textOf(box);
+    const notValue = deepQuery(box, 'label, legend, [role="listbox"], [role="menu"], [role="option"]').filter((node) => !node.contains(element));
+    if (element.id) notValue.push(element.getRootNode().querySelector?.(`label[for="${CSS.escape(element.id)}"]`));
+    for (const node of notValue) {
+      const words = textOf(node);
+      if (words) text = text.split(words).join(' ');
+    }
+    return cleanText(`${element.value || ''} ${text}`);
   }
 
   /** Field error messages shown on the page (after filling, before Submit). */
@@ -1944,6 +2097,12 @@
     readComboboxOptions,
     discoverComboboxChoices,
     currentChoices,
+    formSchema,
+    checkFormSchema,
+    classifyPage,
+    formActions,
+    uploadHolds,
+    emptyRequiredUploads,
     unreadableFrames,
     searchComboboxChoices,
     fieldStateOf,
@@ -1985,31 +2144,359 @@
    * What every visible question shows now, for the record of what was submitted (the Manager's
    * edits included): [{ id, label, value }]. Uploads are left out; tick boxes read Ticked/Not ticked.
    */
+  /** What a field holds now, as a person reads it: the choice, the text, Ticked, a file's name. */
+  function valueOf(field, element = findField(field.id)) {
+    if (!element) return '';
+    let value = '';
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
+      value = textOf(groupItems(element).find(isChosen) || {});
+    } else if (field.kind === 'radio' || field.kind === 'checkbox-group') {
+      value = controlsOfGroup(element).filter((control) => control.checked)
+        .map((control) => labelFor(control) || control.value).filter(Boolean).join(' | ');
+    } else if (field.kind === 'checkbox') {
+      const ticked = element.tagName === 'INPUT' ? element.checked : element.getAttribute('aria-checked') === 'true';
+      value = ticked ? 'Ticked' : 'Not ticked';
+    } else if (field.kind === 'select') {
+      value = element.multiple ? [...element.selectedOptions].map(optionText).join(' | ')
+        : element.value ? optionText(element.selectedOptions?.[0] || {}) : '';
+    } else if (field.kind === 'menu' || field.kind === 'combobox') {
+      value = shownValue(field.id).replace(/[×✕]/g, '').trim();
+    } else if (field.kind === 'file') {
+      value = element.files?.[0]?.name || '';
+    } else {
+      value = isEditorHost(element) ? textOf(element) : String(element.value || '');
+    }
+    return cleanText(value).slice(0, 2000);
+  }
+
   function currentAnswers() {
     return scanForm()
       .filter((field) => !field.hidden && field.kind !== 'file')
       .map((field) => {
         const element = findField(field.id);
-        if (!element) return null;
-        let value = '';
-        if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
-          value = textOf(groupItems(element).find(isChosen) || {});
-        } else if (field.kind === 'radio' || field.kind === 'checkbox-group') {
-          value = controlsOfGroup(element).filter((control) => control.checked)
-            .map((control) => labelFor(control) || control.value).filter(Boolean).join(' | ');
-        } else if (field.kind === 'checkbox') {
-          const ticked = element.tagName === 'INPUT' ? element.checked : element.getAttribute('aria-checked') === 'true';
-          value = ticked ? 'Ticked' : 'Not ticked';
-        } else if (field.kind === 'select') {
-          value = element.value ? optionText(element.selectedOptions?.[0] || {}) : '';
-        } else if (field.kind === 'menu' || field.kind === 'combobox') {
-          value = shownValue(field.id).replace(/[×✕]/g, '').trim();
-        } else {
-          value = String(element.value || '');
-        }
-        return { id: field.id, label: field.label, value: cleanText(value).slice(0, 2000) };
+        return element ? { id: field.id, label: field.label, value: valueOf(field, element) } : null;
       })
       .filter(Boolean);
+  }
+
+  // ---- The structured form: one record per question, what the page offers, what it is ----
+  // A projection of scanForm's field records (the single source the runner fills from), as data
+  // that can be checked, logged, and compared between steps. Locators stay in the page: each
+  // field's id is its data-qts-apply-field mark.
+
+  const FORM_SCHEMA_VERSION = '1.0';
+  const CHOICE_FIELD_KINDS = ['select', 'menu', 'combobox', 'radio', 'checkbox-group'];
+
+  /** What the page element is: input, select, textarea, button group, editable box... */
+  function elementTypeOf(field, element) {
+    if (!element) return field.kind;
+    if (field.drop) return 'drop_area';
+    if (isEditorHost(element)) return 'contenteditable';
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return 'button_group';
+    if (element.hasAttribute(MENU_ATTRIBUTE)) return element.tagName === 'INPUT' ? 'input' : 'button';
+    return element.tagName.toLowerCase();
+  }
+
+  /** How the control expects to be answered: typed, picked from a list, ticked, uploaded... */
+  function inputTypeOf(field) {
+    if (field.richEditor) return 'rich_text';
+    if (field.drop) return 'drop_area';
+    if (field.kind === 'file') return 'file_upload';
+    if (field.kind === 'combobox') return field.multiple ? 'multi_select' : 'searchable_select';
+    if (field.kind === 'select' || field.kind === 'menu') return field.multiple ? 'multi_select' : 'single_select';
+    if (field.kind === 'radio') return 'radio_group';
+    if (field.kind === 'checkbox-group') return 'checkbox_group';
+    if (field.kind === 'checkbox') return 'checkbox';
+    if (field.kind === 'textarea') return 'long_text';
+    if (field.kind === 'date' || (field.readOnlyPicker && DATE_FORMAT.test(cleanText(field.placeholder)))) return 'date_picker';
+    if (field.kind === 'tel') return 'phone';
+    return field.kind === 'text' ? 'text' : field.kind;
+  }
+
+  /** The shape the answer must have: a string, a number, yes/no, a date, one choice, several, a file. */
+  function valueTypeOf(field, element) {
+    if (field.kind === 'file') return 'file';
+    if (field.kind === 'checkbox') return 'boolean';
+    if (field.multiple || field.kind === 'checkbox-group') return 'array';
+    if (CHOICE_FIELD_KINDS.includes(field.kind)) return 'enum';
+    if (field.kind === 'number' || field.kind === 'range') {
+      const step = element?.getAttribute?.('step');
+      return !step || /^\d+$/.test(step) ? 'integer' : 'decimal';
+    }
+    if (field.kind === 'date' || inputTypeOf(field) === 'date_picker') return 'date';
+    if (['time', 'datetime-local'].includes((element?.getAttribute?.('type') || '').toLowerCase())) return 'time';
+    return 'string';
+  }
+
+  /**
+   * How much of a field's list is known: complete, partial, unknown, waiting for another answer
+   * (pending_dependency: "Select a country first", or disabled until then), or not applicable.
+   */
+  function optionsStatus(field) {
+    // A text box with suggestions (a datalist) takes other answers too: its list is partial.
+    if (!CHOICE_FIELD_KINDS.includes(field.kind)) return field.options?.length ? 'partial' : 'not_applicable';
+    const element = findField(field.id);
+    const waits = /\b(select|choose|pick)\b.{0,30}\bfirst\b/i;
+    if ((field.disabled && !field.options?.length) || (element?.tagName === 'SELECT' && [...element.options].some((option) => waits.test(optionText(option))))) {
+      return 'pending_dependency';
+    }
+    if (!field.options?.length) return 'unknown';
+    return field.optionsPartial ? 'partial' : 'complete';
+  }
+
+  /** Where a field's choices came from: the page as it was, a click, sample searches, or none yet. */
+  function discoveryMethodOf(field) {
+    if (!CHOICE_FIELD_KINDS.includes(field.kind) && !field.options?.length) return null;
+    if (field.optionsSource) return field.optionsSource;
+    return field.options?.length ? 'dom' : null;
+  }
+
+  /** How sure the question text is: from the page's label (high), only a placeholder (low), or none (unresolved). */
+  function labelConfidence(field) {
+    if (field.labelUnresolved || !hasWords(field.label)) return 'unresolved';
+    return field.labelConfidence || 'high';
+  }
+
+  /**
+   * A list's choices as the page holds them, with what can be seen of each: the shown words, the
+   * value it sends, disabled, selected, its group. Nothing is opened to read them.
+   */
+  function optionDetails(field, element) {
+    if (!element) return [];
+    if (element.tagName === 'SELECT') {
+      return [...element.options].filter((option) => answerable(optionText(option)) && option.value !== '').slice(0, 300).map((option) => ({
+        label: optionText(option),
+        value: option.value,
+        disabled: option.disabled,
+        selected: option.selected,
+        ...(option.parentElement?.tagName === 'OPTGROUP' ? { group: cleanText(option.parentElement.label) } : {}),
+      }));
+    }
+    const listId = element.getAttribute?.('aria-controls') || element.getAttribute?.('aria-owns');
+    const list = listId ? (element.getRootNode().getElementById?.(listId) || null) : null;
+    const items = list ? deepQuery(list, '[role="option"]') : [];
+    if (items.length) {
+      return items.filter((item) => answerable(itemText(item))).slice(0, 300).map((item) => ({
+        label: itemText(item),
+        ...(item.getAttribute('data-value') || item.getAttribute('value') ? { value: item.getAttribute('data-value') || item.getAttribute('value') } : {}),
+        disabled: item.getAttribute('aria-disabled') === 'true',
+        selected: item.getAttribute('aria-selected') === 'true',
+        ...(item.id ? { optionId: item.id } : {}),
+      }));
+    }
+    return (field.options || []).map((label) => ({ label }));
+  }
+
+  // Headings that name a part of a form ("Personal information", "Experience").
+  const SECTION_HEADINGS = 'h1, h2, h3, h4, legend, [role="heading"]';
+
+  /** The form's sections: its headings in page order, each with an id. */
+  function formSections() {
+    return allElements()
+      .filter((element) => element.matches(SECTION_HEADINGS) && isShown(element) && hasWords(textOf(element)) && textOf(element).length <= 120 && !insideQtsUi(element))
+      .map((element, index) => ({ id: `section_${index + 1}`, title: textOf(element), element }));
+  }
+
+  /** The section a field sits in: the last heading before it on the page. */
+  function sectionOf(element, sections) {
+    let found = null;
+    for (const section of sections) {
+      if (section.element.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) found = section;
+      else break;
+    }
+    return found?.id || null;
+  }
+
+  // The job sites a page is on, by its address (for diagnostics and the schema; no behaviour depends on it).
+  const PLATFORMS = [
+    ['greenhouse', /greenhouse\.io/], ['lever', /lever\.co/], ['ashby', /ashbyhq\.com/], ['workable', /workable\.com/],
+    ['smartrecruiters', /smartrecruiters\.com/], ['bamboohr', /bamboohr\.com/], ['zoho_recruit', /zohorecruit/], ['peopleforce', /peopleforce\.io/],
+    ['softgarden', /softgarden\.io/], ['teamtailor', /teamtailor\.com/], ['recruitee', /recruitee\.com/], ['personio', /personio\.(de|com)/],
+    ['workday', /myworkday(jobs|site)\.com/], ['talentlyft', /talentlyft\.com/], ['jobvite', /jobvite\.com/], ['breezy', /breezy\.hr/],
+  ];
+
+  /**
+   * The page's own actions a person could take, each with what it is and whether Apply may take it:
+   * Next/Continue (a navigation candidate, its effect unverified), Submit (final, the Manager's), a
+   * start button, sign-in or account creation (never Apply's), back.
+   */
+  function formActions() {
+    const kinds = [
+      ['submit', SUBMIT_TEXT, 'final_submit'],
+      ['next', NEXT_TEXT, 'unverified'],
+      ['start', START_TEXT, 'start_application'],
+      ['sign_in', /^(sign ?in|log ?in|create (an )?account|register|sign ?up|continue with (google|linkedin|apple|microsoft|facebook))\b/i, 'never_automatic'],
+      ['back', /^(back|previous|zurück|wstecz|retour|atrás|anterior)$/i, 'navigation'],
+    ];
+    const seen = new Set();
+    let count = 0;
+    return allElements()
+      .filter((element) => (element.tagName === 'BUTTON' || element.tagName === 'A' || (element.tagName === 'INPUT' && ['submit', 'button'].includes(element.type))
+        || element.getAttribute('role') === 'button') && isShown(element) && !insideQtsUi(element))
+      .map((element) => {
+        const text = buttonText(element).slice(0, 60);
+        const kind = kinds.find(([, pattern]) => pattern.test(text));
+        if (!kind || seen.has(`${kind[0]}:${text}`)) return null;
+        seen.add(`${kind[0]}:${text}`);
+        count += 1;
+        return {
+          id: `${kind[0]}_${count}`,
+          text,
+          type: kind[0],
+          safetyStatus: kind[2],
+          disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+
+  // A one-time code or verification step ("Enter the 6-digit code we sent you").
+  const VERIFICATION_TEXT = /\b(verification code|one[- ]time (code|password)|enter the (\d-digit )?code|we (have )?sent (you )?(a|an|the) (code|link|email)|check your (email|inbox)|magic link)\b/i;
+  const REGISTRATION_TEXT = /\b(create (an |your )?account|register|sign ?up|confirm (your )?password)\b/i;
+
+  /**
+   * What kind of page this is, for deciding what Apply may do. { type, reason }. One of:
+   * application_form, partial_application_form, email_first_application, application_navigation,
+   * authentication_required, registration_required, verification_required, captcha_required,
+   * application_closed, application_submitted, unsupported_page, unknown.
+   */
+  function classifyPage(fields = scanForm()) {
+    const shown = fields.filter((field) => !field.hidden && !field.disabled);
+    const blockers = detectBlockers();
+    const text = cleanText(document.body?.innerText || '').slice(0, 20000);
+    const isEmail = (field) => field.kind === 'email' || /e-?mail/i.test(field.label);
+    const actions = formActions();
+    const passwords = allElements().filter((element) => element.tagName === 'INPUT' && element.type === 'password' && isShown(element));
+    const codeBox = allElements().some((element) => element.tagName === 'INPUT' && isShown(element)
+      && (element.autocomplete === 'one-time-code' || /\b(code|otp|pin)\b/i.test(labelFor(element))));
+    if (blockers.includes('captcha') && shown.length < 3) return { type: 'captcha_required', reason: 'A security check (CAPTCHA) is on the page.' };
+    if (codeBox && VERIFICATION_TEXT.test(text)) return { type: 'verification_required', reason: 'The page asks for a code sent by email or text.' };
+    if (passwords.length >= 2 || (passwords.length && REGISTRATION_TEXT.test(text) && !/\bsign ?in\b|\blog ?in\b/i.test(actions.map((action) => action.text).join(' ')))) {
+      return { type: 'registration_required', reason: 'The page asks to create an account.' };
+    }
+    if (blockers.includes('login')) return { type: 'authentication_required', reason: 'The page asks to sign in.' };
+    if (shown.length <= 1 && CONFIRMED_TEXT.test(text)) return { type: 'application_submitted', reason: 'The page confirms an application was sent.' };
+    const closed = jobClosed();
+    if (closed && shown.length < 2) return { type: 'application_closed', reason: `The page says "${closed}".` };
+    if (shown.some(isEmail) && shown.length >= 3) return { type: 'application_form', reason: `${shown.length} questions, including an email.` };
+    // Only an email (and maybe a name) with a Continue: the next page may be a sign-in or a code sent by email.
+    if (shown.some(isEmail) && shown.length <= 2 && actions.some((action) => action.type === 'next' || action.type === 'start' || action.type === 'submit')) {
+      return { type: 'email_first_application', reason: 'The page asks only for an email before going on.' };
+    }
+    if (shown.length >= 2) return { type: 'partial_application_form', reason: `${shown.length} questions, no email.` };
+    // No questions: an "Apply" button (also a Submit word) can only start the application.
+    if (!shown.length && actions.some((action) => action.type === 'start' || START_TEXT.test(action.text))) {
+      return { type: 'application_navigation', reason: 'A button starts the application.' };
+    }
+    if (!shown.length) return { type: 'unsupported_page', reason: 'No application questions were found.' };
+    return { type: 'unknown', reason: 'One question and nothing that says what the page is.' };
+  }
+
+  /**
+   * The form as structured data, version FORM_SCHEMA_VERSION: the page (address, type, title,
+   * language, platform, step, revision), its sections, one record per question (what it asks, the
+   * element, how it is answered and with what kind of value, its state, constraints, current value,
+   * choices and how they were found, label confidence, lifecycle), the page's actions, and the
+   * questions it could not name. revision grows whenever the questions or their choices change.
+   */
+  function formSchema(step = 1) {
+    const fields = scanForm();
+    const shown = fields.filter((field) => !field.hidden);
+    const sections = formSections();
+    const records = shown.map((field) => {
+      const element = findField(field.id);
+      const status = optionsStatus(field);
+      const issue = element ? fieldIssue(field.id) : '';
+      const value = valueOf(field, element);
+      const confidence = labelConfidence(field);
+      return {
+        id: field.id,
+        sectionId: element ? sectionOf(element, sections) : null,
+        question: field.label,
+        label: field.label,
+        helpText: field.note || null,
+        placeholder: field.placeholder || null,
+        elementType: elementTypeOf(field, element),
+        inputType: inputTypeOf(field),
+        valueType: valueTypeOf(field, element),
+        required: Boolean(field.required),
+        locatorId: field.id,
+        labelConfidence: confidence,
+        constraints: {
+          ...(field.maxLength ? { maxLength: field.maxLength } : {}),
+          ...(Number.isFinite(field.min) ? { min: field.min } : {}),
+          ...(Number.isFinite(field.max) ? { max: field.max } : {}),
+          ...(field.unit ? { unit: field.unit } : {}),
+          ...(field.accept ? { accept: field.accept } : {}),
+          ...(element?.getAttribute?.('pattern') ? { pattern: element.getAttribute('pattern').slice(0, 120) } : {}),
+          ...(DATE_FORMAT.test(cleanText(field.placeholder)) ? { format: field.placeholder } : {}),
+        },
+        multiple: Boolean(field.multiple || field.kind === 'checkbox-group'),
+        options: optionDetails(field, element),
+        optionsDiscovery: { method: discoveryMethodOf(field), status },
+        currentValue: value || null,
+        state: { visible: true, enabled: !field.disabled, readOnly: Boolean(field.readOnlyPicker || element?.readOnly) },
+        ...(issue ? { validationError: issue } : {}),
+        dependsOn: [],
+        lifecycle: confidence === 'unresolved' ? 'unresolved'
+          : status === 'pending_dependency' ? 'waiting_dependency'
+            : CHOICE_FIELD_KINDS.includes(field.kind) && status !== 'unknown' ? 'options_ready' : 'discovered',
+      };
+    });
+    // The revision grows when the questions or their choices change (kept on the page between calls).
+    const signature = records.map((record) => `${record.id}|${record.question}|${record.options.map((option) => option.label).join(',')}`).join(';');
+    const root = document.documentElement;
+    if (root.dataset.qtsFormSignature !== signature) {
+      root.dataset.qtsFormSignature = signature;
+      root.dataset.qtsFormRevision = String(Number(root.dataset.qtsFormRevision || 0) + 1);
+    }
+    const page = classifyPage(fields);
+    const required = records.filter((record) => record.required);
+    return {
+      schemaVersion: FORM_SCHEMA_VERSION,
+      page: {
+        url: location.href.split('#')[0].slice(0, 300),
+        origin: location.origin,
+        type: page.type,
+        reason: page.reason,
+        step,
+        title: cleanText(document.title).slice(0, 160),
+        language: (document.documentElement.lang || '').slice(0, 12) || null,
+        platform: PLATFORMS.find(([, pattern]) => pattern.test(location.hostname))?.[0] || null,
+        forms: document.querySelectorAll('form').length,
+        revision: Number(root.dataset.qtsFormRevision),
+      },
+      sections: sections.map(({ id, title }) => ({ id, title })),
+      fields: records,
+      actions: formActions(),
+      unresolvedFields: records.filter((record) => record.labelConfidence === 'unresolved').map((record) => record.id),
+      discoveryStatus: required.some((record) => ['unknown', 'pending_dependency'].includes(record.optionsDiscovery.status)) ? 'partial' : 'complete_for_current_state',
+    };
+  }
+
+  /**
+   * Whether a form record is well formed, before anything downstream uses it: [] when it is, else
+   * what is wrong.
+   */
+  function checkFormSchema(schema) {
+    const problems = [];
+    if (schema?.schemaVersion !== FORM_SCHEMA_VERSION) problems.push('schemaVersion');
+    if (!schema?.page || typeof schema.page.type !== 'string') problems.push('page.type');
+    if (!Array.isArray(schema?.fields)) return [...problems, 'fields'];
+    const ids = new Set();
+    schema.fields.forEach((record, index) => {
+      if (!record.id || ids.has(record.id)) problems.push(`fields[${index}].id`);
+      ids.add(record.id);
+      for (const key of ['question', 'elementType', 'inputType', 'valueType', 'labelConfidence']) {
+        if (typeof record[key] !== 'string') problems.push(`fields[${index}].${key}`);
+      }
+      if (typeof record.required !== 'boolean') problems.push(`fields[${index}].required`);
+      if (!Array.isArray(record.options)) problems.push(`fields[${index}].options`);
+      if (!['complete', 'partial', 'unknown', 'pending_dependency', 'not_applicable'].includes(record.optionsDiscovery?.status)) problems.push(`fields[${index}].optionsDiscovery.status`);
+    });
+    if (!Array.isArray(schema.actions)) problems.push('actions');
+    return problems;
   }
 
   /** Scrolls a question into view and outlines it briefly, for "click an answer" in the review panel. */

@@ -274,6 +274,9 @@
     return { value: /notice/.test(label) ? noticeWords(days) : `In ${noticeWords(days)}`, source };
   }
 
+  // A question asking for something other than yes or no.
+  const OPEN_QUESTION = /^(where|which|what|when|why|how|who|whom|whose)\b/;
+
   // A question answered Yes or No, which a fact such as a phone number never answers.
   const YES_NO_QUESTION = /^(are|do|does|did|have|has|had|can|could|will|would|is|was|were|may|should|shall)\b/;
 
@@ -579,6 +582,9 @@
       if (field.kind === 'checkbox' && !rule.yesNo) continue;
       // Nor does a yes/no question ("Are you available for a phone screen?").
       if (!rule.yesNo && YES_NO_QUESTION.test(label)) continue;
+      // A yes/no fact never answers a question asking where, what, or which ("Where would you
+      // relocate to?" asks a place, not whether), unless the field only takes yes or no.
+      if (rule.yesNo && !hasOptions(field) && field.kind !== 'checkbox' && OPEN_QUESTION.test(label)) continue;
       const answer = ruleAnswer(rule, field, label, candidate, context);
       return answer && rule.personal ? { ...answer, fact: rule.name } : answer;
     }
@@ -1011,7 +1017,9 @@
   ].join('\n');
 
   const REPLY_FORMAT = [
-    'Reply with JSON only, in this shape: {"answers":[{"id":"<question id>","value":"<answer>"}]}',
+    'Reply with JSON only, in this shape: {"answers":[{"id":"<question id>","value":"<answer>","status":"ready"}]}',
+    'status "review" with value null and a short "reason" when nothing given (candidate facts, résumé, job description, reusable answers) supports an answer, for example the candidate\'s own account name, a reference\'s contact, or a figure not stated: never guess a fact. Otherwise "ready".',
+    'A question with "labelUncertain": true has text taken only from its box\'s hint: answer it only when that text clearly says what it asks, else status "review".',
     'Answer every question id. For "options", copy exactly one option character for character; for type "checkbox-group" or "multiple": true, every option that truly fits the candidate, separated by " | ".',
     'For "optionsPartial": true, "options" are only some of the list\'s choices (shown for sample searches): copy one when it fits; otherwise answer as for "choicesUnknown".',
     'For "choicesUnknown": true (a list whose choices could not be read), "value" is a JSON list: with "multiple": true, every choice that truly fits; otherwise up to 4 wordings of the one answer that such a list most likely uses, the best first (for example ["5-8 years", "5+ years", "More than 5 years"]).',
@@ -1083,6 +1091,7 @@
         // is matched to them when filled, and the choices it shows come back if none fits.
         : CHOICE_KINDS.has(field.kind) ? { choicesUnknown: true } : {}),
       ...(field.multiple ? { multiple: true } : {}),
+      ...(field.labelConfidence === 'low' ? { labelUncertain: true } : {}),
       ...(field.note ? { note: field.note } : {}),
       ...(field.placeholder && field.kind !== 'date' ? { placeholder: field.placeholder } : {}),
       ...(field.maxLength ? { maxLength: field.maxLength } : {}),
@@ -1194,12 +1203,24 @@
         // Try the next candidate.
       }
     }
-    const replies = new Map(Array.isArray(parsed?.answers)
-      ? parsed.answers.filter((entry) => entry && typeof entry.id === 'string').map((entry) => [entry.id, entry.value])
-      : []);
+    // Each answer names its question by "id" (Apply's format) or "fieldId".
+    const entries = (Array.isArray(parsed?.answers) ? parsed.answers : [])
+      .filter((entry) => entry && typeof (entry.id ?? entry.fieldId) === 'string')
+      .map((entry) => ({ ...entry, id: entry.id ?? entry.fieldId }));
+    const replies = new Map(entries.map((entry) => [entry.id, entry.value]));
+    // Questions the AI says nothing supports an answer to (status "review" or "needs_review"): never
+    // filled, never asked again; the Manager answers them, with the AI's short reason.
+    const reviewReasons = new Map(entries
+      .filter((entry) => /^(review|needs_review)$/i.test(String(entry.status || '')))
+      .map((entry) => [entry.id, String(entry.reason || '').replace(/\s+/g, ' ').trim().slice(0, 140)]));
     const answers = {};
     const invalid = [];
+    const review = [];
     for (const field of fields) {
+      if (reviewReasons.has(field.id)) {
+        review.push({ id: field.id, label: field.label, ...(reviewReasons.get(field.id) ? { reason: reviewReasons.get(field.id) } : {}) });
+        continue;
+      }
       const reply = replies.get(field.id);
       // A list: every choice that fits, for a list that takes several; otherwise wordings of the one
       // answer, the best first, tried in turn on a dropdown whose choices could not be read.
@@ -1219,7 +1240,7 @@
       if (checked.ok) answers[field.id] = { value: checked.value, source: 'ai' };
       else invalid.push({ id: field.id, label: field.label, reason: checked.reason });
     }
-    return { answers, invalid };
+    return { answers, invalid, review };
   }
 
   /**
