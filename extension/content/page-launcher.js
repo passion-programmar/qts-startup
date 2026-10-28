@@ -108,7 +108,6 @@ async function initializeQtsPageLauncher() {
     .apply-pick .pick-account { display: block; width: 100%; margin-top: 8px; padding: 9px 12px; border: 1px solid #10b981; border-radius: 10px; background: #ecfdf5; color: #065f46; font: 700 13px/1.3 system-ui, sans-serif; text-align: left; cursor: pointer; }
     .apply-pick .pick-account:hover:not(:disabled) { background: #d1fae5; }
     .apply-pick .pick-account:disabled { opacity: .6; cursor: wait; }
-    .apply-pick .pick-off { margin-top: 8px; padding: 8px 12px; border: 1px dashed #cbd5e1; border-radius: 10px; color: #64748b; }
     .launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }
     /* A Get JD page that needs the Manager keeps an orange badge until the notice is resolved. */
     .notice-badge { position: absolute; top: -4px; left: -4px; z-index: 4; display: none; place-items: center; width: 20px; height: 20px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: #f97316; color: #fff; font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: 0 2px 8px #f9731688; cursor: pointer; }
@@ -377,18 +376,10 @@ async function initializeQtsPageLauncher() {
     globalThis.__qtsPageToast?.show(message, { type });
   }
 
-  // Why an account's job on this page cannot be started now.
-  const PICK_REASONS = {
-    not_generated: 'not generated yet',
-    generating: 'Generation is writing it',
-    applied: 'already applied',
-    open: 'open in a Chrome',
-  };
-
   /**
-   * While Apply is on, the launcher opened on a job page shows the accounts that have this page's
-   * job: the ready ones (generated, no bid) as buttons that start it here, the others with why not.
-   * Nothing shows on a page with no saved job.
+   * While Apply is on, the launcher opened on a job page shows the accounts whose job here is
+   * generated and can be applied to now (no bid, open in no Chrome), as buttons that start it here.
+   * Nothing shows when no account has one.
    */
   async function showApplyPick() {
     let reply = null;
@@ -397,7 +388,8 @@ async function initializeQtsPageLauncher() {
     } catch {
       reply = null;
     }
-    const applications = reply?.applications || [];
+    // Only the accounts whose job here is generated and can be applied to now.
+    const applications = (reply?.applications || []).filter((application) => application.state === 'ready');
     if (!reply?.ok || !reply.applyOn || (!reply.openHere && !applications.length)) {
       applyPick.hidden = true;
       return;
@@ -420,13 +412,6 @@ async function initializeQtsPageLauncher() {
     } else {
       applyPick.append(line('pick-job', `${applications[0].title} · ${applications[0].company}`), line('pick-note', 'Choose the account to apply for:'));
       for (const application of applications) {
-        if (application.state !== 'ready') {
-          applyPick.append(Object.assign(document.createElement('div'), {
-            className: 'pick-off',
-            textContent: `${application.candidateName} — ${PICK_REASONS[application.state] || application.state}`,
-          }));
-          continue;
-        }
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'pick-account';
