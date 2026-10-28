@@ -9,7 +9,8 @@
 
    The 24 templates are listed by number ("QTS Template 1" ... "24"), which is
    also the order Generation rotates through them. Each one's section order is
-   in src/app/pdf/resume-sections.ts.
+   in src/app/pdf/resume-sections.ts: Career Highlights, when a résumé has them,
+   right after the summary, Projects last.
    ========================================================================== */
 (() => {
   const FONTS = ["arial", "georgia", "times", "calibri", "cambria", "palatino", "verdana", "tahoma", "trebuchet", "mono"];
@@ -26,8 +27,9 @@
       values: ["rule", "plain", "band", "bar", "pill", "flanked", "topline", "double", "overbar", "underbar", "marker", "underline"],
     },
     titleCase: { label: "Title case", values: ["upper", "title", "lower"] },
+    // Every template uses C (role and dates, then company and location): each part stands apart,
+    // which ATS parsers need to tell the job title, company and dates apart.
     entryLayout: { label: "Entry layout", values: ["A", "B", "C", "D", "E", "F", "G"] },
-    showFocus: { label: "Focus skills next to the role", values: ["yes", "no"] },
     datePosition: { label: "Dates", values: ["inline", "below", "parentheses"] },
     bulletStyle: { label: "Bullets", values: ["disc", "dash", "chevron"] },
     itemStyle: { label: "Entries", values: ["plain", "divided", "timeline", "bordered"] },
@@ -44,124 +46,124 @@
 
   window.RESUME_TEMPLATES = [
     template("startup", "QTS Template 1",
-      "Skills first · role (dates), then company · rows skills",
+      "Skills first · role and dates, then company and location · rows skills",
       "Arimo", {
-        entryLayout: "F", showFocus: "no", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "underline", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "underline", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
       }),
     template("centered", "QTS Template 2",
-      "Education first · role line, then company and dates · compact skills",
+      "Education first · role and dates, then company and location · compact skills",
       "Gelasio + Arimo", {
-        entryLayout: "B", showFocus: "yes", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "dash", itemStyle: "bordered", summaryStyle: "quote", skillsLayout: "compact", skillDetail: "dash", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "quote", skillsLayout: "compact", skillDetail: "dash", letterLayout: "modified",
       }),
     template("corporate", "QTS Template 3",
-      "Career Highlights first · company and location, then role and dates · rows skills",
+      "Education first · role and dates, then company and location · rows skills",
       "Fira Sans", {
-        entryLayout: "D", showFocus: "yes", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "underbar", titleCase: "upper", bulletStyle: "chevron", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "underbar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
       }),
     template("ledger", "QTS Template 4",
       "Experience first · role and dates, then company and location · rows skills",
       "Tinos", {
-        entryLayout: "C", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "underbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "underbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
       }),
     template("bold", "QTS Template 5",
-      "Projects first · company first, then role, then dates · tags skills",
+      "Education first · role and dates, then company and location · tags skills",
       "Arimo + Archivo Black", {
-        entryLayout: "E", showFocus: "yes", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "double", titleCase: "upper", bulletStyle: "dash", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "double", titleCase: "upper", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "colon", letterLayout: "block",
       }),
     template("technical", "QTS Template 6",
-      "Skills first · role (dates), then company · compact skills",
+      "Skills first · role and dates, then company and location · compact skills",
       "Carlito + Caladea", {
-        entryLayout: "F", showFocus: "no", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "topline", titleCase: "lower", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "bracket", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "topline", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "bracket", letterLayout: "modified",
       }),
     template("professional", "QTS Template 7",
-      "Education first · one line, dates right · compact skills",
+      "Education first · role and dates, then company and location · compact skills",
       "Tinos", {
-        entryLayout: "A", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "rule", titleCase: "upper", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "rule", titleCase: "upper", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
       }),
     template("executive", "QTS Template 8",
-      "Career Highlights first · company and location, then role and dates · rows skills",
+      "Experience first · role and dates, then company and location · rows skills",
       "Gelasio + Arimo", {
-        entryLayout: "D", showFocus: "yes", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "plain", titleCase: "title", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
+        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "plain", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
       }),
     template("timeline", "QTS Template 9",
-      "Experience first · role line, then company and dates · tags skills",
+      "Experience first · role and dates, then company and location · tags skills",
       "Gelasio", {
-        entryLayout: "B", showFocus: "yes", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "pill", titleCase: "upper", bulletStyle: "chevron", itemStyle: "timeline", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "pill", titleCase: "upper", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "block",
       }),
     template("graphite", "QTS Template 10",
-      "Skills first · company and location, then role and dates · rows skills",
+      "Skills first · role and dates, then company and location · rows skills",
       "Gelasio + Arimo", {
-        entryLayout: "D", showFocus: "yes", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "labeled", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "labeled", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "modified",
       }),
     template("modern-serif", "QTS Template 11",
-      "Projects first · role and dates, then company and location · tags skills",
+      "Experience first · role and dates, then company and location · tags skills",
       "DejaVu Sans", {
-        entryLayout: "C", showFocus: "yes", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "flanked", titleCase: "upper", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "flanked", titleCase: "upper", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "block",
       }),
     template("compact", "QTS Template 12",
-      "Experience first · role, then company, then dates · compact skills",
+      "Experience first · role and dates, then company and location · compact skills",
       "Fira Sans + Archivo Black", {
-        entryLayout: "G", showFocus: "no", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "underline", titleCase: "title", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "underline", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
       }),
     template("minimal", "QTS Template 13",
       "Skills first · role and dates, then company and location · compact skills",
       "Carlito", {
-        entryLayout: "C", showFocus: "yes", headerStyle: "accent-top", headerAlign: "start", contactStyle: "labeled", titleStyle: "bar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "labeled", titleStyle: "bar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
       }),
     template("harvard", "QTS Template 14",
-      "Education first · role (dates), then company · compact skills",
+      "Education first · role and dates, then company and location · compact skills",
       "Tinos", {
-        entryLayout: "F", showFocus: "no", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "overbar", titleCase: "title", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "colon", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "overbar", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "compact", skillDetail: "colon", letterLayout: "modified",
       }),
     template("nordic", "QTS Template 15",
-      "Skills first · one line, dates right · rows skills",
+      "Skills first · role and dates, then company and location · rows skills",
       "DejaVu Sans", {
-        entryLayout: "A", showFocus: "yes", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "marker", titleCase: "upper", bulletStyle: "chevron", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "marker", titleCase: "upper", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
       }),
     template("academic", "QTS Template 16",
-      "Education first · company first, then role, then dates · rows skills",
+      "Education first · role and dates, then company and location · rows skills",
       "Caladea", {
-        entryLayout: "E", showFocus: "yes", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "topline", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "topline", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
       }),
     template("swiss", "QTS Template 17",
-      "Projects first · role, then company, then dates · tags skills",
+      "Experience first · role and dates, then company and location · tags skills",
       "DejaVu Sans", {
-        entryLayout: "G", showFocus: "no", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "marker", titleCase: "upper", bulletStyle: "dash", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
+        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "marker", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
       }),
     template("slate", "QTS Template 18",
-      "Career Highlights first · one line, dates right · tags skills",
+      "Skills first · role and dates, then company and location · tags skills",
       "Fira Sans + Archivo Black", {
-        entryLayout: "A", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "inline", titleStyle: "pill", titleCase: "lower", bulletStyle: "chevron", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "inline", titleStyle: "pill", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "bubbles", skillDetail: "dash", letterLayout: "modified",
       }),
     template("high-contrast", "QTS Template 19",
-      "Experience first · company first, then role, then dates · tags skills",
+      "Experience first · role and dates, then company and location · tags skills",
       "Caladea", {
-        entryLayout: "E", showFocus: "yes", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "plain", titleCase: "upper", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "plain", titleCase: "upper", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "bubbles", skillDetail: "bracket", letterLayout: "block",
       }),
     template("classic", "QTS Template 20",
-      "Career Highlights first · role and dates, then company and location · rows skills",
+      "Experience first · role and dates, then company and location · rows skills",
       "Carlito + Caladea", {
-        entryLayout: "C", showFocus: "yes", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "flanked", titleCase: "title", bulletStyle: "dash", itemStyle: "plain", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "side-bar", headerAlign: "start", contactStyle: "inline", titleStyle: "flanked", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
       }),
     template("qts-standard", "QTS Template 21",
-      "Experience first · role line, then company and dates · rows skills",
+      "Experience first · role and dates, then company and location · rows skills",
       "Arimo + Gelasio", {
-        entryLayout: "B", showFocus: "yes", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "double", titleCase: "upper", bulletStyle: "chevron", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "double", titleCase: "upper", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
       }),
     template("elegant", "QTS Template 22",
-      "Education first · one line, dates right · rows skills",
+      "Education first · role and dates, then company and location · rows skills",
       "Caladea", {
-        entryLayout: "A", showFocus: "yes", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "overbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "dash", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "overbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "dash", letterLayout: "modified",
       }),
     template("creative", "QTS Template 23",
-      "Projects first · role, then company, then dates · rows skills",
+      "Skills first · role and dates, then company and location · rows skills",
       "Arimo + Archivo Black", {
-        entryLayout: "G", showFocus: "no", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "upper", bulletStyle: "dash", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
       }),
     template("banded", "QTS Template 24",
-      "Experience first · role line, then company and dates · rows skills",
+      "Experience first · role and dates, then company and location · rows skills",
       "Carlito + Caladea", {
-        entryLayout: "B", showFocus: "yes", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "bar", titleCase: "title", bulletStyle: "chevron", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "bar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "block",
       }),
   ];
 })();

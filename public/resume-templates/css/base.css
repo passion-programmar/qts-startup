@@ -132,7 +132,9 @@
   --space-header: 10pt;
   --space-section: 10pt;
   --space-title: 4pt;
-  --space-item: 6pt;
+  /* Between entries: ATS parsers start a new job or school where the gap is
+     over 1.4 lines, so this stays at least ~0.5 line in every density. */
+  --space-item: 8pt;
   --space-bullet: 1.5pt;
   --indent-bullet: 10pt;
 }
@@ -146,7 +148,8 @@
   size: A4;
   margin: 15mm 16mm 10mm;
 
-  /* Page numbers from page 2 on (Chromium 131+, WeasyPrint, Prince). */
+  /* Page numbers from page 2 on (Chromium 131+, WeasyPrint, Prince), only
+     with theme.showPageNumbers: true; render.js turns them off otherwise. */
   @bottom-right {
     content: "Page " counter(page) " of " counter(pages);
     font-family: "QTS Arial", Arial, "Liberation Sans", Arimo, Helvetica, sans-serif;
@@ -408,8 +411,7 @@ a {
   column-gap: 12pt;
 }
 
-.entry-line + .entry-line,
-.item-focus + .entry-line {
+.entry-line + .entry-line {
   margin-top: 1.5pt;
 }
 
@@ -422,19 +424,6 @@ a {
   font-family: var(--font-meta);
   font-size: calc(var(--text-meta) * var(--font-scale));
   color: var(--color-muted);
-}
-
-/* The role's key skills, on their own line under it (render.js). */
-.item-focus {
-  margin-top: 1pt;
-  font-family: var(--font-meta);
-  font-size: calc(var(--text-meta) * var(--font-scale));
-  color: var(--color-muted);
-}
-
-/* A hyphenated word in running text stays on one line (render.js). */
-.nowrap {
-  white-space: nowrap;
 }
 
 .item-company {
@@ -498,7 +487,9 @@ a {
 }
 
 /* Text markers (Chromium paints the default disc as a shape), so each bullet
-   starts with a real character in the extracted text. */
+   starts with a real character in the extracted text. Every template uses the
+   round bullet: ATS parsers that find a job's bullets by their marker know "•"
+   but not always "–" or "›". */
 .item-bullets {
   margin-top: 3pt;
   padding-inline-start: var(--indent-bullet);
@@ -877,7 +868,7 @@ li {
   --space-header: 8pt;
   --space-section: 8pt;
   --space-title: 3pt;
-  --space-item: 4pt;
+  --space-item: 7pt;
   --space-bullet: 0.5pt;
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
-import { templateSectionOrders } from "@/app/pdf/resume-sections";
+import { shownSectionIds, templateSectionOrders } from "@/app/pdf/resume-sections";
 import sampleFull from "@/app/pdf/sample-full.json";
 import { pdfTemplateValues } from "@/server/pdf/pdf-templates";
 
@@ -103,12 +103,12 @@ test("a required section whose entries print nothing counts as missing", () => {
 test("each template shows its own sections in its own order, with its own layout", () => {
   const parsed = parsePdfPackage(JSON.stringify(generatedPackage));
   const technical = toResumeTemplateData(parsed, "technical");
-  // Technical shows Projects (empty here, so hidden) and never Career Highlights.
+  // Technical shows Projects; with none here, the Career Highlights take their place, after the summary.
   assert.deepEqual(
     technical.resume.sections.map((section) => section.id),
-    ["skills", "experience", "education"],
+    ["career_highlights", "skills", "experience", "education"],
   );
-  assert.deepEqual(technical.theme.sectionOrder, ["summary", "skills", "experience", "education"]);
+  assert.deepEqual(technical.theme.sectionOrder, ["summary", "career_highlights", "skills", "experience", "education"]);
   const executive = toResumeTemplateData(parsed, "executive");
   assert.deepEqual(
     executive.resume.sections.map((section) => section.id),
@@ -119,15 +119,28 @@ test("each template shows its own sections in its own order, with its own layout
   assert.equal("bulletStyle" in executive.theme, false);
 });
 
-test("every template has a distinct order with the core sections and one of projects or highlights", () => {
-  const orders = pdfTemplateValues.map((template) => templateSectionOrders[template]);
-  assert.equal(new Set(orders.map((order) => order.join(","))).size, pdfTemplateValues.length);
-  for (const order of orders) {
+test("every template has the core sections and one of highlights (first) or projects (last)", () => {
+  for (const template of pdfTemplateValues) {
+    const order = templateSectionOrders[template];
     for (const required of ["skills", "experience", "education", "certifications"] as const) {
-      assert.ok(order.includes(required));
+      assert.ok(order.includes(required), template);
     }
-    assert.equal(Number(order.includes("projects")) + Number(order.includes("career_highlights")), 1);
+    assert.equal(Number(order.includes("projects")) + Number(order.includes("career_highlights")), 1, template);
+    if (order.includes("career_highlights")) assert.equal(order[0], "career_highlights", template);
+    else assert.equal(order.at(-1), "projects", template);
   }
+});
+
+test("a résumé prints one of highlights or projects, the template's own choice first", () => {
+  const both = ["skills", "experience", "education", "certifications", "projects", "career_highlights"];
+  // Each template's own choice when the résumé has both.
+  assert.deepEqual(shownSectionIds("classic", both), ["career_highlights", "experience", "education", "skills", "certifications"]);
+  assert.deepEqual(shownSectionIds("banded", both), ["experience", "education", "skills", "certifications", "projects"]);
+  // The other one in its place when the template's own is missing: highlights first, projects last.
+  assert.deepEqual(shownSectionIds("banded", ["skills", "experience", "education", "career_highlights"]), ["career_highlights", "experience", "education", "skills", "certifications"]);
+  assert.deepEqual(shownSectionIds("classic", ["skills", "experience", "education", "projects"]), ["experience", "education", "skills", "certifications", "projects"]);
+  // Neither, and Certifications only print when the résumé has them (orderResumeSections drops missing ones).
+  assert.deepEqual(shownSectionIds("classic", ["skills", "experience", "education"]), ["experience", "education", "skills", "certifications"]);
 });
 
 test("the supplied full template sample parses and retains its content", () => {
@@ -151,7 +164,8 @@ test("the supplied full template sample parses and retains its content", () => {
   assert.deepEqual(adapted.candidate.links, []);
   assert.deepEqual(
     adapted.resume.sections.map((section) => section.title),
-    ["Career Highlights", "Experience", "Education", "Skills", "Certifications"],
+    // Standard titles, whatever the JSON calls the sections.
+    ["Career Highlights", "Professional Experience", "Education", "Skills", "Certifications"],
   );
   assert.equal(adapted.resume.sections[3].type, "skills");
   assert.equal(adapted.coverLetter.recipient?.company, "Example Employer");

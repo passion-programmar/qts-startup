@@ -126,21 +126,14 @@
     return link;
   }
 
-  // Appends text, keeping each hyphenated word ("on-call") on one line: split
-  // at a line end, an ATS that joins lines with a space would read "on- call".
-  function unbroken(node, value) {
-    value.split(/(\S*\w-\w\S*)/g).forEach((part, index) => {
-      if (part) node.append(index % 2 ? el("span", "nowrap", part) : part);
-    });
-    return node;
-  }
-
-  // Appends text, turning **keyword** into <strong class="keyword">.
+  // Appends text, turning **keyword** into <strong class="keyword">. Nothing
+  // else is wrapped: Chrome prints the space next to an inline element as a
+  // piece of its own, which some ATS parsers drop, joining the words.
   function rich(node, value) {
     value.split(/(\*\*[^*]+?\*\*)/g).forEach((part) => {
       if (!part) return;
       const keyword = /^\*\*([^*]+?)\*\*$/.exec(part);
-      node.append(keyword ? unbroken(el("strong", "keyword"), keyword[1]) : unbroken(document.createDocumentFragment(), part));
+      node.append(keyword ? el("strong", "keyword", keyword[1]) : part);
     });
     return node;
   }
@@ -347,7 +340,9 @@
       );
     }
     if (letter) rules.push("@page { size: letter; }");
-    if (theme.showPageNumbers === false) {
+    // Page numbers only when asked for: an ATS reads "Page 2 of 2" in the
+    // middle of the entry that runs onto page 2.
+    if (theme.showPageNumbers !== true) {
       rules.push("@page { @bottom-right { content: none; } }");
     } else if (labels.page !== DEFAULT_LABELS.page || labels.of !== DEFAULT_LABELS.of) {
       rules.push(
@@ -579,11 +574,6 @@
   function renderEntryHeader(item, settings) {
     const header = el("div", "item-header");
     if (!item.heading && !item.subheading && !item.location && !item.dateRange) return null;
-    // The entry's key skills get a line of their own under the role, so an ATS
-    // reads the role line as the job title alone.
-    const focus = settings.showFocus === "yes" && item.heading && item.focus.length
-      ? el("p", "item-focus", item.focus.slice(0, 3).join(" · "))
-      : null;
     entryLines(item, settings).forEach(([main, aside]) => {
       if (!main.length && !aside.length) return;
       const line = el("div", "entry-line");
@@ -597,7 +587,6 @@
         line.append(end);
       }
       header.append(line);
-      if (focus && main.some((part) => part.localName === "h3")) header.append(focus);
     });
     return header;
   }
@@ -657,6 +646,8 @@
       item.bullets.forEach((bullet) => bullets.append(rich(el("li"), bullet)));
       node.append(bullets);
     }
+    // A job prints no line of its key skills: wherever it stands, an ATS takes
+    // it for the company name. They are in the Skills section.
     return node;
   }
 
@@ -842,7 +833,8 @@
      A page ends early when the next block (a heading with its first entry, a
      bullet) does not fit, which would leave white space above the bottom
      margin. That space is shared out over the gaps between the sections,
-     entries, bullets and paragraphs on the page, each growing by the same
+     entries, skill groups and paragraphs on the page (not between bullets: an
+     ATS that splits entries at wide gaps would cut an entry there), each growing by the same
      share of its size and at most tripling, so every page but the last ends at
      the bottom margin. Pages are found with the columns of the page view,
      which break exactly like print; a fill that would move anything to
@@ -851,7 +843,6 @@
   const FILL_GAPS = [
     ".section + .section",
     ".item + .item",
-    ".item-bullets li + li",
     ".skill-group + .skill-group",
     ".letter-paragraph + .letter-paragraph",
   ].join(", ");
@@ -1075,7 +1066,7 @@
   // What @page prints in the bottom-right margin (base.css section 2 and
   // applyDocumentSettings): nothing on page 1 or when page numbers are off.
   function pageNumberText(theme, labels, page, total) {
-    if (page === 1 || theme.showPageNumbers === false) return "";
+    if (page === 1 || theme.showPageNumbers !== true) return "";
     return `${labels.page} ${page} ${labels.of} ${total}`;
   }
 

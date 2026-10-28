@@ -45,34 +45,51 @@ export function resumeSectionId(id: string | undefined, title: string): ResumeSe
 }
 
 // The order each template shows its sections in, after the summary, listed by template number.
-// Each shows Projects or Career Highlights, never both, and ends with Certifications; a section
-// missing from the JSON is simply left out.
+// Each shows Projects or Career Highlights, never both: Career Highlights straight after the
+// summary, Projects as the last section. Skills, Experience and Education follow the template's
+// own order, then Certifications. A section missing from the JSON is simply left out.
 export const templateSectionOrders: Record<PdfTemplate, readonly ResumeSectionId[]> = {
-  startup: ["skills", "career_highlights", "experience", "education", "certifications"], // QTS Template 1
-  centered: ["education", "skills", "experience", "career_highlights", "certifications"], // QTS Template 2
+  startup: ["career_highlights", "skills", "experience", "education", "certifications"], // QTS Template 1
+  centered: ["career_highlights", "education", "skills", "experience", "certifications"], // QTS Template 2
   corporate: ["career_highlights", "education", "experience", "skills", "certifications"], // QTS Template 3
-  ledger: ["experience", "career_highlights", "education", "skills", "certifications"], // QTS Template 4
-  bold: ["projects", "education", "experience", "skills", "certifications"], // QTS Template 5
-  technical: ["skills", "projects", "experience", "education", "certifications"], // QTS Template 6
-  professional: ["education", "career_highlights", "experience", "skills", "certifications"], // QTS Template 7
+  ledger: ["career_highlights", "experience", "education", "skills", "certifications"], // QTS Template 4
+  bold: ["education", "experience", "skills", "certifications", "projects"], // QTS Template 5
+  technical: ["skills", "experience", "education", "certifications", "projects"], // QTS Template 6
+  professional: ["career_highlights", "education", "experience", "skills", "certifications"], // QTS Template 7
   executive: ["career_highlights", "experience", "skills", "education", "certifications"], // QTS Template 8
-  timeline: ["experience", "career_highlights", "skills", "education", "certifications"], // QTS Template 9
-  graphite: ["skills", "experience", "projects", "education", "certifications"], // QTS Template 10
-  "modern-serif": ["projects", "experience", "education", "skills", "certifications"], // QTS Template 11
-  compact: ["experience", "skills", "education", "career_highlights", "certifications"], // QTS Template 12
-  minimal: ["skills", "experience", "education", "projects", "certifications"], // QTS Template 13
-  harvard: ["education", "experience", "projects", "skills", "certifications"], // QTS Template 14
-  nordic: ["skills", "education", "experience", "career_highlights", "certifications"], // QTS Template 15
-  academic: ["education", "projects", "experience", "skills", "certifications"], // QTS Template 16
-  swiss: ["projects", "experience", "skills", "education", "certifications"], // QTS Template 17
+  timeline: ["career_highlights", "experience", "skills", "education", "certifications"], // QTS Template 9
+  graphite: ["skills", "experience", "education", "certifications", "projects"], // QTS Template 10
+  "modern-serif": ["experience", "education", "skills", "certifications", "projects"], // QTS Template 11
+  compact: ["career_highlights", "experience", "skills", "education", "certifications"], // QTS Template 12
+  minimal: ["skills", "experience", "education", "certifications", "projects"], // QTS Template 13
+  harvard: ["education", "experience", "skills", "certifications", "projects"], // QTS Template 14
+  nordic: ["career_highlights", "skills", "education", "experience", "certifications"], // QTS Template 15
+  academic: ["education", "experience", "skills", "certifications", "projects"], // QTS Template 16
+  swiss: ["experience", "skills", "education", "certifications", "projects"], // QTS Template 17
   slate: ["career_highlights", "skills", "experience", "education", "certifications"], // QTS Template 18
-  "high-contrast": ["experience", "skills", "career_highlights", "education", "certifications"], // QTS Template 19
+  "high-contrast": ["career_highlights", "experience", "skills", "education", "certifications"], // QTS Template 19
   classic: ["career_highlights", "experience", "education", "skills", "certifications"], // QTS Template 20
-  "qts-standard": ["experience", "skills", "projects", "education", "certifications"], // QTS Template 21
-  elegant: ["education", "experience", "career_highlights", "skills", "certifications"], // QTS Template 22
-  creative: ["projects", "skills", "experience", "education", "certifications"], // QTS Template 23
-  banded: ["experience", "education", "skills", "projects", "certifications"], // QTS Template 24
+  "qts-standard": ["experience", "skills", "education", "certifications", "projects"], // QTS Template 21
+  elegant: ["career_highlights", "education", "experience", "skills", "certifications"], // QTS Template 22
+  creative: ["skills", "experience", "education", "certifications", "projects"], // QTS Template 23
+  banded: ["experience", "education", "skills", "certifications", "projects"], // QTS Template 24
 };
+
+/**
+ * The sections a template prints for a résumé that has these sections, in print order. When the
+ * résumé lacks the template's own choice of Projects or Career Highlights but has the other, the
+ * other prints in its place: Career Highlights after the summary, Projects last.
+ */
+export function shownSectionIds(template: PdfTemplate, has: readonly string[]): ResumeSectionId[] {
+  const order = templateSectionOrders[template] ?? templateSectionOrders["qts-standard"];
+  const own = order.includes("projects") ? "projects" : "career_highlights";
+  const other = own === "projects" ? "career_highlights" : "projects";
+  const shown = has.includes(own) ? own : has.includes(other) ? other : null;
+  const core = order.filter((id) => id !== "projects" && id !== "career_highlights");
+  if (shown === "career_highlights") return ["career_highlights", ...core];
+  if (shown === "projects") return [...core, "projects"];
+  return core;
+}
 
 type PrintableItem = {
   focus?: string[];
@@ -83,22 +100,37 @@ type PrintableItem = {
   bullets?: (string | { name: string; detail?: string })[];
 };
 
+// Every template prints these titles, whatever the JSON calls a section: ATS parsers find sections
+// by short, standard headings ("Core Technical Skills" is missed by some).
+export const resumeSectionTitles: Record<ResumeSectionId, string> = {
+  skills: "Skills",
+  experience: "Professional Experience",
+  education: "Education",
+  projects: "Projects",
+  career_highlights: "Career Highlights",
+  certifications: "Certifications",
+};
+
 /**
- * The sections a template shows, in its order, as every template prints them. Sections it does
- * not list are left out. Content rules shared by all templates:
+ * The sections a template shows, in its order and with their standard titles, as every template
+ * prints them. Sections it does not list are left out. Content rules shared by all templates:
  * - Projects show only their name, a "Technologies:" line (the entry's focus) and bullets.
  * - Education entries have no bullets.
  * - Skills are names only, without years or levels.
- * - Other entries show at most 3 focus skills.
+ * - Jobs print no focus skills (an ATS reads that line as the company); the data keeps up to 3.
  */
-export function orderResumeSections<T extends { id?: string; items: PrintableItem[] }>(
+export function orderResumeSections<T extends { id?: string; title?: string; items: PrintableItem[] }>(
   sections: readonly T[],
   template: PdfTemplate,
 ): T[] {
-  const order = templateSectionOrders[template] ?? templateSectionOrders["qts-standard"];
+  const order = shownSectionIds(template, sections.filter((section) => section.items.length).map((section) => section.id ?? ""));
   return order.flatMap((sectionId) => sections
     .filter((section) => section.id === sectionId)
-    .map((section) => ({ ...section, items: section.items.map((item) => printableItem(sectionId, item)) })));
+    .map((section) => ({
+      ...section,
+      title: resumeSectionTitles[sectionId],
+      items: section.items.map((item) => printableItem(sectionId, item)),
+    })));
 }
 
 /**
