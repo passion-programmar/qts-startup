@@ -540,6 +540,13 @@
       "when": 1793187693585,
       "tag": "0076_site_account_password",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1793191792456,
+      "tag": "0077_apply_forget_old_returns",
+      "breakpoints": true
     }
   ]
 }
