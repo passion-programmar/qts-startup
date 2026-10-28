@@ -1928,7 +1928,9 @@ function assistPageOf(url) {
  * filled at most twice there; an upload once), so nothing is filled or uploaded over and over.
  */
 function assistKeys(tabId, page, field) {
-  const question = HAS_WORDS.test(field.label || '') ? `${field.kind}|${field.label}` : field.id;
+  // An upload's section heading is part of its question: "Upload file" under "Upload your CV" and
+  // under "Add a cover letter" (steps at one address) are two uploads.
+  const question = HAS_WORDS.test(field.label || '') ? `${field.kind}|${field.label}|${field.section || ''}` : field.id;
   return { box: `${tabId}|${page}|${field.id}`, question: `${tabId}|${page}|${question}` };
 }
 

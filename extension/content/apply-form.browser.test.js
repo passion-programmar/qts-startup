@@ -338,3 +338,10 @@ test('sign-in and create-account forms are the Manager\'s; the application form 
   assert.deepEqual(Object.fromEntries(await marks(`<form><label for="em">Email</label><input id="em" type="email"><label for="otp">Code</label><input id="otp" type="password" autocomplete="one-time-code"></form>`)),
     { em: false });
 });
+
+test('an upload carries the heading of its section, so a cover-letter step is told from a CV step', { skip }, async () => {
+  const sections = await onPage(`<main><h1>Apply to Acme</h1>
+      <section><h2>Confirm your cover letter</h2><div class="drop"><input id="up" type="file" required><button>Upload file</button></div></section></main>`,
+  `return api.scanForm().filter((f) => f.kind === 'file').map((f) => f.section);`);
+  assert.deepEqual(sections, ['Confirm your cover letter']);
+});

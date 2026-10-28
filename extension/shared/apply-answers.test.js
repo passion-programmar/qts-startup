@@ -889,3 +889,23 @@ test('the AI may say nothing supports an answer: that question is neither filled
   // An answer that is not one of a complete list's options is refused, never matched loosely.
   assert.match(answers.parseAnswerReply(JSON.stringify({ answers: [{ id: 'Years of Python?', value: '6' }] }), [fields[1]]).invalid[0].reason, /"6" is not one of the options/);
 });
+
+test('an upload named only "Upload file" takes the document its section heading names', () => {
+  const resolve = (...fields) => answers.resolveFields(fields, candidate, []).answers;
+  // A cover-letter step (one upload per step): required, generic name, heading "Add a cover letter".
+  assert.equal(resolve(field('Upload file', { kind: 'file', section: 'Add a cover letter' }))['Upload file'].file, 'coverLetter');
+  assert.equal(resolve(field('Drag & drop', { kind: 'file', required: false, section: 'Confirm your cover letter' }))['Drag & drop'].file, 'coverLetter');
+  assert.equal(resolve(field('Upload file', { kind: 'file', section: 'Upload your CV' }))['Upload file'].file, 'resume');
+  // A heading naming both documents decides nothing: a required box still takes the résumé.
+  assert.equal(resolve(field('Upload file', { kind: 'file', section: 'Your CV and cover letter' }))['Upload file'].file, 'resume');
+  // The box's own name comes first.
+  assert.equal(resolve(field('Resume', { kind: 'file', section: 'Add a cover letter' })).Resume.file, 'resume');
+  // Other languages.
+  for (const label of ['Anschreiben', 'Motivationsschreiben', 'List motywacyjny', 'Lettre de motivation', 'Carta de presentación', 'Motivation letter']) {
+    assert.equal(resolve(field(label, { kind: 'file' }))[label].file, 'coverLetter', label);
+  }
+  assert.equal(resolve(field('Lebenslauf', { kind: 'file' })).Lebenslauf.file, 'resume');
+  // With a résumé box on the page, an optional general box under a cover-letter heading is the letter.
+  const both = resolve(field('Resume/CV', { kind: 'file' }), field('Attach file', { kind: 'file', required: false, section: 'Cover letter (optional)' }));
+  assert.deepEqual([both['Resume/CV'].file, both['Attach file'].file], ['resume', 'coverLetter']);
+});

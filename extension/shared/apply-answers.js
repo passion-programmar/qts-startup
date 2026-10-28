@@ -477,9 +477,9 @@
       if (isAutofillUpload(field)) return { skip: 'The site\'s autofill-from-résumé upload.' };
       // Photos and other images are never uploaded, even when required: Apply has no image to give.
       if (isImageUpload(field)) return { skip: 'An image upload (photo).' };
-      if (/cover/.test(label)) return { file: 'coverLetter', source: 'documents' };
-      if (/resume|résumé|\bcv\b|curriculum/.test(label) || field.required) return { file: 'resume', source: 'documents' };
-      if (field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
+      const document = uploadDocument(field);
+      if (document) return { file: document, source: 'documents' };
+      if (field.required || field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
       return { skip: 'An optional upload that is not a résumé or cover letter.' };
     }
     // An image CAPTCHA ("Type below image text") is the Manager's to solve, never typed by Apply or the AI.
@@ -915,14 +915,34 @@
     const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled
       && !isImageUpload(field) && !isAutofillUpload(field));
     // The uploads resolveField already gives the résumé (named for it, or required).
-    const takesResume = (field) => !/cover/.test(labelOf(field))
-      && (/resume|résumé|\bcv\b|curriculum/.test(labelOf(field)) || field.required);
+    const takesResume = (field) => uploadDocument(field) === 'resume' || (!uploadDocument(field) && field.required);
     if (uploads.some(takesResume)) return null;
     const general = uploads.find((field) => {
       const label = labelOf(field);
-      return GENERAL_UPLOAD.test(label) && !OTHER_DOCUMENT.test(label) && !/cover/.test(label);
+      return GENERAL_UPLOAD.test(label) && !OTHER_DOCUMENT.test(label) && !uploadDocument(field);
     });
     return general ? general.id : null;
+  }
+
+  // A cover letter and a résumé as job sites name them, in the languages they use.
+  const COVER_DOCUMENT = /cover|motivation(al)? letter|letter of motivation|anschreiben|motivationsschreiben|list motywacyjny|lettre de motivation|carta de (presentaci[oó]n|motivaci[oó]n)|lettera (di )?(presentazione|motivazione)|carta de apresenta[cç][aã]o/;
+  const RESUME_DOCUMENT = /resume|résumé|\bcv\b|curriculum|lebenslauf|życiorys/;
+
+  /**
+   * Which document an upload takes, 'coverLetter' or 'resume', or null when nothing says. Its own
+   * label first; a box named only "Upload file" goes by its section's heading ("Add a cover
+   * letter"), unless that heading names both documents.
+   */
+  function uploadDocument(field) {
+    const label = labelOf(field);
+    if (COVER_DOCUMENT.test(label)) return 'coverLetter';
+    if (RESUME_DOCUMENT.test(label)) return 'resume';
+    const section = String(field.section || '').toLowerCase();
+    const cover = COVER_DOCUMENT.test(section);
+    const resume = RESUME_DOCUMENT.test(section);
+    if (cover && !resume) return 'coverLetter';
+    if (resume && !cover) return 'resume';
+    return null;
   }
 
   /**

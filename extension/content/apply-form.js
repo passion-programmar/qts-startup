@@ -296,6 +296,21 @@
     return named.length ? named[0].slice(0, 200) : '';
   }
 
+  /**
+   * The heading of the section an upload sits in: the last heading before it on the page ("Add a
+   * cover letter" above a box named only "Upload file"), so it gets the right document.
+   */
+  function headingAbove(control) {
+    let anchor = control;
+    while (anchor.getRootNode() !== document && anchor.getRootNode().host) anchor = anchor.getRootNode().host;
+    let found = '';
+    for (const heading of document.querySelectorAll('h1, h2, h3, h4, legend, [role="heading"]')) {
+      if (heading.contains(anchor) || !(heading.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+      if (isShown(heading) && textOf(heading)) found = textOf(heading);
+    }
+    return cleanText(found).slice(0, 120);
+  }
+
   // A text written as a date format ("DD/MM/YYYY", "mm-dd-yy").
   const DATE_FORMAT = /^[dmy]{1,4}[./\- ][dmy]{1,4}[./\- ][dmy]{1,4}$/i;
 
@@ -753,6 +768,8 @@
         // What an upload takes ("image/*" for a photo), so Apply never puts a document there.
         ...(type === 'file' && control.accept ? { accept: String(control.accept).slice(0, 200) } : {}),
         ...(type === 'file' && autofillSection(control) ? { autofill: true } : {}),
+        // The section's heading tells an upload named only "Upload file" which document it takes.
+        ...(type === 'file' && headingAbove(control) ? { section: headingAbove(control) } : {}),
         // Date fields typed as text show their format here (DD/MM/YYYY).
         ...(control.placeholder ? { placeholder: String(control.placeholder).slice(0, 40) } : {}),
         // The question's help text ("Gross annual, in EUR"), so the AI answers in the form it asks for.
@@ -793,6 +810,7 @@
         hidden: false,
         disabled: false,
         ...(autofillSection(zone.element) ? { autofill: true } : {}),
+        ...(headingAbove(zone.element) ? { section: headingAbove(zone.element) } : {}),
       });
     }
     for (const field of fields) {
