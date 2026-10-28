@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeLearned, optionsKey, parseLearnedAnswers, safeAutoAnswer, type LearnedAnswer, type MemoryRow } from "./question-memory-values";
+import { isPerCandidateQuestion, isPersonalQuestion, mergeLearned, optionsKey, parseLearnedAnswers, safeAutoAnswer, type LearnedAnswer, type MemoryRow } from "./question-memory-values";
 
 const item = (overrides: Partial<LearnedAnswer> = {}): LearnedAnswer => ({
   question: "Do you consent to a background check?",
@@ -61,4 +61,22 @@ test("a question becomes reusable by itself only when it is safe", () => {
   const mixed = mergeLearned(row, item({ answer: "No" }), "c3");
   assert.equal(safeAutoAnswer(mixed, "Do you consent to a background check?"), null);
   assert.equal(safeAutoAnswer(row!, "Do you have experience with Kubernetes?"), null);
+});
+
+test("personal facts are never learned or suggested: location, where one lives, birthday", () => {
+  for (const question of ["Location* (required)", "Where do you live now?", "Where are you based?", "Birthday*", "Date of birth", "Complete Address*", "First", "Last", "Place of residence"]) {
+    assert.equal(isPersonalQuestion(question), true, question);
+  }
+  for (const question of ["What best describes your experience?", "Do you require visa sponsorship?", "How did you hear about us?"]) {
+    assert.equal(isPersonalQuestion(question), false, question);
+  }
+});
+
+test("questions each candidate answers differently are never suggested as one reusable answer", () => {
+  for (const question of ["What compensation are you targeting?", "What best describes your experience?", "Can you briefly describe one experiment you ran to improve an ML or LLM-powered system?", "What are your salary expectations?", "Location* (required)"]) {
+    assert.equal(isPerCandidateQuestion(question), true, question);
+  }
+  for (const question of ["Do you consent to a background check?", "How did you hear about us?", "Do you agree to our privacy policy?", "Do you require visa sponsorship?"]) {
+    assert.equal(isPerCandidateQuestion(question), false, question);
+  }
 });

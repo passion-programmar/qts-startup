@@ -86,6 +86,11 @@ const generationHeartbeatOkAt = new Map();
 const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
 // ChatGPT has this long from sending a prompt to finishing its answer.
 const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;
+// An answer that finished with no text, or ChatGPT never starting, is retried in a fresh tab
+// after these, instead of waiting out the 3 minutes.
+const GENERATION_EMPTY_ANSWER_MS = 6000;
+const GENERATION_NO_START_MS = 60 * 1000;
+const GENERATION_STOPPED_EMPTY_MS = 15 * 1000;
 // Without ChatGPT's copy button, an answer that stopped changing this long counts as finished.
 const GENERATION_ANSWER_QUIET_MS = 3000;
 // One pinned ChatGPT tab serves this many jobs (a new chat each), then a fresh tab takes over.
@@ -3389,6 +3394,63 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     await ensureChatGptReady(chatTabId);
   }
 
+  /**
+   * A real Enter, then a real click on Send, through Chrome's debugger: for a ChatGPT version that
+   * ignores simulated input. True when the prompt left the box or ChatGPT started answering.
+   */
+  async function sendPromptWithRealInput(tabId) {
+    const target = { tabId };
+    const state = async () => (await chrome.scripting.executeScript({
+      target,
+      func: () => {
+        const composer = globalThis.__qtsChatGptComposerHandoff;
+        const editor = composer?.findUnifiedComposerEditor?.();
+        editor?.focus();
+        const scope = editor?.closest('form') || document;
+        const send = [...scope.querySelectorAll('button')].find((button) => button.getClientRects().length && !button.disabled
+          && /send|submit/i.test(`${button.getAttribute('aria-label') || ''} ${button.getAttribute('data-testid') || ''} ${button.type || ''}`)
+          && !/dictat|voice|record|listen/i.test(button.getAttribute('aria-label') || ''));
+        const box = send?.getBoundingClientRect();
+        return {
+          left: editor ? String(composer.readEditorText(editor) || '').trim().length : 0,
+          generating: Boolean(composer?.isGenerating?.()),
+          send: box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : null,
+        };
+      },
+    }).catch(() => []))[0]?.result || { left: 0, generating: false, send: null };
+    const sentSoon = async () => {
+      for (let check = 0; check < 10; check += 1) {
+        await sleep(300);
+        const now = await state();
+        if (!now.left || now.generating) return true;
+      }
+      return false;
+    };
+    let attached = false;
+    try {
+      const before = await state();
+      if (!before.left) return before.generating;
+      await chrome.debugger.attach(target, '1.3');
+      attached = true;
+      const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key, text: '\r' });
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'keyUp', ...key });
+      if (await sentSoon()) return true;
+      const now = await state();
+      if (!now.send) return false;
+      const at = { x: now.send.x, y: now.send.y, button: 'left', clickCount: 1 };
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...at });
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...at });
+      return await sentSoon();
+    } catch (error) {
+      console.warn('[QTS Generation] A real Send could not be made:', error instanceof Error ? error.message : error);
+      return false;
+    } finally {
+      if (attached) await chrome.debugger.detach(target).catch(() => {});
+    }
+  }
+
   async function sendGenerationPromptWithRecovery(chatTabId, prompt) {
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -3401,9 +3463,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           target: { tabId: chatTabId },
           files: ['shared/chatgpt-composer-handoff.js'],
         });
-        const handoffResults = await chrome.scripting.executeScript({
+        // One page round first (type and a simulated Send); later rounds only when real input did not send.
+        const handoffRound = (maxRounds) => chrome.scripting.executeScript({
           target: { tabId: chatTabId },
-          func: async (message) => {
+          func: async (message, maxRounds) => {
             const composer = globalThis.__qtsChatGptComposerHandoff;
             if (!composer?.runUnifiedComposerHandoffAsync) {
               return { ok: false, error: 'The ChatGPT composer helper is unavailable.' };
@@ -3429,7 +3492,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
               // Up to three rounds while the prompt stays unsent in the box (so it is never sent twice):
               // ChatGPT may still be loading, so later rounds wait, retype the prompt and send again.
               let result = null;
-              for (let round = 1; round <= 3; round += 1) {
+              for (let round = 1; round <= maxRounds; round += 1) {
                 if (round > 1) {
                   window.__qtsSetGenerationStep?.('3/6 · Sending the prompt', `ChatGPT wasn't ready; trying again (${round} of 3)...`);
                   await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -3454,10 +3517,16 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
               error: 'Timed out waiting for the ChatGPT message box. Sign in to ChatGPT and retry.',
             };
           },
-          args: [prompt],
+          args: [prompt, maxRounds],
         });
-        const handoff = handoffResults[0]?.result;
+        let handoff = (await handoffRound(1))[0]?.result;
         if (handoff?.ok && handoff.sent) return handoff;
+        // The prompt is in the box but a simulated Send did nothing: a real Enter and click, at once.
+        if (handoff?.needsManualSend) {
+          if (await sendPromptWithRealInput(chatTabId)) return { ...handoff, ok: true, sent: true, method: 'real_input' };
+          handoff = (await handoffRound(3))[0]?.result;
+          if (handoff?.ok && handoff.sent) return handoff;
+        }
         lastError = new Error(
           handoff?.needsManualSend
             ? 'The prompt is ready in ChatGPT, but QTS could not confirm Send. Click Send once, then retry Generation if needed.'
@@ -3531,6 +3600,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     let lastText = '';
     let quietSince = 0;
     let lastShownSecond = -1;
+    let emptySince = 0;
+    let stoppedSince = 0;
+    let everStarted = false;
     while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS) {
       await sleep(750);
       active.local();
@@ -3549,6 +3621,25 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         );
       }
       if (snapshot?.chatError && !snapshot.generating) throw chatGptPageError(snapshot.chatError);
+      if (snapshot?.generating || snapshot?.text) everStarted = true;
+      // A finished answer with no text (its buttons show, nothing written): ChatGPT failed quietly.
+      if (snapshot?.isNew && snapshot.finished && !snapshot.text && !snapshot.generating) {
+        emptySince ||= Date.now();
+        if (Date.now() - emptySince >= GENERATION_EMPTY_ANSWER_MS) throw chatGptPageError('ChatGPT gave an empty answer.');
+      } else {
+        emptySince = 0;
+      }
+      // Sent, but ChatGPT never started (no Stop button, no thinking, no text) for a minute.
+      if (!everStarted && Date.now() - startedAt >= GENERATION_NO_START_MS) {
+        throw chatGptPageError('ChatGPT did not start answering within a minute.');
+      }
+      // ChatGPT worked, then stopped with no text at all.
+      if (everStarted && !snapshot?.generating && !snapshot?.text) {
+        stoppedSince ||= Date.now();
+        if (Date.now() - stoppedSince >= GENERATION_STOPPED_EMPTY_MS) throw chatGptPageError('ChatGPT stopped without writing an answer.');
+      } else {
+        stoppedSince = 0;
+      }
       if (!snapshot?.isNew || !snapshot.text || snapshot.generating) {
         lastText = '';
         continue;

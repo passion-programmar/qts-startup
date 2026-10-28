@@ -4,7 +4,6 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   applyAttempts,
   bids,
-  candidateSavedAnswers,
   extensionBrowsers,
   jobs,
   profiles,
@@ -23,14 +22,13 @@ import {
   type AppliedAnswer,
   type ApplyRun,
   coverLetterText,
-  normalizeQuestionKey,
   resumeFolderOf,
   resumeText,
   workTypeOf,
 } from "./apply-values";
 import { type ExchangeRates, loadExchangeRates } from "./exchange-rates";
 import { type RememberedChoice, recordLearnedAnswers, rememberedChoices } from "./question-memory";
-import type { LearnedAnswer } from "./question-memory-values";
+import { type LearnedAnswer } from "./question-memory-values";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
 // it ("claimed"), the Manager reviews each step ("waiting_review"), clicks the site's Submit
@@ -64,8 +62,8 @@ export type ClaimedApplication = {
     coverLetterText: string | null;
   };
   candidate: Record<string, string | number | boolean | null>;
-  // The candidate's own saved answers first, then Super Admin's reusable answers for everyone.
-  savedAnswers: { questionKey: string; questionText: string; answer: string; note: string | null; scope: "candidate" | "everyone" }[];
+  // Super Admin's reusable answers, the same for every candidate.
+  savedAnswers: { questionKey: string; questionText: string; answer: string; note: string | null; scope: "everyone" }[];
   // For salary questions in another currency; null when the ECB is unreachable.
   exchangeRates: ExchangeRates | null;
   // Which option a value that did not fit became on a known choice list: filled without AI.
@@ -157,6 +155,8 @@ export async function claimNextApplication(
       githubUrl: profiles.githubUrl,
       portfolioUrl: profiles.portfolioUrl,
       nationality: profiles.nationality,
+      // YYYY-MM-DD; Apply fills birthday questions from it and never guesses one.
+      birthday: profiles.birthday,
       languages: profiles.languages,
       // The candidate's own diversity answers (keys from src/lib/diversity-options.ts).
       gender: profiles.gender,
@@ -177,30 +177,17 @@ export async function claimNextApplication(
     .limit(1);
   if (!row) return null;
 
-  const [ownAnswers, sharedAnswers] = await Promise.all([
-    db
-      .select({
-        questionKey: candidateSavedAnswers.questionKey,
-        questionText: candidateSavedAnswers.questionText,
-        answer: candidateSavedAnswers.answer,
-      })
-      .from(candidateSavedAnswers)
-      .where(eq(candidateSavedAnswers.candidateId, row.candidateId)),
-    db
-      .select({
-        questionKey: reusableAnswers.questionKey,
-        questionText: reusableAnswers.questionText,
-        answer: reusableAnswers.answer,
-        note: reusableAnswers.note,
-      })
-      .from(reusableAnswers),
-  ]);
-  const savedAnswers = [
-    ...ownAnswers.map((entry) => ({ ...entry, note: null, scope: "candidate" as const })),
-    ...sharedAnswers
-      .filter((entry) => !ownAnswers.some((own) => own.questionKey === entry.questionKey))
-      .map((entry) => ({ ...entry, scope: "everyone" as const })),
-  ];
+  // Only Super Admin's reusable answers, the same for every candidate. Answers from earlier
+  // applications are never reused: each job's questions are answered for that job.
+  const savedAnswers = (await db
+    .select({
+      questionKey: reusableAnswers.questionKey,
+      questionText: reusableAnswers.questionText,
+      answer: reusableAnswers.answer,
+      note: reusableAnswers.note,
+    })
+    .from(reusableAnswers))
+    .map((entry) => ({ ...entry, scope: "everyone" as const }));
 
   const {
     jobId, url, title, company, location, employmentType, workplaceType, salary, description,
@@ -424,35 +411,6 @@ function answersOf(evidence: unknown): AppliedAnswer[] {
   return Array.isArray(answers) ? answers as AppliedAnswer[] : [];
 }
 
-const MAX_SAVED_ANSWER_LENGTH = 5000;
-
-/** The written answers of a confirmed application, kept so the next form asking the same question needs no AI. */
-async function saveCandidateAnswers(candidateId: string, answers: AppliedAnswer[]): Promise<void> {
-  const rows = answers
-    .filter((entry) => ["ai", "saved", "manager"].includes(entry.source))
-    .map((entry) => ({
-      candidateId,
-      questionKey: normalizeQuestionKey(entry.question),
-      questionText: entry.question.replace(/\s+/g, " ").trim().slice(0, 500),
-      answer: entry.answer.trim().slice(0, MAX_SAVED_ANSWER_LENGTH),
-      source: entry.source === "manager" ? "manager" : "ai",
-    }))
-    .filter((row) => row.questionKey && row.answer);
-  if (!rows.length) return;
-  await db
-    .insert(candidateSavedAnswers)
-    .values(rows)
-    .onConflictDoUpdate({
-      target: [candidateSavedAnswers.candidateId, candidateSavedAnswers.questionKey],
-      set: {
-        questionText: sql`excluded.question_text`,
-        answer: sql`excluded.answer`,
-        source: sql`excluded.source`,
-        updatedAt: new Date(),
-      },
-    });
-}
-
 /**
  * The Manager's answer to "Submitted successfully?", from the Chrome (browserId) or the Jobs page
  * (browserId null). Yes makes the bid, an independent copy of the job, its documents and the
@@ -549,9 +507,6 @@ export async function answerApplication(input: {
   ]);
   if (!done) return null;
   await recordApplyRun(attempt.jobId, "confirmed", null, answers);
-  await saveCandidateAnswers(attempt.candidateId, answers).catch((error) => {
-    console.error("Could not save the application's answers.", error);
-  });
   // A confirmed application teaches Apply's question memory (suggestions, remembered choices,
   // and safe reusable answers added by themselves).
   await recordLearnedAnswers(attempt.candidateId, learnedOf(attempt.evidence)).catch((error) => {

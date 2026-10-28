@@ -32,9 +32,22 @@ const MAX_CHOICES = 10;
 const MAX_STORED_ANSWER = 100;
 
 // Facts that differ per person come from the profile and are never learned or shared.
-const PERSONAL_QUESTION = /\b(?:name|e-?mail|phone|mobile|address|street|city|town|postcode|postal|zip|country|citizenship|linkedin|github|portfolio|website|gender|sex|race|veteran|birth|age)\b|\b(?:nationalit|ethnic|disabilit|orientation|pronoun)/i;
+const PERSONAL_QUESTION = /\b(?:name|first|last|surname|e-?mail|phone|mobile|address|street|city|town|postcode|postal|zip|country|citizenship|linkedin|github|portfolio|website|gender|sex|race|veteran|age|dob|location|located|based|resid\w*|live|living)\b|\b(?:birth|nationalit|ethnic|disabilit|orientation|pronoun)/i;
+
+/** A question whose answer is the candidate's own fact (name, contact, where they live, birthday...). */
+export function isPersonalQuestion(question: string): boolean {
+  return PERSONAL_QUESTION.test(question);
+}
 // Answers that depend on the candidate's own experience or wishes differ per candidate.
-const EXPERIENCE_QUESTION = /\b(years?|experience|how (long|many|much)|describe|tell us|why|explain|example|salary|rate|compensation|pay|notice|start|availab|level|proficien)\b/i;
+const EXPERIENCE_QUESTION = /\b(years?|experience|how (long|many|much)|describe|tell us|why|explain|example|salary|rate|compensation|pay|notice|start|availab|level|proficien|expect\w*|desired|targeting|motivat\w*|about yourself)\b/i;
+
+/**
+ * A question each candidate answers differently: their own facts, experience, or wishes. Never one
+ * reusable answer for everyone, so never suggested or added as one.
+ */
+export function isPerCandidateQuestion(question: string): boolean {
+  return PERSONAL_QUESTION.test(question) || EXPERIENCE_QUESTION.test(question);
+}
 // A site's reading of one candidate's résumé is that candidate's own, never learned for others.
 const NOT_LEARNED_SOURCES = new Set(["profile", "documents", "consent", "site"]);
 

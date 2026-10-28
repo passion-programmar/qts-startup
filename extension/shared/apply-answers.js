@@ -266,23 +266,27 @@
 
   // Each rule: the question it recognizes, and the candidate fact that answers it (or the missing fact's name).
   const RULES = [
-    { test: /first and last name|full name|legal name|^(your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name' },
+    { test: /first and last name|full name|legal name|^(your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name', personal: true },
     // English, then the Polish, German, French, and Spanish words forms use.
-    { test: /\b(first|given|preferred) name\b|preferred first|^imi[eę]$|^vorname$|^pr[ée]nom$|^nombre$/, fact: (c) => c.firstName, name: 'first name' },
-    { test: /\b(last|family) name\b|\bsurname\b|^nazwisko$|^nachname$|^nom( de famille)?$|^apellidos?$/, fact: (c) => c.lastName, name: 'last name' },
-    { test: /e-?mail/, fact: (c) => c.email, name: 'email' },
-    { test: /\b(phone|mobile|telephone|cell)\b|^telefon( kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone' },
-    { test: /linkedin/, fact: (c) => c.linkedinUrl, name: 'LinkedIn profile', optionalIfMissing: true },
-    { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true },
-    { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true },
-    { test: /^(current )?city$|city of residence|^town( or city)?$/, fact: (c) => c.city, name: 'city' },
-    { test: /^(current )?location$|where are you (located|based)|current location|^location of residence/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location' },
-    { test: /^country( of residence)?$/, fact: (c) => c.country, name: 'country' },
-    { test: /postal|post ?code|zip/, fact: (c) => c.postalCode, name: 'postal code' },
+    { test: /\b(first|given|preferred) name\b|preferred first|^(first|given)$|^imi[eę]$|^vorname$|^pr[ée]nom$|^nombre$/, fact: (c) => c.firstName, name: 'first name', personal: true },
+    { test: /\b(last|family) name\b|\bsurname\b|^(last|family)$|^nazwisko$|^nachname$|^nom( de famille)?$|^apellidos?$/, fact: (c) => c.lastName, name: 'last name', personal: true },
+    { test: /e-?mail/, fact: (c) => c.email, name: 'email', personal: true },
+    { test: /\b(phone|mobile|telephone|cell)\b|^telefon( kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone', personal: true },
+    { test: /linkedin/, fact: (c) => c.linkedinUrl, name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
+    { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
+    { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
+    { test: /^(current )?city$|city of residence|^town( or city)?$/, fact: (c) => c.city, name: 'city', personal: true },
+    { test: /^(current )?location$|where are you (currently )?(located|based|living)|where do you (currently )?(live|reside)\b(?! in)|current location|^location of residence|^(city|place|country) of residence$/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location', personal: true },
+    { test: /^country( of residence)?$/, fact: (c) => c.country, name: 'country', personal: true },
+    { test: /postal|post ?code|zip/, fact: (c) => c.postalCode, name: 'postal code', personal: true },
     { test: /second line of (your )?address|address line 2|apartment|suite/, fact: () => null, name: 'address line 2', optionalIfMissing: true },
-    { test: /^(street )?address( line 1)?$|first line of (your )?address/, fact: (c) => c.addressLine1, name: 'address' },
-    { test: /^(state|province|region)(\s*\/\s*(state|province|region))?$/, fact: (c) => c.province, name: 'state or province' },
-    { test: /nationalit|citizenship/, fact: (c) => c.nationality, name: 'nationality' },
+    // The whole address in one box ("Complete Address"): street, postal code and city, province, country.
+    { test: /(complete|full|home|residential|postal|current|permanent) address|^address (full)$/, fact: (c) => fullAddress(c), name: 'full address', personal: true },
+    { test: /^(street )?address( line 1)?$|first line of (your )?address/, fact: (c) => c.addressLine1, name: 'address', personal: true },
+    { test: /^(state|province|region)(\s*\/\s*(state|province|region))?$/, fact: (c) => c.province, name: 'state or province', personal: true },
+    { test: /nationalit|citizenship/, fact: (c) => c.nationality, name: 'nationality', personal: true },
+    // Never guessed: without a birthday in the profile it is left for the Manager.
+    { test: /birth ?day|date of birth|birth ?date|d.?o.?b|geburtsdatum|date de naissance|fecha de nacimiento|data (urodzenia|di nascita)/, fact: (c) => c.birthday, date: true, neverGuess: true, name: 'birthday', personal: true },
     { test: SPONSORSHIP_QUESTION, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
     { test: /relocat/, yesNo: (c) => c.willingToRelocate, name: 'relocation' },
     { test: NOTICE_QUESTION, notice: true, name: 'notice period' },
@@ -461,6 +465,10 @@
       if (field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
       return { skip: 'An optional upload that is not a résumé or cover letter.' };
     }
+    // An image CAPTCHA ("Type below image text") is the Manager's to solve, never typed by Apply or the AI.
+    if (/\bcaptcha\b|type (the )?(below |above )?image|(text|characters|letters|code) (shown )?(in|from|below|above) (the )?(image|picture)|(image|picture) (text|code)\b/.test(label)) {
+      return { skip: 'An image CAPTCHA for the Manager.' };
+    }
     // A link to a photo is not made up either; a question that only mentions images is answered.
     if (['text', 'url'].includes(field.kind) && IMAGE_WORDS.test(label) && /\b(url|link)\b/.test(label)) {
       return { skip: 'A link to a photo or image.' };
@@ -475,6 +483,8 @@
     if (hasOptions(field) && field.options.length === 1 && CONSENT.test(String(field.options[0]))) {
       return { value: field.options[0], source: 'consent' };
     }
+    const salutation = salutationAnswer(field, candidate);
+    if (salutation) return salutation;
     // A cover letter typed into the form is the one Generation wrote; a shorter one comes from the AI.
     if (!hasOptions(field) && ['textarea', 'text'].includes(field.kind) && (COVER_LETTER_BOX.test(label) || (field.kind === 'textarea' && MESSAGE_BOX.test(label)))) {
       const letter = context.coverLetterText;
@@ -513,6 +523,9 @@
     }
     // 0. A reusable answer saved for exactly this question ("Does the advertised salary align with
     //    your expectations?" → Yes), unless it is the one standing in for a profile fact.
+    // Personal facts come from the candidate's own profile when it has them, before any reusable answer.
+    const own = aboutSomeoneElse ? null : personalAnswer(field, label, candidate, context);
+    if (own) return own;
     const exactRow = aboutSomeoneElse ? null : (savedAnswers || []).find((row) => row.questionKey === normalizeQuestionKey(field.label));
     if (exactRow && !candidate.factRows?.has(exactRow)) return reusableAnswer(field, exactRow);
     // 1. Super Admin's reusable answers for their topics (right to work, employment type, ...);
@@ -563,6 +576,7 @@
       }
       const fact = rule.fact(candidate);
       if (fact === null || fact === undefined || fact === '') {
+        if (rule.neverGuess) return { skip: `No ${rule.name} in the profile: left for the Manager.` };
         if (rule.optionalIfMissing && !field.required) return { skip: `No ${rule.name} in the profile.` };
         return { missing: rule.name };
       }
@@ -580,9 +594,27 @@
         // The profile has it, but not as one of these choices ("Poland" where the list says "Polska").
         return { ask: String(fact) };
       }
+      if (rule.date) {
+        const date = new Date(`${String(fact).slice(0, 10)}T12:00:00Z`);
+        if (Number.isNaN(date.getTime())) return { skip: `The profile's ${rule.name} is not a date.` };
+        return { value: field.kind === 'date' ? formatDate(date) : formatDate(date, field.placeholder), source: 'profile' };
+      }
       return { value: String(fact), source: 'profile' };
     }
     return undefined;
+  }
+
+  function fullAddress(c) {
+    const town = [c.postalCode, c.city].filter(Boolean).join(' ');
+    return [c.addressLine1, town, c.province, c.country].filter(Boolean).join(', ') || null;
+  }
+
+  /** A personal fact the profile has (name, contact, address, birthday...): it wins over any reusable answer. */
+  function personalAnswer(field, label, candidate, context) {
+    const rule = RULES.find((entry) => entry.test.test(label));
+    if (!rule?.personal || (field.kind === 'checkbox' && !rule.yesNo)) return null;
+    const answer = profileAnswer(field, label, candidate, context);
+    return answer?.value !== undefined ? answer : null;
   }
 
   // Words that say nothing about what a question asks, left out when questions are compared.
@@ -639,7 +671,35 @@
 
   function isAutofillUpload(field) {
     // A photo upload near an "Easy Apply" heading is still a photo upload.
-    return field.kind === 'file' && AUTOFILL_UPLOAD.test(labelOf(field)) && !isImageUpload(field);
+    // The page marks it (`autofill`: its section says so, apply-form.js) or its label says so.
+    return field.kind === 'file' && (field.autofill === true || AUTOFILL_UPLOAD.test(labelOf(field))) && !isImageUpload(field);
+  }
+
+  // A salutation question ("Anrede", "Civilité", "Title: Mr / Ms") in the languages job sites use,
+  // answered from the profile's gender; the choices tell it apart from a job title.
+  // (\b does not see accented letters as word letters, so "civilité" and "saudação" match without it.)
+  const SALUTATION_LABEL = /\b(anrede|salutation|form of address|title|tratamiento|aanhef|zwrot)\b|\bcivilit[ée]|\bsauda[çc][ãa]o/;
+  const SALUTATIONS = {
+    man: [/^(mr\.?|mister|herr|m\.|monsieur|sr\.?|se[ñn]or|pan|dhr\.?|de heer|sig\.?|signor)$/i],
+    // Ms first: it says nothing about marriage.
+    woman: [/^ms\.?$/i, /^(frau|mme\.?|madame|sra\.?|se[ñn]ora|pani|mevr\.?|mevrouw|sig\.ra|signora|mrs\.?|miss)$/i],
+    non_binary: [/^(mx\.?|divers|diverse|neutral|non[- ]?binary)$/i],
+  };
+  const DECLINE_SALUTATION = /^(keine angabe|ohne( anrede)?|prefer not to say|none|n\/a|no title|aucun(e)?|ninguno|sin tratamiento)$/i;
+
+  function salutationAnswer(field, candidate) {
+    if (!hasOptions(field) || !SALUTATION_LABEL.test(labelOf(field))) return null;
+    const options = field.options.map((option) => String(option).trim());
+    const known = Object.values(SALUTATIONS).flat();
+    if (!options.some((option) => known.some((pattern) => pattern.test(option)))) return null;
+    for (const pattern of SALUTATIONS[candidate?.gender] || []) {
+      const own = options.find((option) => pattern.test(option));
+      if (own) return { value: own, source: 'profile' };
+    }
+    const decline = options.find((option) => DECLINE_SALUTATION.test(option));
+    if (decline) return { value: decline, source: 'profile' };
+    // Never guessed from the name: an optional one is left empty.
+    return field.required ? null : { skip: 'Salutation: the profile gives no gender.' };
   }
 
   // A box for the cover letter, or a message to the employer, takes Generation's cover letter text.
@@ -660,7 +720,7 @@
     return IMAGE_WORDS.test(label) && !/resume|résumé|\bcv\b|curriculum|cover/.test(label);
   }
 
-  const GENERAL_UPLOAD = /\b(files?|upload|attach|attachments?|documents?)\b/;
+  const GENERAL_UPLOAD = /\b(files?|upload|attach|attachments?|documents?|pdf|docx?|dateien?|unterlagen|fichiers?|archivos?)\b/;
   const OTHER_DOCUMENT = /\b(additional|other|supporting|extra|portfolio|photo|picture|image|avatar|headshot|certificates?|certifications?|transcripts?|diploma|degree|passport|identity|id|samples?|writing|references?|recommendation|video|audio)\b/;
 
   /**
@@ -727,10 +787,10 @@
   const DEFAULT_ANSWER_PROMPT = [
     'You fill in one page of a job application for the candidate below. Answer every question in the list.',
     '',
-    'Sources, in this order:',
-    '1. A question\'s "hint": the candidate\'s profile value or a reusable answer that did not fit the field as written. Keep its meaning; only change the form (pick the matching option, number, or date). Follow any note in the hint.',
-    '2. Candidate facts (profile, salary and notice figures, diversity answers) and the reusable answers below.',
-    '3. The résumé and cover letter, then the job description.',
+    'Sources:',
+    '1. Experience, skills, levels, years, projects, achievements, motivation, and every free-text answer: the résumé (the one sent with this application) and the job description. Every answer agrees with the résumé and fits this job.',
+    '2. Personal facts and policies (contact, location, nationality, salary, notice, sponsorship, relocation, diversity): the candidate facts and the reusable answers below.',
+    '3. A question\'s "hint": the candidate\'s profile value or a reusable answer that did not fit the field as written. Keep its meaning; only change the form (pick the matching option, number, or date). Follow any note in the hint.',
     '',
     'Rules:',
     '- Never invent employers, degrees, certifications, dates, numbers, or skills. Requirement questions ("Do you have experience with X?"): Yes only when the résumé shows it or clearly related work; otherwise No.',
@@ -763,8 +823,10 @@
 
   const REPLY_FORMAT = [
     'Reply with JSON only, in this shape: {"answers":[{"id":"<question id>","value":"<answer>"}]}',
-    'Answer every question id. For "options", copy exactly one option character for character; for type "checkbox-group", one or more options separated by " | ".',
+    'Answer every question id. For "options", copy exactly one option character for character; for type "checkbox-group" or "multiple": true, every option that truly fits the candidate, separated by " | ".',
     'Respect maxLength, and min and max for numbers. A number takes digits only. A date uses its "format", else YYYY-MM-DD.',
+    'Follow a question\'s "note" and "placeholder" for what to write and in what form (currency, period, units).',
+    'Answer experience, skill, and motivation questions from the résumé and the job description: never claim what the résumé does not show.',
   ].join('\n');
 
   function candidateFacts(candidate, job, fields, exchangeRates, today) {
@@ -806,13 +868,22 @@
     return Object.fromEntries(Object.entries(facts).filter(([, value]) => value !== null && value !== undefined && value !== ''));
   }
 
+  // Fields answered by picking from a list.
+  const CHOICE_KINDS = new Set(['select', 'menu', 'combobox']);
+
   function questionList(fields) {
     return fields.map((field) => ({
       id: field.id,
       question: field.label,
       type: field.kind,
       required: Boolean(field.required),
-      ...(hasOptions(field) ? { options: field.options } : {}),
+      ...(hasOptions(field) ? { options: field.options }
+        // A list whose choices could not be read yet (some show them only while typing): the answer
+        // is matched to them when filled, and the choices it shows come back if none fits.
+        : CHOICE_KINDS.has(field.kind) ? { options: 'not readable yet: answer in the few words its choices most likely use' } : {}),
+      ...(field.multiple ? { multiple: true } : {}),
+      ...(field.note ? { note: field.note } : {}),
+      ...(field.placeholder && field.kind !== 'date' ? { placeholder: field.placeholder } : {}),
       ...(field.maxLength ? { maxLength: field.maxLength } : {}),
       ...(Number.isFinite(field.min) ? { min: field.min } : {}),
       ...(Number.isFinite(field.max) ? { max: field.max } : {}),
@@ -869,8 +940,8 @@
     if (hasOptions(field)) {
       const find = (wanted) => field.options.find((entry) => String(entry).trim() === wanted)
         ?? field.options.find((entry) => String(entry).trim().toLowerCase() === wanted.toLowerCase());
-      // A tick-box group may take several choices, separated by " | ".
-      if (field.kind === 'checkbox-group') {
+      // A tick-box group or a "select all that apply" list may take several choices, separated by " | ".
+      if (field.kind === 'checkbox-group' || field.multiple) {
         const parts = text.split(/\s*\|\s*/).filter(Boolean);
         const picked = parts.map(find);
         const wrong = parts.filter((_, index) => picked[index] === undefined);
@@ -881,6 +952,8 @@
         ? { ok: false, reason: `"${text}" is not one of the options` }
         : { ok: true, value: option };
     }
+    // A list whose choices show only while typing: each choice is searched for in turn.
+    if (field.multiple) return { ok: true, value: text.split(/\s*\|\s*/).filter(Boolean) };
     if (field.maxLength && text.length > field.maxLength) {
       return { ok: false, reason: `longer than ${field.maxLength} characters` };
     }

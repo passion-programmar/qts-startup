@@ -15,7 +15,7 @@
   // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
-  const START_TEXT = /^(apply|apply now|apply (for|to) (this|the) (job|position|role|vacancy|opening)|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?)$/i;
+  const START_TEXT = /^(apply|apply now|apply (for|to) (this|the) (job|position|role|vacancy|opening)|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?|apply (directly )?(on|at|via|through) (the )?(employer|company|hiring company|recruiter)['’]?s? (site|website|page|career(s)? (site|page))|apply (on|at) (company|employer) (site|website)|apply externally|apply on website|(continue|go|proceed) to (the )?(application|apply|employer['’]?s? site))$/i;
   const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|enter (your )?(details|information) manually|continue (manually|without .{1,30}))$/i;
   const NOT_START = /linkedin|indeed|seek|xing|glassdoor|easy apply|with (google|facebook|apple|github|resume|cv)|later|save|share|refer|alert|similar|sign ?in|log ?in|register|autofill/i;
   // Job-site systems whose form a company page embeds in a frame; opening the frame shows the form.
@@ -24,7 +24,11 @@
   const MENU_ITEMS = '[role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="menuitem"]';
   const POPUP_ITEM = /^(option|menuitem|menuitemcheckbox|menuitemradio)$/;
   const CONFIRMED_TEXT = /thank(s| you) for (applying|your application|your interest|submitting)|application (has been |was )?(received|submitted|sent)|we['’]?ve received your application|we have received your application|successfully (applied|submitted)|your application (is|was|has been) (complete|submitted|received)|application submitted/i;
-  const PLACEHOLDER_OPTION = /^(select|choose|please select|--|—|select\.\.\.|select one|pick one)/i;
+  // "Please select" in the languages job sites use: a dropdown's placeholder, never an answer.
+  const PLACEHOLDER_WORDS = String.raw`(please )?(select|choose|pick)\b|bitte (aus)?w(ä|ae)hlen|(aus)?w(ä|ae)hlen sie|ausw(ä|ae)hlen|veuillez (s(é|e)lectionner|choisir)|s(é|e)lectionne(r|z)?\b|choisi(r|ssez)\b|seleccion(e|a|ar)\b|elija\b|selecione\b|escolha\b|selezion(a|are)\b|scegli\b|wybierz|kliknij|kies\b|selecteer\b|maak een keuze`;
+  const PLACEHOLDER_OPTION = new RegExp(String.raw`^(-+$|—|–|-+\s*none\s*-+|${PLACEHOLDER_WORDS})`, 'i');
+  const answerable = (text) => Boolean(text) && !PLACEHOLDER_OPTION.test(text);
+  const IMAGE_CAPTCHA = /\bcaptcha\b|type (the )?(below |above )?(image )?(text|characters|letters|code|word)s? (shown |in |from |below |above )*(the )?(image|picture)?|type (the )?below image|enter (the )?(code|characters|text|letters) (shown |in |from )+(the )?(image|picture)/i;
 
   function shadowRootOf(element) {
     if (element.shadowRoot) return element.shadowRoot;
@@ -69,6 +73,25 @@
   }
 
   /** The question a control answers: its label, aria label, fieldset legend, or nearby question text. */
+  /**
+   * A page component's own label attribute around the control (Zoho's cx-prop-label="Last Name",
+   * label="Email", data-label="City"): the question when no <label> names it.
+   */
+  function componentLabel(control) {
+    let node = control.parentElement || control.getRootNode()?.host;
+    for (let depth = 0; node && depth < 6; depth += 1) {
+      // Only a component around this one control: a section holding other fields names them all.
+      if (node.querySelectorAll?.('input:not([type="hidden"]), textarea, select').length > 2) break;
+      for (const attribute of node.attributes || []) {
+        if (!/(^|-)label$/i.test(attribute.name) || attribute.name === 'aria-label' || /class|style|position|direction/i.test(attribute.name)) continue;
+        const text = cleanText(attribute.value);
+        if (text && /\p{L}{2}/u.test(text) && text.length <= 200) return text;
+      }
+      node = node.parentElement || node.getRootNode?.()?.host;
+    }
+    return '';
+  }
+
   function labelFor(control) {
     const root = control.getRootNode();
     if (control.id) {
@@ -83,6 +106,8 @@
       if (text) return text;
     }
     if (control.getAttribute('aria-label')) return cleanText(control.getAttribute('aria-label'));
+    const component = componentLabel(control);
+    if (component) return component;
     const legend = control.closest('fieldset')?.querySelector('legend');
     if (legend && textOf(legend)) return textOf(legend);
     // A question block: the nearest ancestor with its own text before the control.
@@ -131,9 +156,43 @@
     return { text: questionAround(element), block: element.parentElement };
   }
 
+  // Words saying an upload reads the résumé to fill the form (apply-answers.js decides on the label too).
+  const AUTOFILL_NEAR = /auto-?fill|auto-?complete|auto-?populate|pre-?fill|easy apply|\b(parse|import)\b[^.]{0,30}\b(resume|résumé|cv)s?\b/i;
+
+  /**
+   * Whether an upload's own section says it reads the résumé to fill the form (Zoho's "Autofill
+   * Application" above "Upload your resume"). Stops at a section holding another upload.
+   */
+  function autofillSection(element) {
+    for (let node = element.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth += 1) {
+      if (node.querySelectorAll('input[type="file"]').length > 1) return false;
+      const text = textOf(node);
+      if (text.length > 500) return false;
+      if (AUTOFILL_NEAR.test(text)) return true;
+    }
+    return false;
+  }
+
+  // A button's words on an upload ("Choose file", "Browse", "or drag and drop here"), not its question.
+  const UPLOAD_ACTION = /^(or )?(choose|select|browse|upload|attach|add|drop|drag)\b[^.]{0,40}$|drag (and|&) drop|no file (chosen|selected)|^\*$/i;
+
+  /**
+   * An upload's question ("Resume", "Cover letter"): the texts its input is labelled by, then its
+   * own <label>, leaving out button words. Empty when only button words name it.
+   */
+  function uploadQuestion(control) {
+    const root = control.getRootNode();
+    const named = (control.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+      .map((id) => textOf(root.getElementById?.(id)))
+      .concat(control.id ? [...(root.querySelectorAll?.(`label[for="${CSS.escape(control.id)}"]`) || [])].map(textOf) : [])
+      .map((text) => cleanText(text.replace(/[*✱]/g, ' ')))
+      .filter((text) => text && !UPLOAD_ACTION.test(text));
+    return named.length ? named[0].slice(0, 200) : '';
+  }
+
   /**
    * Upload areas without a file field of their own (Dropzone keeps its input outside the page's
-   * form): the innermost element that says "drop your file", unless its block has a file input.
+   * form): the innermost element that says "drop your file", unless a file input sits next to it.
    */
   function dropZones() {
     const zones = [];
@@ -144,6 +203,10 @@
       if ([...element.children].some((child) => DROP_TEXT.test(textOf(child)))) continue;
       const { text: question, block } = blockQuestion(element);
       if (block?.querySelector('input[type="file"]')) continue;
+      // "or drag and drop here" beside a real file input (Workable) is that upload, not another one.
+      let near = element.parentElement;
+      for (let depth = 0; near && depth < 4 && !near.querySelector('input[type="file"]'); depth += 1) near = near.parentElement;
+      if (near?.querySelector('input[type="file"]')) continue;
       zones.push({ element, question });
     }
     return zones;
@@ -163,6 +226,9 @@
    * often adds the current choice ("Country United States").
    */
   function menuLabel(control) {
+    // A component's own label first: the text next to the button may be its current value ("-None-").
+    const component = componentLabel(control);
+    if (component) return component;
     const own = textOf(control);
     let label = blockQuestion(control).text || labelFor(control);
     if (own && label.endsWith(own)) label = label.slice(0, -own.length).trim();
@@ -171,6 +237,14 @@
 
   function itemText(item) {
     return cleanText(item.getAttribute('data-search-text') || textOf(item));
+  }
+
+  // What opens a menu of choices: a button, or a non-text element marked as a dropdown (Zoho's
+  // <div role="combobox" aria-haspopup="listbox">). A typed combobox is an <input> and handled apart.
+  function isMenuButton(control) {
+    const role = control.getAttribute('role');
+    return control.tagName === 'BUTTON' || role === 'button'
+      || (role === 'combobox' && control.tagName !== 'INPUT' && control.hasAttribute('aria-haspopup'));
   }
 
   // Choice buttons a page draws itself: pressable ones side by side (Ashby's Yes / No).
@@ -284,7 +358,7 @@
       }
       if (tag === 'INPUT' && control.closest(`[${RADIO_GROUP_ATTRIBUTE}="press"]`)) continue;
       // Menus count only inside the form (a "Share page" menu is not a question).
-      if ((tag === 'BUTTON' || control.getAttribute('role') === 'button') && control.closest('form, fieldset') && menuChoices(control)) {
+      if (isMenuButton(control) && control.closest('form, fieldset') && menuChoices(control)) {
         const label = labelFor(control);
         control.setAttribute(MENU_ATTRIBUTE, '1');
         fields.push({
@@ -292,7 +366,7 @@
           label,
           kind: 'menu',
           required: isRequired(control, label),
-          options: menuChoices(control).map(itemText).filter(Boolean),
+          options: menuChoices(control).map(itemText).filter(answerable),
           hidden: !isShown(control),
           disabled: control.disabled,
         });
@@ -300,7 +374,7 @@
       }
       // A menu whose choices exist only while it is open (Radix DropdownMenu): read by opening it.
       // A menu button beside an input (a phone number's country flag) belongs to that input.
-      if ((tag === 'BUTTON' || control.getAttribute('role') === 'button') && control.closest('form, fieldset')
+      if (isMenuButton(control) && control.closest('form, fieldset')
         && /^(menu|listbox|true)$/i.test(control.getAttribute('aria-haspopup') || '') && !listboxChoices(control)
         && !blockQuestion(control).block?.querySelector('input:not([type="hidden"]):not([aria-hidden="true"]), textarea')
         // "Import resume from…" and autofill pickers are not questions.
@@ -423,12 +497,13 @@
         field.hidden = field.hidden && !shown;
         continue;
       }
-      // A styled upload's input has no useful label of its own ("Attach"); its block names it.
+      // A styled upload's input has no useful label of its own ("Attach"); its question names it.
       const blockLabel = type === 'file' ? blockQuestion(control).text : '';
       const fieldLabel = type === 'file'
-        ? (/resume|résumé|\bcv\b|cover|letter|file|attach|upload|document|portfolio/i.test(blockLabel)
-          ? blockLabel
-          : cleanText(`${questionAround(control)} ${control.id || control.name || ''}`))
+        ? (uploadQuestion(control)
+          || (/resume|résumé|\bcv\b|cover|letter|file|attach|upload|document|portfolio/i.test(blockLabel)
+            ? blockLabel
+            : cleanText(`${questionAround(control)} ${control.id || control.name || ''}`)))
         : label;
       const field = {
         id: fieldId(control),
@@ -443,8 +518,13 @@
         ...(control.maxLength > 0 ? { maxLength: control.maxLength } : {}),
         // What an upload takes ("image/*" for a photo), so Apply never puts a document there.
         ...(type === 'file' && control.accept ? { accept: String(control.accept).slice(0, 200) } : {}),
+        ...(type === 'file' && autofillSection(control) ? { autofill: true } : {}),
         // Date fields typed as text show their format here (DD/MM/YYYY).
         ...(control.placeholder ? { placeholder: String(control.placeholder).slice(0, 40) } : {}),
+        // The question's help text ("Gross annual, in EUR"), so the AI answers in the form it asks for.
+        ...(helpText(control) ? { note: helpText(control) } : {}),
+        // "Select all that apply": a list that takes several choices.
+        ...(isCombobox && isMultiple(control, fieldLabel) ? { multiple: true } : {}),
         // Text already in the box (a site may remember the previous applicant).
         ...(['TEXTAREA', 'INPUT'].includes(tag) && !['file', 'checkbox', 'radio', 'range'].includes(type) && control.value ? { filled: true } : {}),
       };
@@ -469,6 +549,7 @@
         required: isRequired(zone.element, zone.question),
         hidden: false,
         disabled: false,
+        ...(autofillSection(zone.element) ? { autofill: true } : {}),
       });
     }
     for (const field of fields) {
@@ -487,6 +568,29 @@
       field.required = field.required || isRequired(control, field.label);
     }
     return fields;
+  }
+
+  // A site's own required or error message is not help text.
+  const NOT_HELP = /required|mandatory|invalid|error|must be|please (enter|fill|select)|cannot be (empty|blank)/i;
+
+  /** The help text a field points to (aria-describedby), without the site's error messages. */
+  function helpText(control) {
+    const root = control.getRootNode();
+    const text = String(control.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean)
+      .map((id) => textOf(root.getElementById?.(id) || document.getElementById(id)))
+      .filter((entry) => entry && !NOT_HELP.test(entry))
+      .join(' ');
+    return text.slice(0, 200);
+  }
+
+  const MULTIPLE_TEXT = /select all that apply|all that apply|select (one or more|several|multiple|any)|choose (all|one or more|several|multiple)|multiple (choices|answers|selections?)|(select|choose|pick) up to \d/i;
+
+  /** Whether a typed list takes several choices: marked so, or its question says so. */
+  function isMultiple(control, label) {
+    if (control.getAttribute('aria-multiselectable') === 'true') return true;
+    const listId = control.getAttribute('aria-controls') || control.getAttribute('aria-owns');
+    const list = listId && control.getRootNode().getElementById?.(listId);
+    return list?.getAttribute('aria-multiselectable') === 'true' || MULTIPLE_TEXT.test(label);
   }
 
   function labelForGroup(control) {
@@ -533,23 +637,43 @@
     input.click?.();
     await new Promise((resolve) => setTimeout(resolve, 400));
     const list = listFor(input, before);
-    const options = list ? [...list.querySelectorAll('[role="option"]')].map(textOf).filter(Boolean) : [];
+    const options = list ? [...list.querySelectorAll('[role="option"]')].map(textOf).filter(answerable) : [];
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     input.blur();
     return options.slice(0, 300);
   }
 
   /** A menu's choices, read by opening it and closing it again (they exist only while it is open). */
+  /**
+   * The choices of the list a dropdown points to (aria-controls), shown now; null when it names
+   * none, so another dropdown's list left open is never read as this one's.
+   */
+  function controlledChoices(button) {
+    const id = button.getAttribute('aria-controls');
+    const list = id ? (button.getRootNode().getElementById?.(id) || document.getElementById(id)) : null;
+    const items = list ? [...list.querySelectorAll(MENU_ITEMS)].filter((item) => isShown(item) && answerable(itemText(item))) : [];
+    return items.length ? items : null;
+  }
+
   async function readMenuOptions(id) {
     const button = findField(id);
     if (!button) return [];
     press(button);
     await new Promise((resolve) => setTimeout(resolve, 600));
-    const options = shownChoices().map(itemText).filter(Boolean);
+    if (button.hasAttribute('aria-expanded') && button.getAttribute('aria-expanded') !== 'true') {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
+    const options = (controlledChoices(button) || shownChoices()).map(itemText).filter(answerable);
     for (const target of [document.activeElement, button]) {
       target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
+    // A dropdown that ignores Escape is closed with another click, so its list does not stay open.
+    if (button.getAttribute('aria-expanded') === 'true') {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
     return [...new Set(options)].slice(0, 300);
   }
 
@@ -643,25 +767,14 @@
       return { ok: element.value === option.value, value: optionText(option) };
     }
     if (element.getAttribute('role') === 'combobox') {
-      // Searchable lists match on what is typed, so "Warsaw, Poland" searches "Warsaw" and then
-      // picks the option that matches the whole answer best.
-      const answer = cleanText(value).toLowerCase();
-      const before = shownListboxes();
-      element.focus();
-      setNativeValue(element, String(value).split(',')[0].trim());
-      let options = [];
-      for (let waited = 0; waited < 3000 && !options.length; waited += 300) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        const list = listFor(element, before);
-        options = list ? [...list.querySelectorAll('[role="option"]')] : [];
+      // A list that takes several choices gets each one in turn.
+      const picked = [];
+      for (const one of [].concat(value)) {
+        const result = await pickInCombobox(element, one);
+        if (!result.ok) return { ...result, value: picked.join(', ') };
+        picked.push(result.value);
       }
-      const match = options.find((option) => textOf(option).toLowerCase() === answer)
-        || options.find((option) => answer.split(',').every((part) => textOf(option).toLowerCase().includes(part.trim())))
-        || options.find((option) => textOf(option).toLowerCase().startsWith(answer.split(',')[0].trim()));
-      if (!match) return { ok: false, error: `No option matching "${value}".` };
-      match.click();
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      return { ok: true, value: textOf(match) };
+      return { ok: picked.length > 0, value: picked.join(', ') };
     }
     element.focus();
     setNativeValue(element, String(value));
@@ -678,6 +791,58 @@
     const digits = (text) => String(text).replace(/\D/g, '');
     const reformatted = digits(element.value).length >= 4 && digits(String(value)).endsWith(digits(element.value));
     return { ok: Boolean(element.value) && (suggestion || element.value === String(value) || reformatted), value: element.value };
+  }
+
+  /**
+   * One choice in a search list: "Warsaw, Poland" searches "Warsaw" and then picks the option that
+   * matches the whole answer best. Nothing typed stays when no option matches; the options the list
+   * showed come back, so the AI can choose one of them.
+   */
+  async function pickInCombobox(element, value) {
+    const answer = cleanText(value).toLowerCase();
+    const search = String(value).split(',')[0].trim();
+    const before = shownListboxes();
+    let seen = [];
+    const findMatch = async (waitMs) => {
+      let options = [];
+      for (let waited = 0; waited < waitMs && !options.length; waited += 300) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const list = listFor(element, before);
+        options = list ? [...list.querySelectorAll('[role="option"]')].filter((option) => answerable(textOf(option))) : [];
+      }
+      if (options.length) seen = options.map(textOf);
+      return options.find((option) => textOf(option).toLowerCase() === answer)
+        || options.find((option) => answer.split(',').every((part) => textOf(option).toLowerCase().includes(part.trim())))
+        || options.find((option) => textOf(option).toLowerCase().startsWith(search.toLowerCase()));
+    };
+    element.focus();
+    setNativeValue(element, search);
+    let match = await findMatch(3000);
+    // Some suggestion boxes search only on key presses, or slowly: typed again letter by letter.
+    if (!match) {
+      await typeLetters(element, search);
+      match = await findMatch(6000);
+    }
+    if (!match) {
+      setNativeValue(element, '');
+      return { ok: false, error: `No option matching "${value}".`, choices: [...new Set(seen)].slice(0, 300) };
+    }
+    match.click();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return { ok: true, value: textOf(match) };
+  }
+
+  /** Types a text letter by letter with key events, as a person does, after emptying the box. */
+  async function typeLetters(element, text) {
+    element.focus();
+    setNativeValue(element, '');
+    for (let index = 1; index <= text.length; index += 1) {
+      const key = text[index - 1];
+      element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, composed: true }));
+      setNativeValue(element, text.slice(0, index));
+      element.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, composed: true }));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
   }
 
   /**
@@ -729,13 +894,17 @@
     if (['listbox', 'lazy'].includes(button.getAttribute(MENU_ATTRIBUTE))) {
       // The choices appear in a popup (often outside the form) only once the button is pressed.
       if (button.getAttribute('aria-expanded') !== 'true') press(button);
+      // Some dropdowns open only on a plain click (Zoho).
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      if (button.hasAttribute('aria-expanded') && button.getAttribute('aria-expanded') !== 'true') button.click();
+      const ownList = () => controlledChoices(button);
       // The popup may word an option differently from the hidden list ("EUR Euro" for "EUREuro").
       const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9]+/g, '');
       const target = squash(wanted);
       let option = null;
       for (let waited = 0; waited < 3000 && !option; waited += 250) {
         await new Promise((resolve) => setTimeout(resolve, 250));
-        const shown = shownChoices();
+        const shown = ownList() || shownChoices();
         option = shown.find((element) => squash(itemText(element)) === target)
           || shown.find((element) => squash(itemText(element)) && (target.includes(squash(itemText(element))) || squash(itemText(element)).includes(target)))
           || null;
@@ -816,15 +985,53 @@
     return { x, y };
   }
 
+  /**
+   * The box drawn around a field's input (React Select's "control"), only when it holds this field
+   * alone: a page's "form-control" wrapper around several questions is not it, and clicking its
+   * centre would land on another question.
+   */
+  function ownBox(element) {
+    const box = element.closest('[class*="control" i]');
+    return box && box !== element && holdsOnly(box, element) ? box : null;
+  }
+
+  /** Whether a box holds no field but this one (helper inputs a page hides do not count). */
+  function holdsOnly(box, element) {
+    return ![...box.querySelectorAll('input, textarea, select, [role="combobox"]')]
+      .some((other) => other !== element && other.type !== 'hidden' && !other.closest('[aria-hidden="true"]'));
+  }
+
   /** Where to click to open a field: its centre on screen after scrolling it into view. */
   function boxOf(id) {
     const element = findField(id);
     if (!element) return null;
     // React Select's input is a sliver inside its box; the box is what a person clicks.
     const target = element.tagName === 'INPUT' && element.getAttribute('role') === 'combobox'
-      ? element.closest('[class*="control" i]') || element
+      ? ownBox(element) || element
       : element;
     return centreOf(target);
+  }
+
+  /** The element that has the cursor, inside shadow roots too. */
+  function focusedElement() {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return active;
+  }
+
+  /**
+   * Whether the cursor is in this field (or what it typed into belongs to it), putting it there when a
+   * click did not. Real key presses go wherever the cursor is, so nothing is typed until this is true.
+   */
+  function cursorInField(id) {
+    const element = findField(id);
+    if (!element) return false;
+    const inField = () => {
+      const active = focusedElement();
+      return Boolean(active) && (active === element || element.contains(active) || Boolean(ownBox(element)?.contains(active)));
+    };
+    if (!inField()) element.focus?.();
+    return inField();
   }
 
   /** The choices an open list shows, by role or by the class names list libraries use. */
@@ -915,7 +1122,7 @@
     return controlsOfGroup(element).some((entry) => entry.checked && choiceText(entry).toLowerCase() === wanted);
   }
 
-  const PLACEHOLDER = /^(|-+|–?\s*select\s*–?|select( an option| one)?\.*|choose.*|please select.*|kliknij.*|wybierz.*)$/i;
+  const PLACEHOLDER = new RegExp(String.raw`^(|-+|–|—|-+\s*none\s*-+|–?\s*select\s*–?|(${PLACEHOLDER_WORDS}).*)$`, 'i');
 
   /** Whether a scanned field still has no answer, whatever kind it is. */
   function isUnanswered(field) {
@@ -1046,7 +1253,9 @@
     if (!element) return '';
     if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)) return textOf(element);
     // React Select shows the choice in its control box, not in the input's own small container.
-    const box = element.closest('[class*="control" i]') || element.closest('[class*="container" i]') || element.parentElement;
+    // Only a box around this field alone: a wrapper of several questions holds their answers too.
+    const container = element.closest('[class*="container" i]');
+    const box = ownBox(element) || (container && holdsOnly(container, element) ? container : null) || element.parentElement;
     return cleanText(`${element.value || ''} ${textOf(box)}`);
   }
 
@@ -1078,8 +1287,11 @@
       // DataDome's "verify you are human" (SmartRecruiters and others).
       || (/captcha-delivery\.com/i.test(element.src || '') && element.getBoundingClientRect().height > 40)
     ));
+    // An image of letters to type ("Type below image text", Zoho), the old kind of CAPTCHA.
+    const imageCode = allElements().some((element) => element.tagName === 'INPUT' && isShown(element)
+      && IMAGE_CAPTCHA.test(labelFor(element)));
     // Cloudflare's "Just a moment..." page checks the browser before showing the site.
-    if (challenge || /^just a moment/i.test(document.title)) blockers.push('captcha');
+    if (challenge || imageCode || /^just a moment/i.test(document.title)) blockers.push('captcha');
     const password = allElements().find((element) => element.tagName === 'INPUT' && element.type === 'password' && isShown(element));
     // A sign-in page without a password field yet (an email-first or magic-link login).
     const signInPage = /\/(auth\/)?(sign-?in|log-?in|register|sign-?up|create-account)(\/|$)/i.test(location.pathname);
@@ -1174,7 +1386,11 @@
     if (button) {
       button.scrollIntoView({ block: 'center' });
       button.click();
-      return { ok: true, text: startText(button) };
+      // A link's own address, for when the page catches the click instead (an aggregator's sign-up box).
+      const away = (element) => element?.tagName === 'A' && /^https?:/i.test(element.href || '')
+        && element.href.split('#')[0] !== location.href.split('#')[0];
+      const href = [button, button.closest('a[href]'), ...starts].find(away)?.href || null;
+      return { ok: true, text: startText(button), ...(href ? { href } : {}) };
     }
     if (starts.length) return { ok: false, email: true };
     const frame = allElements().find((element) => element.tagName === 'IFRAME' && isShown(element)
@@ -1209,6 +1425,7 @@
     clearField,
     fieldIssue,
     boxOf,
+    cursorInField,
     markShownChoices,
     shownChoiceTexts,
     choiceBox,

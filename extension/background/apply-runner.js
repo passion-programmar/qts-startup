@@ -171,6 +171,8 @@ async function reachApplicationForm(tab, onTab) {
       continue;
     }
     clicked.push(start.text);
+    const urlBefore = (await getTab(tab.id))?.url;
+    let movedOn = false;
     // The button may open a new tab, load another page, or show the form on this one.
     for (let waited = 0; waited < APPLY_START_WAIT_MS; waited += 1000) {
       await sleep(1000);
@@ -182,9 +184,18 @@ async function reachApplicationForm(tab, onTab) {
         await tabOwnership.markTab(tab.id, 'apply');
         chrome.tabs.remove(jobPage.id).catch(() => {});
         await waitForTabComplete(tab.id, 45 * 1000);
+        movedOn = true;
         break;
       }
       if (await applicationFormShown(tab.id)) return tab;
+      if ((await getTab(tab.id))?.url !== urlBefore) movedOn = true;
+    }
+    // A link the page caught instead of following (Jobgether's sign-up box when not signed in):
+    // its address is opened directly, as a person would by opening the link.
+    if (!movedOn && start.href) {
+      await chrome.tabs.update(tab.id, { url: start.href });
+      await sleep(500);
+      await waitForTabComplete(tab.id, 45 * 1000);
     }
   }
   if (await applicationFormShown(tab.id)) return tab;
@@ -237,6 +248,8 @@ async function realOpen(tabId, field, typed = '') {
   await realClick(tabId, box);
   await sleep(500);
   if (typed) {
+    // Real key presses go wherever the cursor is: never into another question.
+    if (!(await inForm(tabId, (id) => globalThis.__qtsApplyForm.cursorInField(id), [field.id]).catch(() => false))) return false;
     // Text left by an earlier simulated attempt would join what is typed ("NoNo"): select it all and delete it.
     const selectAll = { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 };
     const backspace = { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 };
@@ -263,17 +276,25 @@ async function readChoicesWithRealClick(tabId, field) {
   }
 }
 
-/** Picks a dropdown's choice with real clicks; { ok } or { ok: false, error }. */
+/** Picks a dropdown's choice (each one, for a list that takes several) with real clicks; { ok } or { ok: false, error }. */
 async function pickWithRealClick(tabId, field, value) {
-  const wanted = String([].concat(value)[0] ?? '').trim();
-  if (!wanted) return { ok: false, error: 'no answer' };
+  const values = [].concat(value).map((entry) => String(entry ?? '').trim()).filter(Boolean);
+  if (!values.length) return { ok: false, error: 'no answer' };
+  for (const wanted of values) {
+    const result = await pickOneWithRealClick(tabId, field, wanted);
+    if (!result.ok) return result;
+  }
+  return { ok: true };
+}
+
+async function pickOneWithRealClick(tabId, field, wanted) {
   try {
     // Search lists and suggestion boxes get the answer's first part typed; menus are only opened.
     // Typed up to the first apostrophe, bracket, or slash: "Associate's" may be written "Associate’s".
     const typed = field.kind === 'combobox' || field.kind === 'text' || field.searchable
       ? wanted.split(',')[0].split(/['’(/]/)[0].trim().slice(0, 40)
       : '';
-    if (!(await realOpen(tabId, field, typed))) return { ok: false, error: 'the field is not on the screen' };
+    if (!(await realOpen(tabId, field, typed))) return { ok: false, error: typed ? 'the cursor could not be put in the field' : 'the field is not on the screen' };
     // A search list may fetch its results after typing.
     let choice = null;
     for (let waited = 0; waited < 3000 && !choice; waited += 500) {
@@ -284,6 +305,8 @@ async function pickWithRealClick(tabId, field, value) {
       // What the list or suggestion box does offer goes to the AI as the field's choices.
       const choices = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownChoiceTexts(id), [field.id]).catch(() => []);
       await realEscape(tabId);
+      // What was typed to search does not stay in the field.
+      if (typed) await inForm(tabId, (id) => globalThis.__qtsApplyForm.clearField(id), [field.id]).catch(() => false);
       return { ok: false, error: `the list has no "${wanted}"`, choices: choices || [] };
     }
     await realClick(tabId, choice);
@@ -534,7 +557,9 @@ async function fillAndCheck(tabId, field, answer, file, seen) {
   const emptied = field.kind === 'text' && !String(result?.value ?? '').trim();
   if (!result?.ok && (['menu', 'combobox'].includes(field.kind) || emptied) && !file) {
     const real = await pickWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
-    result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}`, choices: real.choices };
+    // The choices either way of opening it showed go to the AI, so it picks one the field has.
+    const choices = real.choices?.length ? real.choices : result?.choices;
+    result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}`, choices };
   }
   // Radio and tick-box options a site ignores simulated clicks on get real clicks on their labels.
   if (!result?.ok && ['radio', 'checkbox-group'].includes(field.kind)) {

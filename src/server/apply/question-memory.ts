@@ -12,6 +12,7 @@ import {
   mergeLearned,
   safeAutoAnswer,
   SUGGEST_MIN_TIMES,
+  isPerCandidateQuestion,
 } from "./question-memory-values";
 
 // Apply's question memory: what confirmed applications teach. Each question has one small row;
@@ -135,7 +136,9 @@ export async function listQuestionSuggestions(limit = 100): Promise<QuestionSugg
     ))
     .orderBy(desc(applyQuestionMemory.timesSeen), desc(applyQuestionMemory.lastSeenAt))
     .limit(limit);
-  return rows.map((row) => {
+  // Only questions every candidate can answer the same way: never personal facts ("Location"),
+  // experience, or wishes ("What compensation are you targeting?").
+  return rows.filter((row) => !isPerCandidateQuestion(row.questionText)).map((row) => {
     const memory = toRow(row);
     return {
       id: row.id,

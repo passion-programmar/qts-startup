@@ -283,6 +283,9 @@ test('uploads that read the résumé to fill the form are recognised on any site
     assert.equal(answers.isAutofillUpload({ kind: 'file', label }), false, label);
   }
   assert.equal(answers.isAutofillUpload({ kind: 'text', label: 'Autofill from resume' }), false);
+  // Zoho: the box says only "Upload your resume"; its section heading says "Autofill Application".
+  assert.equal(answers.isAutofillUpload({ kind: 'file', label: 'Upload your resume or drag and drop it here', autofill: true }), true);
+  assert.equal(answers.isAutofillUpload({ kind: 'file', label: 'Upload photo', autofill: true, accept: 'image/*' }), false);
   // A photo upload under an "Easy Apply" heading (SmartRecruiters takes .jfif photos) is not the résumé box.
   assert.equal(answers.isAutofillUpload({ kind: 'file', label: 'Easy Apply Choose an option to autocomplete your application.', accept: '.bmp,.gif,.jfif,.jpeg,.jpg,.png,.tif,.tiff,.webp' }), false);
   const { answers: letMessage } = answers.resolveFields([
@@ -301,6 +304,69 @@ test('uploads that read the résumé to fill the form are recognised on any site
   assert.equal(resolved.general.file, 'resume');
   assert.equal(resolved.message.value, coverLetterText);
   assert.equal(resolved.line, undefined);
+});
+
+test('a salutation comes from the profile\'s gender in any language; never guessed, never a job title', () => {
+  const ask = (profile, label, options, extra = {}) =>
+    answers.resolveFields([field(label, { id: 'q', kind: 'menu', options, ...extra })], { ...candidate, ...profile }, []).answers.q;
+  assert.equal(ask({ gender: 'man' }, 'Anrede', ['Herr', 'Frau', 'Divers']).value, 'Herr');
+  assert.equal(ask({ gender: 'woman' }, 'Title', ['Mr', 'Mrs', 'Ms', 'Dr']).value, 'Ms');
+  assert.equal(ask({ gender: 'woman' }, 'Civilité', ['M.', 'Mme']).value, 'Mme');
+  assert.equal(ask({ gender: 'non_binary' }, 'Anrede', ['Herr', 'Frau', 'Divers']).value, 'Divers');
+  // No gender in the profile: the declining choice, else an optional one is left empty.
+  assert.equal(ask({ gender: null }, 'Anrede', ['Herr', 'Frau', 'Keine Angabe']).value, 'Keine Angabe');
+  assert.equal(ask({ gender: null }, 'Anrede', ['Herr', 'Frau'], { required: false }), undefined);
+  // "Title" with job titles is not a salutation.
+  assert.notEqual(ask({ gender: 'man' }, 'Title', ['Engineer', 'Senior Engineer'])?.value, 'Mr');
+});
+
+test('personal facts come from the profile, before any reusable answer; a birthday is never guessed', () => {
+  const daniel = {
+    ...candidate, firstName: 'Daniel', lastName: 'Mestre', city: 'Cluj-Napoca', country: 'Romania', province: 'Cluj',
+    addressLine1: '149, Drumul lui Páter', postalCode: '400684', birthday: '1994-06-07',
+  };
+  // A reusable answer saved for exactly "Location" (another candidate's) does not beat the profile.
+  const saved = [{ questionKey: answers.normalizeQuestionKey('Location*'), questionText: 'Location', answer: 'United Kingdom', note: null, scope: 'global' }];
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Location*', { id: 'location' }),
+    field('Birthday*', { id: 'birthday', kind: 'date' }),
+    field('Date of birth', { id: 'dob', placeholder: 'DD/MM/YYYY' }),
+    field('First', { id: 'first' }),
+    field('Last', { id: 'last' }),
+    field('Complete Address*', { id: 'address' }),
+  ], daniel, saved);
+  assert.equal(resolved.location.value, 'Cluj-Napoca, Romania');
+  assert.equal(resolved.location.source, 'profile');
+  assert.equal(resolved.birthday.value, '1994-06-07');
+  assert.equal(resolved.dob.value, '07/06/1994');
+  assert.equal(resolved.first.value, 'Daniel');
+  assert.equal(resolved.last.value, 'Mestre');
+  assert.equal(resolved.address.value, '149, Drumul lui Páter, 400684 Cluj-Napoca, Cluj, Romania');
+  assert.deepEqual(open, []);
+  // No birthday in the profile: left for the Manager, never asked of the AI.
+  const none = answers.resolveFields([field('Birthday*', { id: 'birthday', kind: 'date' })], { ...daniel, birthday: null }, []);
+  assert.equal(none.answers.birthday, undefined);
+  assert.deepEqual(none.open, []);
+  // A question that is not a personal fact still takes the reusable answer saved for it.
+  const general = answers.resolveFields([field('Do you agree to a trial day?', { id: 'trial' })], daniel,
+    [{ questionKey: answers.normalizeQuestionKey('Do you agree to a trial day?'), questionText: 'Do you agree to a trial day?', answer: 'Yes', note: null, scope: 'global' }]);
+  assert.equal(general.answers.trial.value, 'Yes');
+});
+
+test('"where do you live" questions take the profile\'s city and country', () => {
+  const where = { ...candidate, city: 'Warsaw', country: 'Poland' };
+  for (const label of ['Where do you live?', 'Where do you currently reside?', 'Where are you based?', 'Place of residence']) {
+    assert.equal(answers.resolveFields([field(label, { id: 'q' })], where, []).answers.q?.value, 'Warsaw, Poland', label);
+  }
+});
+
+test('an image CAPTCHA is never typed', () => {
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Type below image text', { id: 'code' }),
+    field('Enter the characters shown in the image', { id: 'code2' }),
+  ], candidate, []);
+  assert.deepEqual(resolved, {});
+  assert.deepEqual(open, []);
 });
 
 test('photo and image uploads are never filled, even when required; image links are not made up', () => {
@@ -626,4 +692,28 @@ test('a reusable answer that does not fit carries the value meant, for remembere
   const rows = [{ questionKey: answers.normalizeQuestionKey('Do you have the right to work?'), questionText: 'Do you have the right to work?', answer: 'Yes', note: null }];
   const { open } = answers.resolveFields([field('Do you have the right to work?', { kind: 'select', options: ['Yes, I have ILR', 'No'] })], candidate, rows);
   assert.equal(open[0].intended, 'Yes');
+});
+
+test('the AI sees help text, lists it could not read, and lists that take several choices', () => {
+  const fields = [
+    field('How many years of experience do you have in Data Science?', { kind: 'combobox' }),
+    field('Which responsible AI principles have you implemented? (Select all that apply)', { kind: 'combobox', multiple: true }),
+    field('What is your salary expectation?', { note: 'Gross annual, in EUR', placeholder: 'e.g. 60000' }),
+  ];
+  const prompt = answers.buildAnswerPrompt({ job: {}, candidate, fields });
+  assert.match(prompt, /"options":"not readable yet: answer in the few words its choices most likely use"/);
+  assert.match(prompt, /"multiple":true/);
+  assert.match(prompt, /"note":"Gross annual, in EUR","placeholder":"e.g. 60000"/);
+  assert.match(prompt, /every option that truly fits/);
+  const reply = JSON.stringify({ answers: [
+    { id: fields[0].id, value: '3-5 years' },
+    { id: fields[1].id, value: 'Model explainability | Bias testing' },
+    { id: fields[2].id, value: '60000 EUR per year' },
+  ] });
+  const { answers: usable, invalid } = answers.parseAnswerReply(reply, fields);
+  assert.deepEqual(invalid, []);
+  assert.deepEqual(usable[fields[1].id].value, ['Model explainability', 'Bias testing']);
+  // Once the list's choices are known, several are checked against them.
+  const known = { ...fields[1], options: ['Model explainability', 'Bias testing', 'Privacy by design'] };
+  assert.deepEqual(answers.parseAnswerReply(JSON.stringify({ answers: [{ id: known.id, value: 'bias testing | Privacy by design' }] }), [known]).answers[known.id].value, ['Bias testing', 'Privacy by design']);
 });
