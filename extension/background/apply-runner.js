@@ -132,7 +132,10 @@ async function applyChatTab() {
 async function waitForTabComplete(tabId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if ((await getTab(tabId))?.status === 'complete') return true;
+    const tab = await getTab(tabId);
+    // A closed page never loads: the wait ends at once.
+    if (!tab) return false;
+    if (tab.status === 'complete') return true;
     await sleep(300);
   }
   return false;
@@ -730,21 +733,25 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
  */
 /**
  * Fills one form page. options.assist (Apply as the Manager's assistant): only what QTS knows for
- * sure (documents, cover letter, profile facts, reusable answers; no AI), never a box that already
- * holds something, never a question in options.handled (met on an earlier pass), and no checks for
- * the Manager (the panel lists what is still empty); only uploads and values the site refused are
- * reported.
+ * sure (documents, cover letter, profile facts, reusable answers; no AI), never a text box that
+ * already holds something, never a box options.skip(field) says was met on an earlier pass, never a
+ * box outside the application (search, newsletter), and no checks for the Manager (the panel lists
+ * what is still empty); only uploads and values the site refused are reported. The résumé and
+ * cover letter are prepared once per application and reused on every page.
  */
 async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   const helpers = self.__qtsApplyAnswers;
   const assist = options.assist === true;
-  const handled = options.handled || null;
+  const skip = options.skip || (() => false);
   const used = {};
   const problems = [];
   let canAskAgain = false;
   const seen = new Set();
   const uploaded = new Set();
-  let documents = null;
+  let documents = assist ? application.assistDocuments || null : null;
+  const keepDocuments = (ready) => {
+    if (assist && ready?.resume?.base64) application.assistDocuments = ready;
+  };
   let rechecked = false;
   // The step's report: every question met, how long each stage took, how many AI requests.
   stepAttempts = [];
@@ -845,9 +852,11 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     return answersById;
   };
   for (let round = 0; round < APPLY_FILL_ROUNDS + 1; round += 1) {
-    const fields = round === 0 && !assist
-      ? await waitForFormFields(tabId)
-      : await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm());
+    const fields = assist
+      ? await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist())
+      : round === 0
+        ? await waitForFormFields(tabId)
+        : await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm());
     if (round === 0 && !assist) {
       await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
       const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
@@ -877,7 +886,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     for (const field of fields || []) {
       if (field.hidden || field.disabled || seen.has(field.id)) continue;
       // The Manager's or the site's own text stays; a question met before is the Manager's now.
-      if (assist && (field.filled || handled?.has(assistFieldKey(field)))) continue;
+      if (assist && (field.filled || field.unrelated || field.account || skip(field))) continue;
       // Drawn again by the page after its answer was picked (a new element): kept as it is.
       if (await stillAnswered(field)) {
         seen.add(field.id);
@@ -914,6 +923,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
         try {
           documents = await fetchApplyDocuments(application.attemptId, tabId);
           application.documentsFolder = documents.folder;
+          keepDocuments(documents);
         } catch {
           documents = {};
         }
@@ -967,6 +977,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
       try {
         documents = await fetchApplyDocuments(application.attemptId, tabId);
         application.documentsFolder = documents.folder;
+        keepDocuments(documents);
       } catch (error) {
         problem(`The résumé could not be prepared (${error instanceof Error ? error.message : 'unknown error'}); upload it by hand from the folder above.`, null, 'upload');
         documents = {};
@@ -1315,13 +1326,29 @@ function learnedAnswers(answersUsed, current) {
 const reviewWaiters = new Map();
 const APPLY_REVIEW_REMINDER_MS = 10 * 60 * 1000;
 
+// The assistant's decisions that came while its page was busy (the page closed while it loaded, a
+// click during a fill): kept and handled as soon as it waits again, never lost.
+const earlyDecisions = new Map();
+// An ending replaces a click kept earlier; a click never replaces an ending.
+const ENDING_ACTIONS = new Set(['closed', 'cancel', 'stopped', 'later', 'lost']);
+
 function waitForManager(attemptId) {
+  const early = earlyDecisions.get(attemptId);
+  if (early) {
+    earlyDecisions.delete(attemptId);
+    return Promise.resolve(early);
+  }
   return new Promise((resolve) => reviewWaiters.set(attemptId, resolve));
 }
 
 function answerManager(attemptId, decision) {
   const resolve = reviewWaiters.get(attemptId);
-  if (!resolve) return false;
+  if (!resolve) {
+    if (!activeReviews.get(attemptId)?.assist) return false;
+    const kept = earlyDecisions.get(attemptId);
+    if (!kept || (ENDING_ACTIONS.has(decision.action) && !ENDING_ACTIONS.has(kept.action))) earlyDecisions.set(attemptId, decision);
+    return true;
+  }
   reviewWaiters.delete(attemptId);
   resolve(decision);
   return true;
@@ -1416,6 +1443,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== 'QTS_APPLY_PANEL' || typeof msg.attemptId !== 'string') return false;
   (async () => {
     if (msg.action === 'ping') return { ok: true };
+    // New boxes on an assistant's page: filled at once.
+    if (msg.action === 'fields_changed') {
+      activeReviews.get(msg.attemptId)?.assistant?.poke(sender.tab?.id);
+      return { ok: true };
+    }
     if (msg.action === 'open_folder') {
       const review = activeReviews.get(msg.attemptId);
       return review?.resumeFolder ? openDownloadedFolder(review.resumeFolder) : { ok: false, error: 'No résumé folder for this job.' };
@@ -1472,13 +1504,13 @@ async function answerWithoutRunner(attemptId, action, tabId) {
 /**
  * The assistant's panel answered after the worker restarted (its application is no longer running
  * here). Only Submitted or Yes records anything: the bid, and the job row deleted. Cancel lets the
- * job go with nothing recorded. The site's own Submit noticed is answered with Submitted here.
+ * job go with nothing recorded.
  */
 async function answerAssistWithoutRunner(msg, tabId) {
   const { attemptId, action } = msg;
   const post = (path, body = {}) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
   let result;
-  if ((action === 'submitted' && !msg.noticed) || action === 'yes') {
+  if (action === 'submitted') {
     await post('submitted', { appliedAnswers: [] });
     result = await post('result', { submitted: true, removeJob: true });
   } else if (action === 'cancel') {
@@ -1511,6 +1543,8 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
       answerManager(review.attemptId, { action: review.panel.final ? 'submitted' : 'continue_manual', noticed: true });
     }
     showReviewPanel(tabId, review.panel).catch(() => {});
+    // A page loaded in an assistant's tab (a redirect, a sign-in, the next step): filled at once.
+    review.assistant?.poke(tabId);
   }
 });
 
@@ -1860,24 +1894,47 @@ async function waitForConfirmation(review, reviewState, answersUsed, current, re
 // ---- Apply as the Manager's assistant ----
 // Each Chrome keeps up to two job pages open, each with a panel: the candidate's profile,
 // experience, education, and Super Admin's reusable answers (every item copied with a click), and
-// two copy buttons (résumé + job description, and with the profile). QTS fills only what it knows
-// for sure (the résumé and cover letter, profile facts, reusable answers; never AI) and never clicks
-// the site's buttons. The Manager does the rest and clicks the site's Submit, then answers
-// "Submitted successfully?", or uses Submitted / Cancel at the bottom of the panel. Submitted saves
-// the bid and deletes the job row; Cancel closes the page and leaves the job as it was.
+// two copy buttons (résumé + job description, and with the profile). On every page of the journey
+// (the form's steps, a pop-up, the employer's site in a tab the job page opened) QTS fills, as soon
+// as boxes show, only what it knows for sure: the résumé and cover letter, profile facts, reusable
+// answers; never AI, never a search, newsletter, or job-alert form, never a sign-in or create-account
+// form (the Manager types those, copying the site account password from the panel), and it never
+// clicks the site's buttons.
+// The Manager does the rest, clicks the site's Submit, then Submitted at the bottom of the panel (the
+// site's buttons are never watched), or Cancel. Submitted saves the bid and deletes the job row;
+// Cancel closes the page and leaves the job as it was.
 const APPLY_TABS_PER_CHROME = 2;
 // Where the assistant's answers may come from: the résumé and cover letter, the profile, reusable answers.
 const ASSIST_SOURCES = new Set(['documents', 'profile', 'reusable']);
-// How often an open page is looked at for questions QTS has not met yet (the form, a next step, a follow-up).
-const ASSIST_LOOK_EVERY_MS = 4000;
+// The page tells QTS when new boxes show (content/apply-assist.js); this slower look is the backup.
+const ASSIST_LOOK_EVERY_MS = 15 * 1000;
+// While the Manager types on a page, QTS waits this long and looks again.
+const ASSIST_TYPING_WAIT_MS = 3000;
+// The longest one fill pass holds the other pages back.
+const ASSIST_PASS_LIMIT_MS = 60 * 1000;
 // Jobs cancelled in this Chrome since Apply was turned on: not opened again until Apply restarts.
 const APPLY_CANCELLED_KEY = 'qtsApplyCancelledJobs';
 // One page is filled at a time in this Chrome, so the open pages never fill over each other.
 let assistFillChain = Promise.resolve();
 
-/** A question's identity across passes: its kind and words (an element may be drawn anew), else its id. */
-function assistFieldKey(field) {
-  return HAS_WORDS.test(field.label || '') ? `${field.kind}|${field.label}` : field.id;
+/** A page's address without its #part: each step at its own address is its own page. */
+function assistPageOf(url) {
+  return String(url || '').split('#')[0];
+}
+
+/**
+ * The assistant's two keys for a box: the box itself on this tab's page (met once, then it is the
+ * Manager's, even if emptied), and its question on the page (a box the page draws anew, empty, is
+ * filled at most twice there; an upload once), so nothing is filled or uploaded over and over.
+ */
+function assistKeys(tabId, page, field) {
+  const question = HAS_WORDS.test(field.label || '') ? `${field.kind}|${field.label}` : field.id;
+  return { box: `${tabId}|${page}|${field.id}`, question: `${tabId}|${page}|${question}` };
+}
+
+function assistSkips(assistant, tabId, page, field) {
+  const keys = assistKeys(tabId, page, field);
+  return assistant.handled.has(keys.box) || (assistant.tries.get(keys.question) || 0) >= (field.kind === 'file' ? 1 : 2);
 }
 
 async function cancelledJobIds() {
@@ -1897,27 +1954,47 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 /**
- * Looks at an open page and fills the questions QTS has not met yet: none while the Manager typed
- * there in the last 3 seconds. Each question is met once; after that it is the Manager's.
+ * Looks at one of an application's pages (any step of the form, the employer's site, a pop-up) and
+ * fills the boxes QTS has not met there yet; none while the Manager typed there in the last 3
+ * seconds. Text the Manager or the site wrote stays; a box met once is the Manager's from then on.
+ * Sign-in and create-account forms are the Manager's (the panel copies the site account password),
+ * and boxes outside the application (search, newsletter, job alerts) are never filled.
  */
 async function assistFillPass(tabId, application, assistant) {
   const tab = await getTab(tabId);
   if (!tab || tab.status !== 'complete') return;
+  const page = assistPageOf(tab.url);
   const look = await inForm(tabId, () => ({
-    fields: globalThis.__qtsApplyForm.scanForm(),
+    fields: globalThis.__qtsApplyForm.scanForAssist(),
     typing: Date.now() - (globalThis.__qtsApplyAssist?.lastKeyAt?.() || 0) < 3000,
   })).catch(() => null);
-  if (!look || look.typing) return;
-  const unmet = (look.fields || []).filter((field) => !field.hidden && !field.disabled && !field.filled && !assistant.handled.has(assistFieldKey(field)));
+  if (!look) return;
+  if (look.typing) {
+    setTimeout(() => assistant.poke(tabId), ASSIST_TYPING_WAIT_MS);
+    return;
+  }
+  const skip = (field) => assistSkips(assistant, tabId, page, field);
+  const unmet = (look.fields || []).filter((field) => !field.hidden && !field.disabled && !field.filled && !field.unrelated && !field.account && !skip(field));
   if (!unmet.length) return;
   const pass = assistFillChain.then(async () => {
     if (assistant.stopped) return;
     assistant.filling = true;
     await assistant.show();
     try {
-      const filled = await fillFormPage(tabId, application, assistant.keepAlive, 1, { assist: true, handled: assistant.handled });
+      // A page that goes away mid-fill (the Manager clicked Next) never holds up the other pages.
+      const filled = await Promise.race([
+        fillFormPage(tabId, application, assistant.keepAlive, 1, { assist: true, skip }),
+        sleep(ASSIST_PASS_LIMIT_MS).then(() => ({ used: {}, problems: [], met: [] })),
+      ]);
       Object.assign(assistant.used, filled.used);
-      for (const field of [...unmet, ...(filled.met || [])]) assistant.handled.add(assistFieldKey(field));
+      const counted = new Set();
+      for (const field of [...unmet, ...(filled.met || [])]) {
+        const keys = assistKeys(tabId, page, field);
+        assistant.handled.add(keys.box);
+        if (counted.has(keys.question)) continue;
+        counted.add(keys.question);
+        assistant.tries.set(keys.question, (assistant.tries.get(keys.question) || 0) + 1);
+      }
       const known = new Set(filled.problems.map((entry) => entry.message));
       assistant.problems = [...assistant.problems.filter((entry) => !known.has(entry.message)), ...filled.problems];
     } finally {
@@ -1970,7 +2047,26 @@ async function runAssistedApplication(application) {
     panel: null,
   };
   activeReviews.set(attemptId, review);
-  const assistant = { used: {}, handled: new Set(), problems: [], filling: false, stopped: false, keepAlive, show: null };
+  const assistant = {
+    used: {}, handled: new Set(), tries: new Map(), problems: [], filling: false, stopped: false, keepAlive, show: null,
+    // Tabs with a fill pass on its way, and those to look at once more when it ends.
+    looking: new Set(), lookAgain: new Set(),
+    // Fills one of this application's tabs now (new boxes shown, a page loaded); a second request
+    // while it fills becomes one more pass after it.
+    poke(tabId) {
+      if (assistant.stopped || tabId == null || !tabsOf(review).has(tabId)) return;
+      if (assistant.looking.has(tabId)) {
+        assistant.lookAgain.add(tabId);
+        return;
+      }
+      assistant.looking.add(tabId);
+      assistFillPass(tabId, application, assistant).catch(() => {}).finally(() => {
+        assistant.looking.delete(tabId);
+        if (assistant.lookAgain.delete(tabId)) assistant.poke(tabId);
+      });
+    },
+  };
+  review.assistant = assistant;
   const panelState = (mode, extra = {}) => ({
     assist: true,
     attemptId,
@@ -1990,6 +2086,8 @@ async function runAssistedApplication(application) {
     resumeText: application.job.resumeText || '',
     resumeFolder: application.job.resumeFolder,
     profile: panelProfile(application.candidate),
+    // Copied from the panel for sign-in and create-account forms; shown as dots.
+    siteAccountPassword: application.siteAccountPassword || null,
     experiences: application.profileDetails?.experiences || [],
     educations: application.profileDetails?.educations || [],
     reusable: (application.savedAnswers || []).map((entry) => ({ question: entry.questionText, answer: entry.answer, note: entry.note || null })),
@@ -2003,23 +2101,27 @@ async function runAssistedApplication(application) {
     review.panel = panelState(mode, extra);
     return Promise.all([...tabsOf(review)].map((tabId) => showReviewPanel(tabId, review.panel).catch(() => {})));
   };
-  assistant.show = () => showPanel(review.panel?.mode === 'confirm' ? 'confirm' : 'assist');
+  assistant.show = () => showPanel('assist');
   const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
-  // Nothing is recorded unless the Manager says the site took it (Submitted, or Yes after the site's
-  // Submit): any other end lets the job go exactly as it was.
+  // Nothing is recorded unless the Manager clicks Submitted on the panel: any other end lets the job
+  // go exactly as it was.
   const drop = (reason) => report('release', { mode: 'drop', reason });
   const closeTabs = () => Promise.all([...tabsOf(review)].map((tabId) => chrome.tabs.remove(tabId).catch(() => {})));
   let tab = null;
-  // The form's answers when the site's Submit was clicked (the page may change right after).
+  // The form's answers when Submitted was clicked.
   let answersAtSubmit = null;
   let learnedAtSubmit = [];
   // The bid's first step reached QTS (the Manager answered; only saving the bid is left).
   let marked = false;
+  // Every tab of the application is filled when the page says boxes changed, and looked at every
+  // 15 seconds as a backup.
+  let fillerRun = 0;
   const startFiller = () => {
     assistant.stopped = false;
+    const run = ++fillerRun;
     (async () => {
-      while (!assistant.stopped && activeReviews.has(attemptId)) {
-        if (review.tabId != null) await assistFillPass(review.tabId, application, assistant).catch(() => {});
+      while (!assistant.stopped && run === fillerRun && activeReviews.has(attemptId)) {
+        for (const tabId of tabsOf(review)) assistant.poke(tabId);
         await sleep(ASSIST_LOOK_EVERY_MS);
       }
     })();
@@ -2040,38 +2142,26 @@ async function runAssistedApplication(application) {
     startFiller();
     for (;;) {
       const decision = await waitForManager(attemptId);
-      // The site's own Submit: only the question "Submitted successfully?"; nothing is recorded yet.
-      if (decision.action === 'submitted' && decision.noticed) {
-        ({ answers: answersAtSubmit, learned: learnedAtSubmit } = await readAnswers(decision.answers));
-        assistant.stopped = true;
-        await showPanel('confirm');
-        continue;
-      }
-      if (decision.action === 'submitted' || decision.action === 'yes') {
-        if (!answersAtSubmit) ({ answers: answersAtSubmit, learned: learnedAtSubmit } = await readAnswers(decision.answers));
+      // Submitted on the panel (the site's own buttons are never watched): the bid, and the job row deleted.
+      if (decision.action === 'submitted') {
         assistant.stopped = true;
         if (!marked) {
+          ({ answers: answersAtSubmit, learned: learnedAtSubmit } = await readAnswers(decision.answers));
           const sent = await report('submitted', { appliedAnswers: answersAtSubmit, learned: learnedAtSubmit });
           if (!sent.success) {
-            await showPanel(review.panel?.mode === 'confirm' ? 'confirm' : 'assist', { message: sent.message || 'QTS did not save the bid; try again.' });
+            await showPanel('assist', { message: sent.message || 'QTS did not save the bid; try again.' });
+            startFiller();
             continue;
           }
           marked = true;
         }
         const saved = await report('result', { submitted: true, removeJob: true, appliedAnswers: answersAtSubmit });
         if (!saved.success) {
-          await showPanel('confirm', { message: saved.message || 'QTS did not save the bid; try again.' });
+          await showPanel('assist', { message: saved.message || 'QTS did not save the bid; try again.' });
           continue;
         }
         await closeTabs();
         return;
-      }
-      if (decision.action === 'no' || decision.action === 'back_to_review') {
-        // The site did not take it (a field error): back to the form, nothing recorded.
-        answersAtSubmit = null;
-        await showPanel('assist');
-        startFiller();
-        continue;
       }
       if (decision.action === 'lost') return;
       // Cancel, all its tabs closed, or Apply turned off: nothing recorded.
@@ -2097,6 +2187,7 @@ async function runAssistedApplication(application) {
     clearInterval(heartbeat);
     activeReviews.delete(attemptId);
     reviewWaiters.delete(attemptId);
+    earlyDecisions.delete(attemptId);
     for (const tabId of tabsOf(review)) {
       await removeReviewPanel(tabId);
       await releaseDebugger(tabId);

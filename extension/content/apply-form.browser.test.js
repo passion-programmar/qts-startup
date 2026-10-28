@@ -310,3 +310,31 @@ test('a form in a frame from the same site is read and filled', { skip }, async 
    return { found: Boolean(f), ok: res && res.ok, value: document.getElementById('same').contentDocument.getElementById('q').value };`);
   assert.deepEqual(result, { found: true, ok: true, value: 'Answer' });
 });
+
+test('the assistant\'s scan marks search, newsletter, job-alert and footer boxes as not the application', { skip }, async () => {
+  const fields = await onPage(`<header><form action="/jobs/search"><label for="q">Keywords</label><input id="q" type="text"><label for="where">Location</label><input id="where"></form></header>
+    <div role="search"><label for="s2">Find jobs</label><input id="s2"></div>
+    <form id="apply"><label for="fn">First name</label><input id="fn"><label for="em">Email</label><input id="em" type="email"><label for="ci">City</label><input id="ci"><button>Submit application</button></form>
+    <form class="newsletter-signup"><label for="nl">Your email</label><input id="nl" type="email"><button>Go</button></form>
+    <aside><form><p>Get job alerts for roles like this</p><label for="ja">Email</label><input id="ja" type="email"><button>Notify me</button></form></aside>
+    <footer><form><label for="ft">Email</label><input id="ft" type="email"></form></footer>`,
+  `return api.scanForAssist().map((f) => [document.querySelector('[data-qts-apply-field="' + f.id + '"]').id, Boolean(f.unrelated)]);`);
+  assert.deepEqual(Object.fromEntries(fields), { q: true, where: true, s2: true, fn: false, em: false, ci: false, nl: true, ja: true, ft: true });
+});
+
+test('sign-in and create-account forms are the Manager\'s; the application form beside them is not', { skip }, async () => {
+  const marks = (html) => onPage(html,
+    `return api.scanForAssist().filter((f) => !f.hidden).map((f) => [document.querySelector('[data-qts-apply-field="' + f.id + '"]').id, Boolean(f.account)]);`);
+  assert.deepEqual(Object.fromEntries(await marks(`<form id="login"><label for="u">Email or username</label><input id="u"><label for="p">Password</label><input id="p" type="password"><button>Sign in</button></form>`)),
+    { u: true });
+  assert.deepEqual(Object.fromEntries(await marks(`<form><label for="fn">First name</label><input id="fn"><label for="em">Email</label><input id="em" type="email">
+      <label for="p1">Password</label><input id="p1" type="password"><label for="p2">Confirm password</label><input id="p2" type="password"><button>Create account</button></form>`)),
+    { fn: true, em: true });
+  // A sign-in box beside the application's own form leaves the application's questions to QTS.
+  assert.deepEqual(Object.fromEntries(await marks(`<form><label for="u">Email</label><input id="u" type="email"><label for="p">Password</label><input id="p" type="password"></form>
+      <form><label for="fn">First name</label><input id="fn"><label for="em">Email</label><input id="em" type="email"><label for="ci">City</label><input id="ci"></form>`)),
+    { u: true, fn: false, em: false, ci: false });
+  // A one-time code box is not a password: its form stays QTS's.
+  assert.deepEqual(Object.fromEntries(await marks(`<form><label for="em">Email</label><input id="em" type="email"><label for="otp">Code</label><input id="otp" type="password" autocomplete="one-time-code"></form>`)),
+    { em: false });
+});

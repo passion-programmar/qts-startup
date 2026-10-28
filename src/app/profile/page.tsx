@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
-import { KeyRound } from "lucide-react";
+import { eq } from "drizzle-orm";
+import { KeyRound, LockKeyhole } from "lucide-react";
 import { redirect } from "next/navigation";
 import { ProfileForm } from "@/app/profile/profile-form";
+import { SiteAccountPasswordForm } from "@/app/profile/site-account-password-form";
+import { users } from "@/db/schema";
+import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
@@ -15,6 +19,9 @@ export const metadata: Metadata = {
 export default async function ProfilePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  const [siteAccount] = user.role === "manager"
+    ? await db.select({ password: users.siteAccountPassword }).from(users).where(eq(users.id, user.id)).limit(1)
+    : [];
 
   return (
     <WorkspaceShell activeHref="/profile" user={user}>
@@ -44,6 +51,22 @@ export default async function ProfilePage() {
             loginName={user.loginName}
           />
         </section>
+
+        {user.role === "manager" && (
+          <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+            <div className="mb-6 border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-2">
+                <LockKeyhole className="size-4 text-indigo-600" />
+                <h2 className="text-sm font-semibold text-slate-800">Site account password</h2>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                The one password for your candidates&apos; accounts on job sites. Apply fills it on sign-in and
+                create-account pages (with the candidate&apos;s email); you click Sign in or Create account yourself.
+              </p>
+            </div>
+            <SiteAccountPasswordForm saved={Boolean(siteAccount?.password)} />
+          </section>
+        )}
       </div>
     </main>
     </WorkspaceShell>

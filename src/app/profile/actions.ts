@@ -11,6 +11,10 @@ import {
   passwordLengthError,
 } from "@/lib/password-policy";
 import { createSession, requireUser } from "@/lib/session";
+import {
+  SITE_ACCOUNT_PASSWORD_MAX,
+  encryptSiteAccountPassword,
+} from "@/server/apply/site-account-password";
 
 export type ProfileState = {
   error: string | null;
@@ -98,6 +102,39 @@ export async function updateProfileAction(
       ? "Your profile and password were updated."
       : "Your profile was updated.",
   };
+}
+
+/**
+ * A Manager's one password for the candidates' accounts on job sites (the same for every account):
+ * saved encrypted, filled by Apply on sign-in and registration pages. Remove clears it.
+ */
+export async function saveSiteAccountPasswordAction(
+  _previousState: ProfileState,
+  formData: FormData,
+): Promise<ProfileState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") return { error: "Only Managers keep a site account password.", success: null };
+  const remove = formData.get("intent") === "remove";
+  const password = readSecret(formData, "siteAccountPassword");
+  const confirm = readSecret(formData, "confirmSiteAccountPassword");
+  if (!remove) {
+    if (!password) return { error: "Type the password.", success: null };
+    if (password.length > SITE_ACCOUNT_PASSWORD_MAX) {
+      return { error: `Use at most ${SITE_ACCOUNT_PASSWORD_MAX} characters.`, success: null };
+    }
+    if (password !== confirm) return { error: "The passwords do not match.", success: null };
+  }
+  try {
+    await db
+      .update(users)
+      .set({ siteAccountPassword: remove ? null : encryptSiteAccountPassword(password), updatedAt: new Date() })
+      .where(eq(users.id, actor.id));
+  } catch (error) {
+    logCredentialFailure("saving the site account password", error);
+    return { error: "The password could not be saved. Please try again.", success: null };
+  }
+  revalidatePath("/profile");
+  return { error: null, success: remove ? "The site account password was removed." : "The site account password was saved." };
 }
 
 function readText(formData: FormData, name: string, maxLength: number): string {

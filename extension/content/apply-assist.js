@@ -3,8 +3,8 @@
 // (résumé + job description, and with the profile), the candidate's profile, experience, education,
 // and Super Admin's reusable answers as cards (every item copied with a click), what QTS filled, and
 // the required questions still empty. At the bottom: Submitted (saves the bid, deletes the job row)
-// and Cancel (closes the page; the job stays). The Manager's own click on the site's Submit asks
-// "Submitted successfully?" Yes / No.
+// and Cancel (closes the page; the job stays). The site's own buttons are never watched. When new
+// boxes show on the page, the panel tells QTS so it fills them at once.
 (function initApplyAssist(global) {
   if (global.__qtsApplyAssist) return;
 
@@ -268,11 +268,12 @@
     return node;
   }
 
-  function item(label, value) {
+  // shown: what the item displays when it is not the value itself (a password shows as dots).
+  function item(label, value, shown = value) {
     const node = element('button', 'item');
     node.type = 'button';
     node.title = 'Click to copy';
-    node.append(element('span', 'label', label), element('span', 'value', value));
+    node.append(element('span', 'label', label), element('span', 'value', shown));
     node.addEventListener('click', async () => {
       if (!(await copyText(value))) return showToast('Could not copy');
       node.classList.add('copied');
@@ -433,6 +434,10 @@
     const facts1 = profileFacts(state.profile);
     const disclosures = disclosureFacts(state.profile);
     scroll.append(card('profile', 'Profile', facts1.length, (body) => {
+      // The Manager's one password for the candidates' site accounts, for sign-in and create-account
+      // forms (the Manager types those): never shown, copied with a click.
+      if (state.siteAccountPassword) body.append(item('Site account password', state.siteAccountPassword, '••••••••'));
+      else body.append(element('div', 'none', 'No site account password saved (QTS → My profile).'));
       for (const [label, value] of facts1) body.append(item(label, value));
       if (disclosures.length) {
         body.append(element('div', 'group', 'Voluntary disclosures'));
@@ -479,19 +484,11 @@
     const foot = element('div', 'foot');
     if (state.message) foot.append(element('div', 'message', state.message));
     const actions = element('div', 'actions');
-    if (state.mode === 'confirm') {
-      foot.append(element('div', 'note', 'Submitted successfully? Check the page (or the email), then answer.'));
-      actions.append(
-        actionButton('Yes, submitted', 'submitted', 'yes'),
-        actionButton('No', 'no', 'no'),
-      );
-    } else {
-      foot.append(element('div', 'note', 'Fill the rest, click the site\'s Submit, then Submitted here.'));
-      actions.append(
-        actionButton('Submitted', 'submitted', 'submitted', () => ({ answers: currentAnswers() })),
-        actionButton('Cancel', 'cancel', 'cancel'),
-      );
-    }
+    foot.append(element('div', 'note', 'Fill the rest, click the site\'s Submit, then Submitted here.'));
+    actions.append(
+      actionButton('Submitted', 'submitted', 'submitted', () => ({ answers: currentAnswers() })),
+      actionButton('Cancel', 'cancel', 'cancel'),
+    );
     foot.append(actions);
     panel.append(brandHeader(), scroll, foot);
     scroll.scrollTop = scrollTop;
@@ -528,27 +525,43 @@
     render();
   }, 2000);
 
-  // The Manager's own click on the site's Submit, on a page that shows the application's questions
-  // (an "Apply" button on the job page only opens the form): Yes / No. The form's values are read now.
-  let submitNoticedAt = 0;
-  function noticeSubmit(target) {
-    if (!state || state.mode !== 'assist' || busy) return;
-    if (target && !global.__qtsApplyForm?.isSubmitControl?.(target)) return;
-    let questions = 0;
-    try {
-      questions = (global.__qtsApplyForm?.scanForm?.() || []).filter((field) => !field.hidden).length;
-    } catch {
-      questions = 0;
-    }
-    if (questions < 2 || Date.now() - submitNoticedAt < 3000) return;
-    submitNoticedAt = Date.now();
-    send('submitted', { answers: currentAnswers(), noticed: true });
+  // The site's own buttons are never watched: the application ends only with Submitted or Cancel here.
+
+  // New boxes on the page (the next step, a pop-up form, a section shown by an answer, a new
+  // address in a single-page site): QTS is told half a second after the page settles, and only when
+  // the boxes shown changed, so it fills them at once without reading the page for nothing.
+  const BOX_SELECTOR = 'input:not([type="hidden"]), select, textarea, [role="combobox"], [role="radiogroup"], [role="checkbox"], [contenteditable="true"]';
+  let boxesSeen = '';
+  let changeTimer = null;
+  // Each box by its own number (QTS's marks on the boxes change when it reads them; this does not).
+  const boxNumbers = new WeakMap();
+  let nextBoxNumber = 1;
+  const boxNumber = (box) => {
+    if (!boxNumbers.has(box)) boxNumbers.set(box, nextBoxNumber++);
+    return boxNumbers.get(box);
+  };
+  const shownBoxes = () => [...document.querySelectorAll(BOX_SELECTOR)]
+    .filter((box) => !host.contains(box) && box.getClientRects().length)
+    .map(boxNumber)
+    .join(',');
+  function pageChanged() {
+    clearTimeout(changeTimer);
+    changeTimer = setTimeout(() => {
+      if (!state || state.mode !== 'assist') return;
+      const now = `${location.href}|${shownBoxes()}`;
+      if (now === boxesSeen) return;
+      boxesSeen = now;
+      send('fields_changed');
+    }, 500);
   }
-  document.addEventListener('click', (event) => {
-    if (event.composedPath().includes(host)) return;
-    noticeSubmit(event.target);
-  }, true);
-  document.addEventListener('submit', () => noticeSubmit(null), true);
+  new MutationObserver((records) => {
+    if (records.every((record) => record.target === host || host.contains(record.target))) return;
+    pageChanged();
+  }).observe(document.documentElement, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'aria-hidden', 'open', 'disabled'],
+  });
+  global.addEventListener('popstate', pageChanged);
+  global.addEventListener('hashchange', pageChanged);
   // QTS waits while the Manager types on this page.
   document.addEventListener('keydown', (event) => {
     if (!event.composedPath().includes(host)) lastKeyAt = Date.now();

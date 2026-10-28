@@ -2092,8 +2092,68 @@
     return { result: 'unclear', evidence: text.slice(0, 300) };
   }
 
+  // ---- Apply as the Manager's assistant: which boxes belong to the application ----
+
+  // Forms that are not the application: a site search, a newsletter, job alerts.
+  const UNRELATED_FORM = /\b(news ?letters?|subscri(be|ption)|job ?alerts?|get (job )?notified|notify me|mailing list|talent (community|network|pool)|stay (in touch|updated)|search)\b/i;
+  const PAGE_FRAME = 'header, nav, footer, [role="banner"], [role="navigation"], [role="contentinfo"]';
+
+  /** The <form> a control sits in, out of page components too; null outside any form. */
+  function formOf(control) {
+    for (let node = control; node; node = node.parentElement || node.getRootNode?.()?.host || null) {
+      if (node.tagName === 'FORM') return node;
+    }
+    return null;
+  }
+
+  /**
+   * A box that is not the application's: in a search (role="search"), in a newsletter, job-alert or
+   * search form (its name, or the words of a small form), or in a small form in the page's header
+   * or footer. The candidate's facts are never typed there.
+   */
+  function unrelatedBox(control) {
+    for (let node = control; node; node = node.parentElement || node.getRootNode?.()?.host || null) {
+      if (node.tagName === 'SEARCH' || node.getAttribute?.('role') === 'search') return true;
+    }
+    const form = formOf(control);
+    if (!form) return Boolean(control.closest(PAGE_FRAME));
+    const named = `${form.id} ${typeof form.className === 'string' ? form.className : ''} ${form.getAttribute('name') || ''} ${form.getAttribute('action') || ''} ${form.getAttribute('aria-label') || ''}`;
+    if (UNRELATED_FORM.test(named.replace(/[-_/.?=&]+/g, ' '))) return true;
+    const boxes = [...form.querySelectorAll('input, select, textarea')]
+      .filter((element) => !['hidden', 'submit', 'button', 'image', 'reset'].includes((element.type || '').toLowerCase()) && isShown(element)).length;
+    if (boxes > 2) return false;
+    return UNRELATED_FORM.test(cleanText(form.innerText || '').slice(0, 300)) || Boolean(form.closest(PAGE_FRAME));
+  }
+
+  /**
+   * A box of a sign-in or create-account form (one with a password box; on a page without forms, a
+   * page showing one): the Manager types those, with the password copied from the panel.
+   */
+  function accountBox(control) {
+    const form = formOf(control);
+    const scope = form || document;
+    return [...scope.querySelectorAll('input[type="password"]')].some((box) => isShown(box) && box.autocomplete !== 'one-time-code');
+  }
+
+  /**
+   * scanForm for the assistant: each question that is not the application's is marked unrelated
+   * (search, newsletter, job alerts), and each of a sign-in or create-account form marked account.
+   */
+  function scanForAssist() {
+    const fields = scanForm();
+    const elements = new Map(allElements().filter((element) => element.hasAttribute(FIELD_ATTRIBUTE))
+      .map((element) => [element.getAttribute(FIELD_ATTRIBUTE), element]));
+    return fields.map((field) => {
+      const element = elements.get(field.id);
+      if (!element) return field;
+      if (unrelatedBox(element)) return { ...field, unrelated: true };
+      return accountBox(element) ? { ...field, account: true } : field;
+    });
+  }
+
   global.__qtsApplyForm = {
     scanForm,
+    scanForAssist,
     readComboboxOptions,
     discoverComboboxChoices,
     currentChoices,

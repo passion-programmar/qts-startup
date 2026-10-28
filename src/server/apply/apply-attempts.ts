@@ -32,6 +32,7 @@ import {
 import { type ExchangeRates, loadExchangeRates } from "./exchange-rates";
 import { type RememberedChoice, recordLearnedAnswers, rememberedChoices } from "./question-memory";
 import { type LearnedAnswer } from "./question-memory-values";
+import { decryptSiteAccountPassword } from "./site-account-password";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
 // it ("claimed"), the Manager reviews each step ("waiting_review"), clicks the site's Submit
@@ -75,6 +76,9 @@ export type ClaimedApplication = {
   rememberedChoices: RememberedChoice[];
   // Super Admin's default answer prompt for the Manager's AI mode; null means Apply's built-in one.
   answerPrompt: { id: string; template: string } | null;
+  // The Manager's password for the candidates' site accounts (My profile), for sign-in and
+  // registration pages; null when none is saved. Never shown in the panel.
+  siteAccountPassword: string | null;
 };
 
 type ProfileExperience = {
@@ -212,6 +216,7 @@ export async function claimNextApplication(
       aiMode: users.applyAiMode,
       autoSubmit: users.autoSubmit,
       reviewMode: users.applyReviewMode,
+      siteAccountPassword: users.siteAccountPassword,
     })
     .from(applyAttempts)
     .innerJoin(jobs, eq(jobs.id, applyAttempts.jobId))
@@ -236,7 +241,7 @@ export async function claimNextApplication(
   const {
     jobId, url, title, company, location, employmentType, workplaceType, salary, description,
     resumeLocalPath, resumeSavedOn, promptName, pdfTemplate, savedResumeText, savedCoverLetterText,
-    deliveredResume, deliveredCoverLetter, aiMode, autoSubmit, reviewMode, ...candidate
+    deliveredResume, deliveredCoverLetter, aiMode, autoSubmit, reviewMode, siteAccountPassword, ...candidate
   } = row;
   return {
     attemptId,
@@ -266,6 +271,7 @@ export async function claimNextApplication(
     exchangeRates: await loadExchangeRates(),
     rememberedChoices: await rememberedChoices(),
     answerPrompt: await defaultAnswerPrompt(aiMode === "gemini" ? "gemini" : "chatgpt"),
+    siteAccountPassword: decryptSiteAccountPassword(siteAccountPassword),
   };
 }
 

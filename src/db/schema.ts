@@ -110,6 +110,9 @@ export const users = pgTable(
     // "before_submit", where it goes through the steps itself and stops once before Submit. Problems
     // still stop on their step either way.
     applyReviewMode: text("apply_review_mode").default("every_step").notNull(),
+    // The Manager's one password for the candidates' accounts on job sites, encrypted
+    // (src/server/apply/site-account-password.ts); Apply fills it on sign-in and registration pages.
+    siteAccountPassword: text("site_account_password"),
     // The Romania-time day the "Clear applied jobs?" question was last asked: once a day across all Chromes.
     appliedCleanupAskedOn: date("applied_cleanup_asked_on", { mode: "string" }),
     // "Stop all" on the Jobs page bumps a counter; every Chrome stops that mode when it sees a new value.

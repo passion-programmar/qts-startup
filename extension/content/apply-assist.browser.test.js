@@ -127,7 +127,24 @@ test('the copy buttons copy the résumé and the job description, and with the p
   });
 });
 
-test('Submitted and Cancel tell the worker; the site\'s own Submit asks Yes / No, an Apply button on a job page does not', { skip }, async () => {
+test('the site account password shows as dots and copies with a click; without one the panel says where to save it', { skip }, async () => {
+  await withPanel(FORM, { ...STATE, siteAccountPassword: 'S1te-Acc0unt!' }, async (page, panel) => {
+    const text = await panel.text();
+    assert.ok(text.includes('Site account password'));
+    assert.ok(text.includes('••••••••'));
+    assert.ok(!text.includes('S1te-Acc0unt!'));
+    await panel.click('.item', 'Site account password');
+    assert.deepEqual(await panel.copied(), ['S1te-Acc0unt!']);
+    // Never in the copies meant for ChatGPT.
+    await panel.click('.copy-all', '+ profile');
+    assert.ok(!(await panel.copied())[1].includes('S1te-Acc0unt!'));
+  });
+  await withPanel(FORM, STATE, async (page, panel) => {
+    assert.ok((await panel.text()).includes('No site account password saved'));
+  });
+});
+
+test('Submitted and Cancel tell the worker; the site\'s own buttons are never watched', { skip }, async () => {
   await withPanel(FORM, STATE, async (page, panel) => {
     await panel.click('.submitted', 'Submitted');
     const [submitted] = await panel.sent();
@@ -141,24 +158,55 @@ test('Submitted and Cancel tell the worker; the site\'s own Submit asks Yes / No
     await panel.click('.cancel', 'Cancel');
     assert.deepEqual((await panel.sent()).map((message) => message.action), ['cancel']);
   });
+  // The site's Submit, Enter in a box, an Apply button: nothing is sent; only Submitted ends it.
   await withPanel(FORM, STATE, async (page, panel) => {
     await page.type('#fn', 'Ana');
+    await page.keyboard.press('Enter');
     await page.click('button[type=submit]');
-    const [noticed] = await panel.sent();
-    assert.equal(noticed.action, 'submitted');
-    assert.equal(noticed.noticed, true);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(await panel.sent(), []);
     assert.equal(await page.evaluate(() => window.siteSubmitted), true);
   });
   await withPanel('<main><h1>Data Engineer</h1><p>About the job</p><button type="button">Apply</button></main>', STATE, async (page, panel) => {
     await page.click('button');
     assert.deepEqual(await panel.sent(), []);
   });
-  await withPanel(FORM, { ...STATE, mode: 'confirm' }, async (page, panel) => {
-    const text = await panel.text();
-    assert.ok(text.includes('Submitted successfully?'));
-    assert.ok(!text.includes('Cancel'));
-    await panel.click('.submitted', 'Yes, submitted');
-    assert.deepEqual((await panel.sent()).map((message) => message.action), ['yes']);
+});
+
+test('new boxes on the page (a pop-up, the next step, a section shown) tell the worker once; other changes do not', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    const changes = async () => (await panel.sent()).filter((message) => message.action === 'fields_changed').length;
+    // The first look after the panel shows.
+    await page.evaluate(() => document.body.append(Object.assign(document.createElement('p'), { textContent: 'Loaded.' })));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const first = await changes();
+    // A pop-up with two new boxes: told once, half a second after it settles.
+    await page.evaluate(() => {
+      const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      dialog.innerHTML = '<label for="ph">Phone</label><input id="ph"><label for="ci">City</label><input id="ci">';
+      document.body.append(dialog);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(await changes(), first, 'not before the page settles');
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.equal(await changes(), first + 1);
+    // Text and styles changing, with the same boxes: nothing is sent.
+    await page.evaluate(() => { document.querySelector('p').textContent = 'Still loaded.'; document.body.className = 'busy'; });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.equal(await changes(), first + 1);
+    // A hidden section shown: told again.
+    await page.evaluate(() => {
+      const section = document.createElement('div');
+      section.hidden = true;
+      section.innerHTML = '<label for="lk">LinkedIn</label><input id="lk">';
+      document.body.append(section);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    const hiddenAdded = await changes();
+    await page.evaluate(() => { document.querySelector('#lk').parentElement.hidden = false; });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.equal(await changes(), hiddenAdded + 1);
   });
 });
 
