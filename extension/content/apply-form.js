@@ -322,6 +322,16 @@
     return /date|picker|calendar/i.test(`${control.className} ${control.id} ${control.name}`);
   }
 
+  /**
+   * A phone box holding only a dialling code ("+49", "0049"), put there by its country picker: no
+   * number yet, so it is empty and gets the candidate's number.
+   */
+  function onlyDialCode(control, label = '') {
+    const phone = (control.getAttribute?.('type') || '').toLowerCase() === 'tel'
+      || /phone|mobile|telefon|\btel\b|handy|cellular|kom[oó]rk/i.test(`${label} ${control.name || ''} ${control.id || ''} ${control.autocomplete || ''}`);
+    return phone && /^\s*(\+|00)\s?\d{1,4}\s*$/.test(String(control.value || ''));
+  }
+
   /** Choices that are mostly dialing codes ("+40", "Romania (+40)"). */
   function dialCodeList(options) {
     return options.length >= 2 && options.filter((text) => /\+\s?\d{1,4}\b/.test(text)).length >= options.length / 2;
@@ -777,7 +787,8 @@
         // "Select all that apply": a list that takes several choices.
         ...(isCombobox && isMultiple(control, fieldLabel) ? { multiple: true } : {}),
         // Text already in the box (a site may remember the previous applicant).
-        ...(['TEXTAREA', 'INPUT'].includes(tag) && !['file', 'checkbox', 'radio', 'range'].includes(type) && control.value ? { filled: true } : {}),
+        // A phone box holding only the dialling code its country picker put there ("+49") is empty.
+        ...(['TEXTAREA', 'INPUT'].includes(tag) && !['file', 'checkbox', 'radio', 'range'].includes(type) && control.value && !onlyDialCode(control, fieldLabel) ? { filled: true } : {}),
       };
       if (type === 'number' || type === 'range') {
         const unit = unitOf(control, fieldLabel);
@@ -1804,7 +1815,7 @@
       const shown = shownValue(field.id).replace(/[×✕]/g, '').trim();
       return PLACEHOLDER.test(shown);
     }
-    return !String(element.value || '').trim();
+    return !String(element.value || '').trim() || onlyDialCode(element, field.label);
   }
 
   /**

@@ -345,3 +345,19 @@ test('an upload carries the heading of its section, so a cover-letter step is to
   `return api.scanForm().filter((f) => f.kind === 'file').map((f) => f.section);`);
   assert.deepEqual(sections, ['Confirm your cover letter']);
 });
+
+test('a phone box holding only its country\'s dialling code is empty and takes the number; a real number stays', { skip }, async () => {
+  const result = await onPage(`<form>
+      <label for="ph">Phone number *</label><div><button type="button">Germany</button><input id="ph" type="tel" value="+49" required></div>
+      <label for="mb">Mobile</label><input id="mb" value="0049">
+      <label for="own">Phone</label><input id="own" type="tel" value="+49 151 2345678">
+      <label for="age">Age</label><input id="age" value="+49">
+    </form>`,
+  `const fields = api.scanForm();
+   const byId = (id) => fields.find((f) => document.querySelector('[data-qts-apply-field="' + f.id + '"]').id === id);
+   const empty = api.emptyRequired().map((e) => e.label);
+   const filled = await api.fillField(byId('ph').id, '+40264484948');
+   return { ph: Boolean(byId('ph').filled), mb: Boolean(byId('mb').filled), own: Boolean(byId('own').filled), age: Boolean(byId('age').filled),
+     empty, ok: filled.ok, value: document.getElementById('ph').value };`);
+  assert.deepEqual(result, { ph: false, mb: false, own: true, age: true, empty: ['Phone number *'], ok: true, value: '+40264484948' });
+});
