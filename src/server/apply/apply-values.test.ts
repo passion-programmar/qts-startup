@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  APPLY_DOCUMENT_STATUSES,
   canTakeWork,
   compareExtensionVersions,
   coverLetterText,
@@ -136,4 +137,9 @@ test("a run's answers are kept as question, answer, and source; malformed ones a
     { question: "Gender", answer: "Female", source: "ai" },
   ]);
   assert.deepEqual(parseAppliedAnswers(null), []);
+});
+
+test("the assistant's job pages (held for the Manager from the start) may fetch their résumé", () => {
+  assert.ok(APPLY_DOCUMENT_STATUSES.includes("waiting_review"));
+  assert.ok(APPLY_DOCUMENT_STATUSES.includes("claimed"));
 });

@@ -8,6 +8,7 @@ import { generationDownloadPaths } from "@/server/generation/generation-artifact
 import { type ChromePrintJob, chromePrintJob } from "@/server/pdf/chrome-print";
 import { renderDocumentPdfs } from "@/server/pdf/document-pdfs";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
+import { APPLY_DOCUMENT_STATUSES } from "./apply-values";
 
 /** The template printer failed; the documents can be asked for again shortly. */
 export class ApplyDocumentsUnavailableError extends Error {
@@ -57,7 +58,7 @@ export async function buildApplyDocuments(
       eq(applyAttempts.id, attemptId),
       eq(applyAttempts.managerId, managerId),
       eq(applyAttempts.browserId, browserId),
-      inArray(applyAttempts.status, ["claimed", "submitting"]),
+      inArray(applyAttempts.status, [...APPLY_DOCUMENT_STATUSES]),
     ))
     .orderBy(desc(generationRuns.createdAt))
     .limit(1);

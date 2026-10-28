@@ -7,6 +7,11 @@ export const APPLY_PARALLEL_LIMIT = 2;
 export const APPLY_LEASE_SECONDS = 120;
 /** An application waiting for the Manager (review, or Yes/No in an open tab) is held this long without a heartbeat. */
 export const APPLY_REVIEW_LEASE_SECONDS = 600;
+/**
+ * An application whose résumé and cover letter its Chrome may fetch: being filled, waiting for the
+ * Manager (the assistant's job pages are held as waiting_review from the start), or being submitted.
+ */
+export const APPLY_DOCUMENT_STATUSES = ["claimed", "waiting_review", "submitting"] as const;
 /** Generation and Apply work goes only to this extension version or newer (Apply with Manager review). */
 export const MIN_WORK_EXTENSION_VERSION = "1.36.0";
 
