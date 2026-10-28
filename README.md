@@ -307,7 +307,7 @@ remain and also removes that staff user's login history; it cannot be undone.
 Password fields have a show/hide control while entering a password, but saved
 passwords cannot be viewed because the database stores only one-way hashes.
 Changing a password invalidates the user's existing sessions.
-New and replacement staff passwords must contain at least 12 characters.
+New and replacement staff passwords must contain at least 4 characters.
 Existing password hashes remain valid until the password is changed. Login
 attempts are throttled in PostgreSQL and successful authentication clears the
 account-specific attempt bucket while retaining the network abuse counter.

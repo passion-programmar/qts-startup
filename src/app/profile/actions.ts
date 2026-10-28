@@ -119,6 +119,7 @@ export async function saveSiteAccountPasswordAction(
   const confirm = readSecret(formData, "confirmSiteAccountPassword");
   if (!remove) {
     if (!password) return { error: "Type the password.", success: null };
+    if (password.length < minimumPasswordLength) return { error: passwordLengthError("The password"), success: null };
     if (password.length > SITE_ACCOUNT_PASSWORD_MAX) {
       return { error: `Use at most ${SITE_ACCOUNT_PASSWORD_MAX} characters.`, success: null };
     }

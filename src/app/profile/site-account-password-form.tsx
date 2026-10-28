@@ -5,6 +5,7 @@ import { Check, Trash2 } from "lucide-react";
 import { saveSiteAccountPasswordAction, type ProfileState } from "@/app/profile/actions";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { PasswordField } from "@/app/components/password-field";
+import { minimumPasswordLength } from "@/lib/password-policy";
 
 const initialState: ProfileState = { error: null, success: null };
 
@@ -24,12 +25,14 @@ export function SiteAccountPasswordForm({ saved }: { saved: boolean }) {
           autoComplete="off"
           id="siteAccountPassword"
           label={saved ? "New password" : "Password"}
+          minLength={minimumPasswordLength}
           name="siteAccountPassword"
         />
         <PasswordField
           autoComplete="off"
           id="confirmSiteAccountPassword"
           label="Confirm password"
+          minLength={minimumPasswordLength}
           name="confirmSiteAccountPassword"
         />
       </div>
