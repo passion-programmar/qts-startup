@@ -2119,7 +2119,7 @@ function panelProfile(candidate) {
  * deleted. Cancel, closing all its tabs, Apply turned off, or an error record nothing: the job stays
  * as it was (not opened again in this Chrome until Apply restarts). No goes back to the form.
  */
-async function runAssistedApplication(application, { resumeTabIds = null } = {}) {
+async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null } = {}) {
   const { attemptId } = application;
   let renewedAt = Date.now();
   let leaseSeconds = 0;
@@ -2250,7 +2250,12 @@ async function runAssistedApplication(application, { resumeTabIds = null } = {})
     appliedAnswers: answersAtSubmit || [],
   });
   try {
-    if (resumeTabIds?.length) {
+    if (adoptTabId != null) {
+      // "Apply this page": the Manager's own tab becomes the application, filled from now on (the
+      // server holds it for the Manager already).
+      review.tabIds = new Set([adoptTabId]);
+      review.tabId = adoptTabId;
+    } else if (resumeTabIds?.length) {
       // The extension restarted with this job's pages open: they are worked in again, and what
       // they already show is left as it is (met), as the Manager may have chosen it.
       review.tabIds = new Set(resumeTabIds);
@@ -2395,6 +2400,33 @@ async function processApplyQueue() {
     applyLoopRunning = false;
   }
 }
+
+// "Apply this page": the launcher on a job page asks which of the Manager's accounts have this job
+// (generated, no bid), then starts the one chosen in that very tab. Only while Apply is on; a job
+// chosen this way opens even when this Chrome has its two pages open.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== 'QTS_APPLY_PAGE_ACCOUNTS' && msg?.type !== 'QTS_APPLY_PAGE_START') return false;
+  (async () => {
+    const tab = sender.tab;
+    if (tab?.id == null || !/^https?:/i.test(tab.url || '')) return { ok: false, error: 'Open the job\'s page first.' };
+    if (!(await isApplyOn())) return { ok: true, applyOn: false, applications: [] };
+    const owner = [...activeReviews.values()].find((review) => review.assist && tabsOf(review).has(tab.id));
+    if (msg.type === 'QTS_APPLY_PAGE_ACCOUNTS') {
+      if (owner) return { ok: true, applyOn: true, openHere: owner.candidate, applications: [] };
+      const reply = await workerApiRequest('POST', '/api/extension/apply/page', { url: tab.url });
+      return reply.success === true
+        ? { ok: true, applyOn: true, applications: reply.applications || [] }
+        : { ok: false, error: reply.message || 'QTS could not look up this page.' };
+    }
+    if (owner) return { ok: false, error: `This tab is already ${owner.candidate}'s application.` };
+    const reply = await workerApiRequest('POST', '/api/extension/apply/start-job', { jobId: msg.jobId });
+    if (reply.success !== true || !reply.application) return { ok: false, error: reply.message || 'QTS could not start this job.' };
+    await tabOwnership.markTab(tab.id, 'apply').catch(() => {});
+    runAssistedApplication(reply.application, { adoptTabId: tab.id }).catch(() => {});
+    return { ok: true };
+  })().then(sendResponse, (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Failed.' }));
+  return true;
+});
 
 // An application being filled or waiting for the Manager: never paced down or turned off.
 const isBusy = () => activeReviews.size > 0;

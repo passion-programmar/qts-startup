@@ -103,6 +103,12 @@ async function initializeQtsPageLauncher() {
     .details dt { color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .details dd { margin: 2px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
     .description { max-height: 180px; overflow: auto; padding: 9px; border-radius: 8px; background: #f8fafc; }
+    .apply-pick .pick-job { margin: 0 0 4px; font-weight: 700; }
+    .apply-pick .pick-note { margin: 0 0 6px; color: #475569; }
+    .apply-pick .pick-account { display: block; width: 100%; margin-top: 8px; padding: 9px 12px; border: 1px solid #10b981; border-radius: 10px; background: #ecfdf5; color: #065f46; font: 700 13px/1.3 system-ui, sans-serif; text-align: left; cursor: pointer; }
+    .apply-pick .pick-account:hover:not(:disabled) { background: #d1fae5; }
+    .apply-pick .pick-account:disabled { opacity: .6; cursor: wait; }
+    .apply-pick .pick-off { margin-top: 8px; padding: 8px 12px; border: 1px dashed #cbd5e1; border-radius: 10px; color: #64748b; }
     .launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }
     /* A Get JD page that needs the Manager keeps an orange badge until the notice is resolved. */
     .notice-badge { position: absolute; top: -4px; left: -4px; z-index: 4; display: none; place-items: center; width: 20px; height: 20px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: #f97316; color: #fff; font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: 0 2px 8px #f9731688; cursor: pointer; }
@@ -248,6 +254,12 @@ async function initializeQtsPageLauncher() {
   details.className = 'details';
   preview.append(previewHeader, localNote, details);
 
+  // "Apply this page" while Apply is on: the accounts with this page's generated job, to start one here.
+  const applyPick = document.createElement('section');
+  applyPick.className = 'preview apply-pick';
+  applyPick.hidden = true;
+  applyPick.setAttribute('aria-label', 'Apply this page');
+
   // How Get JD ended on this page: a closing countdown, or a notice with the actions that resolve it.
   const outcomeCard = document.createElement('section');
   outcomeCard.className = 'outcome';
@@ -333,7 +345,7 @@ async function initializeQtsPageLauncher() {
     };
   }
 
-  root.append(style, cleanupStyle, launcher, signInForm, preview, outcomeCard, cleanup);
+  root.append(style, cleanupStyle, launcher, signInForm, preview, applyPick, outcomeCard, cleanup);
   (document.documentElement || document.body).appendChild(host);
 
   function setOpen(open) {
@@ -363,6 +375,86 @@ async function initializeQtsPageLauncher() {
   // All toasts on the page share one stack (content/page-toast.js).
   function showToast(message, type = 'info') {
     globalThis.__qtsPageToast?.show(message, { type });
+  }
+
+  // Why an account's job on this page cannot be started now.
+  const PICK_REASONS = {
+    not_generated: 'not generated yet',
+    generating: 'Generation is writing it',
+    applied: 'already applied',
+    open: 'open in a Chrome',
+  };
+
+  /**
+   * While Apply is on, the launcher opened on a job page shows the accounts that have this page's
+   * job: the ready ones (generated, no bid) as buttons that start it here, the others with why not.
+   * Nothing shows on a page with no saved job.
+   */
+  async function showApplyPick() {
+    let reply = null;
+    try {
+      reply = await chrome.runtime.sendMessage({ type: 'QTS_APPLY_PAGE_ACCOUNTS' });
+    } catch {
+      reply = null;
+    }
+    const applications = reply?.applications || [];
+    if (!reply?.ok || !reply.applyOn || (!reply.openHere && !applications.length)) {
+      applyPick.hidden = true;
+      return;
+    }
+    const header = document.createElement('div');
+    header.className = 'preview-header';
+    const title = document.createElement('h2');
+    title.textContent = 'Apply this page';
+    const closeButton = document.createElement('button');
+    closeButton.className = 'close';
+    closeButton.type = 'button';
+    closeButton.setAttribute('aria-label', 'Close Apply this page');
+    closeButton.textContent = '×';
+    closeButton.addEventListener('click', () => { applyPick.hidden = true; });
+    header.append(title, closeButton);
+    const line = (className, text) => Object.assign(document.createElement('p'), { className, textContent: text });
+    applyPick.replaceChildren(header);
+    if (reply.openHere) {
+      applyPick.append(line('pick-note', `This tab is already ${reply.openHere}'s application.`));
+    } else {
+      applyPick.append(line('pick-job', `${applications[0].title} · ${applications[0].company}`), line('pick-note', 'Choose the account to apply for:'));
+      for (const application of applications) {
+        if (application.state !== 'ready') {
+          applyPick.append(Object.assign(document.createElement('div'), {
+            className: 'pick-off',
+            textContent: `${application.candidateName} — ${PICK_REASONS[application.state] || application.state}`,
+          }));
+          continue;
+        }
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'pick-account';
+        button.textContent = application.candidateName;
+        button.addEventListener('click', () => startPick(application));
+        applyPick.append(button);
+      }
+    }
+    applyPick.hidden = false;
+  }
+
+  async function startPick(application) {
+    const buttons = [...applyPick.querySelectorAll('.pick-account')];
+    for (const button of buttons) button.disabled = true;
+    let reply = null;
+    try {
+      reply = await chrome.runtime.sendMessage({ type: 'QTS_APPLY_PAGE_START', jobId: application.jobId });
+    } catch {
+      reply = null;
+    }
+    if (reply?.ok) {
+      applyPick.hidden = true;
+      setOpen(false);
+      showToast(`Applying for ${application.candidateName}: QTS fills this page.`, 'success');
+      return;
+    }
+    for (const button of buttons) button.disabled = false;
+    showToast(reply?.error || 'QTS could not start this job.', 'error');
   }
 
   function showSignInForm() {
@@ -780,6 +872,8 @@ async function initializeQtsPageLauncher() {
     setOpen(opening);
     // Opening QTS ends any idle back-off: this Chrome checks for work right away.
     if (opening) chrome.runtime.sendMessage({ type: 'QTS_ACTIVITY' }).catch(() => {});
+    // While Apply is on, a page with saved jobs offers its accounts ("Apply this page").
+    if (opening) showApplyPick().catch(() => {});
   });
   launcher.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));

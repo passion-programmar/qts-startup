@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   APPLY_DOCUMENT_STATUSES,
+  comparableJobUrl,
   canTakeWork,
   compareExtensionVersions,
   coverLetterText,
@@ -142,4 +143,9 @@ test("a run's answers are kept as question, answer, and source; malformed ones a
 test("the assistant's job pages (held for the Manager from the start) may fetch their résumé", () => {
   assert.ok(APPLY_DOCUMENT_STATUSES.includes("waiting_review"));
   assert.ok(APPLY_DOCUMENT_STATUSES.includes("claimed"));
+});
+
+test("a page address is compared without its #part and trailing slashes", () => {
+  assert.equal(comparableJobUrl(" https://jobs.example.com/job/42/#apply "), "https://jobs.example.com/job/42");
+  assert.equal(comparableJobUrl("https://jobs.elastic.co/form?gh_jid=8195964"), "https://jobs.elastic.co/form?gh_jid=8195964");
 });

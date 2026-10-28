@@ -23,6 +23,7 @@ import {
   APPLY_PARALLEL_LIMIT,
   APPLY_REVIEW_LEASE_SECONDS,
   type AppliedAnswer,
+  comparableJobUrl,
   type ApplyRun,
   coverLetterText,
   resumeFolderOf,
@@ -319,7 +320,14 @@ export async function resumeApplication(
     .where(and(ownedBy(attemptId, managerId, browserId), inArray(applyAttempts.status, ["claimed", "waiting_review"])))
     .returning({ id: applyAttempts.id });
   if (held) return loadApplication(held.id);
-  // A live attempt of another Chrome for the job conflicts with its one-live-attempt index: nothing is taken.
+  return claimJobForBrowser(managerId, browserId, jobId);
+}
+
+/**
+ * One chosen job taken for this Chrome, held for the Manager: generated, no bid, and no Chrome
+ * holding it (its one-live-attempt index refuses a second). Null when it cannot be taken.
+ */
+export async function claimJobForBrowser(managerId: string, browserId: string, jobId: string): Promise<ClaimedApplication | null> {
   const taken = await db.execute<{ id: string }>(sql`
     insert into apply_attempts (job_id, manager_id, candidate_id, browser_id, status, lease_expires_at)
     select jobs.id, jobs.manager_id, jobs.candidate_id, ${browserId}, 'waiting_review',
@@ -333,6 +341,55 @@ export async function resumeApplication(
   `);
   const id = taken.rows[0]?.id;
   return id ? loadApplication(id) : null;
+}
+
+export type PageApplicationState = "ready" | "not_generated" | "generating" | "applied" | "open";
+export type PageApplication = { jobId: string; candidateName: string; title: string; company: string; state: PageApplicationState };
+
+const comparableJobUrlSql = sql`regexp_replace(split_part(btrim(${jobs.jobUrl}), '#', 1), '/+$', '')`;
+
+/**
+ * The Manager's saved jobs for a page address, one per account, with whether each can be applied
+ * to now: ready (generated, no bid, not open in any Chrome), not generated, generating, applied
+ * (it has a bid), or open (a Chrome holds it). The address matches as saved, or without its query
+ * when the saved one has none (tracking parameters on the page).
+ */
+export async function findPageApplications(managerId: string, pageUrl: string): Promise<PageApplication[]> {
+  const full = comparableJobUrl(pageUrl);
+  const bare = comparableJobUrl(full.split("?")[0]);
+  const rows = await db
+    .select({
+      jobId: jobs.id,
+      title: jobs.jobTitle,
+      company: jobs.company,
+      firstName: profiles.firstName,
+      lastName: profiles.lastName,
+      generationStatus: jobs.generationStatus,
+      hasResume: sql<boolean>`${jobs.resumeLocalPath} is not null`,
+      generating: generationHeldSql(),
+      hasBid: jobHasBid(),
+      open: sql<boolean>`exists (select 1 from apply_attempts x where x.job_id = ${jobs.id}
+        and x.status in ('claimed', 'waiting_review', 'waiting_confirmation', 'submitting'))`,
+    })
+    .from(jobs)
+    .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
+    .innerJoin(users, and(eq(users.id, jobs.candidateId), isNull(users.blockedAt)))
+    .where(and(
+      eq(jobs.managerId, managerId),
+      sql`(${comparableJobUrlSql} = ${full} or (${comparableJobUrlSql} = ${bare} and position('?' in ${jobs.jobUrl}) = 0))`,
+    ))
+    .orderBy(asc(profiles.firstName), asc(profiles.lastName))
+    .limit(50);
+  return rows.map((row) => ({
+    jobId: row.jobId,
+    candidateName: [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
+    title: row.title,
+    company: row.company,
+    state: row.hasBid ? "applied"
+      : row.open ? "open"
+        : row.generating ? "generating"
+          : row.generationStatus === "completed" && row.hasResume ? "ready" : "not_generated",
+  }));
 }
 
 /**

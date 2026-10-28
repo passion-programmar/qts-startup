@@ -219,3 +219,8 @@ export function parseAppliedAnswers(value: unknown): AppliedAnswer[] {
     }];
   });
 }
+
+/** A job address as it is compared: no #part, no trailing slashes. */
+export function comparableJobUrl(url: string): string {
+  return url.trim().split("#")[0].replace(/\/+$/, "");
+}
