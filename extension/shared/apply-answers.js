@@ -721,6 +721,15 @@
    */
   function sameFactOption(factName, value, options) {
     const choices = (options || []).map(String);
+    // A phone's country-code list ("+40", "Romania (+40)"): the number's own code, the longest that fits.
+    if (factName === 'phone') {
+      const digits = value.replace(/\D/g, '');
+      const codeOf = (choice) => choice.match(/\+\s?(\d{1,4})\b/)?.[1] || '';
+      const fitting = /^\s*\+/.test(value) ? choices.filter((choice) => codeOf(choice) && digits.startsWith(codeOf(choice))) : [];
+      const longest = Math.max(0, ...fitting.map((choice) => codeOf(choice).length));
+      const best = fitting.filter((choice) => codeOf(choice).length === longest);
+      return best.length === 1 ? best[0] : null;
+    }
     let code = null;
     if (factName === 'country') code = countryCode(value);
     else if (factName === 'location') code = countryCode(value.split(',').pop());
@@ -928,6 +937,12 @@
     for (const field of fields) {
       if (field.hidden || field.disabled) continue;
       const resolved = resolveField(field, candidate, savedAnswers, context);
+      // A box no text names for sure (labelUnresolved): only a fact its name hint matches fills it
+      // ("first_name"); it is never asked of the AI as if it were some question.
+      if (field.labelUnresolved && (!resolved || resolved.missing || resolved.ask)) {
+        if (field.required) byHand.push({ id: field.id, label: field.label, message: `QTS couldn't tell which question this box is for${field.label ? ` ("${field.label}")` : ''}: fill it by hand.` });
+        continue;
+      }
       if (!resolved) {
         if (field.kind !== 'checkbox' || field.required) open.push(field);
         continue;
@@ -998,6 +1013,7 @@
   const REPLY_FORMAT = [
     'Reply with JSON only, in this shape: {"answers":[{"id":"<question id>","value":"<answer>"}]}',
     'Answer every question id. For "options", copy exactly one option character for character; for type "checkbox-group" or "multiple": true, every option that truly fits the candidate, separated by " | ".',
+    'For "optionsPartial": true, "options" are only some of the list\'s choices (shown for sample searches): copy one when it fits; otherwise answer as for "choicesUnknown".',
     'For "choicesUnknown": true (a list whose choices could not be read), "value" is a JSON list: with "multiple": true, every choice that truly fits; otherwise up to 4 wordings of the one answer that such a list most likely uses, the best first (for example ["5-8 years", "5+ years", "More than 5 years"]).',
     'Respect maxLength, and min and max for numbers. A number takes digits only. A date uses its "format", else YYYY-MM-DD.',
     'Follow a question\'s "note" and "placeholder" for what to write and in what form (currency, period, units).',
@@ -1062,7 +1078,7 @@
       question: field.label,
       type: field.kind,
       required: Boolean(field.required),
-      ...(hasOptions(field) ? { options: field.options }
+      ...(hasOptions(field) ? { options: field.options, ...(field.optionsPartial ? { optionsPartial: true } : {}) }
         // A list whose choices could not be read yet (some show them only while typing): the answer
         // is matched to them when filled, and the choices it shows come back if none fits.
         : CHOICE_KINDS.has(field.kind) ? { choicesUnknown: true } : {}),
@@ -1122,6 +1138,13 @@
     if (value === null || value === undefined) return { ok: false, reason: 'no answer' };
     const text = String(value).trim();
     if (!text) return { ok: false, reason: 'empty answer' };
+    // Only some of a list's choices known (sample searches, a datalist): one of them, or the AI's own
+    // wording, which filling then searches for.
+    if (hasOptions(field) && field.optionsPartial) {
+      const known = (wanted) => field.options.find((entry) => String(entry).trim().toLowerCase() === wanted.toLowerCase()) ?? wanted;
+      if (field.multiple) return { ok: true, value: text.split(/\s*\|\s*/).filter(Boolean).map(known) };
+      return { ok: true, value: known(text) };
+    }
     if (hasOptions(field)) {
       const find = (wanted) => field.options.find((entry) => String(entry).trim() === wanted)
         ?? field.options.find((entry) => String(entry).trim().toLowerCase() === wanted.toLowerCase());

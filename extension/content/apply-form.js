@@ -39,7 +39,19 @@
     }
   }
 
-  /** Every element under root, including inside open and closed shadow roots. */
+  /** A frame's document when the browser lets this page read it (the same site); null otherwise. */
+  function frameDocument(frame) {
+    try {
+      return frame.contentDocument || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Every element under root, including inside open and closed shadow roots and inside frames from
+   * the same site (another site's frame cannot be read; unreadableFrames reports those).
+   */
   function allElements(root = document) {
     const found = [];
     const visit = (node) => {
@@ -47,10 +59,37 @@
         found.push(element);
         const shadow = shadowRootOf(element);
         if (shadow) visit(shadow);
+        if (element.tagName === 'IFRAME') {
+          const inner = frameDocument(element);
+          if (inner?.documentElement) visit(inner);
+        }
       }
     };
     visit(root);
     return found;
+  }
+
+  // Frames that never hold application questions: security checks, video, maps, ads, payments.
+  const NOT_FORM_FRAME = /captcha|recaptcha|hcaptcha|turnstile|challenges\.cloudflare|youtube|vimeo|wistia|maps\.google|google\.com\/maps|doubleclick|googletagmanager|facebook|twitter|linkedin\.com\/embed|stripe|paypal|intercom|zendesk|hotjar/i;
+
+  /**
+   * Shown frames from another site that may hold part of the form and cannot be read: their
+   * addresses, so the Manager is told rather than Apply claiming the page is complete.
+   */
+  function unreadableFrames() {
+    return allElements()
+      .filter((element) => element.tagName === 'IFRAME' && isShown(element) && !frameDocument(element)?.documentElement)
+      .filter((frame) => {
+        const box = frame.getBoundingClientRect();
+        return box.width >= 300 && box.height >= 200 && /^https?:/i.test(frame.src || '') && !NOT_FORM_FRAME.test(frame.src);
+      })
+      .map((frame) => {
+        try {
+          return new URL(frame.src).host;
+        } catch {
+          return frame.src.slice(0, 80);
+        }
+      });
   }
 
   /** The elements under root matching a selector, inside page components (shadow roots) too. */
@@ -107,35 +146,73 @@
 
   function labelFor(control) {
     const root = control.getRootNode();
+    // aria-labelledby first, as browsers name a field: a wrapping <label> may hold only an icon's
+    // fallback text ("SVGs not supported by this browser.", Workable).
+    const labelledBy = control.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const text = worded(labelledBy.split(/\s+/).map((id) => (root.getElementById?.(id) === control ? '' : textOf(root.getElementById?.(id)))).filter(Boolean).join(' '));
+      if (text) return text;
+    }
     if (control.id) {
       const label = worded(textOf(root.querySelector?.(`label[for="${CSS.escape(control.id)}"]`)));
       if (label) return label;
     }
     const wrapping = worded(textOf(control.closest('label')));
     if (wrapping) return wrapping;
-    const labelledBy = control.getAttribute('aria-labelledby');
-    if (labelledBy) {
-      const text = worded(labelledBy.split(/\s+/).map((id) => textOf(root.getElementById?.(id))).filter(Boolean).join(' '));
-      if (text) return text;
-    }
     const ariaLabel = worded(cleanText(control.getAttribute('aria-label')));
     if (ariaLabel) return ariaLabel;
     const component = worded(componentLabel(control));
     if (component) return component;
     const legend = worded(textOf(control.closest('fieldset')?.querySelector('legend')));
     if (legend) return legend;
-    // A question block: the nearest ancestor with its own worded text before the control.
+    // A question block: the nearest worded text before the control that is its own: never another
+    // field's <label for>, never text holding a field, and with no other field between the text and
+    // this control (that text is the other field's question).
+    const before = (element, later) => Boolean(element.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
+    // A <label for> naming another field on the page is that field's; one naming nothing that
+    // exists (Ashby's "Location" for a missing id) may still be this question's.
+    const labelsOther = (element) => {
+      if (element.tagName !== 'LABEL' || !element.htmlFor || element.htmlFor === control.id) return false;
+      const target = element.getRootNode().getElementById?.(element.htmlFor);
+      return Boolean(target && target !== control && !target.contains(control) && target.matches(FIELD_CONTROLS));
+    };
     for (let node = control.parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
-      const heading = [...node.querySelectorAll('label, legend, [class*="label" i], [class*="question" i], h3, h4, p')]
-        // Before the control only: a later label is the next question's.
-        .find((element) => !element.contains(control) && hasWords(textOf(element))
-          && Boolean(element.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING));
-      if (heading) return textOf(heading).slice(0, 300);
+      const fieldsHere = [...node.querySelectorAll(FIELD_CONTROLS)].filter((other) => other !== control && other.type !== 'hidden' && isShown(other));
+      // Texts before the control with no other field between them and it, nearest last.
+      const headings = [...node.querySelectorAll('label, legend, [class*="label" i], [class*="question" i], h3, h4, p')]
+        .filter((element) => !element.contains(control) && before(element, control) && hasWords(textOf(element))
+          && !labelsOther(element) && !element.querySelector(FIELD_CONTROLS)
+          && !fieldsHere.some((other) => before(element, other) && before(other, control)));
+      if (!headings.length) {
+        // A text exists, but another field sits between it and this control: it is that field's.
+        if (fieldsHere.some((other) => before(other, control))) break;
+        continue;
+      }
+      // A real <label> or <legend> names the question; a paragraph after it only describes it.
+      const heading = [...headings].reverse().find((element) => ['LABEL', 'LEGEND'].includes(element.tagName)) || headings[headings.length - 1];
+      return textOf(heading).slice(0, 300);
     }
     // Inside a page component: the question around the component on the page.
     const outside = root.host ? labelFor(root.host) : '';
     if (outside) return outside;
-    return worded(questionAround(control)) || cleanText(control.getAttribute('placeholder') || control.getAttribute('name') || '');
+    // Nothing names it for sure: its own placeholder or title, or text around it that holds no other
+    // field. '' when none: the question is unresolved (scanForm marks it), never guessed.
+    return worded(cleanText(control.getAttribute('placeholder') || control.getAttribute('aria-placeholder') || control.getAttribute('title')))
+      || worded(ownTextAround(control));
+  }
+
+  // Elements that are a field (or one option of one).
+  const FIELD_CONTROLS = 'input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"], [role="listbox"], [role="radiogroup"], button[aria-pressed], [contenteditable="true"]';
+
+  /** The text of the boxes around a control, up to the first one that holds another field; '' when none. */
+  function ownTextAround(control) {
+    const up = (node) => node.parentElement || node.parentNode?.host || null;
+    for (let node = up(control), depth = 0; node && depth < 4; node = up(node), depth += 1) {
+      if (deepQuery(node, FIELD_CONTROLS).some((other) => other !== control && !other.contains(control) && isShown(other))) return '';
+      const text = textOf(node);
+      if (hasWords(text)) return text.slice(0, 300);
+    }
+    return '';
   }
 
   /**
@@ -212,6 +289,33 @@
     return named.length ? named[0].slice(0, 200) : '';
   }
 
+  // A text written as a date format ("DD/MM/YYYY", "mm-dd-yy").
+  const DATE_FORMAT = /^[dmy]{1,4}[./\- ][dmy]{1,4}[./\- ][dmy]{1,4}$/i;
+
+  /** A read-only box that opens a picker: a list (typed list, popup) or a date picker. */
+  function readOnlyPicker(control) {
+    if (control.tagName !== 'INPUT') return false;
+    if (isTypedList(control) || control.hasAttribute('aria-haspopup') || (control.getAttribute('type') || '').toLowerCase() === 'date') return true;
+    if (DATE_FORMAT.test(cleanText(control.placeholder))) return true;
+    return /date|picker|calendar/i.test(`${control.className} ${control.id} ${control.name}`);
+  }
+
+  /** Choices that are mostly dialing codes ("+40", "Romania (+40)"). */
+  function dialCodeList(options) {
+    return options.length >= 2 && options.filter((text) => /\+\s?\d{1,4}\b/.test(text)).length >= options.length / 2;
+  }
+
+  /** An upload's label texts as the page writes them ("Resume/CV *"), for its required mark. */
+  function uploadLabelsAsWritten(control, blockLabel = '') {
+    const root = control.getRootNode();
+    return [
+      ...(control.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map((id) => textOf(root.getElementById?.(id))),
+      ...(control.id ? [...(root.querySelectorAll?.(`label[for="${CSS.escape(control.id)}"]`) || [])].map(textOf) : []),
+      textOf(control.closest('label')),
+      blockLabel,
+    ].filter(Boolean).find((text) => isRequired(control, text)) || '';
+  }
+
   /**
    * Upload areas without a file field of their own (Dropzone keeps its input outside the page's
    * form): the innermost element that says "drop your file", unless a file input sits next to it.
@@ -257,13 +361,28 @@
     return label;
   }
 
-  // A chosen chip's remove mark ("None of the above ✕") is not part of the choice.
+  // A chosen chip's remove mark ("None of the above ✕", "Yes✕") is not part of the choice; only the
+  // marks at the very end are removed, so "C++", "R&D", or "2×2 grid" keep every character.
+  const CHIP_REMOVE_MARK = /\s*[✕✖×✗]+$/u;
   function itemText(item) {
-    return cleanText(item.getAttribute('data-search-text') || textOf(item)).replace(/s*[✕✖×✗]+$/u, '');
+    return cleanText(item.getAttribute('data-search-text') || textOf(item)).replace(CHIP_REMOVE_MARK, '');
   }
 
   // What opens a menu of choices: a button, or a non-text element marked as a dropdown (Zoho's
   // <div role="combobox" aria-haspopup="listbox">). A typed combobox is an <input> and handled apart.
+  /**
+   * A typed list: an input with role="combobox" (also a type="search" one), or one that says it
+   * suggests from a list (aria-autocomplete="list|both", aria-haspopup="listbox") without that role.
+   */
+  function isTypedList(control) {
+    if (control.tagName !== 'INPUT') return false;
+    const type = (control.getAttribute('type') || '').toLowerCase();
+    if (['hidden', 'submit', 'button', 'image', 'reset', 'password', 'checkbox', 'radio', 'file'].includes(type)) return false;
+    return control.getAttribute('role') === 'combobox'
+      || /^(list|both)$/i.test(control.getAttribute('aria-autocomplete') || '')
+      || /^listbox$/i.test(control.getAttribute('aria-haspopup') || '');
+  }
+
   function isMenuButton(control) {
     const role = control.getAttribute('role');
     return control.tagName === 'BUTTON' || role === 'button'
@@ -488,10 +607,17 @@
         });
         continue;
       }
-      if (tag === 'INPUT' && ['hidden', 'submit', 'button', 'image', 'reset', 'search', 'password'].includes(type)) continue;
-      const isCombobox = control.getAttribute('role') === 'combobox' && tag === 'INPUT';
+      // A typed list: role="combobox" (also on type="search" boxes), or a box that says it suggests
+      // from a list (aria-autocomplete, aria-haspopup="listbox") without that role.
+      const isCombobox = isTypedList(control);
+      if (tag === 'INPUT' && ['hidden', 'submit', 'button', 'image', 'reset', 'search', 'password'].includes(type) && !isCombobox) continue;
       if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && !isCombobox) continue;
-      const label = labelFor(control);
+      // No text names this box for sure: its name attribute is only a hint ("first_name"), and the
+      // question is marked unresolved, so it is never answered as if it were another question.
+      // A dropdown with no label of its own whose choices are dialing codes is a phone's country code.
+      const named = labelFor(control) || (tag === 'SELECT' && dialCodeList(realOptions(control)) ? 'Phone country code' : '');
+      const labelUnresolved = !named && type !== 'radio' && type !== 'checkbox' && type !== 'file';
+      const label = named || (labelUnresolved ? cleanText(String(control.name || control.id || '').replace(/[_\-[\].]+/g, ' ')) : '');
       // A styled radio or tick box hides its input and shows its label instead.
       const ownLabel = (type === 'radio' || type === 'checkbox')
         ? control.closest('label') || (control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
@@ -535,9 +661,15 @@
           : tag === 'SELECT' ? 'select'
             : isCombobox ? 'combobox'
               : ['email', 'tel', 'url', 'number', 'date', 'file', 'checkbox', 'range'].includes(type) ? type : 'text',
-        required: isRequired(control, fieldLabel),
+        // An upload's name drops its "*", so its required mark is read from its label texts as written.
+        required: isRequired(control, fieldLabel) || (type === 'file' && isRequired(control, uploadLabelsAsWritten(control, blockLabel))),
         hidden: !shown,
-        disabled: control.disabled || control.readOnly,
+        // Read-only only stops Apply when it is not a picker: a date picker or a list box takes its
+        // value through a popup, so it is still a question; a locked prefilled box is left alone.
+        disabled: control.disabled || (control.readOnly && !readOnlyPicker(control)),
+        ...(control.readOnly && readOnlyPicker(control) ? { readOnlyPicker: true } : {}),
+        ...(labelUnresolved ? { labelUnresolved: true } : {}),
+        ...(tag === 'SELECT' && control.multiple ? { multiple: true } : {}),
         ...(control.maxLength > 0 ? { maxLength: control.maxLength } : {}),
         // What an upload takes ("image/*" for a photo), so Apply never puts a document there.
         ...(type === 'file' && control.accept ? { accept: String(control.accept).slice(0, 200) } : {}),
@@ -559,6 +691,15 @@
       }
       if (tag === 'SELECT') {
         field.options = realOptions(control);
+      }
+      // Choices already in the page are read without opening anything: a typed list's own list (even
+      // closed), or the suggestions a <datalist> offers a text box (only some of what it takes).
+      if (isCombobox || control.list) {
+        const read = domChoices(control);
+        if (read.options.length) {
+          field.options = read.options;
+          if (!isCombobox || read.partial) field.optionsPartial = true;
+        }
       }
       fields.push(field);
     }
@@ -650,21 +791,200 @@
     return shownListboxes().find((list) => !before.includes(list)) || null;
   }
 
-  /** Comboboxes (React Select and similar) show their options only when opened; opening reads them. */
-  async function readComboboxOptions(id) {
+  // At most this many choices go to the AI; a list with more is marked partial, never complete.
+  const MAX_CHOICES = 300;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * A typed list's choices already in the page, read without opening it: a <datalist>, or the
+   * options of the list it names (aria-controls), even while that list is closed. { options, partial }.
+   */
+  function domChoices(control) {
+    let texts = [];
+    if (control.list?.options?.length) {
+      texts = [...new Set([...control.list.options].map((option) => cleanText(option.value || option.label || option.textContent)).filter(answerable))];
+    } else {
+      const listId = control.getAttribute('aria-controls') || control.getAttribute('aria-owns');
+      const list = listId ? (control.getRootNode().getElementById?.(listId) || document.getElementById(listId)) : null;
+      texts = list ? [...new Set(deepQuery(list, '[role="option"]').map(itemText).filter(answerable))] : [];
+    }
+    return { options: texts.slice(0, MAX_CHOICES), partial: texts.length > MAX_CHOICES };
+  }
+
+  /**
+   * What a typed list holds before Apply looks at its choices: its value, and the words around it
+   * (chips), so looking can be checked to have changed nothing.
+   */
+  function fieldState(input) {
+    return { value: input.value, around: textAround(input) };
+  }
+
+  /** The words around a box (its chips, its question), without any list open beside it. */
+  function textAround(input) {
+    const { block } = blockQuestion(input.getRootNode()?.host || input);
+    let text = textOf(block);
+    for (const list of deepQuery(block, '[role="listbox"], [role="menu"]')) {
+      const listText = textOf(list);
+      if (listText) text = text.split(listText).join(' ');
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * After looking at a list's choices: a value it changed is put back; words that appeared around it
+   * (a chip a tag box created) cannot be, and are reported. true when anything had changed.
+   */
+  function restoreAfterLooking(input, state) {
+    let changed = false;
+    if (input.value !== state.value) {
+      setNativeValue(input, state.value);
+      changed = true;
+    }
+    // A list left open beside the box is not a change; anything else around it (a new chip) is.
+    if (textAround(input) !== state.around) changed = true;
+    return changed;
+  }
+
+  /** The element that scrolls a list's choices: the list itself or a box around it. */
+  function scrollerOf(list) {
+    for (let node = list, depth = 0; node && depth < 4 && node !== document.body; node = node.parentElement, depth += 1) {
+      const style = getComputedStyle(node);
+      if (node.scrollHeight > node.clientHeight + 5 && /(auto|scroll)/.test(`${style.overflowY} ${style.overflow}`)) return node;
+    }
+    return null;
+  }
+
+  /**
+   * A search list that shows nothing when opened: sample searches ("a", "e", ...) bring up its
+   * choices, collected and never picked. Only typing events are sent (no "change", which a tag box
+   * takes as a new tag); the box is emptied after and checked to be as it was.
+   * { options, partial: true, changed }.
+   */
+  async function searchComboboxChoices(id) {
     const input = findField(id);
-    if (!input) return [];
-    const before = shownListboxes();
+    if (!input || input.tagName !== 'INPUT') return { options: [], partial: true, changed: false };
+    const state = fieldState(input);
+    const found = new Set();
+    const typeQuietly = (text) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      if (setter) setter.call(input, text);
+      else input.value = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    markShownChoices();
     input.focus();
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    for (const query of ['a', 'e', 'i', 'o', 'u', '1']) {
+      typeQuietly(query);
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: query, bubbles: true, composed: true }));
+      for (let waited = 0; waited < 1500; waited += 300) {
+        await sleep(300);
+        const texts = shownChoiceTexts(id);
+        if (texts.length) {
+          for (const text of texts) found.add(text);
+          break;
+        }
+      }
+      if (found.size > MAX_CHOICES) break;
+    }
+    typeQuietly(state.value);
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
+    input.blur();
+    await sleep(100);
+    const options = [...found].filter(answerable);
+    return { options: options.slice(0, MAX_CHOICES), partial: true, changed: restoreAfterLooking(input, state) };
+  }
+
+  /** The choices sample searches bring up (only some of the list's). */
+  async function searchComboboxOptions(id) {
+    return (await searchComboboxChoices(id)).options;
+  }
+
+  /**
+   * A typed list's choices, read by opening it, and closed again with nothing picked: opened with a
+   * click (the arrow key, which can mark a choice a site then commits, only when a click opens
+   * nothing); a list that loads more rows as it scrolls is scrolled to its end and back. The box is
+   * checked to be as it was. { options, partial, changed }: partial when more rows may exist.
+   */
+  async function discoverComboboxChoices(id) {
+    const input = findField(id);
+    if (!input) return { options: [], partial: false, changed: false };
+    const state = fieldState(input);
+    const before = shownListboxes();
+    const found = new Set();
+    const collect = (list) => {
+      for (const text of deepQuery(list, '[role="option"]').map(itemText).filter(answerable)) found.add(text);
+    };
+    input.focus();
     input.click?.();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    const list = listFor(input, before);
-    // Inside page components too.
-    const options = deepQuery(list, '[role="option"]').map(itemText).filter(answerable);
+    await sleep(400);
+    let list = listFor(input, before);
+    if (!list || !deepQuery(list, '[role="option"]').length) {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      await sleep(300);
+      list = listFor(input, before);
+    }
+    // A list that opened empty may still be loading its choices: waited for, up to 1.5 seconds more.
+    for (let waited = 0; list && !deepQuery(list, '[role="option"]').length && waited < 1500; waited += 300) {
+      await sleep(300);
+      list = listFor(input, before) || list;
+    }
+    collect(list);
+    let partial = false;
+    const scroller = list && scrollerOf(list);
+    if (scroller) {
+      for (let step = 0; step < 15; step += 1) {
+        const size = found.size;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+        await sleep(300);
+        collect(listFor(input, before) || list);
+        if (found.size === size) break;
+        // Still growing after the last step: more rows may exist.
+        if (step === 14 || found.size > MAX_CHOICES) partial = true;
+        if (found.size > MAX_CHOICES) break;
+      }
+      scroller.scrollTop = 0;
+    }
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     input.blur();
-    return options.slice(0, 300);
+    await sleep(100);
+    const options = [...found];
+    return { options: options.slice(0, MAX_CHOICES), partial: partial || options.length > MAX_CHOICES, changed: restoreAfterLooking(input, state) };
+  }
+
+  /** Comboboxes (React Select and similar) show their options only when opened; opening reads them. */
+  async function readComboboxOptions(id) {
+    return (await discoverComboboxChoices(id)).options;
+  }
+
+  /**
+   * A dropdown's choices as the page holds them now, read without opening anything (a select, a
+   * typed list's named list or datalist, a menu's list, a hidden select): null when they are not in
+   * the page and only opening it would show them.
+   */
+  function currentChoices(id) {
+    const element = findField(id);
+    if (!element) return null;
+    if (element.tagName === 'SELECT') return realOptions(element);
+    if (isTypedList(element) || element.list) {
+      const read = domChoices(element);
+      return read.options.length ? read.options : null;
+    }
+    const menu = menuChoices(element);
+    if (menu) return menu.map(itemText).filter(answerable);
+    return listboxChoices(element);
+  }
+
+  /** A typed list's state by its id, before the service worker opens it with real clicks to look. */
+  function fieldStateOf(id) {
+    const input = findField(id);
+    return input?.tagName === 'INPUT' ? fieldState(input) : null;
+  }
+
+  /** After a real-click look: the value put back if it changed; true when anything had changed. */
+  function restoreFieldState(id, state) {
+    const input = findField(id);
+    return input && state ? restoreAfterLooking(input, state) : false;
   }
 
   /** A menu's choices, read by opening it and closing it again (they exist only while it is open). */
@@ -789,29 +1109,48 @@
       if (element.checked !== Boolean(value)) element.click();
       return { ok: element.checked === Boolean(value), value: element.checked };
     }
+    if (element.tagName === 'SELECT' && element.multiple) {
+      // Several choices: each one selected, every other one left unselected.
+      const wanted = [].concat(value).map((entry) => cleanText(entry).toLowerCase());
+      const options = [...element.options];
+      const missing = wanted.filter((text) => !options.some((entry) => optionText(entry).toLowerCase() === text));
+      if (missing.length) return { ok: false, error: `"${missing.join('", "')}" is not an option.` };
+      for (const entry of options) entry.selected = wanted.includes(optionText(entry).toLowerCase());
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      const picked = [...element.selectedOptions].map(optionText);
+      return { ok: picked.length === wanted.length, value: picked.join(', ') };
+    }
     if (element.tagName === 'SELECT') {
       const option = [...element.options].find((entry) => optionText(entry).toLowerCase() === cleanText(value).toLowerCase());
       if (!option) return { ok: false, error: `"${value}" is not an option.` };
       setNativeValue(element, option.value);
       return { ok: element.value === option.value, value: optionText(option) };
     }
-    if (element.getAttribute('role') === 'combobox') {
+    if (isTypedList(element)) {
       // A list that takes several choices gets each one in turn.
       const picked = [];
       for (const one of [].concat(value)) {
+        // Already holding this choice: left as it is, never opened again.
+        if (sameWords(element.value, one) || choiceShown(id, one)) {
+          picked.push(cleanText(one));
+          continue;
+        }
         const result = await pickInCombobox(element, one);
         if (!result.ok) return { ...result, value: picked.join(', ') };
         picked.push(result.value);
       }
       return { ok: picked.length > 0, value: picked.join(', ') };
     }
-    // A phone box beside a country-code picker that already shows the number's code takes the rest.
-    const typed = phoneWithoutShownCode(element, String(value));
+    // A phone box beside a country-code picker: the picker on the number's country, the rest typed.
+    const typed = await fitPhoneToPicker(element, String(value));
+    // Suggestions already showing (another field's list) are marked, so only this box's are used.
+    markShownChoices();
     element.focus();
     setNativeValue(element, typed);
     // A search box (Lever's location, Google Places) keeps a value only when a suggestion is picked.
     await new Promise((resolve) => setTimeout(resolve, 700));
-    const suggestion = pickSuggestion(typed);
+    const suggestion = pickSuggestion(element, typed);
     if (suggestion) {
       suggestion.click();
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -821,7 +1160,9 @@
     // Sites reformat numbers: "5000" shows as "5,000", and a country picker keeps "600 100 200" of "+48 600 100 200".
     const digits = (text) => String(text).replace(/\D/g, '');
     const reformatted = digits(element.value).length >= 4 && digits(String(value)).endsWith(digits(element.value));
-    return { ok: Boolean(element.value) && (suggestion || element.value === String(value) || reformatted), value: element.value };
+    // A picked suggestion counts only when the box now holds it (the typed text's words).
+    const tookSuggestion = Boolean(suggestion) && closeChoice(element.value, typed.split(',')[0]);
+    return { ok: Boolean(element.value) && (element.value === typed || element.value === String(value) || reformatted || tookSuggestion), value: element.value };
   }
 
   /**
@@ -882,25 +1223,76 @@
    * a select) already shows "+40": typed whole, the site would read "+40 +40 264…". Any other value,
    * or a picker showing another code, is typed as it is.
    */
-  function phoneWithoutShownCode(element, value) {
+  // A country code as a picker shows it: "+40", "🇷🇴 +40", "RO +40".
+  const DIAL_CODE = /^[^\p{L}\p{N}+]*(?:\p{Lu}{2}\s*)?\+\s?(\d{1,4})\s*$/u;
+
+  /**
+   * The country-code picker beside a phone box, however a site draws it (a button, a select, a
+   * component, plain text): { node, code }, found in the boxes around the phone box up to the one
+   * holding another question. null when there is none.
+   */
+  function dialPicker(element) {
+    const up = (node) => node.parentElement || node.parentNode?.host || null;
+    for (let box = up(element), depth = 0; box && depth < 5; box = up(box), depth += 1) {
+      // A box holding another question's field is past this phone box: no picker of its own there.
+      const others = deepQuery(box, 'input:not([type="hidden"]), textarea')
+        .filter((input) => input !== element && !String(input.value || '').match(DIAL_CODE) && isShown(input));
+      if (others.length) return null;
+      for (const node of deepQuery(box, '*')) {
+        if (node === element || node.contains(element) || !isShown(node)) continue;
+        const shown = node.tagName === 'SELECT' ? optionText(node.selectedOptions?.[0] || { textContent: '' })
+          : node.tagName === 'INPUT' ? node.value : textOf(node);
+        const code = String(shown).match(DIAL_CODE)?.[1];
+        if (!code) continue;
+        // The part a person clicks: the select, the button or dropdown it is, holds, or sits in.
+        const CLICKABLE = 'button, select, [role="combobox"], [role="button"], [aria-haspopup]';
+        const clickable = node.matches(CLICKABLE) ? node
+          : deepQuery(node, CLICKABLE).find((inner) => isShown(inner)) || node.closest(CLICKABLE) || node;
+        return { node: clickable, code };
+      }
+    }
+    return null;
+  }
+
+  /** The digits after a number's country code, with the spacing the number had ("+40 264 484 948" → "264 484 948"). */
+  const afterCode = (number, code) => number.replace(/^\+\s*/, '').slice(code.length).replace(/^[\s.()-]+/, '');
+
+  /**
+   * A phone number for a box beside a country-code picker, with the picker on the number's own
+   * country: "+40 264 484 948" types "264 484 948" with the picker on +40. A picker on another code
+   * is first switched to the number's (a choice showing "+40"); when it cannot be, or there is no
+   * picker, the whole number is typed as it is.
+   */
+  async function fitPhoneToPicker(element, value) {
     const number = value.trim();
     if (!/^\+\d[\d\s().-]{5,}$/.test(number)) return value;
     const digits = number.replace(/\D/g, '');
-    // The question's box, and the box around the page component when the input sits inside one.
-    const host = element.getRootNode()?.host;
-    const blocks = [blockQuestion(element).block, host && blockQuestion(host).block].filter(Boolean);
-    for (const block of blocks) {
-      for (const picker of deepQuery(block, 'button, select, [role="combobox"], [role="button"]')) {
-        if (picker === element || !isShown(picker)) continue;
-        const shown = picker.tagName === 'SELECT' ? optionText(picker.selectedOptions?.[0] || { textContent: '' }) : textOf(picker);
-        const code = String(shown).match(/\+\s?(\d{1,4})\b/)?.[1];
-        if (code && digits.startsWith(code)) {
-          const rest = number.replace(/^\+\s*/, '').slice(code.length).replace(/^[\s.-]+/, '');
-          return rest || value;
-        }
+    const picker = dialPicker(element);
+    if (!picker) return value;
+    if (digits.startsWith(picker.code)) return afterCode(number, picker.code) || value;
+    // Another country's code: the picker's choice with the number's code, the longest that fits (+420 before +4).
+    const codeOf = (text) => String(text).match(/\+\s?(\d{1,4})\b/)?.[1] || '';
+    const best = (texts) => texts.filter((text) => codeOf(text) && digits.startsWith(codeOf(text)))
+      .sort((a, b) => codeOf(b).length - codeOf(a).length)[0];
+    if (picker.node.tagName === 'SELECT') {
+      const option = [...picker.node.options].find((entry) => optionText(entry) === best([...picker.node.options].map(optionText)));
+      if (!option) return value;
+      setNativeValue(picker.node, option.value);
+    } else {
+      press(picker.node);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const choices = shownChoices().filter((choice) => !choice.contains(element));
+      const wanted = best(choices.map(itemText));
+      const choice = wanted && choices.find((entry) => itemText(entry) === wanted);
+      if (!choice) {
+        for (const target of [document.activeElement, picker.node]) target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
+        return value;
       }
+      choice.click();
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
-    return value;
+    const now = dialPicker(element);
+    return now && digits.startsWith(now.code) ? afterCode(number, now.code) || value : value;
   }
 
   /** Types a text letter by letter with key events, as a person does, after emptying the box. */
@@ -962,6 +1354,8 @@
 
   async function pickMenuChoice(button, value) {
     const wanted = cleanText(value).toLowerCase();
+    // Already showing this choice: left as it is, never opened again.
+    if (sameWords(textOf(button), value)) return { ok: true, value: textOf(button) };
     if (['listbox', 'lazy'].includes(button.getAttribute(MENU_ATTRIBUTE))) {
       // The choices appear in a popup (often outside the form) only once the button is pressed.
       if (button.getAttribute('aria-expanded') !== 'true') press(button);
@@ -1014,15 +1408,21 @@
     return !element.value;
   }
 
-  /** A suggestion list that appeared after typing: the entry that matches what was typed. */
-  function pickSuggestion(typed) {
-    const wanted = typed.toLowerCase().split(',')[0].trim();
-    const entries = allElements().filter((element) => isShown(element) && (
-      element.getAttribute('role') === 'option'
-      || /(^|\s)(pac-item|dropdown-location|location-result|autocomplete-item|suggestion)/i.test(element.className || '')
-    ));
-    return entries.find((entry) => textOf(entry).toLowerCase().startsWith(wanted))
-      || entries.find((entry) => textOf(entry).toLowerCase().includes(wanted))
+  /**
+   * This box's suggestion matching what was typed: only from the list the box names, or from
+   * suggestions that appeared since typing began (markShownChoices before it). Another field's
+   * list left open is never used. Matched by whole words: "Warsaw" finds "Warsaw, Masovian…".
+   */
+  function pickSuggestion(element, typed) {
+    const listId = element.getAttribute('aria-controls') || element.getAttribute('aria-owns');
+    const ownList = listId ? (element.getRootNode().getElementById?.(listId) || null) : null;
+    const entries = allElements().filter((entry) => isShown(entry) && !entry.contains(element) && (
+      entry.getAttribute('role') === 'option'
+      || /(^|\s)(pac-item|dropdown-location|location-result|autocomplete-item|suggestion)/i.test(entry.className || '')
+    )).filter((entry) => (ownList ? ownList.contains(entry) : !entry.hasAttribute(SEEN_ATTRIBUTE)));
+    const first = typed.split(',')[0].trim();
+    return entries.find((entry) => wordsOf(first).trim() && wordsOf(itemText(entry)).startsWith(wordsOf(first)))
+      || entries.find((entry) => closeChoice(itemText(entry), typed))
       || null;
   }
 
@@ -1050,8 +1450,15 @@
     element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
     const box = element.getBoundingClientRect();
     if (!box.width || !box.height) return null;
-    const x = Math.round(box.left + box.width / 2);
-    const y = Math.round(box.top + box.height / 2);
+    // Inside a frame its box is measured from the frame: the frames' own places are added.
+    let [left, top] = [box.left, box.top];
+    for (let frame = element.ownerDocument?.defaultView?.frameElement; frame; frame = frame.ownerDocument?.defaultView?.frameElement) {
+      const outer = frame.getBoundingClientRect();
+      left += outer.left + frame.clientLeft;
+      top += outer.top + frame.clientTop;
+    }
+    const x = Math.round(left + box.width / 2);
+    const y = Math.round(top + box.height / 2);
     // A real click lands where the screen shows it; off the screen it would hit something else.
     if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return null;
     return { x, y };
@@ -1078,7 +1485,7 @@
     const element = findField(id);
     if (!element) return null;
     // React Select's input is a sliver inside its box; the box is what a person clicks.
-    const target = element.tagName === 'INPUT' && element.getAttribute('role') === 'combobox'
+    const target = isTypedList(element)
       ? ownBox(element) || element
       : element;
     return centreOf(target);
@@ -1087,8 +1494,12 @@
   /** The element that has the cursor, inside shadow roots too. */
   function focusedElement() {
     let active = document.activeElement;
-    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-    return active;
+    // Into page components and frames from the same site.
+    for (;;) {
+      if (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+      else if (active?.tagName === 'IFRAME' && frameDocument(active)?.activeElement) active = frameDocument(active).activeElement;
+      else return active;
+    }
   }
 
   /**
@@ -1117,6 +1528,8 @@
 
   /** Marks the choices showing before a list is opened, so only the list's own are used after. */
   function markShownChoices() {
+    // Marks from an earlier look are cleared: a list hidden then shown again counts as new.
+    for (const element of allElements()) if (element.hasAttribute(SEEN_ATTRIBUTE)) element.removeAttribute(SEEN_ATTRIBUTE);
     for (const element of shownChoices()) element.setAttribute(SEEN_ATTRIBUTE, '1');
     return true;
   }
@@ -1140,12 +1553,14 @@
   function shownChoiceTexts(id) {
     // A search list's prompts ("Type to search", "No options") are not choices.
     return [...new Set(openedChoices(id).map(itemText).filter(Boolean))]
-      .filter((text) => !/^(no options|no results|type to search|start typing|loading|search\.*)$/i.test(text) && !/^type .* to search/i.test(text))
+      .filter((text) => !/^(no options|no results|no matches|nothing found|no items|type to search|start typing|loading\.*|search\.*)$/i.test(text) && !/^type .* to search/i.test(text))
       .slice(0, 300);
   }
 
   /** A text's words, spaced, so "UK" is found in "UK (United Kingdom)" but never in "Ukraine". */
   const wordsOf = (text) => ` ${String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
+  /** The same words, case and punctuation aside ("Romania" and "romania "); never two empty texts. */
+  const sameWords = (one, other) => wordsOf(one).trim() !== '' && wordsOf(one) === wordsOf(other);
 
   /**
    * Whether a choice holds the answer's whole words: "Poland" in "Poland +48", "Associate" in
@@ -1527,6 +1942,13 @@
   global.__qtsApplyForm = {
     scanForm,
     readComboboxOptions,
+    discoverComboboxChoices,
+    currentChoices,
+    unreadableFrames,
+    searchComboboxChoices,
+    fieldStateOf,
+    restoreFieldState,
+    searchComboboxOptions,
     readMenuOptions,
     fillField,
     clearField,
@@ -1541,6 +1963,7 @@
     optionBox,
     optionChecked,
     emptyRequired,
+    isUnanswered,
     unreadRequired,
     fieldErrors,
     detectBlockers,

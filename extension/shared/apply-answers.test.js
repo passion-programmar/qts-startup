@@ -820,3 +820,44 @@ test('every answer prompt, Super Admin\'s too, asks for the strongest true answe
   // The fix-up request keeps the same goal.
   assert.match(answers.buildFixPrompt([{ id: fields[0].id, label: fields[0].label, reason: 'not an option' }], fields), /best qualifies the candidate/);
 });
+
+test('a phone question shown as a country-code list takes the number\'s own code', () => {
+  assert.equal(answers.sameFactOption('phone', '+40264484948', ['+48', '+44', '+40']), '+40');
+  assert.equal(answers.sameFactOption('phone', '+420601234567', ['+4', '+42', '+420']), '+420');
+  assert.equal(answers.sameFactOption('phone', '+40264484948', ['Poland (+48)', 'Romania (+40)']), 'Romania (+40)');
+  assert.equal(answers.sameFactOption('phone', '0264484948', ['+40']), null);
+  const { answers: resolved } = answers.resolveFields([field('Telephone*', { kind: 'select', options: ['+48', '+44', '+40'] })], { ...candidate, phone: '+40264484948' }, []);
+  assert.equal(resolved['Telephone*'].value, '+40');
+});
+
+test('a box no text names for sure is never asked of the AI; a fact its name hint matches still fills it', () => {
+  const fields = [
+    field('first name', { labelUnresolved: true }),
+    field('q 17', { labelUnresolved: true }),
+    field('notes', { labelUnresolved: true, required: false }),
+  ];
+  const { answers: resolved, open, byHand } = answers.resolveFields(fields, { ...candidate, firstName: 'Daniel' }, []);
+  assert.equal(resolved['first name'].value, 'Daniel');
+  assert.equal(open.length, 0);
+  assert.deepEqual(byHand.map((entry) => entry.id), ['q 17']);
+  assert.match(byHand[0].message, /couldn't tell which question this box is for \("q 17"\)/);
+});
+
+test('a native multi-select takes several choices, each one of its options', () => {
+  const languages = field('Languages you speak', { kind: 'select', multiple: true, options: ['English', 'German', 'Polish'] });
+  const reply = JSON.stringify({ answers: [{ id: languages.id, value: 'English | polish' }] });
+  assert.deepEqual(answers.parseAnswerReply(reply, [languages]).answers[languages.id].value, ['English', 'Polish']);
+  assert.match(answers.buildAnswerPrompt({ job: {}, candidate, fields: [languages] }), /"multiple":true/);
+  const wrong = JSON.stringify({ answers: [{ id: languages.id, value: 'English | Klingon' }] });
+  assert.match(answers.parseAnswerReply(wrong, [languages]).invalid[0].reason, /"Klingon" is not one of the options/);
+});
+
+test('a list read only in part takes the AI\'s own wording; a complete one does not', () => {
+  const partial = field('City', { kind: 'combobox', options: ['Cluj-Napoca', 'Turda'], optionsPartial: true });
+  const complete = field('Region', { kind: 'combobox', options: ['Cluj', 'Bihor'] });
+  const reply = JSON.stringify({ answers: [{ id: partial.id, value: 'Oradea' }, { id: complete.id, value: 'Mazowieckie' }] });
+  const { answers: usable, invalid } = answers.parseAnswerReply(reply, [partial, complete]);
+  assert.equal(usable[partial.id].value, 'Oradea');
+  assert.deepEqual(invalid.map((entry) => entry.id), [complete.id]);
+  assert.match(answers.buildAnswerPrompt({ job: {}, candidate, fields: [partial] }), /"optionsPartial":true/);
+});

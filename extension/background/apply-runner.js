@@ -263,16 +263,21 @@ async function realOpen(tabId, field, typed = '') {
   return true;
 }
 
-/** A dropdown's choices read after opening it with a real click. */
+/**
+ * A dropdown's choices read after opening it with a real click, closed again with nothing picked;
+ * a typed list's box is checked to be as it was. { options, partial, changed }.
+ */
 async function readChoicesWithRealClick(tabId, field) {
+  const state = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldStateOf(id), [field.id]).catch(() => null);
   try {
-    if (!(await realOpen(tabId, field))) return [];
-    const choices = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownChoiceTexts(id), [field.id]).catch(() => []);
+    if (!(await realOpen(tabId, field))) return { options: [], partial: false, changed: false };
+    const choices = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownChoiceTexts(id), [field.id]).catch(() => []) || [];
     await realEscape(tabId);
     await sleep(200);
-    return choices || [];
+    const changed = await inForm(tabId, (id, before) => globalThis.__qtsApplyForm.restoreFieldState(id, before), [field.id, state]).catch(() => false);
+    return { options: choices, partial: choices.length >= 300, changed: Boolean(changed) };
   } catch {
-    return [];
+    return { options: [], partial: false, changed: false };
   }
 }
 
@@ -358,21 +363,43 @@ async function checkWithRealClick(tabId, field, value) {
   }
 }
 
+/**
+ * Each dropdown's choices before anything is filled, with as little interaction as needed:
+ * 1. already in the page (read by the scan, nothing opened); 2. opened by a click, then a real
+ * click; 3. only when nothing shows, sample searches typed into a search list (collected, never
+ * picked; only some of its choices, so the AI may still give its own wording).
+ */
 async function readComboboxOptions(tabId, fields) {
+  // Fields whose box looking at the choices changed (a tag a site created): checked by the Manager.
+  const changed = [];
+  const keepChoices = (field, read, source) => {
+    if (read?.changed) changed.push(field);
+    if (!read?.options?.length) return false;
+    field.options = read.options;
+    field.optionsSource = source;
+    // A list that may hold more than was read (scrolling, more than 300, sample searches) is partial,
+    // so a choice outside what was read is still searched for instead of refused.
+    if (read.partial || read.options.length >= 300) field.optionsPartial = true;
+    return true;
+  };
   for (const field of fields) {
     if (field.hidden || field.disabled || field.options?.length) continue;
     if (field.kind === 'combobox') {
-      field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readComboboxOptions(id), [field.id]).catch(() => []);
+      if (keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.discoverComboboxChoices(id), [field.id]).catch(() => null), 'click')) continue;
       // A list that ignores simulated events (React Select) opens for a real click.
-      if (!field.options?.length) field.options = await readChoicesWithRealClick(tabId, field);
+      if (keepChoices(field, await readChoicesWithRealClick(tabId, field), 'click')) continue;
+      if (!keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.searchComboboxChoices(id), [field.id]).catch(() => null), 'search')) field.options = [];
     } else if (field.kind === 'menu' && field.lazy) {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readMenuOptions(id), [field.id]).catch(() => []);
-      if (!field.options?.length) field.options = await readChoicesWithRealClick(tabId, field);
+      if (field.options?.length) field.optionsSource = 'click';
+      else keepChoices(field, await readChoicesWithRealClick(tabId, field), 'click');
+      field.options ||= [];
       // An optional menu that shows no choices even then is left alone. A required one stays, so a
       // choice it cannot take stops the application rather than sending what it already shows.
       if (!field.options.length && !field.required) field.hidden = true;
     }
   }
+  return changed;
 }
 
 /** The answer prompt for a page's open questions: Super Admin's prompt for the AI mode, or the default. */
@@ -558,6 +585,9 @@ async function fetchApplyDocuments(attemptId, tabId) {
  * Fills one field and checks the site took it: the value read back, then the site's own message
  * next to the field. { ok, error } or { gone } when the field left the page for good.
  */
+// A site's "this field is required" message, in the languages forms use.
+const REQUIRED_MESSAGE = /required|mandatory|cannot be (empty|blank)|wymagane|obowi[aą]zkowe|pflicht|erforderlich|obligatoire|obligatorio|obrigat[oó]rio|obbligatorio/i;
+
 async function fillAndCheck(tabId, field, answer, file, seen) {
   const fill = (fieldId) => inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file]);
   let fieldId = field.id;
@@ -587,6 +617,12 @@ async function fillAndCheck(tabId, field, answer, file, seen) {
   }
   if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [] };
   const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
+  // "This field is required" left from before the pick, under a field that now holds its answer, is
+  // not the site rejecting it: the answer matched, and the field is not filled again.
+  if (issue && REQUIRED_MESSAGE.test(issue)) {
+    const empty = await inForm(tabId, (entry) => globalThis.__qtsApplyForm.isUnanswered(entry), [{ ...field, id: fieldId }]).catch(() => true);
+    if (!empty) return { ok: true };
+  }
   return issue ? { ok: false, error: issue } : { ok: true };
 }
 
@@ -612,6 +648,71 @@ async function fillFormPage(tabId, application, keepAlive, step) {
   };
   // An AI answer that changed a profile fact's meaning, not only its form ("United Kingdom" for a
   // profile saying Romania), is never filled: the Manager fills that question.
+  /**
+   * Dependent lists (Country → Region → City): a dropdown below a choice filled in this round may
+   * offer other choices now. Its choices are read again (from the page; a list read by a click is
+   * opened again, never typed into) and its answer decided again with them: the profile or a
+   * reusable answer may fit now, and the AI gets the current list. Returns the questions left for the AI.
+   */
+  const refreshDependentChoices = async (toAsk, position, lastFilledChoice) => {
+    if (lastFilledChoice < 0) return toAsk;
+    const changed = [];
+    for (const field of toAsk) {
+      if (!['select', 'menu', 'combobox'].includes(field.kind) || (position.get(field.id) ?? -1) <= lastFilledChoice) continue;
+      let options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.currentChoices(id), [field.id]).catch(() => null);
+      let partial = false;
+      if (!options && field.optionsSource === 'click') {
+        const read = await inForm(tabId, (id) => globalThis.__qtsApplyForm.discoverComboboxChoices(id), [field.id]).catch(() => null);
+        options = read?.options?.length ? read.options : null;
+        partial = Boolean(read?.partial);
+      }
+      if (!options || JSON.stringify(options) === JSON.stringify(field.options || [])) continue;
+      field.options = options;
+      field.optionsPartial = partial || options.length >= 300 || undefined;
+      changed.push(field);
+    }
+    if (!changed.length) return toAsk;
+    // Decided afresh: the earlier hint and value meant were for the old choices.
+    const plain = changed.map((field) => {
+      const copy = { ...field };
+      delete copy.hint;
+      delete copy.intended;
+      delete copy.fact;
+      return copy;
+    });
+    const again = helpers.resolveFields(plain, application.candidate, application.savedAnswers, {
+      exchangeRates: application.exchangeRates,
+      today: new Date(),
+      coverLetterText: application.job.coverLetterText,
+    });
+    for (const entry of again.byHand || []) problem(entry.message, entry);
+    const left = toAsk.filter((field) => !changed.includes(field));
+    for (const field of plain) {
+      const answer = again.answers[field.id];
+      const reopened = again.open.find((entry) => entry.id === field.id);
+      if (answer && !answer.file) {
+        const outcome = await fillAndCheck(tabId, field, answer, null, seen);
+        if (outcome.ok) {
+          used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
+          continue;
+        }
+        if (!outcome.gone) left.push({ ...field, hint: `The candidate's profile or a reusable answer says "${answerText(answer.saved ?? answer.value)}", but the site did not take it (${outcome.error}); give it in a form this field takes.`, intended: answer.intended ?? answerText(answer.saved ?? answer.value), ...(answer.fact ? { fact: answer.fact } : {}) });
+      } else if (reopened) {
+        left.push(reopened);
+      }
+    }
+    return left;
+  };
+  // A question answered in this step that still shows its answer is never filled again: not when
+  // the page draws it anew after the pick (a new element, so a new id), not when a check cannot
+  // see the answer in its box (a chip beside it).
+  const stillAnswered = async (field) => {
+    const before = HAS_WORDS.test(field.label || '') ? used[field.label] : null;
+    if (!before || before.step !== step) return false;
+    const empty = await inForm(tabId, (entry) => globalThis.__qtsApplyForm.isUnanswered(entry), [field]).catch(() => true);
+    if (!empty) return true;
+    return inForm(tabId, (id, text) => globalThis.__qtsApplyForm.choiceShown(id, text), [field.id, answerText(before.value)]).catch(() => false);
+  };
   const keepProfileMeaning = (answersById, fields) => {
     // Required questions the AI could not answer in a form their field takes: the Manager's.
     for (const entry of (application.aiUnanswered || []).splice(0)) {
@@ -639,15 +740,33 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
       if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
     }
-    const fresh = (fields || []).filter((field) => !field.hidden && !field.disabled && !seen.has(field.id));
+    const fresh = [];
+    for (const field of fields || []) {
+      if (field.hidden || field.disabled || seen.has(field.id)) continue;
+      // Drawn again by the page after its answer was picked (a new element): kept as it is.
+      if (await stillAnswered(field)) {
+        seen.add(field.id);
+        used[field.label].fieldId = field.id;
+        continue;
+      }
+      fresh.push(field);
+    }
     if (!fresh.length) {
       // Complete before review: a required question still empty (an answer the site dropped, or
       // one asked before it was ready) gets one more round, as if new.
       if (rechecked) break;
       rechecked = true;
       const empty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
-      if (!empty?.length) break;
-      for (const entry of empty) seen.delete(entry.id);
+      let again = 0;
+      for (const entry of empty || []) {
+        // Already listed for the Manager with its reason (by hand, AI gave nothing it takes): not retried.
+        if (problems.some((known) => known.fieldId && known.fieldId === entry.id)) continue;
+        // One the page shows answered another way (a chip, a value outside its box) stays answered.
+        if (await stillAnswered((fields || []).find((field) => field.id === entry.id) || entry)) continue;
+        seen.delete(entry.id);
+        again += 1;
+      }
+      if (!again) break;
       continue;
     }
     for (const field of fresh) seen.add(field.id);
@@ -675,7 +794,9 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         }
       }
     }
-    await readComboboxOptions(tabId, fresh);
+    for (const field of await readComboboxOptions(tabId, fresh)) {
+      problem(`Check "${field.label}": looking at its choices changed it; set it as it should be.`, field);
+    }
     const resolved = helpers.resolveFields(fresh, application.candidate, application.savedAnswers, {
       exchangeRates: application.exchangeRates,
       today: new Date(),
@@ -705,6 +826,12 @@ async function fillFormPage(tabId, application, keepAlive, step) {
 
     // 1. The profile's answers, in page order; one the site does not take goes to ChatGPT.
     const rejected = [];
+    const position = new Map(fresh.map((field, index) => [field.id, index]));
+    // The last choice question filled in this round, in page order: lists below it may have changed.
+    let lastFilledChoice = -1;
+    const noteFilled = (field) => {
+      if (CHOICE_KINDS.has(field.kind)) lastFilledChoice = Math.max(lastFilledChoice, position.get(field.id) ?? -1);
+    };
     for (const field of fresh) {
       const answer = answers[field.id];
       if (!answer) {
@@ -732,6 +859,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       if (outcome.ok) {
         if (answer.file) uploaded.add(answer.file);
         else used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
+        noteFilled(field);
       } else if (answer.file) {
         // A cover letter that could not be attached is typed instead where the site offers it.
         const typed = answer.file === 'coverLetter' && application.job.coverLetterText
@@ -750,6 +878,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
           if (again.gone) continue;
           if (again.ok) {
             used[usedKey(used, field)] = { ...converted, step, fieldId: field.id, ...fieldFacts(field) };
+            noteFilled(field);
             continue;
           }
         }
@@ -760,7 +889,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
           : `The candidate's profile says "${meant}"`;
         rejected.push({
           ...field,
-          ...(outcome.choices?.length ? { options: outcome.choices } : {}),
+          ...(outcome.choices?.length ? choicesSeen(field, outcome.choices) : {}),
           hint: `${was}, but the site did not take it (${outcome.error}); give it in a form this field takes.`,
           intended: meant,
           ...(answer.fact ? { fact: answer.fact } : {}),
@@ -781,10 +910,12 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         continue;
       }
       const outcome = await fillAndCheck(tabId, field, { value: choice, source: 'saved' }, null, seen);
-      if (outcome.ok) used[usedKey(used, field)] = { value: choice, source: 'saved', step, fieldId: field.id, ...fieldFacts(field) };
-      else if (!outcome.gone) remaining.push(field);
+      if (outcome.ok) {
+        used[usedKey(used, field)] = { value: choice, source: 'saved', step, fieldId: field.id, ...fieldFacts(field) };
+        noteFilled(field);
+      } else if (!outcome.gone) remaining.push(field);
     }
-    toAsk = remaining;
+    toAsk = await refreshDependentChoices(remaining, position, lastFilledChoice);
     if (toAsk.length) {
       try {
         const aiAnswers = keepProfileMeaning(await askAiForAnswers(application, toAsk, keepAlive), toAsk);
@@ -812,7 +943,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         };
         await fillAnswers(aiAnswers, toAsk, (field, answer, error, choices) => {
           // The follow-up offers the choices the field showed when the answer was typed.
-          if (choices?.length) field.options = choices;
+          if (choices?.length) Object.assign(field, choicesSeen(field, choices));
           issues.push({ id: field.id, label: field.label, reason: `the site did not take "${[].concat(answer.value).join(' | ')}": ${error}` });
         });
         if (issues.length) {
@@ -850,6 +981,9 @@ async function fillFormPage(tabId, application, keepAlive, step) {
   for (const entry of (unread || []).filter((item) => !listed(item))) {
     problem(entry.kind === 'unread' ? `QTS couldn't read this question — check it: "${entry.label}".` : `Still empty: "${entry.label}".`, entry);
   }
+  // A frame from another site the browser does not let QTS read may hold questions: the Manager is told.
+  const frames = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadableFrames()).catch(() => []);
+  for (const host of [...new Set(frames || [])]) problem(`Part of this page comes from ${host}, which QTS cannot read: check it for questions to answer.`);
   const errors = await inForm(tabId, () => globalThis.__qtsApplyForm.fieldErrors()).catch(() => []);
   for (const text of errors || []) problem(`The form shows: ${text}`);
   return { used, problems, canAskAgain };
@@ -858,6 +992,14 @@ async function fillFormPage(tabId, application, keepAlive, step) {
 async function browserName() {
   const stored = await chrome.storage.local.get('qtsBrowserName');
   return stored.qtsBrowserName || `Chrome · ${String(await self.__qtsApiWorker.workerBrowserKey()).slice(0, 4).toUpperCase()}`;
+}
+
+/**
+ * The choices a failed fill showed (often search results for what was typed), for the follow-up:
+ * never a complete list, and a complete list read before is kept.
+ */
+function choicesSeen(field, choices) {
+  return field.options?.length && !field.optionsPartial ? {} : { options: choices, optionsPartial: true };
 }
 
 // A question's text has words; a lone required mark ("*") does not.
