@@ -294,12 +294,27 @@ async function pickOneWithRealClick(tabId, field, wanted) {
     const typed = field.kind === 'combobox' || field.kind === 'text' || field.searchable
       ? wanted.split(',')[0].split(/['’(/]/)[0].trim().slice(0, 40)
       : '';
-    if (!(await realOpen(tabId, field, typed))) return { ok: false, error: typed ? 'the cursor could not be put in the field' : 'the field is not on the screen' };
-    // A search list may fetch its results after typing.
+    const findChoice = async (waitMs, exact) => {
+      let found = null;
+      for (let waited = 0; waited < waitMs && !found; waited += 500) {
+        found = await inForm(tabId, (text, id, same) => globalThis.__qtsApplyForm.choiceBox(text, id, same), [wanted, field.id, exact]).catch(() => null);
+        if (!found) await sleep(500);
+      }
+      return found;
+    };
     let choice = null;
-    for (let waited = 0; waited < 3000 && !choice; waited += 500) {
-      choice = await inForm(tabId, (text, id) => globalThis.__qtsApplyForm.choiceBox(text, id), [wanted, field.id]).catch(() => null);
-      if (!choice) await sleep(500);
+    // Click first: a list that shows its choices when opened is picked from, with nothing typed. A
+    // list that can be searched takes only the same choice then; a menu, which cannot, the closest.
+    // A plain text box (Lever's location) shows suggestions only once typed.
+    if (field.kind !== 'text') {
+      if (!(await realOpen(tabId, field))) return { ok: false, error: 'the field is not on the screen' };
+      choice = await findChoice(typed ? 1000 : 3000, Boolean(typed));
+    }
+    // No choices shown, or not this one among them: typed to search. A search list may fetch its
+    // results after typing.
+    if (!choice && typed) {
+      if (!(await realOpen(tabId, field, typed))) return { ok: false, error: 'the cursor could not be put in the field' };
+      choice = await findChoice(3000, false);
     }
     if (!choice) {
       // What the list or suggestion box does offer goes to the AI as the field's choices.
@@ -315,9 +330,10 @@ async function pickOneWithRealClick(tabId, field, wanted) {
     const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9À-ɏ]+/g, '');
     // A field may show the whole choice or a part of it (a phone country picker shows "+48" for "Poland +48").
     const [now, picked] = [squash(shown), squash(choice.text)];
-    return now && (now.includes(picked) || (now.length >= 2 && picked.includes(now)))
-      ? { ok: true }
-      : { ok: false, error: `it shows "${String(shown).slice(0, 80)}"` };
+    if (now && (now.includes(picked) || (now.length >= 2 && picked.includes(now)))) return { ok: true };
+    // A list taking several choices shows each as a chip beside its box, which stays empty.
+    const chip = await inForm(tabId, (id, text) => globalThis.__qtsApplyForm.choiceShown(id, text), [field.id, choice.text]).catch(() => false);
+    return chip ? { ok: true } : { ok: false, error: `it shows "${String(shown).slice(0, 80)}"` };
   } catch (error) {
     return { ok: false, error: `real clicks failed: ${error instanceof Error ? error.message : error}` };
   }
@@ -416,10 +432,7 @@ async function askGeminiToFix(application, problems, fields) {
     { role: 'user', text: helpers.buildFixPrompt(problems, retryFields) },
   ]);
   const retried = helpers.parseAnswerReply(reply, retryFields);
-  const stillWrong = retried.invalid.filter((entry) => retryFields.find((field) => field.id === entry.id)?.required);
-  if (stillWrong.length) {
-    throw new ApplyStop(`Gemini could not answer: ${stillWrong.map((entry) => `${entry.label} (${entry.reason})`).join('; ')}`.slice(0, 480));
-  }
+  noteUnanswered(application, retried.invalid, retryFields);
   return retried.answers;
 }
 
@@ -473,11 +486,17 @@ async function askChatGptToFix(application, problems, fields, keepAlive) {
   const retryFields = fields.filter((field) => problems.some((entry) => entry.id === field.id));
   const reply = await askChatGpt(application.chatTabId, application, helpers.buildFixPrompt(problems, retryFields), keepAlive);
   const retried = helpers.parseAnswerReply(reply, retryFields);
-  const stillWrong = retried.invalid.filter((entry) => retryFields.find((field) => field.id === entry.id)?.required);
-  if (stillWrong.length) {
-    throw new ApplyStop(`ChatGPT could not answer: ${stillWrong.map((entry) => `${entry.label} (${entry.reason})`).join('; ')}`.slice(0, 480));
-  }
+  noteUnanswered(application, retried.invalid, retryFields);
   return retried.answers;
+}
+
+/**
+ * Required questions the AI still could not answer in a form their field takes (not one of the
+ * choices, twice): left for the Manager, never a reason to stop the whole application.
+ */
+function noteUnanswered(application, invalid, fields) {
+  const required = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
+  (application.aiUnanswered ||= []).push(...required);
 }
 
 /**
@@ -591,6 +610,26 @@ async function fillFormPage(tabId, application, keepAlive, step) {
   const problem = (message, field = null, kind = 'field') => {
     if (!problems.some((entry) => entry.message === message)) problems.push({ message, fieldId: field?.id ?? null, kind });
   };
+  // An AI answer that changed a profile fact's meaning, not only its form ("United Kingdom" for a
+  // profile saying Romania), is never filled: the Manager fills that question.
+  const keepProfileMeaning = (answersById, fields) => {
+    // Required questions the AI could not answer in a form their field takes: the Manager's.
+    for (const entry of (application.aiUnanswered || []).splice(0)) {
+      problem(`Fill by hand: "${entry.label}" — ${aiName(application)} gave no answer this field takes (${entry.reason}).`, entry);
+    }
+    for (const field of fields) {
+      const answer = answersById[field.id];
+      if (!answer) continue;
+      if (helpers.keepsMeaning(field, answer.value)) {
+        if (answer.alternatives) answer.alternatives = answer.alternatives.filter((value) => helpers.keepsMeaning(field, value));
+        continue;
+      }
+      delete answersById[field.id];
+      const from = field.fact === 'answer' ? 'the reusable answer' : 'the profile';
+      problem(`Fill by hand: "${field.label}" — ${from} says "${field.intended}", and ${aiName(application)}'s "${answerText(answer.value)}" does not say the same.`, field);
+    }
+    return answersById;
+  };
   for (let round = 0; round < APPLY_FILL_ROUNDS + 1; round += 1) {
     const fields = round === 0
       ? await waitForFormFields(tabId)
@@ -643,11 +682,13 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       coverLetterText: application.job.coverLetterText,
     });
     const { answers } = resolved;
+    // A personal fact the profile lacks is the Manager's to fill, never the AI's to guess.
+    for (const entry of resolved.byHand || []) problem(entry.message, entry);
     // "Fill again" reuses this application's earlier answers instead of asking ChatGPT again.
     const open = resolved.open.filter((field) => {
       // What the site filled from the résumé is kept, not asked of the AI again.
       if (application.siteFilledFromResume && field.filled) return false;
-      const cached = application.answerCache?.get(field.label);
+      const cached = HAS_WORDS.test(field.label || '') && application.answerCache?.get(field.label);
       if (!cached) return true;
       answers[field.id] = cached;
       return false;
@@ -670,7 +711,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         // Filled by the site from the résumé: kept, and listed so the Manager can check it.
         if (field.filled && application.siteFilledFromResume) {
           const value = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownValue(id), [field.id]).catch(() => '');
-          if (value) used[field.label || field.id] = { value, source: 'site', step, fieldId: field.id, ...fieldFacts(field) };
+          if (value) used[usedKey(used, field)] = { value, source: 'site', step, fieldId: field.id, ...fieldFacts(field) };
           continue;
         }
         // Text left from someone else is emptied; a referral or source code the site filled stays.
@@ -690,7 +731,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       if (outcome.gone) continue;
       if (outcome.ok) {
         if (answer.file) uploaded.add(answer.file);
-        else used[field.label || field.id] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
+        else used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
       } else if (answer.file) {
         // A cover letter that could not be attached is typed instead where the site offers it.
         const typed = answer.file === 'coverLetter' && application.job.coverLetterText
@@ -699,16 +740,30 @@ async function fillFormPage(tabId, application, keepAlive, step) {
       } else if (answer.source === 'documents') {
         if (field.required) problem(`"${field.label}" did not take the cover letter text; paste it by hand.`, field);
       } else {
+        // The profile's fact in the words of the choices the field showed ("Rumunia" for
+        // "Romania", "RO"): filled without the AI.
+        const meant = answer.intended ?? answerText(answer.saved ?? answer.value);
+        const same = answer.fact && outcome.choices?.length ? helpers.sameFactOption(answer.fact, meant, outcome.choices) : null;
+        if (same) {
+          const converted = { ...answer, value: same, intended: meant };
+          const again = await fillAndCheck(tabId, field, converted, null, seen);
+          if (again.gone) continue;
+          if (again.ok) {
+            used[usedKey(used, field)] = { ...converted, step, fieldId: field.id, ...fieldFacts(field) };
+            continue;
+          }
+        }
         // The value that did not fit goes to ChatGPT with what it was (the profile's fact or a
         // reusable answer and its note), the site's reason, and the choices the field showed.
         const was = answer.source === 'reusable'
           ? `The reusable answer for this question is "${answer.saved ?? answer.value}"${answer.note ? ` (note: ${answer.note})` : ''}`
-          : `The candidate's profile says "${answer.value}"`;
+          : `The candidate's profile says "${meant}"`;
         rejected.push({
           ...field,
           ...(outcome.choices?.length ? { options: outcome.choices } : {}),
           hint: `${was}, but the site did not take it (${outcome.error}); give it in a form this field takes.`,
-          intended: answerText(answer.saved ?? answer.value),
+          intended: meant,
+          ...(answer.fact ? { fact: answer.fact } : {}),
         });
       }
     }
@@ -721,27 +776,38 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     const remaining = [];
     for (const field of toAsk) {
       const choice = helpers.findRememberedChoice(field, field.intended, application.rememberedChoices);
-      if (!choice) {
+      if (!choice || !helpers.keepsMeaning(field, choice)) {
         remaining.push(field);
         continue;
       }
       const outcome = await fillAndCheck(tabId, field, { value: choice, source: 'saved' }, null, seen);
-      if (outcome.ok) used[field.label || field.id] = { value: choice, source: 'saved', step, fieldId: field.id, ...fieldFacts(field) };
+      if (outcome.ok) used[usedKey(used, field)] = { value: choice, source: 'saved', step, fieldId: field.id, ...fieldFacts(field) };
       else if (!outcome.gone) remaining.push(field);
     }
     toAsk = remaining;
     if (toAsk.length) {
       try {
-        const aiAnswers = await askAiForAnswers(application, toAsk, keepAlive);
+        const aiAnswers = keepProfileMeaning(await askAiForAnswers(application, toAsk, keepAlive), toAsk);
         const issues = [];
         const fillAnswers = async (answersById, fieldsToFill, onRejected) => {
           for (const field of fieldsToFill) {
-            const answer = answersById[field.id];
-            if (!answer) continue;
-            const outcome = await fillAndCheck(tabId, field, answer, null, seen);
+            const { alternatives = [], ...first } = answersById[field.id] || {};
+            if (!('value' in first)) continue;
+            let answer = first;
+            let outcome = await fillAndCheck(tabId, field, answer, null, seen);
+            // A dropdown whose choices could not be read: the AI's other wordings of the same answer,
+            // in its order, before asking it again.
+            for (const value of alternatives) {
+              if (outcome.ok || outcome.gone) break;
+              const next = { ...first, value };
+              const tried = await fillAndCheck(tabId, field, next, null, seen);
+              if (tried.ok || tried.gone) answer = next;
+              // The choices any attempt showed go to the follow-up.
+              outcome = tried.ok || tried.gone || tried.choices?.length ? tried : { ...tried, choices: outcome.choices };
+            }
             if (outcome.gone) continue;
-            if (outcome.ok) used[field.label || field.id] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
-            else onRejected(field, answer, outcome.error, outcome.choices);
+            if (outcome.ok) used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
+            else onRejected(field, alternatives.length ? { ...first, value: [first.value, ...alternatives] } : first, outcome.error, outcome.choices);
           }
         };
         await fillAnswers(aiAnswers, toAsk, (field, answer, error, choices) => {
@@ -752,7 +818,7 @@ async function fillFormPage(tabId, application, keepAlive, step) {
         if (issues.length) {
           const tried = new Map(issues.map((entry) => [entry.id, entry.reason]));
           try {
-            const fixed = await askAiToFix(application, issues, toAsk, keepAlive);
+            const fixed = keepProfileMeaning(await askAiToFix(application, issues, toAsk, keepAlive), toAsk);
             await fillAnswers(fixed, toAsk.filter((field) => tried.has(field.id)), (field, answer, error) => {
               if (field.required) problem(`Fill by hand: "${field.label}" — the site said: ${error}. Tried: ${tried.get(field.id)}; then "${[].concat(answer.value).join(' | ')}".`, field);
             });
@@ -776,10 +842,12 @@ async function fillFormPage(tabId, application, keepAlive, step) {
     await sleep(1000);
   }
   const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
-  for (const entry of stillEmpty || []) problem(`Still empty: "${entry.label}".`, entry);
+  // A question already listed with its reason (a fact the profile lacks) is not listed again.
+  const listed = (entry) => problems.some((known) => known.fieldId && known.fieldId === entry.id);
+  for (const entry of stillEmpty || []) if (!listed(entry)) problem(`Still empty: "${entry.label}".`, entry);
   // The safety net: questions the page shows as required that Apply could not read, or left empty.
   const unread = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadRequired()).catch(() => []);
-  for (const entry of unread || []) {
+  for (const entry of (unread || []).filter((item) => !listed(item))) {
     problem(entry.kind === 'unread' ? `QTS couldn't read this question — check it: "${entry.label}".` : `Still empty: "${entry.label}".`, entry);
   }
   const errors = await inForm(tabId, () => globalThis.__qtsApplyForm.fieldErrors()).catch(() => []);
@@ -792,12 +860,28 @@ async function browserName() {
   return stored.qtsBrowserName || `Chrome · ${String(await self.__qtsApiWorker.workerBrowserKey()).slice(0, 4).toUpperCase()}`;
 }
 
+// A question's text has words; a lone required mark ("*") does not.
+const HAS_WORDS = /\p{L}{2}/u;
+
+/**
+ * The record's name for a field's answer: its question, unless that has no words or another field
+ * already answered under it; then made unique, so answers never overwrite each other.
+ */
+function usedKey(used, field) {
+  const label = String(field.label || '').trim();
+  const base = HAS_WORDS.test(label) ? label : `${label || 'Question'} (${field.id})`;
+  let key = base;
+  for (let count = 2; used[key] && used[key].fieldId !== field.id; count += 1) key = `${base} (${count})`;
+  return key;
+}
+
 // What Apply's question memory keeps about a field: a choice or text question, the choices it
 // offered, and the value meant when one did not fit as written.
 const CHOICE_KINDS = new Set(['select', 'menu', 'combobox', 'radio', 'checkbox-group', 'checkbox']);
 function fieldFacts(field) {
   const options = Array.isArray(field.options) ? field.options.slice(0, 30).map((option) => String(option)) : [];
-  return { kind: options.length || CHOICE_KINDS.has(field.kind) ? 'choice' : 'text', options, intended: field.intended ?? null };
+  // A value meant for the field (a profile fact changed only in form) is kept from the answer when the field has none.
+  return { kind: options.length || CHOICE_KINDS.has(field.kind) ? 'choice' : 'text', options, ...(field.intended != null ? { intended: field.intended } : {}), ...(field.fact ? { fact: field.fact } : {}) };
 }
 
 /** An answer as the record shows it: lists joined, tick boxes as Ticked/Not ticked. */
@@ -806,6 +890,9 @@ function answerText(value) {
   if (typeof value === 'boolean') return value ? 'Ticked' : 'Not ticked';
   return String(value ?? '');
 }
+
+// Two values compared as words, case and punctuation aside.
+const simpleText = (value) => String(value ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 // The answers so far, kept with the attempt and on the job row: question, answer, source.
 function appliedAnswers(answersUsed) {
@@ -1108,6 +1195,9 @@ async function runApplication(application, recipe) {
       source: answer.source || 'ai',
       step: answer.step || 1,
       fieldId: answer.fieldId || null,
+      // A profile fact given in the field's own words ("Rumunia"): the profile's value, for the Manager to see.
+      profileValue: answer.fact && answer.intended && simpleText(answer.intended) !== simpleText(answerText(answer.value)) ? String(answer.intended).slice(0, 200) : null,
+      valueFrom: answer.fact === 'answer' ? 'reusable answer' : 'profile',
     })),
     ...extra,
   });

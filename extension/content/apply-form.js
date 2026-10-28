@@ -53,6 +53,14 @@
     return found;
   }
 
+  /** The elements under root matching a selector, inside page components (shadow roots) too. */
+  function deepQuery(root, selector) {
+    if (!root) return [];
+    // The root's own shadow root too: a list component keeps its options there.
+    const own = root.nodeType === 1 ? shadowRootOf(root) : null;
+    return [...allElements(root), ...(own ? allElements(own) : [])].filter((element) => element.matches(selector));
+  }
+
   function isShown(element) {
     if (!element?.isConnected) return false;
     // Helper inputs that libraries hide from people (React Select's validation input) are not fields.
@@ -92,30 +100,42 @@
     return '';
   }
 
+  // A label has words: a lone required mark ("*") is not a question (SmartRecruiters' screening
+  // questions label each box with just "*" and show the question beside it).
+  const hasWords = (text) => /\p{L}{2}/u.test(String(text || ''));
+  const worded = (text) => (hasWords(text) ? text : '');
+
   function labelFor(control) {
     const root = control.getRootNode();
     if (control.id) {
-      const label = root.querySelector?.(`label[for="${CSS.escape(control.id)}"]`);
-      if (label && textOf(label)) return textOf(label);
+      const label = worded(textOf(root.querySelector?.(`label[for="${CSS.escape(control.id)}"]`)));
+      if (label) return label;
     }
-    const wrapping = control.closest('label');
-    if (wrapping && textOf(wrapping)) return textOf(wrapping);
+    const wrapping = worded(textOf(control.closest('label')));
+    if (wrapping) return wrapping;
     const labelledBy = control.getAttribute('aria-labelledby');
     if (labelledBy) {
-      const text = labelledBy.split(/\s+/).map((id) => textOf(root.getElementById?.(id))).filter(Boolean).join(' ');
+      const text = worded(labelledBy.split(/\s+/).map((id) => textOf(root.getElementById?.(id))).filter(Boolean).join(' '));
       if (text) return text;
     }
-    if (control.getAttribute('aria-label')) return cleanText(control.getAttribute('aria-label'));
-    const component = componentLabel(control);
+    const ariaLabel = worded(cleanText(control.getAttribute('aria-label')));
+    if (ariaLabel) return ariaLabel;
+    const component = worded(componentLabel(control));
     if (component) return component;
-    const legend = control.closest('fieldset')?.querySelector('legend');
-    if (legend && textOf(legend)) return textOf(legend);
-    // A question block: the nearest ancestor with its own text before the control.
+    const legend = worded(textOf(control.closest('fieldset')?.querySelector('legend')));
+    if (legend) return legend;
+    // A question block: the nearest ancestor with its own worded text before the control.
     for (let node = control.parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
-      const heading = node.querySelector('label, legend, [class*="label" i], [class*="question" i], h3, h4, p');
-      if (heading && !heading.contains(control) && textOf(heading)) return textOf(heading).slice(0, 300);
+      const heading = [...node.querySelectorAll('label, legend, [class*="label" i], [class*="question" i], h3, h4, p')]
+        // Before the control only: a later label is the next question's.
+        .find((element) => !element.contains(control) && hasWords(textOf(element))
+          && Boolean(element.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (heading) return textOf(heading).slice(0, 300);
     }
-    return cleanText(control.getAttribute('placeholder') || control.getAttribute('name') || '');
+    // Inside a page component: the question around the component on the page.
+    const outside = root.host ? labelFor(root.host) : '';
+    if (outside) return outside;
+    return worded(questionAround(control)) || cleanText(control.getAttribute('placeholder') || control.getAttribute('name') || '');
   }
 
   /**
@@ -123,7 +143,9 @@
    * the nearest enclosing block, without the options' own texts and button words.
    */
   function questionAround(control, optionTexts = []) {
-    for (let node = control.parentElement, depth = 0; node && depth < 7; node = node.parentElement, depth += 1) {
+    // Out of a page component too: its option sits in a shadow root, the question outside it.
+    const up = (node) => node.parentElement || node.parentNode?.host || null;
+    for (let node = up(control), depth = 0; node && depth < 7; node = up(node), depth += 1) {
       let text = textOf(node);
       for (const option of optionTexts) if (option) text = text.split(option).join(' ');
       text = cleanText(text.replace(/\b(attach|dropbox|google drive|enter manually|remove|upload|browse)\b/gi, ' '));
@@ -235,8 +257,9 @@
     return label;
   }
 
+  // A chosen chip's remove mark ("None of the above ✕") is not part of the choice.
   function itemText(item) {
-    return cleanText(item.getAttribute('data-search-text') || textOf(item));
+    return cleanText(item.getAttribute('data-search-text') || textOf(item)).replace(/s*[✕✖×✗]+$/u, '');
   }
 
   // What opens a menu of choices: a button, or a non-text element marked as a dropdown (Zoho's
@@ -376,7 +399,7 @@
       // A menu button beside an input (a phone number's country flag) belongs to that input.
       if (isMenuButton(control) && control.closest('form, fieldset')
         && /^(menu|listbox|true)$/i.test(control.getAttribute('aria-haspopup') || '') && !listboxChoices(control)
-        && !blockQuestion(control).block?.querySelector('input:not([type="hidden"]):not([aria-hidden="true"]), textarea')
+        && !deepQuery(blockQuestion(control).block, 'input:not([type="hidden"]):not([aria-hidden="true"]), textarea').length
         // "Import resume from…" and autofill pickers are not questions.
         && !/import|autofill|upload|attach|apply with|\bresume\b|\bcv\b|svg/i.test(`${textOf(control)} ${labelFor(control)}`)) {
         const label = menuLabel(control);
@@ -637,7 +660,8 @@
     input.click?.();
     await new Promise((resolve) => setTimeout(resolve, 400));
     const list = listFor(input, before);
-    const options = list ? [...list.querySelectorAll('[role="option"]')].map(textOf).filter(answerable) : [];
+    // Inside page components too.
+    const options = deepQuery(list, '[role="option"]').map(itemText).filter(answerable);
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     input.blur();
     return options.slice(0, 300);
@@ -691,13 +715,18 @@
   function choiceText(control) {
     return textOf(control.closest('label'))
       || textOf(control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
+      // A radio inside a page component (<x-radio>Yes</x-radio>): the component's own words.
+      || worded(textOf(control.getRootNode().host))
       || control.value;
   }
 
   // Same type only: Rails pairs a checkbox with a hidden input of the same name.
   function controlsOfGroup(first) {
     const root = first.getRootNode();
-    return [...root.querySelectorAll(`input[type="${first.type}"][name="${CSS.escape(first.name)}"]`)];
+    const local = [...root.querySelectorAll(`input[type="${first.type}"][name="${CSS.escape(first.name)}"]`)];
+    // Page components keep each option in its own shadow root: the group spans them.
+    if (local.length > 1 || root === document) return local;
+    return allElements().filter((control) => control.tagName === 'INPUT' && control.type === first.type && control.name === first.name);
   }
 
   /** Whether a file input takes this file: no accept list, or one naming its type or extension. */
@@ -776,11 +805,13 @@
       }
       return { ok: picked.length > 0, value: picked.join(', ') };
     }
+    // A phone box beside a country-code picker that already shows the number's code takes the rest.
+    const typed = phoneWithoutShownCode(element, String(value));
     element.focus();
-    setNativeValue(element, String(value));
+    setNativeValue(element, typed);
     // A search box (Lever's location, Google Places) keeps a value only when a suggestion is picked.
     await new Promise((resolve) => setTimeout(resolve, 700));
-    const suggestion = pickSuggestion(String(value));
+    const suggestion = pickSuggestion(typed);
     if (suggestion) {
       suggestion.click();
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -803,21 +834,35 @@
     const search = String(value).split(',')[0].trim();
     const before = shownListboxes();
     let seen = [];
-    const findMatch = async (waitMs) => {
+    const squash = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    // exact: only the same choice (case and punctuation aside), for a whole list nothing filtered.
+    const findMatch = async (waitMs, exact = false) => {
       let options = [];
       for (let waited = 0; waited < waitMs && !options.length; waited += 300) {
         await new Promise((resolve) => setTimeout(resolve, 300));
         const list = listFor(element, before);
-        options = list ? [...list.querySelectorAll('[role="option"]')].filter((option) => answerable(textOf(option))) : [];
+        options = deepQuery(list, '[role="option"]').filter((option) => answerable(itemText(option)));
       }
-      if (options.length) seen = options.map(textOf);
-      return options.find((option) => textOf(option).toLowerCase() === answer)
-        || options.find((option) => answer.split(',').every((part) => textOf(option).toLowerCase().includes(part.trim())))
-        || options.find((option) => textOf(option).toLowerCase().startsWith(search.toLowerCase()));
+      if (options.length) seen = options.map(itemText);
+      const same = options.find((option) => squash(itemText(option)) === squash(answer));
+      if (exact || same) return same || null;
+      return options.find((option) => closeChoice(itemText(option), value))
+        // "Warsaw" (what was typed) in "Warsaw, Masovian Voivodeship, Poland".
+        || options.find((option) => closeChoice(itemText(option), search));
     };
+    // Click first: a list that shows its choices when opened is picked from, with nothing typed.
     element.focus();
+    element.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    element.click?.();
+    let match = await findMatch(1200, true);
+    if (match) {
+      match.click();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return { ok: true, value: textOf(match) };
+    }
+    // No choices shown, or not this one among them: typed to search.
     setNativeValue(element, search);
-    let match = await findMatch(3000);
+    match = await findMatch(3000);
     // Some suggestion boxes search only on key presses, or slowly: typed again letter by letter.
     if (!match) {
       await typeLetters(element, search);
@@ -830,6 +875,32 @@
     match.click();
     await new Promise((resolve) => setTimeout(resolve, 200));
     return { ok: true, value: textOf(match) };
+  }
+
+  /**
+   * "+40 264 420 463" as "264 420 463" when a country-code picker beside the box (a flag button,
+   * a select) already shows "+40": typed whole, the site would read "+40 +40 264…". Any other value,
+   * or a picker showing another code, is typed as it is.
+   */
+  function phoneWithoutShownCode(element, value) {
+    const number = value.trim();
+    if (!/^\+\d[\d\s().-]{5,}$/.test(number)) return value;
+    const digits = number.replace(/\D/g, '');
+    // The question's box, and the box around the page component when the input sits inside one.
+    const host = element.getRootNode()?.host;
+    const blocks = [blockQuestion(element).block, host && blockQuestion(host).block].filter(Boolean);
+    for (const block of blocks) {
+      for (const picker of deepQuery(block, 'button, select, [role="combobox"], [role="button"]')) {
+        if (picker === element || !isShown(picker)) continue;
+        const shown = picker.tagName === 'SELECT' ? optionText(picker.selectedOptions?.[0] || { textContent: '' }) : textOf(picker);
+        const code = String(shown).match(/\+\s?(\d{1,4})\b/)?.[1];
+        if (code && digits.startsWith(code)) {
+          const rest = number.replace(/^\+\s*/, '').slice(code.length).replace(/^[\s.-]+/, '');
+          return rest || value;
+        }
+      }
+    }
+    return value;
   }
 
   /** Types a text letter by letter with key events, as a person does, after emptying the box. */
@@ -852,7 +923,7 @@
   async function dropFile(zone, file) {
     if (!file) return { ok: false, error: 'No file to attach.' };
     const { block } = blockQuestion(zone);
-    const inputValues = () => [...(block?.querySelectorAll('input:not([type="file"])') || [])].map((input) => input.value).join('|');
+    const inputValues = () => deepQuery(block, 'input:not([type="file"])').map((input) => input.value).join('|');
     const before = textOf(block);
     const valuesBefore = inputValues();
     const shown = () => {
@@ -963,7 +1034,8 @@
     const element = findField(id);
     if (!element) return '';
     const { block } = blockQuestion(element);
-    const message = [...(block?.querySelectorAll('[role="alert"], [class*="error" i], [class*="invalid" i]') || [])]
+    // Inside page components too: a component shows its own field's error in its shadow root.
+    const message = deepQuery(block, '[role="alert"], [class*="error" i], [class*="invalid" i]')
       .filter((node) => isShown(node) && !node.contains(element) && textOf(node) && textOf(node).length < 300)
       .map(textOf)[0];
     if (message) return message;
@@ -1072,18 +1144,37 @@
       .slice(0, 300);
   }
 
-  /** The opened list's choice matching an answer, with where to click it. */
-  function choiceBox(value, id) {
+  /** A text's words, spaced, so "UK" is found in "UK (United Kingdom)" but never in "Ukraine". */
+  const wordsOf = (text) => ` ${String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
+
+  /**
+   * Whether a choice holds the answer's whole words: "Poland" in "Poland +48", "Associate" in
+   * "Associate's degree", and "Warsaw, Poland" in "Warsaw, Masovian Voivodeship, Poland" (each part).
+   */
+  function closeChoice(choice, answer) {
+    const words = wordsOf(choice);
+    const has = (part) => wordsOf(part).trim() && words.includes(wordsOf(part));
+    const parts = String(answer).split(',').filter((part) => part.trim());
+    return has(answer) || (parts.length > 1 && parts.every(has));
+  }
+
+  /**
+   * The opened list's choice matching an answer, with where to click it. exact: only the same
+   * choice (case and punctuation aside), for a whole list that nothing typed has narrowed.
+   */
+  function choiceBox(value, id, exact = false) {
     const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9À-ɏ]+/g, '');
     const target = squash(value);
     const choices = openedChoices(id);
-    // "Warsaw, Poland" also matches the suggestion "Warsaw, Masovian Voivodeship, Poland".
-    const parts = String(value).split(',').map(squash).filter(Boolean);
+    if (exact) {
+      const same = choices.find((element) => squash(itemText(element)) === target);
+      const centre = same && centreOf(same);
+      return centre ? { ...centre, text: itemText(same) } : null;
+    }
     const choice = choices.find((element) => squash(itemText(element)) === target)
-      || choices.find((element) => squash(itemText(element)).startsWith(target))
-      || choices.find((element) => squash(itemText(element)).includes(target))
-      || choices.find((element) => parts.length > 1 && parts.every((part) => squash(itemText(element)).includes(part)))
-      || choices.find((element) => parts[0] && squash(itemText(element)).startsWith(parts[0]));
+      || choices.find((element) => closeChoice(itemText(element), value))
+      // "Warsaw" (the part typed) in Lever's "Warsaw, Warszawa, Mazowieckie, POL".
+      || choices.find((element) => closeChoice(itemText(element), String(value).split(',')[0]));
     if (!choice) return null;
     const centre = centreOf(choice);
     return centre ? { ...centre, text: itemText(choice) } : null;
@@ -1225,8 +1316,9 @@
       // Uploads have their own check (a failed upload is marked for the Manager): a block with a
       // file input or a drop box, or a question asking for a document, is left to it. Sites swap
       // the input for the file's name once uploaded (Greenhouse).
-      if (block.querySelector(`input[type="file"], [${DROP_ATTRIBUTE}]`) || UPLOAD_QUESTION.test(question)) continue;
-      const marked = [block, ...block.querySelectorAll(`[${FIELD_ATTRIBUTE}]`)];
+      if (deepQuery(block, `input[type="file"], [${DROP_ATTRIBUTE}]`).length || UPLOAD_QUESTION.test(question)) continue;
+      // Inside page components too: SmartRecruiters keeps its phone input in a shadow root.
+      const marked = [block, ...deepQuery(block, `[${FIELD_ATTRIBUTE}]`)];
       // A field the page hid once answered (a picked dropdown, an uploaded file) still counts; a
       // hidden one with no answer (a box behind buttons Apply did not read) does not.
       const known = marked.map((element) => fields.get(element.getAttribute(FIELD_ATTRIBUTE)))
@@ -1235,7 +1327,7 @@
         // Entries a section lists may sit next to its heading's box: the section counts when it
         // holds no other question.
         const section = block.parentElement;
-        const ownSection = section && !section.querySelector(`[${FIELD_ATTRIBUTE}]`)
+        const ownSection = section && !deepQuery(section, `[${FIELD_ATTRIBUTE}]`).length
           && ![...section.querySelectorAll('label, legend, h2, h3, h4, h5, h6')].some((element) => !block.contains(element) && requiredHeadingText(element));
         if (blockHasContent(block, question) || (ownSection && blockHasContent(section, question))) continue;
         found.push({ id: fieldId(heading), label: question.slice(0, 200), kind: 'unread' });
@@ -1245,6 +1337,21 @@
       }
     }
     return found.slice(0, 10);
+  }
+
+  /**
+   * Whether a picked choice shows in its question: in the field's own box, or as a chip ("Model
+   * explainability ✕") that a list taking several choices adds beside it. Never an open list's option.
+   */
+  function choiceShown(id, text) {
+    const element = findField(id);
+    const squash = (value) => String(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    const wanted = squash(text);
+    if (!element || !wanted) return false;
+    if (squash(shownValue(id)).includes(wanted)) return true;
+    const { block } = blockQuestion(element.getRootNode()?.host || element);
+    return deepQuery(block, '*').some((node) => isShown(node) && squash(itemText(node)) === wanted
+      && !node.closest('[role="listbox"], [role="option"], [role="menu"], [role="menuitem"]'));
   }
 
   /** What a field shows now: a button's text, or an input's value with the text of its box. */
@@ -1430,6 +1537,7 @@
     shownChoiceTexts,
     choiceBox,
     shownValue,
+    choiceShown,
     optionBox,
     optionChecked,
     emptyRequired,

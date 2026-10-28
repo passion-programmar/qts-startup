@@ -37,6 +37,7 @@
     .q { color: #475569; }
     .a { color: #0f172a; white-space: pre-wrap; word-break: break-word; max-height: 72px; overflow: hidden; }
     .src { height: fit-content; padding: 1px 6px; border-radius: 6px; font-size: 10px; font-weight: 600; background: #f1f5f9; color: #475569; white-space: nowrap; }
+    .profile-value { display: block; margin-top: 2px; font-size: 10px; color: #64748b; }
     .src.ai { background: #f5f3ff; color: #6d28d9; }
     .src.manager { background: #fffbeb; color: #92400e; }
     .foot { padding: 10px 12px; border-top: 1px solid #e2e8f0; background: #f8fafc; }
@@ -89,9 +90,12 @@
     const row = element('div', 'answer');
     row.title = 'Show this question on the form';
     const sourceLabel = { ai: `${state?.aiName || 'ChatGPT'} ⚑`, saved: 'Saved', reusable: 'Reusable', profile: 'Profile', documents: 'Documents', consent: 'Consent', rule: 'Rule', manager: 'Manager', site: 'Site (from résumé)' }[answer.source] || answer.source;
+    // A profile fact given in the field's own words shows the profile's value under it.
+    const value = element('span', 'a', answer.answer || '—');
+    if (answer.profileValue) value.append(element('span', 'profile-value', `${answer.valueFrom || 'profile'}: ${answer.profileValue}`));
     row.append(
       element('span', 'q', answer.question),
-      element('span', 'a', answer.answer || '—'),
+      value,
       element('span', `src ${answer.source === 'ai' ? 'ai' : answer.source === 'manager' ? 'manager' : ''}`, sourceLabel),
     );
     if (answer.fieldId) row.addEventListener('click', () => global.__qtsApplyForm?.focusField?.(answer.fieldId));

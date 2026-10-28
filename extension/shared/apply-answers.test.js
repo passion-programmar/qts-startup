@@ -449,18 +449,39 @@ test('a box about future job opportunities stays unticked even when it mentions 
   assert.deepEqual(resolved, {});
 });
 
-test('a fact the profile lacks, or has in another form, goes to the AI with a hint instead of stopping', () => {
-  const { answers: resolved, open, missing } = answers.resolveFields([
+test('a personal fact the profile lacks is left for the Manager; one in another language is the same fact; a missing policy goes to the AI', () => {
+  const { answers: resolved, open, missing, byHand } = answers.resolveFields([
     field('Are you willing to relocate?', { kind: 'radio', options: ['Yes', 'No'] }),
     field('Country', { kind: 'select', options: ['Polska', 'Niemcy', 'Czechy'] }),
     field('What is your nationality?'),
   ], { ...candidate, willingToRelocate: null, nationality: null }, []);
-  assert.deepEqual(resolved, {});
-  assert.deepEqual(missing.map((entry) => entry.fact), ['relocation', 'nationality']);
-  const hints = Object.fromEntries(open.map((entry) => [entry.id, entry.hint]));
-  assert.match(hints['Are you willing to relocate?'], /has no relocation/);
-  assert.match(hints.Country, /profile says "Poland"/);
-  assert.match(hints['What is your nationality?'], /has no nationality/);
+  // "Poland" is "Polska" in the list's language: the profile's fact, not a guess.
+  assert.equal(resolved.Country.value, 'Polska');
+  assert.equal(resolved.Country.intended, 'Poland');
+  assert.deepEqual(missing.map((entry) => entry.fact), ['relocation']);
+  assert.match(open.find((entry) => entry.id === 'Are you willing to relocate?').hint, /has no relocation/);
+  // Never asked of the AI: the Manager fills it or adds it to the profile.
+  assert.equal(open.some((entry) => entry.id === 'What is your nationality?'), false);
+  assert.match(byHand[0].message, /profile has no nationality: fill "What is your nationality\?" by hand, or add it to the profile/);
+});
+
+test('a profile fact the AI gave in the field\'s form must still say the same', () => {
+  const country = { fact: 'country', intended: 'Romania' };
+  assert.equal(answers.keepsMeaning(country, 'Rumunia'), true);
+  assert.equal(answers.keepsMeaning(country, 'RO'), true);
+  assert.equal(answers.keepsMeaning(country, 'United Kingdom'), false);
+  assert.equal(answers.keepsMeaning({ fact: 'phone', intended: '+40264420463' }, '0264 420 463'), true);
+  assert.equal(answers.keepsMeaning({ fact: 'phone', intended: '+40264420463' }, '+40 111 222 333'), false);
+  assert.equal(answers.keepsMeaning({ fact: 'birthday', intended: '1994-03-07' }, '07/03/1994'), true);
+  assert.equal(answers.keepsMeaning({ fact: 'birthday', intended: '1994-03-07' }, '07/04/1994'), false);
+  assert.equal(answers.keepsMeaning({ fact: 'nationality', intended: 'Romanian' }, 'Romania'), true);
+  // Questions that are not profile facts are not checked here.
+  assert.equal(answers.keepsMeaning({ intended: 'Yes' }, 'No'), true);
+  // The same country in another language, or by its code; never a look-alike.
+  assert.equal(answers.sameFactOption('country', 'Romania', ['Roumanie', 'Royaume-Uni']), 'Roumanie');
+  assert.equal(answers.sameFactOption('country', 'UK', ['Ukraine', 'United Kingdom']), 'United Kingdom');
+  assert.equal(answers.sameFactOption('country', 'Guinea', ['Papua New Guinea', 'Equatorial Guinea']), null);
+  assert.equal(answers.sameFactOption('nationality', 'Polish', ['Polska', 'Niemcy']), 'Polska');
 });
 
 test('Super Admin\'s prompt gets its placeholders filled and always ends with the reply format', () => {
@@ -688,10 +709,24 @@ test('a remembered choice fills a value that did not fit, only on the same quest
   assert.equal(answers.optionsKey(['B', ' a ']), 'a|b');
 });
 
-test('a reusable answer that does not fit carries the value meant, for remembered choices', () => {
-  const rows = [{ questionKey: answers.normalizeQuestionKey('Do you have the right to work?'), questionText: 'Do you have the right to work?', answer: 'Yes', note: null }];
-  const { open } = answers.resolveFields([field('Do you have the right to work?', { kind: 'select', options: ['Yes, I have ILR', 'No'] })], candidate, rows);
-  assert.equal(open[0].intended, 'Yes');
+test('a reusable yes or no is the list\'s own yes or no, in any language; other answers carry the value meant', () => {
+  const row = (question, answer) => ({ questionKey: answers.normalizeQuestionKey(question), questionText: question, answer, note: null });
+  const { answers: resolved } = answers.resolveFields([
+    field('Do you have the right to work?', { kind: 'select', options: ['Yes, I have ILR', 'No'] }),
+    field('Czy wyrażasz zgodę na badanie przeszłości?', { kind: 'radio', options: ['Tak', 'Nie'] }),
+  ], candidate, [row('Do you have the right to work?', 'Yes'), row('Czy wyrażasz zgodę na badanie przeszłości?', 'No')]);
+  assert.equal(resolved['Do you have the right to work?'].value, 'Yes, I have ILR');
+  assert.equal(resolved['Do you have the right to work?'].intended, 'Yes');
+  assert.equal(resolved['Czy wyrażasz zgodę na badanie przeszłości?'].value, 'Nie');
+  // Not a yes or no: the AI gives it in the field's form, keeping the meaning (checked after).
+  const { open } = answers.resolveFields([field('Preferred interview format', { kind: 'select', options: ['Video call', 'Phone call', 'On-site'] })],
+    candidate, [row('Preferred interview format', 'Online, via Teams')]);
+  assert.equal(open[0].intended, 'Online, via Teams');
+  assert.equal(open[0].fact, 'answer');
+  // A reusable yes never comes back from the AI as a no.
+  assert.equal(answers.keepsMeaning({ fact: 'answer', intended: 'Yes' }, 'No, I need sponsorship'), false);
+  assert.equal(answers.keepsMeaning({ fact: 'answer', intended: 'Yes' }, 'Yes, I have ILR'), true);
+  assert.equal(answers.keepsMeaning({ fact: 'answer', intended: 'One month' }, '2026-11-28'), true);
 });
 
 test('the AI sees help text, lists it could not read, and lists that take several choices', () => {
@@ -701,7 +736,8 @@ test('the AI sees help text, lists it could not read, and lists that take severa
     field('What is your salary expectation?', { note: 'Gross annual, in EUR', placeholder: 'e.g. 60000' }),
   ];
   const prompt = answers.buildAnswerPrompt({ job: {}, candidate, fields });
-  assert.match(prompt, /"options":"not readable yet: answer in the few words its choices most likely use"/);
+  assert.match(prompt, /"choicesUnknown":true/);
+  assert.doesNotMatch(prompt, /"options":"/);
   assert.match(prompt, /"multiple":true/);
   assert.match(prompt, /"note":"Gross annual, in EUR","placeholder":"e.g. 60000"/);
   assert.match(prompt, /every option that truly fits/);
@@ -716,4 +752,71 @@ test('the AI sees help text, lists it could not read, and lists that take severa
   // Once the list's choices are known, several are checked against them.
   const known = { ...fields[1], options: ['Model explainability', 'Bias testing', 'Privacy by design'] };
   assert.deepEqual(answers.parseAnswerReply(JSON.stringify({ answers: [{ id: known.id, value: 'bias testing | Privacy by design' }] }), [known]).answers[known.id].value, ['Bias testing', 'Privacy by design']);
+});
+
+test('the candidate\'s own country and city fill "Country/Region" and "City/Town", never the job\'s', () => {
+  const daniel = { ...candidate, city: 'Cluj-Napoca', country: 'Romania' };
+  const fields = [
+    field('Country/Region*', { kind: 'combobox' }),
+    field('Country / Territory'),
+    field('Region/Country'),
+    field('Country of residence'),
+    field('City/Town'),
+    field('State/Region'),
+  ];
+  const { answers: resolved } = answers.resolveFields(fields, daniel, []);
+  assert.equal(resolved['Country/Region*'].value, 'Romania');
+  assert.equal(resolved['Country / Territory'].value, 'Romania');
+  assert.equal(resolved['Region/Country'].value, 'Romania');
+  assert.equal(resolved['Country of residence'].value, 'Romania');
+  assert.equal(resolved['City/Town'].value, 'Cluj-Napoca');
+  assert.notEqual(resolved['State/Region']?.value, 'Romania');
+  const prompt = answers.buildAnswerPrompt({ job: { location: 'London, United Kingdom' }, candidate: daniel, fields: [field('Where would you work from?')] });
+  assert.match(prompt, /"livesIn":"Cluj-Napoca, Romania"/);
+  assert.match(prompt, /never from the job's location/);
+});
+
+test('other people\'s details and yes/no questions never get the candidate\'s own facts', () => {
+  const fields = ['Emergency contact phone number', 'Reference email', 'Referee\'s phone number', 'Are you available for a phone screen?', 'Do you have a mobile phone?']
+    .map((label) => field(label));
+  const { answers: resolved } = answers.resolveFields(fields, candidate, []);
+  for (const entry of fields) assert.equal(resolved[entry.id], undefined, entry.label);
+  // Labels in other languages and forms are still the candidate's own.
+  const own = ['Telefonnummer', 'Wohnort', 'Land', 'PLZ', 'Straße und Hausnummer', 'Staatsangehörigkeit', 'Forename', 'Contact number', 'Postal address']
+    .map((label) => field(label));
+  const { answers: filled } = answers.resolveFields(own, { ...candidate, city: 'Cluj-Napoca', country: 'Romania', postalCode: '400001', addressLine1: 'Str. Exemplu 1', nationality: 'Romanian' }, []);
+  for (const entry of own) assert.ok(filled[entry.id]?.value, entry.label);
+  assert.match(filled['Postal address'].value, /Str\. Exemplu 1, 400001 Cluj-Napoca/);
+});
+
+test('a dropdown whose choices could not be read takes the AI\'s wordings in order; several choices stay several', () => {
+  const years = field('How many years of experience do you have?', { kind: 'combobox' });
+  const principles = field('Which principles have you applied? (Select all that apply)', { kind: 'combobox', multiple: true });
+  const known = field('Level', { kind: 'combobox', options: ['Junior', 'Senior'] });
+  const reply = JSON.stringify({ answers: [
+    { id: years.id, value: ['5-8 years', '5+ years', '5-8 years', 'More than 5 years', 'Over 5', 'Extra'] },
+    { id: principles.id, value: ['Bias testing', 'Privacy by design'] },
+    { id: known.id, value: ['Lead', 'senior'] },
+  ] });
+  const { answers: usable, invalid } = answers.parseAnswerReply(reply, [years, principles, known]);
+  assert.deepEqual(invalid, []);
+  assert.equal(usable[years.id].value, '5-8 years');
+  assert.deepEqual(usable[years.id].alternatives, ['5+ years', 'More than 5 years', 'Over 5']);
+  assert.deepEqual(usable[principles.id].value, ['Bias testing', 'Privacy by design']);
+  assert.equal(usable[principles.id].alternatives, undefined);
+  // Known choices: the first wording that is one of them.
+  assert.equal(usable[known.id].value, 'Senior');
+  assert.match(answers.buildAnswerPrompt({ job: {}, candidate, fields: [years] }), /up to 4 wordings/);
+});
+
+test('every answer prompt, Super Admin\'s too, asks for the strongest true answer for this job', () => {
+  const fields = [field('Years of Python?', { kind: 'select', options: ['0-2', '3-5', '6+'] })];
+  for (const template of [undefined, 'Answer for {{company}}.\n{{questions}}']) {
+    const prompt = answers.buildAnswerPrompt({ template, job: { company: 'Acme' }, candidate, fields });
+    assert.match(prompt, /best qualifies the candidate for this job/);
+    assert.match(prompt, /the highest level, range, or count the résumé supports/);
+    assert.match(prompt, /never claim what the résumé does not show/);
+  }
+  // The fix-up request keeps the same goal.
+  assert.match(answers.buildFixPrompt([{ id: fields[0].id, label: fields[0].label, reason: 'not an option' }], fields), /best qualifies the candidate/);
 });
