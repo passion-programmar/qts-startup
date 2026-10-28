@@ -3151,12 +3151,14 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
   }
 
-  async function scannerChatGptSnapshot(tabId, generationId) {
+  // minimumSent: how many of the task's messages must be sent before an answer counts (a follow-up
+  // still in the box is never answered by the reply to the message before it).
+  async function scannerChatGptSnapshot(tabId, generationId, minimumSent = 0) {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      func: (taskId) => {
+      func: (taskId, minimum) => {
         const composer = globalThis.__qtsChatGptComposerHandoff;
-        const response = composer?.findAssistantResponseForTask?.(taskId);
+        const response = composer?.findAssistantResponseForTask?.(taskId, minimum);
         const generating = Boolean(composer?.isGenerating?.());
         const text = String(response?.innerText || response?.textContent || '').trim();
         // ChatGPT shows the copy button under an answer once it has finished writing it.
@@ -3180,7 +3182,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         }
         return { text, isNew: Boolean(response), generating, finished, chatError };
       },
-      args: [generationId],
+      args: [generationId, minimumSent],
     });
     return results[0]?.result;
   }
@@ -3607,7 +3609,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
 
   // Waits for ChatGPT to finish the answer to this task's latest prompt: the Stop button is gone and
   // the copy button shows (or, without it, the text stopped changing).
-  async function waitForGenerationAnswer(chatTabId, generationId, active) {
+  async function waitForGenerationAnswer(chatTabId, generationId, active, minimumSent = 0) {
     const startedAt = Date.now();
     let lastStatusCheck = startedAt;
     let lastText = '';
@@ -3623,7 +3625,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         await active.server();
         lastStatusCheck = Date.now();
       }
-      const snapshot = await scannerChatGptSnapshot(chatTabId, generationId);
+      const snapshot = await scannerChatGptSnapshot(chatTabId, generationId, minimumSent);
       const seconds = Math.round((Date.now() - startedAt) / 1000);
       if (seconds !== lastShownSecond && seconds % 3 === 0) {
         lastShownSecond = seconds;
@@ -3668,16 +3670,24 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     throw new Error(`ChatGPT did not finish the answer within ${GENERATION_ANSWER_MAX_WAIT_MS / 60_000} minutes.`);
   }
 
-  // Sends one prompt and returns ChatGPT's finished answer. If ChatGPT shows an error ("This response
-  // couldn't load"), its tab is closed and the prompt sent once more in a fresh pinned tab; chatTab
+  // Sends one prompt and returns ChatGPT's finished answer to it: only a reply after a newly sent
+  // message of the task counts (a follow-up left in the box never gets the earlier reply). If
+  // ChatGPT shows an error ("This response couldn't load"), its tab is closed and freshTabPrompt
+  // (the full task, since a new chat has no earlier turns) is sent in a fresh pinned tab; chatTab
   // is the queue's own record, so the queue goes on with (and later closes) the new tab.
-  async function askGenerationChatGpt(chatTab, prompt, generationId, active) {
+  async function askGenerationChatGpt(chatTab, prompt, generationId, active, freshTabPrompt = prompt) {
     for (let attempt = 0; ; attempt += 1) {
       try {
+        const [counted] = await chrome.scripting.executeScript({
+          target: { tabId: chatTab.id },
+          func: (taskId) => globalThis.__qtsChatGptComposerHandoff?.countTaskMessages?.(taskId) ?? 0,
+          args: [generationId],
+        }).catch(() => [{ result: 0 }]);
+        const sentBefore = Number(counted?.result) || 0;
         await updateGenerationBrowserState({ phase: 'sending_prompt' });
-        await sendGenerationPromptWithRecovery(chatTab.id, prompt);
+        await sendGenerationPromptWithRecovery(chatTab.id, attempt > 0 ? freshTabPrompt : prompt);
         await updateGenerationBrowserState({ phase: 'waiting_for_response' });
-        return await waitForGenerationAnswer(chatTab.id, generationId, active);
+        return await waitForGenerationAnswer(chatTab.id, generationId, active, sentBefore + 1);
       } catch (error) {
         if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;
         await showGenerationChatGptStep(chatTab.id, '4/6 · ChatGPT showed an error', `${error.message} Opening a new ChatGPT tab and sending again...`, 'warn');
@@ -3800,7 +3810,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           + 'Reply again with only the complete, valid JSON object in the required structure, with no other text before or after it.',
           generationId,
         );
-        responseText = await askGenerationChatGpt(chatTab, followUp, generationId, active);
+        // A fresh tab (after a ChatGPT error) has no earlier turns: it gets the whole task again.
+        responseText = await askGenerationChatGpt(chatTab, followUp, generationId, active, generationPrompt);
       }
       await updateGenerationBrowserState({ phase: 'response_saved' });
       await showGenerationChatGptStep(chatTab.id, '6/6 · Answer saved', 'Making the résumé and cover-letter PDFs and downloading them...', 'success');

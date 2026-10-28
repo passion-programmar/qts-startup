@@ -489,16 +489,30 @@
     }
   }
 
-  function findAssistantResponseForTask(generationId) {
+  /** The sent messages carrying the task's marker, oldest first (the prompt, then any follow-ups). */
+  function taskMessages(generationId) {
     const marker = `QTS_GENERATION_ID: ${String(generationId || '').trim()}`;
-    if (!/^QTS_GENERATION_ID: [0-9a-f-]{36}$/i.test(marker)) return null;
-    // The latest message for the task: a follow-up asking for a corrected answer carries the marker too.
-    const userMessage = findUserMessages()
+    if (!/^QTS_GENERATION_ID: [0-9a-f-]{36}$/i.test(marker)) return [];
+    return findUserMessages()
       .filter((message) => messageContainsExpectedText(message, marker))
       .sort((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-      )
-      .at(-1) || findSentTurnByText(marker);
+      );
+  }
+
+  /**
+   * ChatGPT's answer to the task's latest sent message. minimumSent: how many of the task's
+   * messages must have been sent, so a follow-up that never left the box is never answered by the
+   * reply to the message before it.
+   */
+  function findAssistantResponseForTask(generationId, minimumSent = 0) {
+    const marker = `QTS_GENERATION_ID: ${String(generationId || '').trim()}`;
+    if (!/^QTS_GENERATION_ID: [0-9a-f-]{36}$/i.test(marker)) return null;
+    const sent = taskMessages(generationId);
+    // From a follow-up on: its own sent message is needed. The first prompt may still be found by its text.
+    if (minimumSent > 1 && sent.length < minimumSent) return null;
+    // The latest message for the task: a follow-up asking for a corrected answer carries the marker too.
+    const userMessage = sent.at(-1) || (minimumSent > 1 ? null : findSentTurnByText(marker));
     if (!userMessage) return null;
     const answer = findAssistantMessages()
       .filter((message) => Boolean(
@@ -797,6 +811,7 @@
     findAssistantMessages,
     findUserMessages,
     findAssistantResponseForTask,
+    countTaskMessages: (generationId) => taskMessages(generationId).length,
     isGenerating,
     insertIntoProseMirror,
     activateComposer,

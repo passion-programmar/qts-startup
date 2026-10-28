@@ -6,6 +6,7 @@ import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import { parsePdfPackage } from "@/app/pdf/document-data";
 import { cleanGeneratedDocuments } from "@/server/generation/clean-documents";
+import { describeResumeShape } from "@/server/generation/response-shape";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const maxResponseLength = 1_000_000;
@@ -47,7 +48,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         return NextResponse.json(
           {
             success: false,
-            message: `The document JSON is invalid: ${error instanceof Error ? error.message : "it does not match the required structure."}`,
+            // What the answer holds, so ChatGPT corrects exactly that and the Manager can see it.
+            message: `The document JSON is invalid: ${error instanceof Error ? error.message : "it does not match the required structure."} ${describeResumeShape(responseJson)}`,
           },
           { status: 422 },
         );
