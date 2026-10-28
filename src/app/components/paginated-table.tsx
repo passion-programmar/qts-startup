@@ -49,7 +49,8 @@ export function PaginatedTable({
     // overflow-clip rounds the corners like overflow-hidden but still lets the pagination bar stick.
     <div className={`paginated-table min-w-0 overflow-clip bg-white ${embedded ? "" : "rounded-2xl border border-slate-200 shadow-sm"}`}>
       {searchFields && (
-        <div className="flex flex-col gap-2 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center">
+        // The search bar stays under the page header while the table scrolls.
+        <div className="sticky top-(--header-height) z-20 flex flex-col gap-2 border-b border-slate-200 bg-white px-4 py-3 shadow-[0_4px_12px_-8px_rgba(15,23,42,0.25)] sm:flex-row sm:items-center">
           <label className="flex items-center gap-2 text-xs text-slate-500">
             <span className="sr-only">Search in</span>
             <select
