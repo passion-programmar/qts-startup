@@ -1,15 +1,14 @@
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
-import { ExternalLink } from "lucide-react";
 import { redirect } from "next/navigation";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { BidActions } from "@/app/components/record-forms";
 import { OpenFolderButton } from "@/app/components/open-folder";
-import { SubmittedAnswersButton, type SubmittedAnswer } from "@/app/components/submitted-answers";
+import type { SubmittedAnswer } from "@/app/components/submitted-answers";
 import { bids, categories, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
-import { formatRomaniaTime } from "@/lib/romania-time";
+import { formatRomaniaDate, formatRomaniaTime } from "@/lib/romania-time";
 import { requireUser } from "@/lib/session";
 
 export const instant = false;
@@ -31,6 +30,7 @@ export default async function BidsPage() {
       url: bids.jobUrl,
       sourceSiteUrl: bids.sourceSiteUrl,
       appliedAt: bids.appliedAt,
+      createdAt: bids.createdAt,
       resumeFolder: bids.resumeFolder,
       resumeSavedOn: bids.resumeSavedOn,
       googleDrivePath: bids.googleDrivePath,
@@ -66,52 +66,51 @@ export default async function BidsPage() {
         />
         <PaginatedTable
           columns={[
-            { label: "No", className: "w-[3%]" },
-            { label: "Candidate", className: "w-[8%]" },
-            { label: "Job", className: "w-[13%]" },
-            { label: "Source site", className: "w-[8%]" },
-            { label: "Location", className: "w-[7%]" },
-            { label: "Work type", className: "w-[7%]" },
-            { label: "Salary", className: "w-[7%]" },
-            { label: "Applied", className: "w-[8%]" },
-            { label: "Résumé folder", className: "w-[14%]" },
-            { label: "Drive path", className: "w-[6%]" },
-            { label: "Prompt · Template", className: "w-[9%]" },
-            { label: "Answers", className: "w-[5%]" },
-            { label: "Link", className: "w-[4%]" },
-            { label: "Actions", className: "w-[5%]" },
+            { label: "No", className: "w-[4%]" },
+            { label: "Candidate", className: "w-[13%]" },
+            { label: "Source URL", className: "w-[14%]" },
+            { label: "Job title", className: "w-[22%]" },
+            { label: "Company", className: "w-[15%]" },
+            { label: "Résumé", className: "w-[9%]" },
+            { label: "Created", className: "w-[12%]" },
+            { label: "Actions", className: "w-[11%]" },
           ]}
           emptyMessage="No applications confirmed yet"
+          searchFields={[
+            { key: "candidate", label: "Candidate" },
+            { key: "source", label: "Source URL" },
+            { key: "title", label: "Job title" },
+            { key: "company", label: "Company" },
+            { key: "created", label: "Date" },
+          ]}
           rows={rows.map((row, index) => {
             const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
             const answers = Array.isArray(row.answers) ? row.answers as SubmittedAnswer[] : [];
+            const created = formatRomaniaDate(row.createdAt);
             return {
               id: row.id,
+              search: {
+                candidate: candidateName,
+                source: row.sourceSiteUrl ?? "",
+                title: row.title,
+                company: row.company,
+                created,
+              },
               cells: [
                 index + 1,
                 <div key="candidate">
                   <span className="block">{candidateName}</span>
-                  <span className="mt-0.5 block text-[10px] text-slate-500">{row.category || "Uncategorized"}</span>
                   {row.candidateBlocked && <span className="mt-0.5 block text-[10px] font-semibold text-rose-700">Blocked</span>}
                 </div>,
-                <div key="job"><span className="block font-medium">{row.title}</span><span className="mt-1 block text-xs text-slate-500">{row.company}</span></div>,
                 row.sourceSiteUrl ? (
                   <a className="break-all text-xs text-blue-700 hover:underline" href={row.sourceSiteUrl} key="source" rel="noreferrer" target="_blank">
                     {row.sourceSiteUrl.replace(/^https?:\/\/(www\.)?/, "")}
                   </a>
                 ) : "—",
-                row.location ?? "—",
-                row.workType ?? "—",
-                row.salary ?? "—",
-                <span className="text-xs" key="applied">{formatRomaniaTime(row.appliedAt)}</span>,
-                <OpenFolderButton folder={row.resumeFolder} key="folder" savedOn={row.resumeSavedOn} />,
-                row.googleDrivePath ?? "—",
-                <div className="text-xs" key="setup">
-                  <span className="block font-medium text-slate-700">{row.promptName ?? "—"}</span>
-                  {row.templateName && <span className="mt-1 block text-slate-500">{row.templateName}</span>}
-                </div>,
-                <SubmittedAnswersButton answers={answers} key="answers" title={`${candidateName} · ${row.title} — ${row.company}`} />,
-                <a aria-label={`Open ${row.title}`} className="inline-flex size-8 items-center justify-center rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50" href={row.url} key="link" rel="noreferrer" target="_blank"><ExternalLink className="size-4" /></a>,
+                <a className="font-medium text-blue-700 hover:underline" href={row.url} key="job" rel="noreferrer" target="_blank" title={row.url}>{row.title}</a>,
+                row.company,
+                <OpenFolderButton folder={row.resumeFolder} key="folder" label="Résumé" savedOn={row.resumeSavedOn} />,
+                <span className="text-xs" key="created">{created}</span>,
                 <BidActions
                   candidates={candidateOptions}
                   key="actions"
@@ -126,6 +125,17 @@ export default async function BidsPage() {
                     salary: row.salary,
                     resumeFolder: row.resumeFolder,
                     googleDrivePath: row.googleDrivePath,
+                    details: {
+                      candidateName,
+                      category: row.category,
+                      sourceSiteUrl: row.sourceSiteUrl,
+                      appliedAt: formatRomaniaTime(row.appliedAt),
+                      createdAt: created,
+                      resumeSavedOn: row.resumeSavedOn,
+                      promptName: row.promptName,
+                      templateName: row.templateName,
+                      answers,
+                    },
                   }}
                 />,
               ],

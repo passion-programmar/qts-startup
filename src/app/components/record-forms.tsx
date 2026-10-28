@@ -13,6 +13,8 @@ import type { ApplyRun } from "@/server/apply/apply-values";
 import { DatePicker } from "@/app/components/date-picker";
 import { FormCard, openCardOfInvalidField } from "@/app/components/form-card";
 import { LoadingIcon } from "@/app/components/loading-icon";
+import { OpenFolderButton } from "@/app/components/open-folder";
+import type { SubmittedAnswer } from "@/app/components/submitted-answers";
 
 export type CandidateOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };
@@ -31,7 +33,19 @@ export type JobTrack = {
   applyStatus: ApplyStatusLine[];
   applyRuns: ApplyRun[];
 };
-export type EditableBid = CommonRecord & { workType: string | null; salary: string | null; resumeFolder: string; googleDrivePath: string | null };
+export type EditableBid = CommonRecord & { workType: string | null; salary: string | null; resumeFolder: string; googleDrivePath: string | null; details?: BidDetails };
+// The rest of a bid, shown read-only in its edit window: as it was when the bid was made.
+export type BidDetails = {
+  candidateName: string;
+  category: string | null;
+  sourceSiteUrl: string | null;
+  appliedAt: string;
+  createdAt: string;
+  resumeSavedOn: string | null;
+  promptName: string | null;
+  templateName: string | null;
+  answers: SubmittedAnswer[];
+};
 
 export function JobEditAction({ record, candidates, track }: { record: EditableJob; candidates: CandidateOption[]; track: JobTrack }) {
   return <RecordActions kind="job" record={record} candidates={candidates} showDelete={false} track={track} />;
@@ -271,6 +285,7 @@ function RecordActions({
                 </div>
               </FormCard>
               {kind === "job" && <JobCards record={record} track={track} />}
+              {kind === "bid" && record.details && <BidCards record={record} details={record.details} />}
               {updateMessage.error && <p className="text-sm text-rose-700" role="alert">{updateMessage.error}</p>}
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
                 <button className="rounded-lg border border-slate-200 px-4 py-2 text-sm" onClick={requestClose} type="button">Cancel</button>
@@ -343,12 +358,14 @@ const sourceLabels: Record<string, string> = {
   consent: "Consent",
   rule: "Rule",
   manager: "Manager",
+  site: "Site (from résumé)",
 };
 const sourceClasses: Record<string, string> = {
   profile: "bg-blue-50 text-blue-700",
   reusable: "bg-indigo-50 text-indigo-700",
   ai: "bg-violet-50 text-violet-700",
   saved: "bg-sky-50 text-sky-700",
+  manager: "bg-amber-50 text-amber-800",
 };
 const toneClasses = { info: "text-slate-700", warn: "text-amber-700", error: "text-rose-700" };
 
@@ -476,6 +493,60 @@ function ApplyRunCard({ run, startOpen }: { run: ApplyRun; startOpen: boolean })
     </details>
   );
 }
+// A bid's read-only cards: where and when it was made, its documents and setup, and the answers it
+// was submitted with.
+function BidCards({ record, details }: { record: EditableBid; details: BidDetails }) {
+  return (
+    <>
+      <FormCard
+        icon={<Activity />}
+        summary={`Applied ${details.appliedAt}`}
+        title="Bid record"
+      >
+        <dl className="grid gap-4 sm:grid-cols-2">
+          <TrackItem label="Candidate">{details.candidateName}<span className="text-slate-500"> · {details.category || "Uncategorized"}</span></TrackItem>
+          <TrackItem label="Source site">
+            {details.sourceSiteUrl
+              ? <a className="break-all text-blue-700 hover:underline" href={details.sourceSiteUrl} rel="noreferrer" target="_blank">{details.sourceSiteUrl}</a>
+              : "—"}
+          </TrackItem>
+          <TrackItem label="Job">
+            <a className="text-blue-700 hover:underline" href={record.url} rel="noreferrer" target="_blank">{record.title}</a>
+            <span className="text-slate-500"> · {record.company}</span>
+          </TrackItem>
+          <TrackItem label="Applied">{details.appliedAt}</TrackItem>
+          <TrackItem label="Created">{details.createdAt}</TrackItem>
+          <TrackItem label="Prompt">{details.promptName ?? "—"}</TrackItem>
+          <TrackItem label="Template">{details.templateName ?? "—"}</TrackItem>
+          <TrackItem label="Résumé folder" wide><OpenFolderButton folder={record.resumeFolder} savedOn={details.resumeSavedOn} /></TrackItem>
+          {record.googleDrivePath && <TrackItem label="Google Drive" wide><code className="break-all text-xs">{record.googleDrivePath}</code></TrackItem>}
+        </dl>
+      </FormCard>
+      <FormCard
+        icon={<ListChecks />}
+        summary={`${details.answers.length} ${details.answers.length === 1 ? "answer" : "answers"}`}
+        title="Submitted answers"
+      >
+        {details.answers.length === 0
+          ? <p className="text-sm text-slate-500">No answers were kept for this bid.</p>
+          : (
+            <ul className="divide-y divide-slate-100">
+              {details.answers.map((answer, index) => (
+                <li className="grid gap-1 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:gap-3" key={`${answer.question}-${index}`}>
+                  <span className="text-xs font-medium text-slate-700">{answer.question}</span>
+                  <span className="whitespace-pre-wrap break-words text-xs text-slate-900">{answer.answer || "—"}</span>
+                  <span className={`h-fit w-fit rounded px-1.5 py-0.5 text-[10px] font-medium ${sourceClasses[answer.source] ?? "bg-slate-100 text-slate-600"}`}>
+                    {sourceLabels[answer.source] ?? answer.source}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+      </FormCard>
+    </>
+  );
+}
+
 function BidFields({ record }: { record: EditableBid }) {
   return (
     <>

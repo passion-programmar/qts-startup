@@ -5,8 +5,8 @@ import { useState } from "react";
 
 // A résumé folder that opens in Windows Explorer: the QTS extension in this Chrome finds the résumé
 // it downloaded there and shows it. In a Chrome that did not save it, the page says which one did
-// and offers to copy the path.
-export function OpenFolderButton({ folder, savedOn }: { folder: string; savedOn: string | null }) {
+// and offers to copy the path. With a label, the button shows only that and the path is its tooltip.
+export function OpenFolderButton({ folder, savedOn, label }: { folder: string; savedOn: string | null; label?: string }) {
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const display = `Downloads\\${folder.replace(/\//g, "\\").replace(/\\+$/, "")}`;
@@ -33,13 +33,13 @@ export function OpenFolderButton({ folder, savedOn }: { folder: string; savedOn:
         className="inline-flex max-w-full items-start gap-1 text-left text-blue-700 hover:underline disabled:opacity-60"
         disabled={pending}
         onClick={open}
-        title="Open in Windows Explorer"
+        title={label ? `Open ${display} in Windows Explorer` : "Open in Windows Explorer"}
         type="button"
       >
         <FolderOpen aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-        <span className="break-all">{display}</span>
+        <span className="break-all">{label ?? display}</span>
       </button>
-      {savedOn && <span className="mt-0.5 block text-[10px] text-slate-500">Saved on {savedOn}</span>}
+      {savedOn && !label && <span className="mt-0.5 block text-[10px] text-slate-500">Saved on {savedOn}</span>}
       {message && (
         <span className="mt-1 flex items-start gap-1 text-[10px] text-amber-700" role="status">
           {message}

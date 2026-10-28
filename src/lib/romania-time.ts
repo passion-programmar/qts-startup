@@ -34,3 +34,10 @@ export function formatRomaniaTime(value: Date | string): string {
     hourCycle: "h23",
   }).format(date);
 }
+
+/** A moment's date in Romania as YYYY/MM/DD. */
+export function formatRomaniaDate(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return romaniaClock(date).day.replaceAll("-", "/");
+}
