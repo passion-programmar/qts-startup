@@ -3268,8 +3268,20 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
-  // Generation works in the Manager's current window: a pinned ChatGPT tab, shown while ChatGPT
-  // writes, and the job pages it opens next to it in the background.
+  /**
+   * The pinned ChatGPT tab in front, in its window brought forward, from the moment it opens (a
+   * hidden tab loads and writes slowly). The tab shown before, to come back to, or null.
+   */
+  async function showGenerationChatGptTab(chatTabId) {
+    const shownBefore = await bringTabToFront(chatTabId);
+    const windowId = (await getTab(chatTabId))?.windowId;
+    if (windowId != null) await chrome.windows.update(windowId, { focused: true }).catch(() => {});
+    return shownBefore;
+  }
+
+  // Generation works in the Manager's current window: a pinned ChatGPT tab, in front while
+  // Generation runs, and the job pages it opens next to it in the background. shownBefore: the tab
+  // the Manager was on.
   async function acquireGenerationChatGptTab() {
     const created = await chrome.tabs.create({
       windowId: await currentWorkWindowId(),
@@ -3279,6 +3291,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
     if (created?.id == null) throw new Error('Could not open a new pinned ChatGPT tab.');
     await tabOwnership.markTab(created.id, 'generation');
+    created.shownBefore = await showGenerationChatGptTab(created.id);
     const existingTabs = await chrome.tabs.query({});
     const otherChatTabs = existingTabs.filter((tab) =>
       tab.id != null &&
@@ -4175,16 +4188,19 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             if (tabStillOpen) await chrome.tabs.remove(chatTab.id).catch(() => {});
             const created = await acquireGenerationChatGptTab();
             chatTab = { id: created.id, jobs: 0 };
+            // The first job remembers the tab to return to when Generation ends.
+            tabBeforeChatGpt ??= created.shownBefore;
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
             await ensureChatGptReady(chatTab.id);
           } else {
+            // ChatGPT in front before its new chat loads (Chrome slows hidden tabs).
+            tabBeforeChatGpt ??= await showGenerationChatGptTab(chatTab.id);
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
             await startNewChatGptChat(chatTab.id);
           }
           chatTab.jobs += 1;
-          // ChatGPT is shown while it writes (Chrome slows hidden tabs); the first job remembers the tab to return to.
-          const shownBefore = await bringTabToFront(chatTab.id);
-          tabBeforeChatGpt ??= shownBefore;
+          // Still in front while ChatGPT writes, if the Manager looked at another tab meanwhile.
+          await bringTabToFront(chatTab.id);
           // No job page is opened: the prompt uses the saved job (description, title, company).
           const result = await runGenerationForTab(jobTabId, queuedJob, chatTab);
           generationId = result.generationId;
