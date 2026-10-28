@@ -1969,9 +1969,17 @@ async function assistFillPass(tabId, application, assistant) {
   const page = assistPageOf(tab.url);
   const look = await inForm(tabId, () => ({
     fields: globalThis.__qtsApplyForm.scanForAssist(),
+    embedded: globalThis.__qtsApplyForm.embeddedApplicationUrl(),
     typing: Date.now() - (globalThis.__qtsApplyAssist?.lastKeyAt?.() || 0) < 3000,
   })).catch(() => null);
   if (!look) return;
+  // A company page showing a job board's form in a frame QTS cannot read (jobs.elastic.co with
+  // Greenhouse): the form opens in this tab, once per page, where QTS fills it.
+  if (look.embedded && !assistant.openedForms.has(`${tabId}|${page}`)) {
+    assistant.openedForms.add(`${tabId}|${page}`);
+    await chrome.tabs.update(tabId, { url: look.embedded }).catch(() => {});
+    return;
+  }
   if (look.typing) {
     setTimeout(() => assistant.poke(tabId), ASSIST_TYPING_WAIT_MS);
     return;
@@ -2052,6 +2060,8 @@ async function runAssistedApplication(application) {
   activeReviews.set(attemptId, review);
   const assistant = {
     used: {}, handled: new Set(), tries: new Map(), problems: [], filling: false, stopped: false, keepAlive, show: null,
+    // Pages whose embedded job-board form was opened in their tab (once each).
+    openedForms: new Set(),
     // Tabs with a fill pass on its way, and those to look at once more when it ends.
     looking: new Set(), lookAgain: new Set(),
     // Fills one of this application's tabs now (new boxes shown, a page loaded); a second request

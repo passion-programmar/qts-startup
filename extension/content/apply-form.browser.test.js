@@ -379,3 +379,27 @@ test('a box after a fixed start ("https://linkedin.com/in/") takes only the hand
    return { li: value('li'), gh: value('gh'), plain: value('plain'), other: value('other'), otherOk: other.ok };`);
   assert.deepEqual(result, { li: 'ana-pop-123', gh: 'anapop', plain: 'linkedin.com/in/ana-pop-123', other: 'https://ana.dev', otherOk: true });
 });
+
+test('a company page showing a job board\'s form in a frame of another site gives that form\'s address', { skip }, async () => {
+  const embedded = async (html) => {
+    const page = await browser.newPage();
+    try {
+      // Nothing leaves the machine: the frame's request is refused, so it stays a frame of another site.
+      await page.setRequestInterception(true);
+      page.on('request', (request) => (request.url().startsWith('https://') ? request.abort() : request.continue()));
+      await page.setContent(html);
+      await page.addScriptTag({ path: FORM_FILE });
+      return await page.evaluate(() => globalThis.__qtsApplyForm.embeddedApplicationUrl());
+    } finally {
+      await page.close();
+    }
+  };
+  const frame = '<iframe src="https://job-boards.greenhouse.io/embed/job_app?for=elastic&token=8195964" style="width:700px;height:900px"></iframe>';
+  // Elastic: "Apply for this job" is a Greenhouse frame; the page's own job-alert box does not count.
+  assert.equal(await embedded(`<main><h2>Apply for this job</h2>${frame}</main><footer><form><input type="email" aria-label="Email"></form></footer>`),
+    'https://job-boards.greenhouse.io/embed/job_app?for=elastic&token=8195964');
+  // A page with its own form, a small frame, or a frame of another kind of site: nothing to open.
+  assert.equal(await embedded(`<form><label for="a">First name</label><input id="a"><label for="b">Email</label><input id="b" type="email"></form>${frame}`), '');
+  assert.equal(await embedded('<iframe src="https://job-boards.greenhouse.io/embed/job_app?token=1" style="width:100px;height:50px"></iframe>'), '');
+  assert.equal(await embedded('<iframe src="https://www.youtube.com/embed/x" style="width:700px;height:400px"></iframe>'), '');
+});

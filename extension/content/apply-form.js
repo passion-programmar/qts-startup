@@ -92,6 +92,31 @@
       });
   }
 
+  // Job-board sites whose application form a company page embeds in a frame.
+  const APPLICATION_FRAME_HOST = /(?:^|\.)(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com|icims\.com|jobvite\.com|smartrecruiters\.com|workable\.com|recruitee\.com|teamtailor\.com|bamboohr\.com|breezy\.hr|applytojob\.com|personio\.(?:de|com)|rippling\.com)$/i;
+
+  /**
+   * The address of a job board's application form shown in a frame QTS cannot read (another site,
+   * "Apply for this job" on a company page embedding Greenhouse), when the page has no form of its
+   * own; '' otherwise. Opened in the tab itself, the form can be filled.
+   */
+  function embeddedApplicationUrl() {
+    const ownQuestions = scanForm().filter((field) => !field.hidden && !field.disabled && !unrelatedBox(findField(field.id) || document.body));
+    if (ownQuestions.length >= 2) return '';
+    const frame = allElements().find((element) => {
+      if (element.tagName !== 'IFRAME' || !isShown(element) || frameDocument(element)?.documentElement) return false;
+      const box = element.getBoundingClientRect();
+      if (box.width < 300 || box.height < 200) return false;
+      try {
+        const url = new URL(element.src, location.href);
+        return /^https:$/.test(url.protocol) && APPLICATION_FRAME_HOST.test(url.hostname);
+      } catch {
+        return false;
+      }
+    });
+    return frame ? new URL(frame.src, location.href).href : '';
+  }
+
   /** The elements under root matching a selector, inside page components (shadow roots) too. */
   function deepQuery(root, selector) {
     if (!root) return [];
@@ -2211,6 +2236,7 @@
   global.__qtsApplyForm = {
     scanForm,
     scanForAssist,
+    embeddedApplicationUrl,
     readComboboxOptions,
     discoverComboboxChoices,
     currentChoices,
