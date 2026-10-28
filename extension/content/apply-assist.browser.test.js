@@ -282,3 +282,18 @@ test('a large frame appearing (a job board\'s embedded form) tells the worker; a
     assert.equal(await changes(), before + 1);
   });
 });
+
+test('after the extension restarted, a panel says what to do instead of doing nothing; a new panel replaces the dead one', { skip }, async () => {
+  // A dead panel left by an earlier run of the extension is on the page before this one shows.
+  await withPanel(`<div data-qts-apply-assist data-qts-apply-review>old panel</div>${FORM}`, STATE, async (page, panel) => {
+    assert.equal(await page.evaluate(() => document.querySelectorAll('[data-qts-apply-assist]').length), 1);
+    // The extension is reloaded: this panel can no longer reach it.
+    await page.evaluate(() => { delete window.chrome.runtime.id; });
+    await panel.click('.submitted', 'Submitted');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const text = await panel.text();
+    assert.ok(text.includes('QTS was restarted or updated'), text.slice(-300));
+    // Not stuck: the button can be clicked again.
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.submitted').disabled), false);
+  });
+});

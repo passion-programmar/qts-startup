@@ -1,0 +1,1 @@
+DROP INDEX "apply_attempts_one_live_per_candidate_unique";

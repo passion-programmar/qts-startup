@@ -7,6 +7,9 @@
 // boxes show on the page, the panel tells QTS so it fills them at once.
 (function initApplyAssist(global) {
   if (global.__qtsApplyAssist) return;
+  // A panel left by an earlier run of the extension (reloaded or updated) can no longer reach QTS:
+  // this one takes its place.
+  for (const stale of document.querySelectorAll('[data-qts-apply-assist], [data-qts-apply-dock]')) stale.remove();
 
   const PANEL_WIDTH = 'min(400px, 48vw)';
   const host = document.createElement('div');
@@ -138,9 +141,21 @@
     return node;
   };
 
+  // The extension was reloaded or updated: this panel can no longer reach it.
+  const RESTARTED = 'QTS was restarted or updated. Turn Apply on again (if it is off): this page\'s panel comes back, then click Submitted.';
+
   function send(action, extra = {}) {
     if (!state) return Promise.resolve(null);
-    return chrome.runtime.sendMessage({ type: 'QTS_APPLY_PANEL', assist: true, attemptId: state.attemptId, jobId: state.jobId, action, ...extra }).catch(() => null);
+    let sending;
+    try {
+      if (!chrome.runtime?.id) return Promise.resolve({ ok: false, error: RESTARTED });
+      sending = chrome.runtime.sendMessage({ type: 'QTS_APPLY_PANEL', assist: true, attemptId: state.attemptId, jobId: state.jobId, action, ...extra });
+    } catch {
+      return Promise.resolve({ ok: false, error: RESTARTED });
+    }
+    return sending.catch((error) => (/context invalidated|receiving end does not exist/i.test(String(error?.message))
+      ? { ok: false, error: RESTARTED }
+      : null));
   }
 
   function setDocked(docked) {

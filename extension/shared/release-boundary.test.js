@@ -693,9 +693,9 @@ test('the prompt and template flow from the Generation run to the job and its bi
   assert.ok(start.includes('const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);'));
   assert.ok(finalize.includes('promptId: run.promptId,'));
   assert.ok(finalize.includes('pdfTemplate: run.pdfTemplate,'));
-  // The bid keeps the prompt and template by name, copied when the Manager confirms the application.
-  assert.ok(applyAttempts.includes('templateName: templateLabel(attempt.pdfTemplate),'));
-  assert.ok(applyAttempts.includes('promptName: attempt.promptName,'));
+  // The bid keeps the prompt and template by name, copied from the job when the Manager confirms the application.
+  assert.ok(applyAttempts.includes('templateName: templateLabel(job.pdfTemplate),'));
+  assert.ok(applyAttempts.includes('promptName: job.promptName,'));
 });
 
 test('every candidate has a category, falling back to the default Global category', () => {

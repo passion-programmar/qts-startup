@@ -1517,14 +1517,23 @@ async function answerAssistWithoutRunner(msg, tabId) {
   const post = (path, body = {}) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
   let result;
   if (action === 'submitted') {
-    await post('submitted', { appliedAnswers: [] });
-    result = await post('result', { submitted: true, removeJob: true });
+    // The form's answers as the panel read them (a plain question and answer each).
+    const appliedAnswers = (Array.isArray(msg.answers) ? msg.answers : [])
+      .map((entry) => ({ question: String(entry?.label || '').slice(0, 300), answer: String(entry?.value || '').slice(0, 2000), source: 'manager' }))
+      .filter((entry) => entry.question && entry.answer);
+    await post('submitted', { appliedAnswers });
+    result = await post('result', { submitted: true, removeJob: true, appliedAnswers });
+    // The application record is gone (its hold ran out while QTS was away): the bid from the job.
+    if (!result?.success && result?._httpStatus === 409 && typeof msg.jobId === 'string') {
+      result = await workerApiRequest('POST', '/api/extension/apply/save-bid', { jobId: msg.jobId, appliedAnswers });
+    }
   } else if (action === 'cancel') {
     result = await post('release', { mode: 'drop', reason: 'Cancelled by the Manager.' });
     if (result?.success) await noteCancelledJob(msg.jobId);
   } else {
     return { ok: false, error: 'Apply restarted in this Chrome: if the site took the application, click Submitted; else Cancel.' };
   }
+  if (result?.success) await forgetApplySession(attemptId);
   if (result?.success && tabId != null) {
     await removeReviewPanel(tabId);
     await chrome.tabs.remove(tabId).catch(() => {});
@@ -1572,7 +1581,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     }
     if (!review.tabIds.delete(tabId)) continue;
     if (!review.tabIds.size) answerManager(review.attemptId, { action: 'closed' });
-    else if (review.tabId === tabId) review.tabId = [...review.tabIds].pop();
+    else {
+      if (review.tabId === tabId) review.tabId = [...review.tabIds].pop();
+      rememberApplySession(review).catch(() => {});
+    }
   }
 });
 
@@ -1584,6 +1596,7 @@ chrome.tabs.onCreated.addListener((tab) => {
     review.tabIds.add(tab.id);
     review.tabId = tab.id;
     tabOwnership.markTab(tab.id, 'apply').catch(() => {});
+    rememberApplySession(review).catch(() => {});
   }
 });
 
@@ -1945,6 +1958,77 @@ function assistSkips(assistant, tabId, page, field) {
   return assistant.handled.has(keys.box) || (assistant.tries.get(keys.question) || 0) >= (field.kind === 'file' ? 1 : 2);
 }
 
+// The assistant's open applications, by attempt: the job and the tabs it lives in. Kept in local
+// storage so that after the extension restarts (reloaded, updated, the worker stopped) the same
+// pages are worked in again and Submitted still saves the bid. Tab ids last while Chrome is open.
+const APPLY_SESSIONS_KEY = 'qtsApplySessions';
+let applySessionWrites = Promise.resolve();
+
+async function applySessions() {
+  const stored = (await chrome.storage.local.get(APPLY_SESSIONS_KEY))[APPLY_SESSIONS_KEY];
+  return stored && typeof stored === 'object' ? stored : {};
+}
+
+/** One write at a time, so two pages saving together never undo each other. */
+function changeApplySessions(change) {
+  applySessionWrites = applySessionWrites.then(async () => {
+    const sessions = await applySessions();
+    change(sessions);
+    await chrome.storage.local.set({ [APPLY_SESSIONS_KEY]: sessions });
+  }).catch(() => {});
+  return applySessionWrites;
+}
+
+function rememberApplySession(review) {
+  const tabIds = [...tabsOf(review)];
+  if (!review.assist || !tabIds.length) return Promise.resolve();
+  return changeApplySessions((sessions) => {
+    sessions[review.attemptId] = { jobId: review.job.id, company: review.job.company, title: review.job.title, tabIds };
+  });
+}
+
+function forgetApplySession(attemptId) {
+  return changeApplySessions((sessions) => { delete sessions[attemptId]; });
+}
+
+/**
+ * The applications whose pages are still open after the extension restarted: each is taken up
+ * again (the server holds it for this Chrome again, or takes its job back when its hold ran out),
+ * with its panel shown again. Returns the runs started; a page that cannot be taken up loses its
+ * panel and the Manager is told.
+ */
+async function resumeApplySessions(limit) {
+  const runs = [];
+  for (const [attemptId, saved] of Object.entries(await applySessions())) {
+    if (activeReviews.has(attemptId)) continue;
+    const tabIds = [];
+    for (const tabId of saved.tabIds || []) if (await getTab(tabId)) tabIds.push(tabId);
+    await forgetApplySession(attemptId);
+    if (!tabIds.length) continue;
+    const reply = runs.length < limit
+      ? await workerApiRequest('POST', '/api/extension/apply/resume', { attemptId, jobId: saved.jobId })
+      : null;
+    if (reply?.success === true && reply.application) {
+      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds }));
+      continue;
+    }
+    for (const tabId of tabIds) await removeStalePanel(tabId);
+    await notifyApply(`${saved.company || 'A job'}: QTS restarted and could not take this page up again (another Chrome has it, or it has a bid). Its tab stays open.`);
+  }
+  return runs;
+}
+
+/** A panel left by an earlier run of the extension (it can no longer reach QTS) is removed. */
+async function removeStalePanel(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    func: () => {
+      for (const node of document.querySelectorAll('[data-qts-apply-assist], [data-qts-apply-dock]')) node.remove();
+      document.documentElement.removeAttribute('data-qts-apply-docked');
+    },
+  }).catch(() => {});
+}
+
 async function cancelledJobIds() {
   const stored = (await chrome.storage.session.get(APPLY_CANCELLED_KEY))[APPLY_CANCELLED_KEY];
   return Array.isArray(stored) ? stored : [];
@@ -2035,7 +2119,7 @@ function panelProfile(candidate) {
  * deleted. Cancel, closing all its tabs, Apply turned off, or an error record nothing: the job stays
  * as it was (not opened again in this Chrome until Apply restarts). No goes back to the form.
  */
-async function runAssistedApplication(application) {
+async function runAssistedApplication(application, { resumeTabIds = null } = {}) {
   const { attemptId } = application;
   let renewedAt = Date.now();
   let leaseSeconds = 0;
@@ -2156,17 +2240,37 @@ async function runAssistedApplication(application) {
     })();
   };
   const readAnswers = async (given) => {
-    const current = given || await inForm(review.tabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) || [];
+    const current = (given?.length ? given : null) || await inForm(review.tabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) || [];
     return { answers: submittedAnswers(assistant.used, current), learned: learnedAnswers(assistant.used, current) };
   };
+  // Submitted when the application record is gone (its hold ran out while the Chrome was away):
+  // the bid is saved from the job itself.
+  const saveFromJob = () => workerApiRequest('POST', '/api/extension/apply/save-bid', {
+    jobId: application.job.id,
+    appliedAnswers: answersAtSubmit || [],
+  });
   try {
-    const othersOpen = [...activeReviews.values()].some((entry) => entry !== review && entry.assist && entry.tabId != null);
-    tab = await openApplyTab(application.job.url, { active: !othersOpen });
-    review.tabId = tab.id;
-    review.tabIds = new Set([tab.id]);
-    // Held for the Manager from the start (the longer hold): the page waits for them.
-    await report('review', { review: true, appliedAnswers: [] });
-    await waitForTabComplete(tab.id, 45 * 1000).catch(() => {});
+    if (resumeTabIds?.length) {
+      // The extension restarted with this job's pages open: they are worked in again, and what
+      // they already show is left as it is (met), as the Manager may have chosen it.
+      review.tabIds = new Set(resumeTabIds);
+      review.tabId = resumeTabIds[resumeTabIds.length - 1];
+      for (const tabId of resumeTabIds) {
+        const page = assistPageOf((await getTab(tabId))?.url);
+        const shown = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist()
+          .filter((field) => !field.hidden && !globalThis.__qtsApplyForm.isUnanswered(field))).catch(() => []);
+        for (const field of shown || []) assistant.handled.add(assistKeys(tabId, page, field).box);
+      }
+    } else {
+      const othersOpen = [...activeReviews.values()].some((entry) => entry !== review && entry.assist && entry.tabId != null);
+      tab = await openApplyTab(application.job.url, { active: !othersOpen });
+      review.tabId = tab.id;
+      review.tabIds = new Set([tab.id]);
+      // Held for the Manager from the start (the longer hold): the page waits for them.
+      await report('review', { review: true, appliedAnswers: [] });
+    }
+    await rememberApplySession(review);
+    if (tab) await waitForTabComplete(tab.id, 45 * 1000).catch(() => {});
     await showPanel('assist');
     startFiller();
     for (;;) {
@@ -2177,16 +2281,23 @@ async function runAssistedApplication(application) {
         if (!marked) {
           ({ answers: answersAtSubmit, learned: learnedAtSubmit } = await readAnswers(decision.answers));
           const sent = await report('submitted', { appliedAnswers: answersAtSubmit, learned: learnedAtSubmit });
+          // The application record is gone: the bid comes from the job itself.
+          const fromJob = !sent.success && sent._httpStatus === 409 ? await saveFromJob() : null;
+          if (fromJob?.success) {
+            await closeTabs();
+            return;
+          }
           if (!sent.success) {
-            await showPanel('assist', { message: sent.message || 'QTS did not save the bid; try again.' });
+            await showPanel('assist', { message: fromJob?.message || sent.message || 'QTS did not save the bid; try again.' });
             startFiller();
             continue;
           }
           marked = true;
         }
         const saved = await report('result', { submitted: true, removeJob: true, appliedAnswers: answersAtSubmit });
-        if (!saved.success) {
-          await showPanel('assist', { message: saved.message || 'QTS did not save the bid; try again.' });
+        const fromJob = !saved.success && saved._httpStatus === 409 ? await saveFromJob() : null;
+        if (!saved.success && !fromJob?.success) {
+          await showPanel('assist', { message: fromJob?.message || saved.message || 'QTS did not save the bid; try again.' });
           continue;
         }
         await closeTabs();
@@ -2217,6 +2328,8 @@ async function runAssistedApplication(application) {
     activeReviews.delete(attemptId);
     reviewWaiters.delete(attemptId);
     earlyDecisions.delete(attemptId);
+    // Ended here (a worker that stops never gets here, so its pages are taken up again after a restart).
+    await forgetApplySession(attemptId);
     for (const tabId of tabsOf(review)) {
       await removeReviewPanel(tabId);
       await releaseDebugger(tabId);
@@ -2231,7 +2344,16 @@ async function processApplyQueue() {
   // The applications open in this Chrome: up to two job pages with the Manager's panel (one
   // automatic application at a time in test mode).
   const running = new Set();
+  const track = (work) => {
+    const run = work.catch(() => {}).finally(() => {
+      running.delete(run);
+      self.__qtsIdlePacing.noteActivity().catch(() => {});
+    });
+    running.add(run);
+  };
   try {
+    // Pages still open from before the extension restarted are taken up first (they count as open).
+    if (await isApplyOn()) for (const run of await resumeApplySessions(APPLY_TABS_PER_CHROME)) track(run);
     while (await isApplyOn()) {
       const testMode = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
       if (running.size >= (testMode ? 1 : APPLY_TABS_PER_CHROME)) {
@@ -2266,13 +2388,7 @@ async function processApplyQueue() {
         });
         continue;
       }
-      const run = (testMode ? runApplication(application, recipe) : runAssistedApplication(application, recipe))
-        .catch(() => {})
-        .finally(() => {
-          running.delete(run);
-          self.__qtsIdlePacing.noteActivity().catch(() => {});
-        });
-      running.add(run);
+      track(testMode ? runApplication(application, recipe) : runAssistedApplication(application));
     }
   } finally {
     await Promise.allSettled([...running]);

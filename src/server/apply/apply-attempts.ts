@@ -161,8 +161,11 @@ export async function claimNextApplication(
       ${`{${skipJobIds.join(",")}}`}::uuid[])::text as "attemptId"
   `);
   const attemptId = claim.rows[0]?.attemptId;
-  if (!attemptId) return null;
+  return attemptId ? loadApplication(attemptId) : null;
+}
 
+/** Everything the Chrome needs to work on an attempt: the job, the candidate, the answers. */
+async function loadApplication(attemptId: string): Promise<ClaimedApplication | null> {
   const [row] = await db
     .select({
       jobId: jobs.id,
@@ -297,6 +300,40 @@ function ownedBy(attemptId: string, managerId: string, browserId: string) {
 }
 
 const leaseFor = (seconds: number) => new Date(Date.now() + seconds * 1000);
+
+/**
+ * A job page this Chrome still has open after its extension restarted (reloaded, updated, woken
+ * up): its application, held for the Manager again. When its hold ran out meanwhile and the attempt
+ * is gone, the same job is taken again for this Chrome, unless another Chrome holds it or it has a
+ * bid. Null when neither works; the Chrome then lets the page go.
+ */
+export async function resumeApplication(
+  managerId: string,
+  browserId: string,
+  attemptId: string,
+  jobId: string,
+): Promise<ClaimedApplication | null> {
+  const [held] = await db
+    .update(applyAttempts)
+    .set({ status: "waiting_review", leaseExpiresAt: leaseFor(APPLY_REVIEW_LEASE_SECONDS), updatedAt: new Date() })
+    .where(and(ownedBy(attemptId, managerId, browserId), inArray(applyAttempts.status, ["claimed", "waiting_review"])))
+    .returning({ id: applyAttempts.id });
+  if (held) return loadApplication(held.id);
+  // A live attempt of another Chrome for the job conflicts with its one-live-attempt index: nothing is taken.
+  const taken = await db.execute<{ id: string }>(sql`
+    insert into apply_attempts (job_id, manager_id, candidate_id, browser_id, status, lease_expires_at)
+    select jobs.id, jobs.manager_id, jobs.candidate_id, ${browserId}, 'waiting_review',
+      now() + make_interval(secs => ${APPLY_REVIEW_LEASE_SECONDS})
+    from jobs
+    where jobs.id = ${jobId} and jobs.manager_id = ${managerId}
+      and jobs.generation_status = 'completed' and jobs.resume_local_path is not null and jobs.status <> 'applied'
+      and not ${jobHasBid()}
+    on conflict do nothing
+    returning id::text as id
+  `);
+  const id = taken.rows[0]?.id;
+  return id ? loadApplication(id) : null;
+}
 
 /**
  * Renews this Chrome's hold; false when the attempt is no longer its own (for example after a long
@@ -468,6 +505,74 @@ function answersOf(evidence: unknown): AppliedAnswer[] {
   return Array.isArray(answers) ? answers as AppliedAnswer[] : [];
 }
 
+/** The job's fields a bid copies (with its prompt and the Chrome that saved its résumé). */
+const jobBidFields = {
+  jobUrl: jobs.jobUrl,
+  jobTitle: jobs.jobTitle,
+  company: jobs.company,
+  titleCompanyKey: jobs.titleCompanyKey,
+  location: jobs.location,
+  employmentType: jobs.employmentType,
+  workplaceType: jobs.workplaceType,
+  salary: jobs.salary,
+  resumeLocalPath: jobs.resumeLocalPath,
+  googleDrivePath: jobs.googleDrivePath,
+  sourceSiteUrl: jobs.sourceSiteUrl,
+  pdfTemplate: jobs.pdfTemplate,
+  promptName: sql<string | null>`(select p.name || ' · v' || p.version from prompts p where p.id = ${jobs.promptId})`,
+  resumeSavedOn: extensionBrowsers.name,
+};
+type JobBidFields = {
+  jobUrl: string; jobTitle: string; company: string; titleCompanyKey: string | null; location: string | null;
+  employmentType: string | null; workplaceType: string | null; salary: string | null; resumeLocalPath: string | null;
+  googleDrivePath: string | null; sourceSiteUrl: string | null; pdfTemplate: string | null; promptName: string | null;
+  resumeSavedOn: string | null;
+};
+
+/** A bid: an independent copy of the job, its documents, and the answers given. */
+function bidOf(job: JobBidFields, managerId: string, candidateId: string, answers: AppliedAnswer[], appliedAt: Date) {
+  return {
+    managerId,
+    candidateId,
+    jobUrl: job.jobUrl,
+    jobTitle: job.jobTitle,
+    company: job.company,
+    titleCompanyKey: job.titleCompanyKey,
+    location: job.location?.trim() || null,
+    workType: workTypeOf(job.employmentType, job.workplaceType),
+    salary: job.salary?.trim() || null,
+    resumeFolder: job.resumeLocalPath ? resumeFolderOf(job.resumeLocalPath) : "",
+    resumeSavedOn: job.resumeSavedOn,
+    googleDrivePath: job.googleDrivePath,
+    sourceSiteUrl: job.sourceSiteUrl,
+    templateName: templateLabel(job.pdfTemplate),
+    promptName: job.promptName,
+    answers,
+    appliedAt,
+  };
+}
+
+/**
+ * Submitted on a job page whose application record is gone (its hold ran out while the Chrome was
+ * away): the bid is saved from the job itself, once per candidate and job, and the job row is
+ * deleted, as Submitted does. False when the job is not this Manager's or no longer exists.
+ */
+export async function saveBidForJob(managerId: string, jobId: string, answers: AppliedAnswer[]): Promise<boolean> {
+  const [job] = await db
+    .select({ ...jobBidFields, candidateId: jobs.candidateId })
+    .from(jobs)
+    .leftJoin(extensionBrowsers, eq(extensionBrowsers.id, jobs.generationBrowserId))
+    .where(and(eq(jobs.id, jobId), eq(jobs.managerId, managerId)))
+    .limit(1);
+  if (!job) return false;
+  await db.batch([
+    db.insert(bids).values(bidOf(job, managerId, job.candidateId, answers, new Date())).onConflictDoNothing(),
+    // Its attempts go with it (cascade), so no Chrome offers it again.
+    db.delete(jobs).where(and(eq(jobs.id, jobId), eq(jobs.managerId, managerId), sql`not ${generationHeldSql()}`)),
+  ]);
+  return true;
+}
+
 /**
  * The Manager's answer to "Submitted successfully?", from the Chrome (browserId) or the Jobs page
  * (browserId null). Yes makes the bid, an independent copy of the job, its documents and the
@@ -488,20 +593,7 @@ export async function answerApplication(input: {
       jobId: applyAttempts.jobId,
       candidateId: applyAttempts.candidateId,
       evidence: applyAttempts.evidence,
-      jobUrl: jobs.jobUrl,
-      jobTitle: jobs.jobTitle,
-      company: jobs.company,
-      titleCompanyKey: jobs.titleCompanyKey,
-      location: jobs.location,
-      employmentType: jobs.employmentType,
-      workplaceType: jobs.workplaceType,
-      salary: jobs.salary,
-      resumeLocalPath: jobs.resumeLocalPath,
-      googleDrivePath: jobs.googleDrivePath,
-      sourceSiteUrl: jobs.sourceSiteUrl,
-      pdfTemplate: jobs.pdfTemplate,
-      promptName: sql<string | null>`(select p.name || ' · v' || p.version from prompts p where p.id = ${jobs.promptId})`,
-      resumeSavedOn: extensionBrowsers.name,
+      ...jobBidFields,
     })
     .from(applyAttempts)
     .innerJoin(jobs, eq(jobs.id, applyAttempts.jobId))
@@ -543,25 +635,7 @@ export async function answerApplication(input: {
 
   const [[done]] = await db.batch([
     settle("confirmed"),
-    db.insert(bids).values({
-      managerId,
-      candidateId: attempt.candidateId,
-      jobUrl: attempt.jobUrl,
-      jobTitle: attempt.jobTitle,
-      company: attempt.company,
-      titleCompanyKey: attempt.titleCompanyKey,
-      location: attempt.location?.trim() || null,
-      workType: workTypeOf(attempt.employmentType, attempt.workplaceType),
-      salary: attempt.salary?.trim() || null,
-      resumeFolder: attempt.resumeLocalPath ? resumeFolderOf(attempt.resumeLocalPath) : "",
-      resumeSavedOn: attempt.resumeSavedOn,
-      googleDrivePath: attempt.googleDrivePath,
-      sourceSiteUrl: attempt.sourceSiteUrl,
-      templateName: templateLabel(attempt.pdfTemplate),
-      promptName: attempt.promptName,
-      answers,
-      appliedAt: now,
-    }).onConflictDoNothing(),
+    db.insert(bids).values(bidOf(attempt, managerId, attempt.candidateId, answers, now)).onConflictDoNothing(),
     // The panel's Submitted: the job row goes at once (its Apply history with it); the bid stays.
     input.removeJob
       ? db.delete(jobs).where(and(eq(jobs.id, attempt.jobId), sql`not ${generationHeldSql()}`))

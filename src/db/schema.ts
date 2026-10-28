@@ -673,14 +673,11 @@ export const applyAttempts = pgTable(
       "apply_attempts_submit_audit_check",
       sql`${table.status} not in ('waiting_confirmation', 'submitting', 'confirmed', 'not_confirmed') or ${table.submitGrantedAt} is not null`,
     ),
-    // One live attempt per job, across every Chrome; a candidate is filled in one Chrome at a time
-    // (an application waiting for the Manager's Yes/No does not hold the candidate).
+    // One live attempt per job, across every Chrome. A candidate may have several job pages open at
+    // once (the assistant, 1.41.0), so there is no limit per candidate (0078).
     uniqueIndex("apply_attempts_one_live_per_job_unique")
       .on(table.jobId)
       .where(sql`${table.status} in ('claimed', 'waiting_review', 'waiting_confirmation', 'submitting')`),
-    uniqueIndex("apply_attempts_one_live_per_candidate_unique")
-      .on(table.candidateId)
-      .where(sql`${table.status} in ('claimed', 'waiting_review', 'submitting')`),
     index("apply_attempts_manager_status_index").on(table.managerId, table.status),
   ],
 );

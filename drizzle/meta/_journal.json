@@ -547,6 +547,13 @@
       "when": 1793191792456,
       "tag": "0077_apply_forget_old_returns",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1793211088105,
+      "tag": "0078_apply_several_pages_per_candidate",
+      "breakpoints": true
     }
   ]
 }
