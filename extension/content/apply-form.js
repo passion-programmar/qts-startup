@@ -318,7 +318,27 @@
       .concat(control.id ? [...(root.querySelectorAll?.(`label[for="${CSS.escape(control.id)}"]`) || [])].map(textOf) : [])
       .map((text) => cleanText(text.replace(/[*✱]/g, ' ')))
       .filter((text) => text && !UPLOAD_ACTION.test(text));
-    return named.length ? named[0].slice(0, 200) : '';
+    if (named.length) return named[0].slice(0, 200);
+    return global.__qtsAutoApplyRules ? uploadGroupQuestion(control) : '';
+  }
+
+  /**
+   * Auto Apply: the question of the labelled group an upload sits in, when its own label is only its
+   * button ("Attach"): Greenhouse's role="group" aria-labelledby → "Resume/CV", "Cover Letter".
+   */
+  function uploadGroupQuestion(control, asWritten = false) {
+    const root = control.getRootNode();
+    for (let node = control.parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth += 1) {
+      if (node.getAttribute('role') !== 'group') continue;
+      const written = [
+        ...(node.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map((id) => textOf(root.getElementById?.(id))),
+        node.getAttribute('aria-label') || '',
+      ].join(' ').trim();
+      const text = cleanText(written.replace(/[*✱]/g, ' '));
+      // asWritten: with its required mark, for reading whether the upload is required.
+      if (text && !UPLOAD_ACTION.test(text)) return (asWritten ? written : text).slice(0, 200);
+    }
+    return '';
   }
 
   /**
@@ -441,6 +461,7 @@
       ...(control.id ? [...(root.querySelectorAll?.(`label[for="${CSS.escape(control.id)}"]`) || [])].map(textOf) : []),
       textOf(control.closest('label')),
       blockLabel,
+      global.__qtsAutoApplyRules ? uploadGroupQuestion(control, true) : '',
     ].filter(Boolean).find((text) => isRequired(control, text)) || '';
   }
 
@@ -1278,6 +1299,12 @@
         }
       }
       const checked = controlsOfGroup(element).filter((control) => control.checked).map(choiceText);
+      // Auto Apply: done only when exactly the wanted choices are the ticked ones (not just any tick).
+      if (global.__qtsAutoApplyRules) {
+        const ticked = checked.map((text) => text.toLowerCase());
+        const exact = ticked.length === wanted.length && wanted.every((entry) => ticked.includes(entry));
+        return exact ? { ok: true, value: checked.join(', ') } : { ok: false, value: checked.join(', '), error: `The site shows "${checked.join(', ') || 'nothing'}" ticked, not "${[].concat(value).join(', ')}".` };
+      }
       return { ok: checked.length > 0, value: checked.join(', ') };
     }
     if (type === 'checkbox') {
@@ -1465,7 +1492,8 @@
       const wanted = best(choices.map(itemText));
       const choice = wanted && choices.find((entry) => itemText(entry) === wanted);
       if (!choice) {
-        for (const target of [document.activeElement, picker.node]) target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }));
+        // Closed with its own toggle: an Escape reaching the page would also close a dialog the form is in.
+        if (shownChoices().some((entry) => !entry.contains(element))) press(picker.node);
         return value;
       }
       choice.click();
@@ -1871,6 +1899,57 @@
     return !String(element.value || '').trim() || onlyDialCode(element, field.label);
   }
 
+  // An upload the site took: the box still holds the file, or the site shows it as attached (its
+  // name, "Remove file", "Success") in the upload's own block (Greenhouse moves the file out of the box).
+  const ATTACHED = /\.(pdf|docx?|rtf|txt|odt)\b|remove file|replace file|success|uploaded|attached/i;
+  function uploadAccepted(id) {
+    const element = findField(id);
+    if (!element) return false;
+    if (element.files?.length) return true;
+    const { block } = blockQuestion(element);
+    return ATTACHED.test(textOf(block || element.parentElement));
+  }
+
+  /**
+   * Auto Apply's read-only look at the whole page as it is now, for its checklist: every question
+   * shown with its current value, whether it is answered, and the error the site shows for it; plus
+   * what the page shows as a whole (errors, unreadable parts, a sign-in wall or human check).
+   * Nothing is filled or clicked.
+   */
+  function auditForm() {
+    const values = new Map(currentAnswers().map((entry) => [entry.id, entry.value]));
+    // Hidden boxes too: a site hides its file inputs and a list's input once a choice is made; only
+    // shown ones count as new questions (shown).
+    const fields = scanForm().filter((field) => !field.disabled || field.kind === 'file').map((field) => {
+      // A list drawn by the page (React Select) shows its choice next to its input, not in it.
+      const value = ['combobox', 'menu'].includes(field.kind) ? shownValue(field.id).replace(/[×✕]/g, '').trim() || values.get(field.id) : values.get(field.id);
+      return {
+        id: field.id,
+        label: field.label,
+        kind: field.kind,
+        shown: !field.hidden,
+        required: Boolean(field.required),
+        labelUnresolved: Boolean(field.labelUnresolved),
+        answered: field.kind === 'file' ? uploadAccepted(field.id) : !isUnanswered(field),
+        value: String(Array.isArray(value) ? value.join(', ') : value ?? '').slice(0, 200),
+        issue: fieldIssue(field.id),
+      };
+    });
+    // File names the page shows as attached (a site that removes its file box after an upload).
+    const fileNames = [...new Set(String(document.body?.innerText || '').match(/[\w .()'-]{1,80}\.(pdf|docx?|rtf|txt|odt)\b/gi) || [])].map((name) => name.trim()).slice(0, 10);
+    return { fields, fileNames, errors: fieldErrors(), unread: unreadRequired(), frames: unreadableFrames(), gate: pageGate(), blockers: detectBlockers() };
+  }
+
+  /**
+   * Auto Apply: what the current form step looks like (its address and the questions it shows), to
+   * tell the Manager's Next (another step) from a question appearing on the same step. Errors the
+   * page shows come with it, so a refused Next is seen too.
+   */
+  function stepShape() {
+    const labels = scanForm().filter((field) => !field.hidden && field.kind !== 'file' && field.label).map((field) => String(field.label).trim().slice(0, 80));
+    return { path: `${location.pathname}${location.hash}`, labels: [...new Set(labels)].sort(), errors: fieldErrors().slice(0, 10) };
+  }
+
   /**
    * Required questions on the page that still have no answer, whatever kind they are: the check
    * that an application is complete before Submit. Uploads are left to the site's own check.
@@ -2054,6 +2133,55 @@
     const signInPage = /\/(auth\/)?(sign-?in|log-?in|register|sign-?up|create-account)(\/|$)/i.test(location.pathname);
     if (password || signInPage) blockers.push('login');
     return blockers;
+  }
+
+  // A page that is itself a human check (DataDome's "Verification Required" slider, Cloudflare,
+  // hCaptcha), or says it is one; and a sign-in wall in front of the application.
+  const BOT_CHECK_HOST = /(^|\.)(captcha-delivery\.com|hcaptcha\.com|challenges\.cloudflare\.com)$/i;
+  const BOT_CHECK_TEXT = /verification required|verify (that )?you('re| are) (a )?human|are you a (human|robot)|press (and|&) hold|slide (right )?to (verify|secure|continue)|slide right to secure|unusual (activity|traffic) from your/i;
+  const SIGN_IN_WALL = /\b(sign|log) ?in to (apply|continue)\b|\b(create|register) an account to apply\b|\byou (need|must) (to )?(sign|log) ?in\b/i;
+
+  /**
+   * Auto Apply: the page scrolled down and back (and any scrolling box that holds the form), so
+   * sections a site draws only when reached are on the page before it is read. Returns the place
+   * scrolled back to.
+   */
+  async function revealLazySections() {
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const page = document.scrollingElement || document.documentElement;
+    const start = page.scrollTop;
+    for (let step = 0, last = -1; step < 25 && page.scrollTop !== last; step += 1) {
+      last = page.scrollTop;
+      page.scrollBy({ top: Math.max(400, window.innerHeight * 0.9), behavior: 'instant' });
+      await wait(200);
+    }
+    // A site draws a section a moment after it is reached: the end of the page is given that moment.
+    await wait(600);
+    const boxes = allElements().filter((element) => element.scrollHeight > element.clientHeight + 200 && /auto|scroll/.test(getComputedStyle(element).overflowY) && isShown(element)).slice(0, 3);
+    for (const box of boxes) {
+      const before = box.scrollTop;
+      box.scrollTop = box.scrollHeight;
+      await wait(300);
+      box.scrollTop = before;
+    }
+    page.scrollTo({ top: start, behavior: 'instant' });
+    return start;
+  }
+
+  /** What stands in front of the application on this page: { kind: 'bot_check' | 'login', text }, or null. */
+  function pageGate() {
+    const text = cleanText(String(document.body?.innerText || '').slice(0, 5000));
+    const questions = scanForm().filter((field) => !field.hidden && field.kind !== 'file').length;
+    const botText = text.match(BOT_CHECK_TEXT)?.[0];
+    if (BOT_CHECK_HOST.test(location.hostname) || (botText && questions < 2) || /^just a moment/i.test(document.title)) {
+      return { kind: 'bot_check', text: botText || document.title || location.hostname };
+    }
+    const password = allElements().some((element) => element.tagName === 'INPUT' && element.type === 'password' && isShown(element));
+    const wall = text.match(SIGN_IN_WALL)?.[0];
+    if ((password && /\b(sign|log) ?in\b|create (an )?account|password/i.test(text)) || (wall && questions < 2)) {
+      return { kind: 'login', text: wall || 'a sign-in form' };
+    }
+    return null;
   }
 
   function buttonText(element) {
@@ -2269,6 +2397,11 @@
     unreadRequired,
     fieldErrors,
     detectBlockers,
+    pageGate,
+    auditForm,
+    stepShape,
+    revealLazySections,
+    uploadAccepted,
     buttons,
     clickButton,
     clickStart,

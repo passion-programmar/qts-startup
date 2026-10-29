@@ -943,3 +943,48 @@ test('Auto Apply\'s prompt leaves out contact and diversity facts and shortens t
   assert.ok(minimal.length < full.length - 2500, `minimal ${minimal.length} vs full ${full.length}`);
   assert.match(minimal, /Why Acme\?/);
 });
+
+test('Auto Apply: no built-in notice default; the assisted Apply keeps it', () => {
+  const person = { firstName: 'Ana', lastName: 'Test', country: 'Romania', city: 'Cluj-Napoca' };
+  const fields = [{ id: 'n', label: 'Notice Period', kind: 'text', required: true }, { id: 's', label: 'When can you start? *', kind: 'text', required: true }];
+  const assisted = answers.resolveFields(fields, person, [], { today: new Date('2026-10-29') });
+  assert.equal(assisted.answers.n.value, '1 week');
+  const auto = answers.resolveFields(fields, person, [], { today: new Date('2026-10-29'), autoApply: true });
+  assert.equal(auto.answers.n, undefined);
+  assert.deepEqual(auto.byHand.map((entry) => entry.id), ['n', 's']);
+  assert.match(auto.byHand[0].message, /no notice period or start date/);
+  // A notice Super Admin approved is used.
+  const approved = answers.resolveFields(fields, person, [{ questionKey: 'what is your notice period', questionText: 'What is your notice period?', answer: '2 weeks', scope: 'everyone' }], { today: new Date('2026-10-29'), autoApply: true });
+  assert.equal(approved.answers.n.value, '2 weeks');
+  // Nor is the default told to the AI as the candidate's own.
+  const prompt = answers.buildAnswerPrompt({ candidate: person, job: { title: 'Engineer', company: 'Acme', description: '' }, fields: [{ id: 'q', label: 'Why Acme?', kind: 'textarea' }], minimal: true });
+  assert.doesNotMatch(prompt, /"noticePeriod"|"earliestStartDate"/);
+});
+
+test('Auto Apply: country and location asked as whole questions; the assisted Apply unchanged', () => {
+  const person = { firstName: 'Ana', lastName: 'Test', country: 'Romania', city: 'Cluj-Napoca' };
+  const labels = ['What is your current country of residence?*', 'Please choose the country in which you are located.', 'What country are you based in?', 'What country do you currently live in? *', 'What is your location?'];
+  const fields = labels.map((label, index) => ({ id: `f${index}`, label, kind: 'text', required: true }));
+  const auto = answers.resolveFields(fields, person, [], { autoApply: true });
+  assert.deepEqual(fields.map((field) => auto.answers[field.id]?.value), ['Romania', 'Romania', 'Romania', 'Romania', 'Cluj-Napoca, Romania']);
+  const assisted = answers.resolveFields(fields, person, []);
+  assert.deepEqual(fields.map((field) => assisted.answers[field.id]?.value), [undefined, undefined, undefined, undefined, undefined]);
+  // A list of countries takes the country (Lever's "What is your location?").
+  const list = answers.resolveFields([{ id: 'l', label: 'What is your location?', kind: 'select', options: ['Afghanistan', 'Romania', 'Spain'] }], person, [], { autoApply: true });
+  assert.equal(list.answers.l.value, 'Romania');
+  // A yes/no question naming another country of residence is not this rule's.
+  const yesNo = answers.resolveFields([{ id: 'y', label: 'Will you relocate to another country of residence?', kind: 'text' }], person, [], { autoApply: true });
+  assert.equal(yesNo.answers.y, undefined);
+});
+
+test('Auto Apply: an approved answer matches the same question in other words (job / position / opportunity)', () => {
+  const saved = [{ questionKey: 'how did you hear about this position', questionText: 'How did you hear about this position?', answer: 'LinkedIn', note: null, scope: 'everyone' }];
+  const labels = ['How did you hear about this job?*', 'Please tell us how you heard about this opportunity.', 'How did you first hear about this role? *'];
+  const fields = labels.map((label, index) => ({ id: `h${index}`, label, kind: 'text', required: true }));
+  const auto = answers.resolveFields(fields, { firstName: 'Ana' }, saved, { autoApply: true });
+  assert.deepEqual(fields.map((field) => [auto.answers[field.id]?.value, auto.answers[field.id]?.source]), [['LinkedIn', 'reusable'], ['LinkedIn', 'reusable'], ['LinkedIn', 'reusable']]);
+  // Other questions about the role are not taken for it.
+  const other = answers.resolveFields([{ id: 'r', label: 'What role are you applying for?', kind: 'text' }, { id: 'f', label: 'Did anyone refer you to this position?', kind: 'text' }], { firstName: 'Ana' }, saved, { autoApply: true });
+  assert.equal(other.answers.r, undefined);
+  assert.equal(other.answers.f, undefined);
+});

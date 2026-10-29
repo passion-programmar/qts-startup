@@ -31,7 +31,8 @@ importScripts(
   '../shared/chrome-pdf.js',
   '../shared/resume-print-requests.js',
   'apply-runner.js',
-  'auto-apply-runner.js'
+  'auto-apply-runner.js',
+  'auto-apply-checklist.js'
 );
 
 function isExtractablePageUrl(url) {

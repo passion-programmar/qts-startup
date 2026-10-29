@@ -6,6 +6,11 @@
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
   const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
   const CONSENT = /\b(agree|consent|acknowledge|privacy|terms|certify|confirm that|i have read|accurate|true and complete|data processing|gdpr)\b/i;
+  // Auto Apply: personal facts never left to the AI when the profile lacks them.
+  const PERSONAL_FACT = /authori[sz]|\bsponsor|\bvisa\b|citizen|nationality|right to work|work permit|permanent resident|relocat|security clearance|criminal|date of birth|\bage\b|over 18|gender|veteran|disab|\brace\b|ethnic/i;
+  const WORK_RIGHT_QUESTION = /\b(legally )?(authori[sz]ed|eligible|entitled|permitted|allowed|right) to (work|be employed)\b|\bwork (authori[sz]ation|permit|visa)\b|\bright to work\b/i;
+  // Auto Apply: a question that asks the candidate to agree to, consent to, or attest something.
+  const LEGAL_QUESTION = /\b(agree|consent|acknowledge|privacy (policy|notice)|terms (and conditions|of (use|service))|above[- ]mentioned terms|certify|attest(ation)?|i have read|data processing|gdpr|confirm that (everything|all|the information)|true and (your own|complete|accurate))\b/i;
   // Questions about salary, notice or start date, and sponsorship, for the profile rules and for
   // Super Admin's reusable answers on the same topics.
   const SALARY_QUESTION = /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b|stawk|wynagrodzeni/;
@@ -213,6 +218,11 @@
   }
 
   /** Days in words: 0 "Immediately", 7 "1 week", 14 "2 weeks", 30 "1 month", 10 "10 days". */
+  /** Whether the notice is known (a reusable answer, or the profile's own), not the usual default. */
+  function hasNotice(candidate) {
+    return Number.isFinite(candidate.noticeDays) || candidate.noticePeriod === '1_week' || candidate.noticePeriod === 'immediately';
+  }
+
   function noticeWords(days) {
     if (!days) return 'Immediately';
     const [count, unit] = days % 30 === 0 ? [days / 30, 'month'] : days % 7 === 0 ? [days / 7, 'week'] : [days, 'day'];
@@ -291,10 +301,15 @@
     { test: /linkedin/, fact: (c) => c.linkedinUrl, name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
-    { test: /^(current )?(city|town)(\s*(\/|or)\s*(city|town|locality))?$|city of residence|^(stadt|ort|wohnort|ville|ciudad|miasto|localidad|localit[ée]|citt[àa])$/, fact: (c) => c.city, name: 'city', personal: true },
-    { test: /^(current )?location$|where are you (currently )?(located|based|living)|where do you (currently )?(live|reside)\b(?! in)|current location|^location of residence|^(city|place) of residence$/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location', personal: true },
-    // "Country", "Country/Region" (SmartRecruiters), "Country / Territory", "Region/Country".
-    { test: /^(your |current )?country(\s*(\/|or|and|&)\s*(region|territory|area))?( of (current )?residence)?$|^(region|territory)\s*(\/|or)\s*country$|^residence country$|^(land|wohnland|pays( de r[ée]sidence)?|pa[ií]s( de residencia)?|kraj( zamieszkania)?|paese)$/, fact: (c) => c.country, name: 'country', personal: true },
+    // autoTest (Auto Apply only): "Location (City)" (Greenhouse), "City / Town".
+    { test: /^(current )?(city|town)(\s*(\/|or)\s*(city|town|locality))?$|city of residence|^(stadt|ort|wohnort|ville|ciudad|miasto|localidad|localit[ée]|citt[àa])$/, autoTest: /^location \(city\)$|^(your )?city\s*\/\s*town$/, fact: (c) => c.city, name: 'city', personal: true },
+    // autoTest (Auto Apply only): also as a whole question, "What is your location?" (Lever, a list of countries).
+    { test: /^(current )?location$|where are you (currently )?(located|based|living)|where do you (currently )?(live|reside)\b(?! in)|current location|^location of residence|^(city|place) of residence$/, autoTest: /^(what is|what's) your (current )?location\??(\s|$)/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location', personal: true },
+    // "Country", "Country/Region" (SmartRecruiters), "Country / Territory", "Region/Country"; autoTest
+    // (Auto Apply only) also as a question: "What is your current country of residence?"
+    // (Greenhouse), "What country are you based in?" (Ashby), "What country do you currently live
+    // in?", "Please choose the country in which you are located." (a yes/no question is never this rule's).
+    { test: /^(your |current )?country(\s*(\/|or|and|&)\s*(region|territory|area))?( of (current )?residence)?$|^(region|territory)\s*(\/|or)\s*country$|^residence country$|^(land|wohnland|pays( de r[ée]sidence)?|pa[ií]s( de residencia)?|kraj( zamieszkania)?|paese)$/, autoTest: /\bcountry of (current |permanent )?residence\b|\b(which|what) country (are|do) you (currently )?(live|living|reside|residing|based|located|in)\b|\bcountry (in which|where) you (are |currently |are currently )?(live|living|reside|residing|located|based)\b/, fact: (c) => c.country, name: 'country', personal: true },
     { test: /second line of (your )?address|address line 2|apartment|suite/, fact: () => null, name: 'address line 2', optionalIfMissing: true },
     // The whole address in one box ("Complete Address"): street, postal code and city, province, country.
     { test: /(complete|full|home|residential|postal|current|permanent) address|^address (full)$/, fact: (c) => fullAddress(c), name: 'full address', personal: true },
@@ -496,6 +511,11 @@
       const neededToApply = field.required || (/\b(terms|privacy|data processing|gdpr)\b/.test(label) && !OPT_IN.test(label));
       return neededToApply ? { value: true, source: 'consent' } : { skip: 'Optional consent box.' };
     }
+    // Auto Apply: a legal agreement, consent, or attestation asked as a choice ("Do you agree and confirm
+    // with the above terms?", "Candidate AI Usage Attestation") is the Manager's decision, never the AI's.
+    if (context.autoApply && hasOptions(field) && field.options.length > 1 && LEGAL_QUESTION.test(label)) {
+      return { skip: 'A legal agreement or consent: the Manager decides.', byHand: `A legal agreement or consent: answer "${field.label}" yourself.` };
+    }
     // A single choice that acknowledges a statement ("I acknowledge this statement") is the answer.
     if (hasOptions(field) && field.options.length === 1 && CONSENT.test(String(field.options[0]))) {
       return { value: field.options[0], source: 'consent' };
@@ -558,7 +578,7 @@
       return fromProfile.value !== undefined && candidate.reusableTopics?.has(topic) ? { ...fromProfile, source: 'reusable' } : fromProfile;
     }
     // 3. Super Admin's reusable answer for a matching question: used when it fits the field, else a hint.
-    const reusable = matchSavedAnswer(field, savedAnswers);
+    const reusable = matchSavedAnswer(field, savedAnswers, { sameMeaning: context.autoApply === true });
     if (reusable) return reusableAnswer(field, reusable);
     if (fromProfile) return fromProfile;
     if (/how did you (hear|find|learn)|where did you (hear|find)|referral source|^source$/.test(label)) {
@@ -577,7 +597,7 @@
    */
   function profileAnswer(field, label, candidate, context) {
     for (const rule of RULES) {
-      if (!rule.test.test(label)) continue;
+      if (!rule.test.test(label) && !(context.autoApply && rule.autoTest?.test(label))) continue;
       // A tick box takes only a yes/no fact ("SMS to my phone number" is not the phone number).
       if (field.kind === 'checkbox' && !rule.yesNo) continue;
       // Nor does a yes/no question ("Are you available for a phone screen?").
@@ -595,6 +615,11 @@
     {
       if (rule.yesNo) {
         const fact = rule.yesNo(candidate);
+        // Auto Apply: a yes/no fact the profile lacks (work authorization, sponsorship) is the
+        // Manager's, never the AI's "most suitable answer".
+        if ((fact === null || fact === undefined) && context.autoApply) {
+          return { skip: `No ${rule.name} in the profile: left for the Manager.`, byHand: `The profile has no ${rule.name}: answer "${field.label}" yourself, or add it to the profile.` };
+        }
         if (fact === null || fact === undefined) return { missing: rule.name };
         const value = yesNoAnswer(field, fact);
         // Choices that are not yes/no (a list of visa types) go to the AI with the profile's yes or no.
@@ -605,6 +630,10 @@
         return resolveSalary(field, label, candidate, context.exchangeRates) ?? { ask: salaryText(candidate) };
       }
       if (rule.notice) {
+        // Auto Apply (context.autoApply): an unknown notice is the Manager's, never the usual 1 week.
+        if (context.autoApply && !hasNotice(candidate)) {
+          return { skip: 'No notice period in the profile: left for the Manager.', byHand: `The profile has no notice period or start date: fill "${field.label}" by hand, or add a reusable answer for it.` };
+        }
         return resolveNotice(field, label, candidate, context.today)
           ?? { ask: `notice period ${noticeWords(noticeDays(candidate)).toLowerCase()}, can start ${formatDate(startDate(candidate, context.today))}` };
       }
@@ -798,8 +827,17 @@
   // Words that say nothing about what a question asks, left out when questions are compared.
   const FILLER_WORDS = new Set(['the', 'and', 'you', 'your', 'are', 'did', 'does', 'have', 'has', 'what', 'which', 'how', 'this', 'that', 'our', 'with', 'for', 'about', 'any', 'please', 'required', 'optional', 'would', 'could', 'can', 'will', 'from', 'into', 'there', 'were', 'was', 'been', 'its', 'them', 'they']);
 
-  function questionWords(text) {
-    return new Set(normalizeQuestionKey(text).split(' ').filter((word) => word.length > 2 && !FILLER_WORDS.has(word)));
+  // Auto Apply: words that ask the same in application questions ("this job" / "this position" /
+  // "this opportunity"; "hear" / "heard"), compared as one.
+  const SAME_MEANING = new Map([
+    ...['job', 'jobs', 'position', 'positions', 'role', 'roles', 'opportunity', 'opportunities', 'opening', 'openings', 'vacancy', 'vacancies', 'posting', 'post'].map((word) => [word, 'job']),
+    ...['hear', 'heard', 'hearing'].map((word) => [word, 'hear']),
+  ]);
+
+  function questionWords(text, sameMeaning = false) {
+    return new Set(normalizeQuestionKey(text).split(' ')
+      .filter((word) => word.length > 2 && !FILLER_WORDS.has(word))
+      .map((word) => (sameMeaning ? SAME_MEANING.get(word) || word : word)));
   }
 
   /**
@@ -807,16 +845,16 @@
    * its meaningful words ("How did you hear about this job?" ~ "How did you hear about us?").
    * Questions that match nothing go to the AI, which sees every reusable answer as context.
    */
-  function matchSavedAnswer(field, savedRows) {
+  function matchSavedAnswer(field, savedRows, { sameMeaning = false } = {}) {
     const rows = savedRows || [];
     const key = normalizeQuestionKey(field.label);
     const exact = rows.find((row) => row.questionKey === key);
     if (exact) return exact;
-    const words = questionWords(field.label);
+    const words = questionWords(field.label, sameMeaning);
     if (!words.size) return null;
     let best = null;
     for (const row of rows) {
-      const other = questionWords(row.questionText);
+      const other = questionWords(row.questionText, sameMeaning);
       if (!other.size) continue;
       const shared = [...words].filter((word) => other.has(word)).length;
       const score = shared / Math.min(words.size, other.size);
@@ -969,8 +1007,19 @@
         if (field.required) byHand.push({ id: field.id, label: field.label, message: `QTS couldn't tell which question this box is for${field.label ? ` ("${field.label}")` : ''}: fill it by hand.` });
         continue;
       }
+      // Auto Apply: a right-to-work question nothing in the profile answers is the Manager's.
+      if (!resolved && context.autoApply && WORK_RIGHT_QUESTION.test(labelOf(field))) {
+        if (field.required) byHand.push({ id: field.id, label: field.label, message: `The profile does not say where the candidate may work: answer "${field.label}" yourself, or add it to the profile.` });
+        continue;
+      }
       if (!resolved) {
         if (field.kind !== 'checkbox' || field.required) open.push(field);
+        continue;
+      }
+      // Auto Apply: a personal fact the profile lacks (right to work, sponsorship, citizenship…) is
+      // the Manager's, never the AI's guess; facts the résumé shows (years) still go to the AI.
+      if (resolved.missing && context.autoApply && PERSONAL_FACT.test(`${resolved.missing} ${labelOf(field)}`)) {
+        if (field.required) byHand.push({ id: field.id, label: field.label, message: `The profile has no ${resolved.missing}: answer "${field.label}" yourself, or add it to the profile.` });
         continue;
       }
       if (resolved.missing) {
@@ -1099,6 +1148,11 @@
       facts.salaryEquivalents = salaryEquivalents(candidate, asked, exchangeRates);
     }
     if (minimal) for (const key of NOT_FOR_AI) delete facts[key];
+    // Auto Apply (minimal): the AI is never told the usual default as if it were the candidate's notice.
+    if (minimal && !hasNotice(candidate)) {
+      delete facts.noticePeriod;
+      delete facts.earliestStartDate;
+    }
     return Object.fromEntries(Object.entries(facts).filter(([, value]) => value !== null && value !== undefined && value !== ''));
   }
 

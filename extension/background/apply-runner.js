@@ -24,6 +24,8 @@ const APPLY_MAX_FORM_PAGES = 5;
 // Questions a page shows only after earlier answers (Teamtailor unlocks its form after the requirement
 // questions) are filled in further rounds, until no new question appears.
 const APPLY_FILL_ROUNDS = 5;
+// Auto Apply never goes past this many form steps by itself.
+const AUTO_APPLY_MAX_STEPS = 12;
 // The longest Apply waits for the AI's answers through the QTS server.
 const APPLY_AI_TIMEOUT_MS = 120 * 1000;
 // Clicks to reach the form from a job page: "Apply for this job", then perhaps "Apply manually".
@@ -241,6 +243,10 @@ async function reachApplicationForm(tab, onTab) {
   if (closed) throw new ApplyStop(`The job is closed on the site ("${closed}").`);
   const blockers = await inForm(tab.id, () => globalThis.__qtsApplyForm.detectBlockers()).catch(() => []);
   if (blockers?.includes('captcha')) throw new ApplyStop('The site shows a security check (CAPTCHA) before the job page; open it in the Apply window and apply by hand.');
+  // A whole page that is a human check, or a sign-in wall: said as it is (never gone around).
+  const gate = await inForm(tab.id, () => globalThis.__qtsApplyForm.pageGate()).catch(() => null);
+  if (gate?.kind === 'bot_check') throw new ApplyStop(`The site asked for a human check ("${String(gate.text).slice(0, 60)}"); QTS does not get around it. Open the job and apply by hand.`, { pageType: 'captcha_required' });
+  if (gate?.kind === 'login') throw new ApplyStop(`The site asks to sign in or create an account before applying ("${String(gate.text).slice(0, 60)}"); account handling comes in a later release. Apply by hand.`, { pageType: 'authentication_required' });
   throw await pageStop(tab.id, 'No application form or Apply button was found on the job page; apply by hand.');
 }
 
@@ -736,9 +742,22 @@ async function askChatGpt(chatTabId, application, prompt, keepAlive, timing = nu
   };
   try {
     const sendStarted = Date.now();
-    await sendGenerationPromptWithRecovery(chatTabId, self.__qtsGenerationChatGpt.buildTaskPrompt(prompt, marker));
-    const answerStarted = Date.now();
-    const answer = await waitForGenerationAnswer(chatTabId, marker, { local: () => {}, server });
+    const task = self.__qtsGenerationChatGpt.buildTaskPrompt(prompt, marker);
+    // Auto Apply on ChatGPT's light page (logged out): its own sender and reader; any other page, and
+    // the assisted Apply, through Generation's shared ones as before.
+    const light = !switchTabs && await isLightChatGptPage(chatTabId);
+    let answer;
+    let answerStarted;
+    if (light) {
+      const sent = await sendToLightChatGpt(chatTabId, task);
+      answerStarted = Date.now();
+      answer = await waitForLightChatGptAnswer(chatTabId, sent.answersBefore, server);
+    } else {
+      await sendGenerationPromptWithRecovery(chatTabId, task);
+      answerStarted = Date.now();
+      answer = await waitForGenerationAnswer(chatTabId, marker, { local: () => {}, server });
+    }
+    if (timing) timing.page = light ? 'light' : 'full';
     const measured = { sendMs: answerStarted - sendStarted, answerMs: Date.now() - answerStarted, promptChars: prompt.length, replyChars: answer.length };
     diag('chatgpt-timing', measured);
     // Auto Apply's round adds them to its own record; a follow-up's add up there too.
@@ -758,6 +777,98 @@ async function askChatGpt(chatTabId, application, prompt, keepAlive, timing = nu
       tabBeforeChatGpt = null;
     }
   }
+}
+
+// ChatGPT's light page (served logged out): a plain text box (#mobile-composer-prompt), a "Send
+// message" button, and each turn as li[data-message-role]; an answer carries data-message-complete
+// when it is done, and "Stop generating" shows while it is written.
+const LIGHT_CHATGPT_ANSWER_MS = 3 * 60 * 1000;
+
+async function isLightChatGptPage(tabId) {
+  const [frame] = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    func: () => Boolean(document.querySelector('#mobile-composer-prompt')),
+  }).catch(() => []);
+  return frame?.result === true;
+}
+
+// What stops ChatGPT answering on its own side (a log-in or usage-limit wall, an error): never gone
+// around; the round ends and its questions go to the Manager.
+const LIGHT_CHATGPT_BLOCKED = /(you['’]ve (reached|hit) (the|your) (limit|free)|too many (requests|messages)|unusual activity|log in to (continue|keep)|sign up to continue|something went wrong|try again later)/i;
+
+/** Puts the prompt in the light page's box and sends it (Send, then Enter); returns how many answers were there before. */
+async function sendToLightChatGpt(tabId, text) {
+  const [frame] = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    func: async (message, blockedSource) => {
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const box = document.querySelector('#mobile-composer-prompt');
+      if (!box) return { ok: false, error: 'ChatGPT\'s message box is not on the page.' };
+      const buttonNamed = (name) => [...document.querySelectorAll('button')].find((button) => button.getAttribute('aria-label') === name && button.getBoundingClientRect().width > 0);
+      if (buttonNamed('Stop generating')) return { ok: false, error: 'ChatGPT is already writing an answer.' };
+      const answersBefore = document.querySelectorAll('li[data-message-role=assistant]').length;
+      const questionsBefore = document.querySelectorAll('li[data-message-role=user]').length;
+      box.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, message);
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(500);
+      if (box.value.length < message.length) return { ok: false, error: 'ChatGPT\'s message box did not take the whole prompt.' };
+      const sent = () => document.querySelectorAll('li[data-message-role=user]').length > questionsBefore || Boolean(buttonNamed('Stop generating'));
+      const tries = [
+        () => buttonNamed('Send message')?.click(),
+        () => { for (const type of ['keydown', 'keypress', 'keyup']) box.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true })); },
+      ];
+      for (const send of tries) {
+        send();
+        for (let waited = 0; waited < 5000; waited += 250) {
+          if (sent()) return { ok: true, answersBefore };
+          await wait(250);
+        }
+      }
+      const text = document.body?.innerText || '';
+      const blocked = text.match(new RegExp(`[^\\n]{0,80}${blockedSource}[^\\n]{0,80}`, 'i'));
+      return { ok: false, error: blocked ? `ChatGPT did not take the questions: "${blocked[0].trim().slice(0, 160)}"` : 'ChatGPT did not take the questions (Send had no effect).' };
+    },
+    args: [text, LIGHT_CHATGPT_BLOCKED.source],
+  });
+  const result = frame?.result;
+  if (!result?.ok) throw new Error(result?.error || 'ChatGPT\'s page did not answer.');
+  return result;
+}
+
+/** The light page's next answer (after answersBefore), once it is complete; server() keeps the claim. */
+async function waitForLightChatGptAnswer(tabId, answersBefore, server) {
+  const started = Date.now();
+  let lastText = '';
+  let stableSince = 0;
+  while (Date.now() - started < LIGHT_CHATGPT_ANSWER_MS) {
+    await server().catch(() => {});
+    const [frame] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      func: (before, blockedSource) => {
+        const answers = [...document.querySelectorAll('li[data-message-role=assistant]')];
+        const answer = answers.length > before ? answers[answers.length - 1] : null;
+        const writing = [...document.querySelectorAll('button')].some((button) => button.getAttribute('aria-label') === 'Stop generating' && button.getBoundingClientRect().width > 0);
+        const text = answer ? answer.innerText.replace(/^\s*ChatGPT said:\s*/i, '').trim() : '';
+        const page = document.body?.innerText || '';
+        const blocked = !answer && !writing ? page.match(new RegExp(`[^\\n]{0,80}${blockedSource}[^\\n]{0,80}`, 'i'))?.[0] : null;
+        return { text, complete: Boolean(answer?.hasAttribute('data-message-complete')), writing, blocked: blocked ? blocked.trim().slice(0, 160) : null };
+      },
+      args: [answersBefore, LIGHT_CHATGPT_BLOCKED.source],
+    }).catch(() => []);
+    const now = frame?.result;
+    if (now?.blocked) throw new Error(`ChatGPT showed: "${now.blocked}"`);
+    if (now?.text) {
+      if (now.text !== lastText) {
+        lastText = now.text;
+        stableSince = Date.now();
+      }
+      // Done: marked complete and no longer written, or (without the mark) unchanged for 3 seconds.
+      if (!now.writing && (now.complete || Date.now() - stableSince >= 3000)) return now.text;
+    }
+    await sleep(750);
+  }
+  throw new Error('ChatGPT did not finish the answer within 3 minutes.');
 }
 
 /** The one follow-up: these answers did not fit (before filling) or the site rejected them (after). */
@@ -935,6 +1046,10 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   const helpers = self.__qtsApplyAnswers;
   const assist = options.assist === true;
   const skip = options.skip || (() => false);
+  // Auto Apply: the form reader's own rules in this page (an upload named by its labelled group).
+  if (application.factSources) {
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: () => { globalThis.__qtsAutoApplyRules = true; } }).catch(() => {});
+  }
   // The sources a box may be filled from (the assistant: documents, profile, reusable answers;
   // Auto Apply passes its own), and options.noAi (Auto Apply): no AI is asked; what no source answers
   // is listed as unresolved instead.
@@ -1002,6 +1117,8 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
       exchangeRates: application.exchangeRates,
       today: new Date(),
       coverLetterText: application.job.coverLetterText,
+      // Auto Apply: its own answer rules (no built-in notice default; more question wordings).
+      autoApply: Boolean(application.factSources),
     });
     for (const entry of again.byHand || []) problem(entry.message, entry, assist ? 'profile' : 'field');
     const left = toAsk.filter((field) => !changed.includes(field));
@@ -1073,6 +1190,14 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
       await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
       const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
       if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
+      if (application.factSources) {
+        // Auto Apply, on every step: a sign-in wall or human check is said as it is (never gone around).
+        const gate = await inForm(tabId, () => globalThis.__qtsApplyForm.pageGate()).catch(() => null);
+        if (gate?.kind === 'bot_check') throw new ApplyStop(`The site asked for a human check ("${String(gate.text).slice(0, 60)}"); QTS does not get around it. Finish the application by hand.`, { skip: false, keepTab: true });
+        if (gate?.kind === 'login') throw new ApplyStop(`The site asks to sign in or create an account ("${String(gate.text).slice(0, 60)}"); account handling comes in a later release. Finish by hand.`, { skip: false, keepTab: true });
+        // Sections a site draws only when scrolled to are on the page before it is read (round 1 reads again).
+        await inForm(tabId, () => globalThis.__qtsApplyForm.revealLazySections()).catch(() => null);
+      }
     }
     if (applyDebug) {
       diag('round', { step, round, fields: (fields || []).length, seen: seen.size });
@@ -1156,7 +1281,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     // The assistant opens only the lists it has an answer for: no list opens on the page for nothing.
     const toDiscover = assist
       ? fresh.filter((field) => ASSIST_SOURCES.has(helpers.resolveFields([field], application.candidate, application.savedAnswers, {
-        exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText,
+        exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText, autoApply: Boolean(application.factSources),
       }).answers[field.id]?.source))
       : fresh;
     const changedByLooking = await readComboboxOptions(tabId, toDiscover);
@@ -1168,6 +1293,8 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
       exchangeRates: application.exchangeRates,
       today: new Date(),
       coverLetterText: application.job.coverLetterText,
+      // Auto Apply: no built-in defaults for personal facts the profile lacks (notice, start date).
+      autoApply: Boolean(application.factSources),
     });
     const { answers } = resolved;
     // The assistant fills only the documents, the profile's facts, and reusable answers (no rules,
@@ -1390,6 +1517,17 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   // A question already listed with its reason (a fact the profile lacks) is not listed again.
   const listed = (entry) => problems.some((known) => known.fieldId && known.fieldId === entry.id);
   for (const entry of stillEmpty || []) if (!listed(entry)) problem(`Still empty: "${entry.label}".`, entry);
+  if (application.factSources) {
+    // Auto Apply: a required question left unanswered counts here even when the page no longer shows
+    // it (the review never says "nothing marked" while one waits).
+    const answeredIds = new Set(Object.values(used).map((answer) => answer.fieldId));
+    for (const entry of unresolved) {
+      if (entry.required && !answeredIds.has(entry.id) && !listed(entry)) problem(`Still empty: "${entry.label}".`, entry);
+    }
+    // The form that was filled is no longer on the page (a dialog closed, the page changed).
+    const shownNow = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm().filter((field) => !field.hidden).length).catch(() => null);
+    if (metFields.size && shownNow === 0) problem('The application form is no longer shown on this page (it may have closed): open it again and check every answer before Submit.');
+  }
   // The safety net: questions the page shows as required that Apply could not read, or left empty.
   const unread = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadRequired()).catch(() => []);
   for (const entry of (unread || []).filter((item) => !listed(item))) {
@@ -1441,6 +1579,7 @@ function stepReport(step, metFields, used, problems, attempts, timings, aiCalls)
       fieldId: field.id,
       question: String(field.label || '').slice(0, 80),
       type: field.kind,
+      required: Boolean(field.required),
       options: (field.options || []).length,
       optionsStatus: !CHOICE_KINDS.has(field.kind) ? 'not_applicable' : !(field.options || []).length ? 'unknown' : field.optionsPartial ? 'partial' : 'complete',
       source: answer?.source || null,
@@ -1700,7 +1839,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const review = activeReviews.get(msg.attemptId);
       return review?.resumeFolder ? openDownloadedFolder(review.resumeFolder) : { ok: false, error: 'No résumé folder for this job.' };
     }
-    if (answerManager(msg.attemptId, { action: msg.action, answers: msg.answers || null, noticed: msg.noticed === true, tabId: sender.tab?.id, label: typeof msg.label === 'string' ? msg.label : null })) {
+    if (answerManager(msg.attemptId, { action: msg.action, answers: msg.answers || null, noticed: msg.noticed === true, tabId: sender.tab?.id, label: typeof msg.label === 'string' ? msg.label : null, look: msg.look && typeof msg.look === 'object' ? msg.look : null })) {
       return { ok: true };
     }
     return msg.assist
@@ -1945,11 +2084,63 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   const unresolved = new Map((resume?.unresolved || []).map((entry) => [entry.label, entry]));
   // Auto Apply: provisional AI answers by question ({ id, label, value, reason, step, accepted }).
   const provisional = new Map((resume?.provisional || []).map((entry) => [entry.label, entry]));
+  // Auto Apply: every question met on every step and where it stands (auto-apply-checklist.js).
+  const checklist = auto && self.__qtsAutoApplyChecklist ? self.__qtsAutoApplyChecklist.create(resume?.checklist || []) : null;
   // What a restarted worker needs to go on: kept by the Auto Apply controller at every step's end.
   const memory = () => ({
     tabId: tab?.id ?? null, used: answersUsed, cache: [...application.answerCache], unresolved: [...unresolved.values()],
     refused: [...(application.aiRefused || [])], aiCalls: application.aiCalls || 0, provisional: [...provisional.values()],
+    ...(checklist ? { checklist: checklist.save(), stepShapes: [...stepShapes] } : {}),
   });
+  // Auto Apply: the step's checklist checked on the page as it is now (read only).
+  const recheckPage = async (tabId, stepNow) => {
+    if (!checklist) return;
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: () => { globalThis.__qtsAutoApplyRules = true; } }).catch(() => {});
+    const look = await inForm(tabId, () => globalThis.__qtsApplyForm.auditForm()).catch(() => null);
+    checklist.recheck(stepNow, look, provisional);
+  };
+  // Auto Apply: each step's shape (address and questions), to know the Manager's Next or Back.
+  const stepShapes = new Map(resume?.stepShapes || []);
+  const shapeNow = (tabId) => inForm(tabId, () => globalThis.__qtsApplyForm.stepShape()).catch(() => null);
+  // The same step: the same address and most of the same questions (a question may appear or go).
+  const sameStep = (a, b) => {
+    if (!a || !b || a.path !== b.path) return false;
+    const mine = new Set(a.labels);
+    const shared = b.labels.filter((label) => mine.has(label)).length;
+    const all = new Set([...a.labels, ...b.labels]).size;
+    return all === 0 || shared / all >= 0.5;
+  };
+  /**
+   * Auto Apply waits for the Manager's own Next (it never clicks it): while a step is reviewed, the
+   * page is looked at every 1.5 seconds. Another step (settled for a second) ends the wait with
+   * 'page_changed'; a question appearing, or an error the site shows (a refused Next), only checks
+   * the step again ('recheck'). Returns the function that stops the watch.
+   */
+  const watchManagerNavigation = (tabId, base) => {
+    let stopped = false;
+    let seen = base;
+    (async () => {
+      while (!stopped) {
+        await sleep(1500);
+        if (stopped) return;
+        const now = await shapeNow(tabId);
+        if (!now || stopped) continue;
+        if (!sameStep(base, now)) {
+          await sleep(1000);
+          const settled = await shapeNow(tabId);
+          if (stopped || !settled || sameStep(base, settled) || sameStep(now, settled) === false) continue;
+          if (!settled.labels.length) continue;
+          // Taken only while the review waits (it may be redrawing); otherwise tried again.
+          if (answerManager(application.attemptId, { action: 'page_changed', shape: settled })) return;
+          continue;
+        }
+        if (JSON.stringify([now.labels, now.errors]) !== JSON.stringify([seen.labels, seen.errors])) {
+          if (answerManager(application.attemptId, { action: 'recheck' })) seen = now;
+        }
+      }
+    })();
+    return () => { stopped = true; };
+  };
   let notice = null;
   let currentStep = resume?.step || 1;
   // Auto Apply: the panel and the launcher say while the AI is answering (and whether its tab is shown).
@@ -2063,6 +2254,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     // A restart while the last step waited for the Manager: the page may already be past the form
     // (the Manager clicked Submit). Then nothing is filled or given back; the Manager says what happened.
     let checkResumedPage = Boolean(resume) && ['final', 'needs_you'].includes(resume.phase);
+    // Auto Apply: the Manager went back (or on again) to a step QTS has filled: it is checked again,
+    // never filled again (what the Manager changed there stays).
+    let revisitStep = false;
     for (;;) {
       if (!(await isApplyOn())) throw new ApplyStop('Apply was cancelled.', { skip: false, keepTab: false });
       if (lostClaim) throw new ApplyStop('This Chrome lost the application to another one.', { skip: false, keepTab: false });
@@ -2073,7 +2267,11 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       await showReviewPanel(tab.id, review.panel).catch(() => {});
       onProgress({ step, phase: 'filling' });
       let filled;
-      if (checkResumedPage) {
+      if (revisitStep) {
+        revisitStep = false;
+        filled = { used: {}, unresolved: [], problems: [], provisional: [] };
+      }
+      if (checkResumedPage && !filled) {
         checkResumedPage = false;
         const shown = await inForm(tab.id, () => globalThis.__qtsApplyForm.scanForm()).catch(() => []);
         if (!(shown || []).some((field) => !field.hidden && !field.disabled)) {
@@ -2108,6 +2306,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       for (const entry of filled.provisional || []) {
         if (provisional.get(entry.label)?.value !== entry.value) provisional.set(entry.label, { ...entry, step, accepted: false });
       }
+      // Auto Apply: every question of this step in the checklist, as the filling saw it.
+      if (checklist) checklist.addStep(step, filled, answersUsed, provisional);
       let buttons = await inForm(tab.id, () => globalThis.__qtsApplyForm.buttons());
       // Sites keep Submit disabled while an upload finishes; give it a moment before judging.
       for (let waited = 0; waited < 15000 && !buttons?.submit && buttons?.submitDisabled; waited += 1000) {
@@ -2141,8 +2341,10 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
 
       // Review before Submit only (Super Admin's per-Manager mode): the steps before the last go on by
       // themselves while nothing needs the Manager; the last step waits for one review of everything.
-      onProgress({ step, phase: final ? 'final' : problems.length ? 'needs_you' : 'next', problems: problems.length, unresolved: unresolved.size, aiCalls: application.aiCalls || 0, aiTimings: application.aiTimings || [], memory: memory() });
-      if (reviewBeforeSubmit() && !submitsItself() && !final && !problems.length) {
+      // (Auto Apply waits for the Manager on every step: its own Next.)
+      onProgress({ step, phase: final ? 'final' : problems.length || auto ? 'needs_you' : 'next', problems: problems.length, unresolved: unresolved.size, aiCalls: application.aiCalls || 0, aiTimings: application.aiTimings || [], memory: memory() });
+      // (Auto Apply never clicks Next: every step waits for the Manager's own click, below.)
+      if (!auto && reviewBeforeSubmit() && !submitsItself() && !final && !problems.length) {
         await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
         await interruptible(sleep(2500));
         step += 1;
@@ -2168,22 +2370,51 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
 
       await report('review', { review: true, appliedAnswers: appliedAnswers(answersUsed) });
       const problemFieldIds = problems.map((entry) => entry.fieldId).filter(Boolean);
+      // Auto Apply: the step's checklist checked on the page itself before the Manager sees it.
+      await recheckPage(tab.id, step);
+      // Auto Apply: this step's shape is kept (for the Manager's Back and Next), and the page is
+      // watched for the Manager's own Next while the review waits.
+      let stopWatch = () => {};
+      if (auto) {
+        const shape = await shapeNow(tab.id);
+        if (shape) stepShapes.set(step, shape);
+        onProgress({ step, phase: final ? 'final' : 'needs_you', quiet: true, memory: memory() });
+        if (shape) stopWatch = watchManagerNavigation(tab.id, shape);
+      }
       let decision;
+      try {
       for (;;) {
+        const listed = checklist?.summary(step);
+        const needing = listed ? listed.needsYou : problems.length;
         decision = await askManager(
           review,
           reviewState('review', {
             step, final, problems, problemFieldIds, reviewAll: reviewBeforeSubmit(), notice,
             canAskAgain: (!auto || application.autoAi !== false) && filled.canAskAgain, aiOn: auto && application.autoAi !== false,
+            ...(listed ? { checklist: listed } : {}),
           }),
           // One "Ready for review" per application, at its first stop; problems always alert.
-          problems.length ? 'problem' : review.notified ? null : 'review',
-          problems.length ? `${problems.length} thing${problems.length === 1 ? '' : 's'} need${problems.length === 1 ? 's' : ''} you.` : 'Check the answers, then Continue or Submit.',
+          needing ? 'problem' : review.notified ? null : 'review',
+          needing ? `${needing} thing${needing === 1 ? '' : 's'} need${needing === 1 ? 's' : ''} you.` : 'Check the answers, then Continue or Submit.',
         );
         // Auto Apply: the Manager accepts a provisional AI answer as it is; the review stays open.
         if (auto && decision.action === 'accept_provisional') {
           const entry = provisional.get(decision.label);
           if (entry) entry.accepted = true;
+          if (entry) checklist?.accept(entry.step, entry.label);
+          onProgress({ step, phase: final ? 'final' : 'needs_you', quiet: true, memory: memory() });
+          continue;
+        }
+        // Auto Apply: the Manager clicked the site's Next: the step as it was at that moment (read by
+        // the panel before the page changed) is what the checklist keeps for it.
+        if (auto && decision.action === 'step_leaving') {
+          if (decision.look) checklist?.recheck(step, decision.look, provisional);
+          onProgress({ step, phase: final ? 'final' : 'needs_you', quiet: true, memory: memory() });
+          continue;
+        }
+        // Auto Apply: "Check again" reads the page again (nothing filled) after the Manager's changes.
+        if (auto && decision.action === 'recheck') {
+          await recheckPage(tab.id, step);
           onProgress({ step, phase: final ? 'final' : 'needs_you', quiet: true, memory: memory() });
           continue;
         }
@@ -2192,8 +2423,26 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         if (!(auto && decision.action === 'propose')) break;
         notice = await proposeCorrections(application, submittedAnswers(answersUsed, decision.answers || []));
       }
+      } finally {
+        stopWatch();
+      }
       notice = null;
       fillAgain = false;
+      // Auto Apply: the Manager's own Next (or Back) took the page to another step. A step QTS has
+      // seen is checked again, never refilled; a new one is filled. The count moves only now.
+      if (auto && decision.action === 'page_changed') {
+        const known = [...stepShapes].find(([seenStep, shape]) => seenStep !== step && sameStep(shape, decision.shape));
+        if (known) {
+          step = known[0];
+          revisitStep = true;
+        } else {
+          step = Math.max(step, ...stepShapes.keys()) + 1;
+          if (step > AUTO_APPLY_MAX_STEPS) throw new ApplyStop(`The form has more than ${AUTO_APPLY_MAX_STEPS} steps; QTS stopped here. Finish it by hand.`, { skip: false, keepTab: true });
+        }
+        continue;
+      }
+      // Auto Apply: the step as the Manager leaves it (their answers count), before the next one.
+      if (decision.action === 'continue' || decision.action === 'continue_manual') await recheckPage(tab.id, step);
       if (decision.action === 'continue') {
         await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
         await interruptible(sleep(2500));

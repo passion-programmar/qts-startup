@@ -161,6 +161,8 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/form') return html(FORM);
     if (url.pathname === '/form-ai') return html(FORM_AI);
     if (url.pathname === '/form-gpt') return html(FORM_GPT);
+    if (url.pathname === '/form-dyn') return html(FORM_DYN);
+    if (url.pathname === '/form-five') return html(FORM_FIVE);
     if (url.pathname === '/blank') return html('<!doctype html><title>Job page</title><h1>A job</h1>');
     if (url.pathname === '/page-submitted') { mock.pageSubmitted += 1; return json({}); }
     if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { canUseApply: mock.canUseApply } });
@@ -329,6 +331,14 @@ async function clickPanelButton(page, label) {
     await client.detach().catch(() => {});
   }
 }
+/** Auto Apply's run waiting for the Manager on this step (it never clicks Next itself). */
+async function waitForAutoStep(storage, step, phases = ['needs_you', 'final'], ms = 120000) {
+  return until(async () => {
+    const run = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs?.[0];
+    return run && run.step === step && phases.includes(run.phase) ? run : null;
+  }, ms, `step ${step} waiting for the Manager`);
+}
+
 async function panelText(page) {
   const { client, doc } = await panelNodes(page);
   try {
@@ -365,9 +375,14 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     assert.equal(reply.ok, true, reply.error);
     assert.equal((await storage(['qtsApplyKind'])).qtsApplyKind, 'auto');
 
-    // Step 1 is filled and goes on by itself; step 2 stops: a required question nothing answers.
+    // Step 1 is filled and waits for the Manager's own Next (Auto Apply never clicks it); the
+    // Manager's click on the site's Next starts step 2, which needs the Manager (nothing answers one).
     const form = await until(() => formPage(browser), 30000, 'the form tab');
-    await until(async () => (await phase()) === 'needs_you', 120000, 'step 2 to need the Manager');
+    await waitForAutoStep(storage, 1);
+    await sleep(4000);
+    assert.equal(await form.evaluate(() => document.getElementById('step2').style.display), 'none', 'Auto Apply did not click Next');
+    await form.click('#next1');
+    await waitForAutoStep(storage, 2);
     timings.toStep2Review = Date.now() - started;
     const run = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState.runs[0];
     const step1 = await form.evaluate(() => ({
@@ -381,22 +396,25 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     assert.match(step1.ph, /264484948/);
     assert.deepEqual([step1.resume, step1.cover], [1, 1]);
     assert.equal(step1.resumeName, 'Ana_Test_CV.pdf');
-    assert.equal(step1.step2, true, 'step 1 went on to step 2 by itself');
+    assert.equal(step1.step2, true, 'step 2 shows after the Manager\'s Next');
     assert.equal(step1.hear, 'LinkedIn', 'an approved answer in other words');
     assert.equal(step1.office, 'Yes', 'an approved answer for the same question');
     assert.deepEqual([step1.mot, step1.extra], ['', ''], 'nothing invents an answer');
     assert.deepEqual([run.step, run.unresolved >= 2], [2, true]);
-    const panel2 = await panelText(form);
-    assert.match(panel2, /Left for you \(2\)/);
-    assert.match(panel2, /Still empty: "What motivates you in your work\? \*"/);
+    const panel2 = await until(async () => { const text = await panelText(form); return /Needs you \(|Nothing blocks Submit/.test(text) ? text : null; }, 20000, 'the step 2 checklist').catch(() => panelText(form));
+    // The checklist: the required question nothing answers needs the Manager; the optional one is folded away.
+    assert.match(panel2, /Needs you \(\d+\)/);
+    assert.match(panel2, /Needs your answer: "What motivates you in your work\? \*"/);
+    assert.match(panel2, /Optional, left empty \(\d+\)/);
     await shot(form, 'b-1-step2-needs-you');
 
-    // The Manager writes the answer and clicks Continue on the panel: step 3 (the last one).
+    // The Manager writes the answer and clicks the site's Next: step 3 (the last one).
     await form.type('#mot', 'Building reliable systems.');
-    assert.equal(await clickPanelButton(form, 'Continue →'), true, 'Continue on the panel');
+    assert.equal(await clickPanelButton(form, 'Continue →'), false, 'no Continue on the panel: the Manager uses the site\'s Next');
+    await form.click('#next2');
     await until(async () => (await phase()) === 'final', 60000, 'the last step');
     timings.toFinalReview = Date.now() - started;
-    const panel3 = await panelText(form);
+    const panel3 = await until(async () => { const text = await panelText(form); return /Review, then Submit/.test(text) ? text : null; }, 20000, 'the final review').catch(() => panelText(form));
     assert.match(panel3, /Review, then Submit/);
     assert.match(panel3, /I agree to the privacy policy/, 'the consent box is left for the Manager');
     await shot(form, 'b-2-final-review');
@@ -437,6 +455,9 @@ test('Stage C: approved answers first, then one Gemini batch for the step (retri
     const started = Date.now();
     assert.equal((await action('auto_apply')).ok, true);
     const form = await until(() => formPage(browser, '/form-ai'), 30000, 'the form tab');
+    // Step 1 waits for the Manager's own Next.
+    await waitForAutoStep(storage, 1);
+    await form.click('#next1');
     await until(async () => (await phase()) === 'final', 120000, 'the last step');
     const toReview = Date.now() - started;
     const state = await form.evaluate(() => ({
@@ -459,10 +480,12 @@ test('Stage C: approved answers first, then one Gemini batch for the step (retri
     assert.deepEqual(asked, ['What motivates you in your work? *', 'How many years of experience with Django do you have? *', 'Which cloud platform have you used most?', 'Anything else you would like to share?'],
       'only the open questions are sent; the profile and approved answers covered the rest');
     assert.match(prompt, /What motivates you/);
-    const panel = await until(async () => { const text = await panelText(form); return /Provisional Gemini answers/.test(text) ? text : null; }, 20000, 'the review with its provisional answers').catch(() => panelText(form));
-    assert.match(panel, /Provisional Gemini answers: accept or edit 2 of 2 before Submit/);
-    assert.match(panel, /How many years of experience with Django do you have\? \* = "9" · step 2 · it says 9\+ years; the profile says 6/);
-    assert.match(panel, /Anything else you would like to share\? = "I am a certified Kubernetes administrator\." · step 2 · it names Kubernetes/);
+    const panel = await until(async () => { const text = await panelText(form); return /Provisional AI answer/.test(text) ? text : null; }, 20000, 'the review with its provisional answers').catch(() => panelText(form));
+    // The checklist: both unbacked answers provisional, with why and where; the consent box needs the Manager.
+    assert.match(panel, /Provisional AI answer: accept or edit: "How many years of experience with Django do you have\? \*" — it says 9\+ years; the profile says 6[^·]* · step 2/);
+    assert.match(panel, /Provisional AI answer: accept or edit: "Anything else you would like to share\?" — it names Kubernetes/);
+    assert.match(panel, /Needs your answer: "I agree to the privacy policy/);
+    assert.match(panel, /Verified \(\d+\)/);
     await shot(form, 'c-1-final-review');
 
     // The Manager corrects the Django years and proposes the corrections as drafts (never approved here).
@@ -483,10 +506,11 @@ test('Stage C: approved answers first, then one Gemini batch for the step (retri
     assert.equal(mock.submitted.length, 0, 'Submit held back');
     assert.equal(await form.evaluate(() => window.submitted || 0), 0, 'the page did not submit');
     const held = await panelText(form);
-    assert.match(held, /Submit was held: accept or edit each provisional answer first/);
-    assert.match(held, /accept or edit 1 of 2 before Submit/, 'the edited Django answer counts as settled');
+    assert.match(held, /Submit was held: deal with what is marked/);
+    assert.doesNotMatch(held, /accept or edit: "How many years/, 'the edited Django answer counts as settled');
+    assert.doesNotMatch(held, /Needs your answer: "I agree to the privacy policy/, 'the ticked consent box counts at once');
     assert.equal(await clickPanelButton(form, 'Accept'), true);
-    await until(async () => /all 2 accepted or edited/.test(await panelText(form)), 20000, 'every provisional answer settled');
+    await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing left blocking');
     await shot(form, 'c-3-provisional-settled');
     // Submit stays the Manager's; Yes records the answers with their sources.
     await form.click('#submit');
@@ -512,6 +536,8 @@ test('restart recovery: a restarted worker goes on at the same step in the same 
   try {
     assert.equal((await ctx.action('auto_apply')).ok, true);
     const form = await until(() => formPage(browser, '/form-ai'), 30000, 'the form tab');
+    await waitForAutoStep(ctx.storage, 1);
+    await form.click('#next1');
     await until(async () => (await ctx.phase()) === 'final', 120000, 'the last step');
     const aiBefore = mock.answers;
     const stored = (await ctx.storage(['qtsAutoApplyRuns'])).qtsAutoApplyRuns[attempt(20)];
@@ -534,7 +560,7 @@ test('restart recovery: a restarted worker goes on at the same step in the same 
     assert.equal((await browser.pages()).filter((page) => page.url().startsWith(`${BASE}/form-ai`)).length, 1, 'the same tab, no new one');
     assert.equal(mock.answers, aiBefore, 'no AI request again: answers and refusals kept');
     assert.match(await form.evaluate(() => document.getElementById('mot').value), /Python payment services/);
-    assert.match(await panelText(form), /Review, then Submit/);
+    assert.match(await until(async () => { const text = await panelText(form); return /Review, then Submit/.test(text) ? text : null; }, 20000, 'the resumed review').catch(() => panelText(form)), /Review, then Submit/);
     await shot(form, 'r-1-resumed');
 
     // What the Manager changed before the restart stays (the step is not filled again).
@@ -657,6 +683,228 @@ test('modes, permission, "Apply this page", Cancel and Stop all: refused without
 // moment the review is ready (before it waits for the Manager), during the review, and after the
 // worker restarted. Each time: the job given back, no heartbeat for it afterwards (no live claim),
 // the form's tab closed, nothing submitted, nothing left to resume, no ChatGPT switch held.
+// Two steps that change as they are filled: an answer that reveals a required question, a section the
+// page draws only when scrolled to, an answer the site refuses, then a right-to-work question, a terms
+// agreement as a list, and a cover-letter upload.
+const FORM_DYN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Umbrella - Apply</title>
+<style>.error { color: #b91c1c; }</style></head><body>
+<form id="app" onsubmit="event.preventDefault(); fetch('/page-submitted', { method: 'POST' }); window.submitted = (window.submitted || 0) + 1;">
+ <div id="step1">
+  <div><label for="fn">First name *</label><input id="fn" required></div>
+  <div><label for="ln">Last name *</label><input id="ln" required></div>
+  <div><label for="em">Email *</label><input id="em" type="email" required></div>
+  <fieldset><legend>Do you have a portfolio website? *</legend><label><input type="radio" name="pf" value="Yes">Yes</label><label><input type="radio" name="pf" value="No">No</label></fieldset>
+  <div id="pf-url" style="display:none"><label for="url">Portfolio URL *</label><input id="url" type="url"></div>
+  <div><label for="yrs">How many years of professional experience do you have? *</label><input id="yrs" type="number" required><div id="yrs-error" class="error" role="alert" hidden></div></div>
+  <div style="height:2600px">(the job's long description)</div>
+  <div id="lazy"></div>
+  <button type="button" id="next1">Next</button>
+ </div>
+ <div id="step2" style="display:none">
+  <fieldset><legend>Are you legally authorized to work in the United States? *</legend><label><input type="radio" name="auth" value="Yes">Yes</label><label><input type="radio" name="auth" value="No">No</label></fieldset>
+  <div><label for="terms">Do you agree to the terms and conditions of this application? *</label><select id="terms" required><option value="">Select…</option><option>Yes, I agree</option><option>No</option></select></div>
+  <div><label for="cl">Cover letter</label><input id="cl" type="file" accept=".pdf"></div>
+  <button type="submit" id="submit">Submit application</button>
+ </div>
+</form>
+<script>
+  // The portfolio address is asked only after "Yes".
+  for (const radio of document.querySelectorAll('input[name=pf]')) radio.addEventListener('change', () => {
+    const yes = document.querySelector('input[name=pf]:checked')?.value === 'Yes';
+    document.getElementById('pf-url').style.display = yes ? '' : 'none';
+    document.getElementById('url').required = yes;
+  });
+  // At most 3 years for this junior role: more is refused with a message.
+  const years = document.getElementById('yrs');
+  const checkYears = () => { const bad = Number(years.value) > 3; const box = document.getElementById('yrs-error'); box.hidden = !bad; box.textContent = bad ? 'Enter a number from 0 to 3.' : ''; years.setAttribute('aria-invalid', String(bad)); };
+  years.addEventListener('input', checkYears); years.addEventListener('change', checkYears);
+  // The country question is drawn only when the end of the page is reached.
+  addEventListener('scroll', () => {
+    if (document.getElementById('country') || innerHeight + scrollY < document.body.scrollHeight - 300) return;
+    document.getElementById('lazy').innerHTML = '<label for="country">What is your current country of residence? *</label><select id="country" required><option value="">Select…</option><option>Germany</option><option>Romania</option><option>Spain</option></select>';
+  });
+  document.getElementById('next1').addEventListener('click', () => {
+    const fine = ['fn', 'ln', 'em'].every((id) => document.getElementById(id).value) && document.querySelector('input[name=pf]:checked')
+      && (!document.getElementById('url').required || document.getElementById('url').value) && years.value && Number(years.value) <= 3 && document.getElementById('country')?.value;
+    if (!fine) return;
+    document.getElementById('step1').style.display = 'none'; document.getElementById('step2').style.display = '';
+  });
+</script></body></html>`;
+
+test('the checklist: a revealed question, a section drawn on scroll, a refused answer, personal facts and terms left, Check again, Submit held then let through', { skip, timeout: 420000 }, async () => {
+  resetMock();
+  const { browser, action, phase, ...ctx } = await launch({ ai: 'off' });
+  try {
+    const job = application(30, 'form-dyn');
+    job.savedAnswers = [...APPROVED, { questionKey: 'do you have a portfolio website', questionText: 'Do you have a portfolio website?', answer: 'Yes', note: null, scope: 'everyone' }];
+    mock.queue.push(job);
+    assert.equal((await action('auto_apply')).ok, true);
+    const form = await until(() => formPage(browser, '/form-dyn'), 30000, 'the form tab');
+    await until(async () => (await phase()) === 'needs_you', 120000, 'step 1 review');
+    const first = await until(async () => { const text = await panelText(form); return /Needs you \(/.test(text) ? text : null; }, 20000, 'the checklist');
+    const values = await form.evaluate(() => ({ pf: document.querySelector('input[name=pf]:checked')?.value, url: document.getElementById('url').value, yrs: document.getElementById('yrs').value, country: document.getElementById('country')?.value ?? null }));
+    // Discovered: the question "Yes" revealed, and the one drawn on scroll (answered from the profile).
+    assert.equal(values.pf, 'Yes', 'the approved answer');
+    assert.equal(values.country, 'Romania', 'the section drawn only when scrolled to was found and filled');
+    assert.match(first, /Needs your answer: "Portfolio URL \*" — The profile has no portfolio/);
+    assert.match(first, /Did not take: check it: "How many years of professional experience do you have\? \*" — The site shows: Enter a number from 0 to 3/);
+    assert.match(first, /Verified \(\d+\)/);
+    assert.doesNotMatch(first, /Nothing blocks Submit/);
+    await shot(form, 'k-1-step1-checklist');
+
+    // The Manager fixes both on the form; Check again reads the page again (nothing filled).
+    await form.type('#url', 'https://ana.example.com');
+    await form.$eval('#yrs', (box) => { box.value = ''; });
+    await form.type('#yrs', '3');
+    const answersBefore = mock.answers;
+    assert.equal(await clickPanelButton(form, 'Check again'), true);
+    const second = await until(async () => { const text = await panelText(form); return /Nothing blocks Submit/.test(text) ? text : null; }, 20000, 'step 1 settled after Check again');
+    assert.doesNotMatch(second, /Did not take/);
+    assert.equal(mock.answers, answersBefore, 'Check again asks no AI');
+    assert.equal(await form.evaluate(() => document.getElementById('yrs').value), '3', 'nothing the Manager wrote was refilled');
+
+    // Step 2: the right to work and the terms are the Manager's; the cover letter is attached.
+    await form.click('#next1');
+    await until(async () => (await phase()) === 'final', 60000, 'the last step');
+    const last = await until(async () => { const text = await panelText(form); return /Review, then Submit/.test(text) && /Needs you \(/.test(text) ? text : null; }, 20000, 'the final checklist');
+    assert.match(last, /Needs your answer: "Are you legally authorized to work in the United States\? \*" — The profile does not say where the candidate may work/);
+    assert.match(last, /Needs your answer: "Do you agree to the terms and conditions of this application\? \*" — A legal agreement or consent/);
+    assert.equal(await form.evaluate(() => document.getElementById('cl').files[0]?.name), 'Ana_Test_Cover.pdf');
+    // Earlier steps stay on the checklist, marked as not on this page.
+    assert.match(last, /step 1 \(earlier: use the site's Back to see it\)/);
+    // "I submitted it" is off, and the site's Submit is held, while they wait.
+    await form.click('#submit');
+    await sleep(1500);
+    assert.equal(mock.submitted.length, 0, 'Submit held');
+    assert.equal(await form.evaluate(() => window.submitted || 0), 0);
+    assert.match(await panelText(form), /Submit was held/);
+    await shot(form, 'k-2-final-held');
+
+    // The Manager answers both: they count at once (read live), and the Manager's Submit goes through.
+    await form.click('input[name=auth][value=Yes]');
+    await form.select('#terms', 'Yes, I agree');
+    await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing left blocking');
+    await form.click('#submit');
+    await until(() => mock.submitted.length === 1, 20000, 'the Submit record');
+    assert.equal(mock.pageSubmitted, 1, 'one Submit: the Manager\'s');
+    assert.equal(mock.answers, 0, 'no AI (Auto Apply\'s AI off)');
+    void ctx;
+  } finally {
+    await browser.close();
+  }
+});
+
+// Five steps the Manager moves through with the site's own Next and Back; step 3 refuses an empty
+// answer (its Next shows an error and stays).
+const FORM_FIVE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hooli - Apply</title></head><body>
+<form id="app" onsubmit="event.preventDefault(); fetch('/page-submitted', { method: 'POST' }); window.submitted = (window.submitted || 0) + 1;">
+ <div class="step" id="s1"><h2>About you</h2>
+  <div><label for="fn">First name *</label><input id="fn" required></div>
+  <div><label for="em">Email *</label><input id="em" type="email" required></div>
+  <button type="button" class="next">Next</button></div>
+ <div class="step" id="s2" hidden><h2>Contact</h2>
+  <div><label for="ph">Phone *</label><input id="ph" type="tel" required></div>
+  <div><label for="hear">How did you hear about us? *</label><select id="hear" required><option value="">Select…</option><option>Indeed</option><option>LinkedIn</option></select></div>
+  <button type="button" class="back">Back</button><button type="button" class="next">Next</button></div>
+ <div class="step" id="s3" hidden><h2>A question</h2>
+  <div><label for="tool">What is your favourite engineering tool? *</label><input id="tool" required><div id="tool-error" class="error" role="alert" hidden>Please answer this question.</div></div>
+  <button type="button" class="back">Back</button><button type="button" class="next">Next</button></div>
+ <div class="step" id="s4" hidden><h2>Office</h2>
+  <fieldset><legend>Will you be able to work from our office twice a week? *</legend><label><input type="radio" name="office" value="Yes">Yes</label><label><input type="radio" name="office" value="No">No</label></fieldset>
+  <button type="button" class="back">Back</button><button type="button" class="next">Next</button></div>
+ <div class="step" id="s5" hidden><h2>Consent</h2>
+  <div><label><input type="checkbox" id="privacy" required> I agree to the privacy policy *</label></div>
+  <button type="button" class="back">Back</button><button type="submit" id="submit">Submit application</button></div>
+</form>
+<script>
+  let at = 1;
+  const show = (n) => { at = n; for (const i of [1, 2, 3, 4, 5]) document.getElementById('s' + i).hidden = i !== n; scrollTo(0, 0); };
+  const done = { 1: () => fn.value && em.value, 2: () => ph.value && hear.value, 3: () => tool.value, 4: () => document.querySelector('input[name=office]:checked') };
+  for (const button of document.querySelectorAll('.next')) button.addEventListener('click', () => {
+    if (!done[at]()) { if (at === 3) { document.getElementById('tool-error').hidden = false; tool.setAttribute('aria-invalid', 'true'); } return; }
+    document.getElementById('tool-error').hidden = true; tool.removeAttribute('aria-invalid');
+    show(at + 1);
+  });
+  for (const button of document.querySelectorAll('.back')) button.addEventListener('click', () => show(at - 1));
+</script></body></html>`;
+
+test('manual steps: QTS fills each step and waits; the Manager\'s Next starts the next step; a refused Next, Back and Next again, a restart, the Manager\'s Submit', { skip, timeout: 600000 }, async () => {
+  resetMock();
+  const ctx = await launch({ ai: 'off' });
+  const { browser, action, storage } = ctx;
+  const visible = (form) => form.evaluate(() => [1, 2, 3, 4, 5].find((n) => !document.getElementById(`s${n}`).hidden));
+  try {
+    mock.queue.push(application(40, 'form-five'));
+    assert.equal((await action('auto_apply')).ok, true);
+    const form = await until(() => formPage(browser, '/form-five'), 30000, 'the form tab');
+
+    // Step 1: filled, then QTS waits; nothing clicks Next for the Manager.
+    await waitForAutoStep(storage, 1);
+    assert.deepEqual(await form.evaluate(() => [fn.value, em.value]), ['Ana', 'ana.test@example.com']);
+    await sleep(5000);
+    assert.equal(await visible(form), 1, 'still on step 1: Auto Apply never clicks Next');
+    assert.equal((await storage(['qtsAutoApplyState'])).qtsAutoApplyState.runs[0].step, 1);
+
+    // The Manager's Next: step 2 is filled by itself once it shows.
+    await form.click('#s1 .next');
+    await waitForAutoStep(storage, 2);
+    assert.match(await form.evaluate(() => ph.value), /264484948/);
+    assert.equal(await form.evaluate(() => hear.value), 'LinkedIn', 'the approved answer');
+    await form.click('#s2 .next');
+
+    // Step 3: nothing answers its question; the Manager's Next is refused by the site (it stays).
+    await waitForAutoStep(storage, 3);
+    assert.equal(await form.evaluate(() => tool.value), '', 'nothing invents an answer');
+    await form.click('#s3 .next');
+    await sleep(5000);
+    assert.equal(await visible(form), 3, 'the site kept step 3');
+    const refused = await until(async () => { const text = await panelText(form); return /Please answer this question/.test(text) ? text : null; }, 20000, 'the refusal on the checklist');
+    assert.match(refused, /Needs you \(/);
+    assert.equal((await storage(['qtsAutoApplyState'])).qtsAutoApplyState.runs[0].step, 3, 'the step count does not move');
+
+    // The Manager answers and goes on, then Back to step 3 and Next again: nothing is filled again.
+    await form.type('#tool', 'Git');
+    await form.click('#s3 .next');
+    await waitForAutoStep(storage, 4);
+    assert.equal(await form.evaluate(() => document.querySelector('input[name=office]:checked')?.value), 'Yes');
+    await form.evaluate(() => { document.querySelector('input[name=office][value=No]').click(); });
+    await form.click('#s4 .back');
+    await waitForAutoStep(storage, 3);
+    assert.equal(await form.evaluate(() => tool.value), 'Git', 'the Manager\'s answer stays (not refilled)');
+    const back = await panelText(form);
+    assert.match(back, /step 4 \(earlier: use the site's Back to see it\)/, 'the other step is not claimed as checked now');
+    await form.click('#s3 .next');
+    await waitForAutoStep(storage, 4);
+    assert.equal(await form.evaluate(() => document.querySelector('input[name=office]:checked')?.value), 'No', 'step 4 seen before: the Manager\'s choice stays (not refilled)');
+
+    // The worker restarts while QTS waits for the Manager's Next: the wait goes on in the same tab.
+    await sleep(1500);
+    await ctx.restartWorker();
+    await ctx.worker.evaluate(() => { self.__qtsApplyRunner.processApplyQueue(); });
+    await until(async () => { const run = (await ctx.storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs?.[0]; return run?.resumed && run.step === 4 && ['needs_you', 'final'].includes(run.phase); }, 120000, 'the resumed wait on step 4');
+    assert.equal((await browser.pages()).filter((page) => page.url().startsWith(`${BASE}/form-five`)).length, 1, 'the same tab');
+    assert.equal(await form.evaluate(() => document.querySelector('input[name=office]:checked')?.value), 'No', 'nothing refilled after the restart');
+    await form.click('#s4 .next');
+
+    // The last step: QTS waits for the Manager's Submit (the consent box is the Manager's).
+    await until(async () => { const run = (await ctx.storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs?.[0]; return run?.step === 5 && run.phase === 'final' ? run : null; }, 120000, 'the last step');
+    await sleep(3000);
+    assert.equal(mock.submitted.length, 0, 'nothing submitted by QTS');
+    assert.equal(mock.pageSubmitted, 0);
+    await form.click('#privacy');
+    await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing blocking');
+    await form.click('#submit');
+    await until(() => mock.submitted.length === 1, 20000, 'the Submit record');
+    await until(async () => /Submitted successfully\?/.test(await panelText(form)), 20000, 'Yes/No');
+    assert.equal(await clickPanelButton(form, 'Yes, submitted'), true);
+    await until(() => mock.results.length === 1, 20000, 'the result');
+    assert.equal(mock.pageSubmitted, 1, 'one Submit: the Manager\'s');
+    assert.equal(mock.submitted.length, 1, 'recorded once');
+  } finally {
+    await browser.close();
+  }
+});
+
 test('Cancel and Stop all at every point: no live claim, no tab left open, nothing submitted', { skip, timeout: 900000 }, async () => {
   resetMock();
   const ctx = await launch({ ai: 'off' });
@@ -794,9 +1042,12 @@ test('Gemini failures (mocked): invalid JSON, quota exhausted, no answer in time
     const started = Date.now();
     assert.equal((await ctx.action('auto_apply')).ok, true);
     const form = await until(() => formPage(ctx.browser, '/form-ai'), 30000, `${name}: the form tab`);
-    await until(async () => ['final', 'needs_you'].includes(await ctx.phase()), 180000, `${name}: the review`);
+    await waitForAutoStep(ctx.storage, 1);
+    await form.click('#next1');
+    await waitForAutoStep(ctx.storage, 2, ['final', 'needs_you'], 180000);
     const values = await form.evaluate(() => ({ mot: document.getElementById('mot').value, dj: document.getElementById('dj').value, cloud: document.getElementById('cloud').value }));
-    const panel = await panelText(form);
+    // The review as drawn (after its checklist is checked on the page).
+    const panel = await until(async () => { const text = await panelText(form); return /Needs you \(|Nothing blocks Submit/.test(text) ? text : null; }, 20000, `${name}: the checklist`).catch(() => panelText(form));
     cases[name] = { ms: Date.now() - started, requests: mock.answers - before, values, panel: (panel.match(/(Gemini did not answer[^)]*\)|Fill by hand: "[^"]+"[^.]*)/g) || []).slice(0, 2) };
     if (process.env.QTS_E2E_TRACE) console.log(`[trace] case ${name}: ${JSON.stringify(cases[name])}${cases[name].panel.length ? '' : ` panel: ${panel.replace(/^.*?Review/s, 'Review').slice(0, 700)}`}`);
     await shot(form, `e-${name}`);
