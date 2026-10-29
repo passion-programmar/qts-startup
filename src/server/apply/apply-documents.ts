@@ -1,13 +1,12 @@
 import "server-only";
 
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { parsePdfPackage } from "@/app/pdf/document-data";
+import { type PdfPackage, parsePdfPackage } from "@/app/pdf/document-data";
 import { applyAttempts, generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
 import { type ChromePrintJob, chromePrintJob } from "@/server/pdf/chrome-print";
-import { renderDocumentPdfs } from "@/server/pdf/document-pdfs";
-import { isPdfTemplate } from "@/server/pdf/pdf-templates";
+import { isPdfTemplate, type PdfTemplate } from "@/server/pdf/pdf-templates";
 import { APPLY_DOCUMENT_STATUSES } from "./apply-values";
 
 /** The template printer failed; the documents can be asked for again shortly. */
@@ -26,19 +25,27 @@ export type ApplyDocuments = {
   print?: ChromePrintJob;
 };
 
+/** What an application's résumé and cover letter are printed from, with their file names. */
+export type ApplyDocumentSource = {
+  data: PdfPackage;
+  template: PdfTemplate;
+  folder: string;
+  resumeFilename: string;
+  coverLetterFilename: string;
+};
+
 /**
- * The résumé and cover letter for a claimed application, printed again from the job's latest
- * delivered Generation run, so Apply works on a computer that never ran that Generation. With
- * `printInChrome`, nothing is printed here: the Chrome prints them from the returned print job.
- * Null when the attempt is not this Chrome's live claim or the job has no delivered run.
+ * The résumé and cover letter source for a claimed application, from the job's latest delivered
+ * Generation run, so Apply works on a computer that never ran that Generation. Null when the attempt
+ * is not this Chrome's live claim or the job has no delivered run. No printing here: the routes that
+ * only hand out print jobs must not pull Chromium into their functions.
  */
-export async function buildApplyDocuments(
+export async function loadApplyDocumentSource(
   attemptId: string,
   managerId: string,
   managerName: string,
   browserId: string,
-  { printInChrome = false }: { printInChrome?: boolean } = {},
-): Promise<ApplyDocuments | null> {
+): Promise<ApplyDocumentSource | null> {
   const [row] = await db
     .select({
       responseJson: generationRuns.responseJson,
@@ -67,10 +74,6 @@ export async function buildApplyDocuments(
   const data = parsePdfPackage(JSON.stringify(row.responseJson));
   const savedTemplate = row.runTemplate ?? row.profileTemplate;
   const template = isPdfTemplate(savedTemplate) ? savedTemplate : "qts-standard";
-  const pdfs = printInChrome ? null : await renderDocumentPdfs(data, template, { enforcePageLimits: false });
-  // Chromium printing only: when it failed, Apply waits and tries again rather than uploading the
-  // plainer fallback design.
-  if (pdfs?.renderer === "fallback") throw new ApplyDocumentsUnavailableError();
   const paths = generationDownloadPaths({
     managerName,
     candidateName: [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
@@ -79,18 +82,21 @@ export async function buildApplyDocuments(
     createdAt: row.createdAt,
   });
   const name = (path: string) => path.split("/").at(-1) ?? "document.pdf";
-  const folder = paths.resume.slice(0, paths.resume.lastIndexOf("/"));
-  if (!pdfs) {
-    return {
-      folder,
-      resume: { filename: name(paths.resume) },
-      coverLetter: { filename: name(paths.coverLetter) },
-      print: chromePrintJob(data, template),
-    };
-  }
   return {
-    folder,
-    resume: { filename: name(paths.resume), base64: Buffer.from(pdfs.resume).toString("base64") },
-    coverLetter: { filename: name(paths.coverLetter), base64: Buffer.from(pdfs.coverLetter).toString("base64") },
+    data,
+    template,
+    folder: paths.resume.slice(0, paths.resume.lastIndexOf("/")),
+    resumeFilename: name(paths.resume),
+    coverLetterFilename: name(paths.coverLetter),
+  };
+}
+
+/** The documents as a print job for the Chrome to print itself (?print=chrome). */
+export function applyDocumentsPrintJob(source: ApplyDocumentSource): ApplyDocuments {
+  return {
+    folder: source.folder,
+    resume: { filename: source.resumeFilename },
+    coverLetter: { filename: source.coverLetterFilename },
+    print: chromePrintJob(source.data, source.template),
   };
 }
