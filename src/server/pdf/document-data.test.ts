@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
-import { shownSectionIds, templateSectionOrders } from "@/app/pdf/resume-sections";
+import { sectionOrders, templateSectionOrders } from "@/app/pdf/resume-sections";
 import sampleFull from "@/app/pdf/sample-full.json";
 import { pdfTemplateValues } from "@/server/pdf/pdf-templates";
 
@@ -28,7 +28,7 @@ const generatedPackage = {
       { id: "experience", title: "Professional Experience", items: [{ heading: "Engineer", bullets: ["Built systems"] }] },
       { id: "skills", title: "Skills", items: [{ heading: "Cloud", bullets: ["AWS"] }] },
       { id: "education", title: "Education", items: [{ heading: "BSc" }] },
-      { id: "projects", title: "Projects", items: [] },
+      { id: "projects", title: "Projects", items: [{ heading: "Settlement Platform", focus: ["Kafka"], bullets: ["Built the event pipeline"] }] },
       { id: "career_highlights", title: "Career Highlights", items: [{ bullets: ["Cut costs by 20%."] }] },
       { title: "Languages", items: [{ bullets: ["English"] }] },
       { title: "Volunteer Experience", items: [{ heading: "Helper" }] },
@@ -47,13 +47,13 @@ test("sections get their fixed ids; languages, volunteering and empty sections a
   const parsed = parsePdfPackage(JSON.stringify(generatedPackage), { requireCoreSections: true });
   assert.deepEqual(
     parsed.resume.sections.map((section) => section.id),
-    ["experience", "skills", "education", "career_highlights"],
+    ["experience", "skills", "education", "projects", "career_highlights"],
   );
   assert.equal(parsed.resume.sections[1].type, "skills");
   assert.equal(parsed.resume.sections[3].type, "standard");
 });
 
-test("generated JSON must have the summary and the skills, experience and education sections", () => {
+test("generated JSON must have the summary and the skills, experience, projects and education sections", () => {
   const withoutEducation = {
     ...generatedPackage,
     resume: {
@@ -65,6 +65,17 @@ test("generated JSON must have the summary and the skills, experience and educat
     () => parsePdfPackage(JSON.stringify(withoutEducation), { requireCoreSections: true }),
     /must include education/,
   );
+  const withoutProjects = {
+    ...generatedPackage,
+    resume: {
+      ...generatedPackage.resume,
+      sections: generatedPackage.resume.sections.filter((section) => section.id !== "projects"),
+    },
+  };
+  assert.throws(
+    () => parsePdfPackage(JSON.stringify(withoutProjects), { requireCoreSections: true }),
+    /must include projects/,
+  );
   const withoutSummary = { ...generatedPackage, resume: { ...generatedPackage.resume, summary: "" } };
   assert.throws(
     () => parsePdfPackage(JSON.stringify(withoutSummary), { requireCoreSections: true }),
@@ -72,6 +83,7 @@ test("generated JSON must have the summary and the skills, experience and educat
   );
   // Stored packages still print without the generation-time requirement.
   assert.doesNotThrow(() => parsePdfPackage(JSON.stringify(withoutEducation)));
+  assert.doesNotThrow(() => parsePdfPackage(JSON.stringify(withoutProjects)));
 });
 
 test("a required section whose entries print nothing counts as missing", () => {
@@ -95,6 +107,11 @@ test("a required section whose entries print nothing counts as missing", () => {
     () => parsePdfPackage(JSON.stringify(withSection("experience", [{ location: "Berlin", focus: ["Go"] }])), { requireCoreSections: true }),
     /must include experience/,
   );
+  // A project prints no dates or company, so one made only of those prints nothing.
+  assert.throws(
+    () => parsePdfPackage(JSON.stringify(withSection("projects", [{ subheading: "Acme", startDate: "2023-01" }])), { requireCoreSections: true }),
+    /must include projects/,
+  );
   assert.doesNotThrow(
     () => parsePdfPackage(JSON.stringify(withSection("education", [{ subheading: "MIT", startDate: "2015-09" }])), { requireCoreSections: true }),
   );
@@ -103,44 +120,59 @@ test("a required section whose entries print nothing counts as missing", () => {
 test("each template shows its own sections in its own order, with its own layout", () => {
   const parsed = parsePdfPackage(JSON.stringify(generatedPackage));
   const technical = toResumeTemplateData(parsed, "technical");
-  // Technical shows Projects; with none here, the Career Highlights take their place, after the summary.
+  // Career Highlights are in the JSON but no template prints them.
   assert.deepEqual(
     technical.resume.sections.map((section) => section.id),
-    ["career_highlights", "skills", "experience", "education"],
+    ["skills", "experience", "projects", "education"],
   );
-  assert.deepEqual(technical.theme.sectionOrder, ["summary", "career_highlights", "skills", "experience", "education"]);
+  assert.deepEqual(technical.theme.sectionOrder, ["summary", "skills", "experience", "projects", "education"]);
   const executive = toResumeTemplateData(parsed, "executive");
   assert.deepEqual(
     executive.resume.sections.map((section) => section.id),
-    ["career_highlights", "experience", "skills", "education"],
+    ["education", "skills", "experience", "projects"],
   );
   // Layout options are no longer forced; the template's own design applies.
   assert.equal("skillsLayout" in executive.theme, false);
   assert.equal("bulletStyle" in executive.theme, false);
 });
 
-test("every template has the core sections and one of highlights (first) or projects (last)", () => {
+test("every template prints Experience, Projects, Skills and Education once, Education first or last, Projects after Experience", () => {
   for (const template of pdfTemplateValues) {
     const order = templateSectionOrders[template];
-    for (const required of ["skills", "experience", "education", "certifications"] as const) {
-      assert.ok(order.includes(required), template);
-    }
-    assert.equal(Number(order.includes("projects")) + Number(order.includes("career_highlights")), 1, template);
-    if (order.includes("career_highlights")) assert.equal(order[0], "career_highlights", template);
-    else assert.equal(order.at(-1), "projects", template);
+    assert.ok(sectionOrders.includes(order as (typeof sectionOrders)[number]), template);
+    assert.deepEqual([...order].sort(), ["education", "experience", "projects", "skills"], template);
+    assert.ok(order[0] === "education" || order.at(-1) === "education", template);
+    assert.equal(order.indexOf("projects"), order.indexOf("experience") + 1, template);
   }
 });
 
-test("a résumé prints one of highlights or projects, the template's own choice first", () => {
-  const both = ["skills", "experience", "education", "certifications", "projects", "career_highlights"];
-  // Each template's own choice when the résumé has both.
-  assert.deepEqual(shownSectionIds("classic", both), ["career_highlights", "experience", "education", "skills", "certifications"]);
-  assert.deepEqual(shownSectionIds("banded", both), ["experience", "education", "skills", "certifications", "projects"]);
-  // The other one in its place when the template's own is missing: highlights first, projects last.
-  assert.deepEqual(shownSectionIds("banded", ["skills", "experience", "education", "career_highlights"]), ["career_highlights", "experience", "education", "skills", "certifications"]);
-  assert.deepEqual(shownSectionIds("classic", ["skills", "experience", "education", "projects"]), ["experience", "education", "skills", "certifications", "projects"]);
-  // Neither, and Certifications only print when the résumé has them (orderResumeSections drops missing ones).
-  assert.deepEqual(shownSectionIds("classic", ["skills", "experience", "education"]), ["experience", "education", "skills", "certifications"]);
+test("any four templates in a row of the rotation print different section orders", () => {
+  const rotation = pdfTemplateValues.map((template) => templateSectionOrders[template].join(","));
+  for (let start = 0; start < rotation.length; start += 1) {
+    // The rotation starts again at Template 1 after Template 24.
+    const run = [0, 1, 2, 3].map((offset) => rotation[(start + offset) % rotation.length]);
+    assert.equal(new Set(run).size, 4, `templates ${start + 1} to ${start + 4}`);
+  }
+});
+
+test("career highlights and certifications are read but never printed", () => {
+  const parsed = parsePdfPackage(JSON.stringify({
+    ...generatedPackage,
+    resume: {
+      ...generatedPackage.resume,
+      sections: [
+        ...generatedPackage.resume.sections,
+        { id: "certifications", title: "Certifications", items: [{ heading: "AWS Solutions Architect" }] },
+      ],
+    },
+  }));
+  for (const template of pdfTemplateValues) {
+    assert.deepEqual(
+      toResumeTemplateData(parsed, template).resume.sections.map((section) => section.id).sort(),
+      ["education", "experience", "projects", "skills"],
+      template,
+    );
+  }
 });
 
 test("the supplied full template sample parses and retains its content", () => {
@@ -165,9 +197,9 @@ test("the supplied full template sample parses and retains its content", () => {
   assert.deepEqual(
     adapted.resume.sections.map((section) => section.title),
     // Standard titles, whatever the JSON calls the sections.
-    ["Career Highlights", "Professional Experience", "Education", "Skills", "Certifications"],
+    ["Education", "Skills", "Professional Experience", "Selected Projects"],
   );
-  assert.equal(adapted.resume.sections[3].type, "skills");
+  assert.equal(adapted.resume.sections[1].type, "skills");
   assert.equal(adapted.coverLetter.recipient?.company, "Example Employer");
 });
 
@@ -224,6 +256,7 @@ test("the template adapter removes links from project sections but preserves oth
   );
   const section = (id: string) => adapted.resume.sections.find((entry) => entry.id === id);
 
+  assert.equal(section("projects")?.items[0].heading, "Dashboard");
   assert.equal(section("projects")?.items[0].link, undefined);
   assert.equal(section("experience")?.items[0].link, "https://example.com/experience");
 });
@@ -255,11 +288,10 @@ test("every template prints projects as name, technologies and bullets, educatio
   for (const template of pdfTemplateValues) {
     const sections = toResumeTemplateData(parsed, template).resume.sections;
     const project = sections.find((section) => section.id === "projects")?.items[0];
-    if (project) {
-      assert.equal(project.dateRange, undefined, template);
-      assert.equal(project.subheading, undefined, template);
-      assert.deepEqual(project.focus, ["Go", "Kubernetes", "Helm", "Prometheus"], template);
-    }
+    assert.equal(project?.heading, "Cost reporter", template);
+    assert.equal(project?.dateRange, undefined, template);
+    assert.equal(project?.subheading, undefined, template);
+    assert.deepEqual(project?.focus, ["Go", "Kubernetes", "Helm", "Prometheus"], template);
     assert.deepEqual(sections.find((section) => section.id === "education")?.items[0].bullets, [], template);
     assert.deepEqual(sections.find((section) => section.id === "skills")?.items[0].bullets, ["AWS", "GCP"], template);
   }

@@ -174,7 +174,8 @@ export function parsePdfPackage(
     if (missing.length > 0) {
       throw new Error(
         `resume.sections must include ${missing.join(", ")}, each with at least one filled item `
-        + "(education: degree in heading and school in subheading, no bullets; skills: skill names in bullets).",
+        + "(education: degree in heading and school in subheading, no bullets; skills: skill names in bullets; "
+        + "projects: 2 to 3 projects from the candidate's real experience, each with a name in heading and bullets).",
       );
     }
   }
