@@ -35,8 +35,8 @@
   const SKILL_MAX_LENGTH = 40;
   const FONT_SCALE_MIN = 0.95;
   const FONT_SCALE_MAX = 1.15;
-  // The sizes a resume's bullets step down to when it runs past its pages.
-  const BULLET_SIZES = ["11.5pt", "11pt"];
+  // The size a resume's bullets step down to from 11.5pt (base.css) when it runs past its pages.
+  const BULLET_SIZES = ["11pt"];
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
   let MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;

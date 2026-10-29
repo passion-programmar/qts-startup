@@ -84,6 +84,8 @@
   --text-section: 12.5pt;
   --text-item: 11.5pt;
   --text-body: 11.5pt;
+  /* Bullets in every template, whatever its body size; 11pt when a résumé runs long (section 12). */
+  --text-bullet: 11.5pt;
   --text-meta: 10.5pt;
   --leading-body: 1.32;
   --leading-tight: 1.2;
@@ -507,6 +509,7 @@ a {
 
 .item-bullets li {
   padding-inline-start: 5pt;
+  font-size: calc(var(--text-bullet) * var(--font-scale));
 }
 
 .item-bullets li + li {
@@ -864,14 +867,9 @@ li {
 /* 12. Density ---------------------------------------------------------------------
    render.js adds .doc--compact when content runs past its page budget
    (density "auto") or when asked ("compact"): spacing only. When a resume
-   still runs over, it adds .doc--small-bullets and sets --text-bullet on the
-   document, stepping down to 11pt, but only when that brings it within its
-   pages; bullets take that size where the template's body text is larger.
-   No other text shrinks. */
-
-.doc--small-bullets .item-bullets li {
-  font-size: calc(min(var(--text-body), var(--text-bullet)) * var(--font-scale));
-}
+   still runs over, it adds .doc--small-bullets and sets --text-bullet to 11pt
+   on the document, but only when that brings it within its pages. No other
+   text shrinks. */
 
 .doc--compact {
   --leading-body: 1.27;
