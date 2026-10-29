@@ -29,6 +29,7 @@ importScripts(
   '../shared/apply-pdf.js',
   '../shared/idle-pacing.js',
   '../shared/chrome-pdf.js',
+  '../shared/resume-print-requests.js',
   'apply-runner.js'
 );
 
@@ -5311,6 +5312,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       sendResponse(await openDownloadedFolder(msg.folder));
     })().catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'The folder could not be opened.' }));
+    return true;
+  }
+  // The Resume page's Download: both PDFs printed here as Generation prints them (shared/chrome-pdf.js),
+  // in a hidden tab of the page's window. { ok: false } sends the page to QTS's server to print; an
+  // invalid request is refused with its reason and nothing is printed (shared/resume-print-requests.js).
+  if (msg.type === 'QTS_PRINT_DOCUMENTS') {
+    (async () => {
+      if (!(await isQtsSite(sender.url))) {
+        sendResponse({ ok: false, error: 'Only the QTS site can print documents here.' });
+        return;
+      }
+      const { key, error } = self.__qtsResumePrints.checkPrintJob(msg.job);
+      if (error) {
+        sendResponse({ ok: false, invalid: true, error });
+        return;
+      }
+      const serverUrl = await self.__qtsRuntimeConfig.getServerUrl();
+      // The same request made again while it prints (a second click, another tab) shares that print.
+      const printed = await self.__qtsResumePrints.printOnce(key, () => self.__qtsChromePdf.printDocuments(msg.job, {
+        serverUrl,
+        windowId: sender.tab?.windowId,
+      }));
+      sendResponse(printed ? { ok: true, resume: printed.resume, coverLetter: printed['cover-letter'] } : { ok: false });
+    })().catch(() => sendResponse({ ok: false }));
     return true;
   }
 

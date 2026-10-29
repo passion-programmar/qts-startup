@@ -49,6 +49,13 @@ export async function createExtensionToken(
 export async function getExtensionManager(
   request: Request,
 ): Promise<ExtensionManager | null> {
+  return (await getExtensionManagerWithApplyAccess(request))?.manager ?? null;
+}
+
+/** The signed-in Manager and whether Super Admin turned Apply on, from the same database read. */
+export async function getExtensionManagerWithApplyAccess(
+  request: Request,
+): Promise<{ manager: ExtensionManager; canUseApply: boolean } | null> {
   const authorization = request.headers.get("authorization");
   const match = authorization?.match(/^Bearer\s+(\S+)$/i);
   if (!match) return null;
@@ -82,6 +89,7 @@ export async function getExtensionManager(
       displayName: users.displayName,
       loginName: users.loginName,
       authVersion: users.authVersion,
+      canUseApply: users.canUseApply,
     })
     .from(users)
     .where(
@@ -96,10 +104,13 @@ export async function getExtensionManager(
 
   if (!manager?.displayName || !manager.loginName) return null;
   return {
-    id: manager.id,
-    role: "manager",
-    displayName: manager.displayName,
-    loginName: manager.loginName,
-    authVersion: manager.authVersion,
+    manager: {
+      id: manager.id,
+      role: "manager",
+      displayName: manager.displayName,
+      loginName: manager.loginName,
+      authVersion: manager.authVersion,
+    },
+    canUseApply: manager.canUseApply,
   };
 }

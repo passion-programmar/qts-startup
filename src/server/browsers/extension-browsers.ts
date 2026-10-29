@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { extensionBrowsers, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { type BrowserHeaders, canTakeWork, defaultBrowserName, parseBrowserHeaders } from "@/server/apply/apply-values";
@@ -22,24 +22,29 @@ export async function resolveExtensionBrowser(
 ): Promise<ExtensionBrowser | null> {
   const identity = parseBrowserHeaders(request.headers);
   if (!identity) return null;
-  return upsertExtensionBrowser(managerId, identity);
+  const [row] = await upsertExtensionBrowser(managerId, identity, new Date());
+  return { ...row, canTakeWork: canTakeWork(row.extensionVersion) };
 }
 
-async function upsertExtensionBrowser(managerId: string, identity: BrowserHeaders): Promise<ExtensionBrowser> {
-  const now = new Date();
-  const [row] = await db
+export type BrowserModes = { getJdOn: boolean; workMode: "off" | "generation" | "apply" };
+
+// Registers the Chrome on first sight and records that it was seen, with its modes when given.
+function upsertExtensionBrowser(managerId: string, identity: BrowserHeaders, now: Date, modes?: BrowserModes) {
+  return db
     .insert(extensionBrowsers)
     .values({
       managerId,
       browserKey: identity.browserKey,
       name: identity.browserName ?? defaultBrowserName(identity.browserKey),
       extensionVersion: identity.extensionVersion,
+      ...modes,
       lastSeenAt: now,
     })
     .onConflictDoUpdate({
       target: [extensionBrowsers.managerId, extensionBrowsers.browserKey],
       set: {
         extensionVersion: identity.extensionVersion,
+        ...modes,
         lastSeenAt: now,
         updatedAt: now,
         // A name the Manager gave this Chrome in the extension wins over the automatic one.
@@ -51,23 +56,19 @@ async function upsertExtensionBrowser(managerId: string, identity: BrowserHeader
       name: extensionBrowsers.name,
       extensionVersion: extensionBrowsers.extensionVersion,
     });
-  return { ...row, canTakeWork: canTakeWork(row.extensionVersion) };
 }
 
-export type BrowserModes = { getJdOn: boolean; workMode: "off" | "generation" | "apply" };
-
-/** Records which modes a Chrome runs and returns the Manager's Stop-all counters. */
+/**
+ * A Chrome's heartbeat in one database round trip: registers it as resolveExtensionBrowser does,
+ * records which modes it runs, and returns the Manager's Stop-all counters.
+ */
 export async function recordBrowserHeartbeat(
   managerId: string,
-  browser: ExtensionBrowser,
+  identity: BrowserHeaders,
   modes: BrowserModes,
-): Promise<{ generationStopVersion: number; applyStopVersion: number }> {
-  const now = new Date();
-  const [, [manager]] = await db.batch([
-    db
-      .update(extensionBrowsers)
-      .set({ getJdOn: modes.getJdOn, workMode: modes.workMode, lastSeenAt: now, updatedAt: now })
-      .where(and(eq(extensionBrowsers.id, browser.id), eq(extensionBrowsers.managerId, managerId))),
+): Promise<{ browser: ExtensionBrowser; generationStopVersion: number; applyStopVersion: number }> {
+  const [[row], [manager]] = await db.batch([
+    upsertExtensionBrowser(managerId, identity, new Date(), modes),
     db
       .select({
         generationStopVersion: users.generationStopVersion,
@@ -78,6 +79,7 @@ export async function recordBrowserHeartbeat(
       .limit(1),
   ]);
   return {
+    browser: { ...row, canTakeWork: canTakeWork(row.extensionVersion) },
     generationStopVersion: manager?.generationStopVersion ?? 0,
     applyStopVersion: manager?.applyStopVersion ?? 0,
   };

@@ -1,10 +1,7 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { users } from "@/db/schema";
-import { db } from "@/lib/db";
-import { type ExtensionManager, getExtensionManager } from "@/lib/extension-auth";
+import { type ExtensionManager, getExtensionManagerWithApplyAccess } from "@/lib/extension-auth";
 import { type ExtensionBrowser, resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { MIN_WORK_EXTENSION_VERSION } from "./apply-values";
 
@@ -25,18 +22,15 @@ function refuse(status: number, message: string): NextResponse {
 export async function authorizeApplyRequest(
   request: Request,
 ): Promise<{ manager: ExtensionManager; browser: ExtensionBrowser } | NextResponse> {
-  const manager = await getExtensionManager(request);
-  if (!manager) return refuse(401, "Your QTS session has ended. Sign in again.");
+  // Apply access comes with the session check, in the same database read.
+  const signedIn = await getExtensionManagerWithApplyAccess(request);
+  if (!signedIn) return refuse(401, "Your QTS session has ended. Sign in again.");
+  const { manager, canUseApply } = signedIn;
   const browser = await resolveExtensionBrowser(manager.id, request);
   if (!browser) return refuse(400, "This extension did not identify its Chrome. Update the QTS extension.");
   if (!browser.canTakeWork) {
     return refuse(426, `Update the QTS extension to version ${MIN_WORK_EXTENSION_VERSION} or newer to apply.`);
   }
-  const [settings] = await db
-    .select({ canUseApply: users.canUseApply })
-    .from(users)
-    .where(eq(users.id, manager.id))
-    .limit(1);
-  if (!settings?.canUseApply) return refuse(403, "Apply is not turned on for your account. Ask your Super Admin.");
+  if (!canUseApply) return refuse(403, "Apply is not turned on for your account. Ask your Super Admin.");
   return { manager, browser };
 }

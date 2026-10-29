@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { MIN_WORK_EXTENSION_VERSION } from "@/server/apply/apply-values";
-import { recordBrowserHeartbeat, resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
+import { MIN_WORK_EXTENSION_VERSION, parseBrowserHeaders } from "@/server/apply/apply-values";
+import { recordBrowserHeartbeat } from "@/server/browsers/extension-browsers";
 
 // Each Chrome reports its modes every 30 seconds and learns whether "Stop all" was pressed.
 export async function POST(request: Request): Promise<NextResponse> {
@@ -12,8 +12,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 401 },
     );
   }
-  const browser = await resolveExtensionBrowser(manager.id, request);
-  if (!browser) {
+  const identity = parseBrowserHeaders(request.headers);
+  if (!identity) {
     return NextResponse.json(
       { success: false, message: "This extension did not identify its Chrome. Update the QTS extension." },
       { status: 400 },
@@ -29,7 +29,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const stopVersions = await recordBrowserHeartbeat(manager.id, browser, { getJdOn: body.getJdOn, workMode });
+    // Registering the Chrome, recording its modes and reading "Stop all" share one database trip.
+    const { browser, ...stopVersions } = await recordBrowserHeartbeat(manager.id, identity, { getJdOn: body.getJdOn, workMode });
     return NextResponse.json({
       success: true,
       browser: { id: browser.id, name: browser.name, canTakeWork: browser.canTakeWork },

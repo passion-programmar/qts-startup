@@ -1,5 +1,6 @@
 // On the QTS site only: passes the Bids page's "open résumé folder" requests to the extension and
-// answers back, so a click there opens Windows Explorer at the folder. It listens only after the
+// answers back, so a click there opens Windows Explorer at the folder, and prints the Resume page's
+// PDFs in this Chrome instead of on QTS's server. It listens only after the
 // service worker confirms this page is the QTS site, so other pages never see it.
 (function initQtsSiteBridge() {
   if (window.top !== window || window.__qtsSiteBridge) return;
@@ -12,8 +13,15 @@
       const data = event.data;
       if (!data || data.source !== 'qts-app' || typeof data.requestId !== 'string') return;
       const reply = (result) => window.postMessage({ source: 'qts-extension', requestId: data.requestId, ...result }, window.location.origin);
+      // `print` tells the Resume page this extension can print its PDFs (older ones never answer that).
       if (data.type === 'ping') {
-        reply({ ok: true });
+        reply({ ok: true, print: true });
+        return;
+      }
+      if (data.type === 'print-documents') {
+        chrome.runtime.sendMessage({ type: 'QTS_PRINT_DOCUMENTS', job: data.job })
+          .then((result) => reply(result || { ok: false }))
+          .catch(() => reply({ ok: false }));
         return;
       }
       if (data.type !== 'open-resume-folder') return;

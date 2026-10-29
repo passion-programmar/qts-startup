@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { WorkspaceClocks } from "@/app/components/workspace-clocks";
 import type { PdfPackage } from "@/app/pdf/document-data";
-import { parsePdfPackage } from "@/app/pdf/document-data";
+import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
 import sampleFull from "@/app/pdf/sample-full.json";
 import { TemplatePagesPreview } from "@/app/pdf/template-pages-preview";
 import {
@@ -68,6 +68,15 @@ export function PdfWorkspace({
   const [downloadDirectoryName, setDownloadDirectoryName] = useState<string | null>(null);
   const [downloadDirectoryReady, setDownloadDirectoryReady] = useState(false);
   const downloadDirectoryRef = useRef<ResumeDownloadDirectory | null>(null);
+  const lastPrintedRef = useRef<{ key: string; pdfs: PrintedPdfs } | null>(null);
+  const downloadingRef = useRef(false);
+  // Cancels a running Download when the page closes.
+  const downloadCancelRef = useRef<AbortController | null>(null);
+  // The message of a Download that failed in a way trying again may fix; shown with Retry while it
+  // is the message on screen.
+  const [retryableError, setRetryableError] = useState<string | null>(null);
+
+  useEffect(() => () => downloadCancelRef.current?.abort(), []);
   const busy = downloadStep !== null;
   const previewOutOfDate = source !== previewSource;
   const documentLabel = activeDocument === "resume" ? "Resume" : "Cover letter";
@@ -133,6 +142,12 @@ export function PdfWorkspace({
   }
 
   async function downloadPair() {
+    // A second click before the button shows it is busy does not print or save a second time.
+    if (downloadingRef.current) return;
+    downloadingRef.current = true;
+    const cancel = new AbortController();
+    downloadCancelRef.current = cancel;
+    setRetryableError(null);
     try {
       if (!parsed || previewOutOfDate) {
         throw new Error("Fix the JSON before downloading; the preview shows the last valid version.");
@@ -149,7 +164,15 @@ export function PdfWorkspace({
           setDownloadDirectoryName(selected.name);
         },
       );
-      const printed = await printPdfPair(parsed, selectedTemplate);
+      // Unchanged JSON and template: the PDFs printed last time are saved again, not printed again.
+      const printKey = `${selectedTemplate}\n${source}`;
+      const printed = lastPrintedRef.current?.key === printKey
+        ? lastPrintedRef.current.pdfs
+        : await printPdfPair(parsed, selectedTemplate, cancel.signal);
+      // The page closed while printing: nothing is saved.
+      if (cancel.signal.aborted) return;
+      // The simplified fallback is not kept, so the next click tries the template printer again.
+      lastPrintedRef.current = printed.renderer === "template" ? { key: printKey, pdfs: printed } : null;
       setDownloadStep("saving");
       const candidateName = safePathPart(parsed.resume.candidate.fullName);
       const jobTitle = safePathPart(parsed.resume.targetRole);
@@ -166,12 +189,15 @@ export function PdfWorkspace({
       }
       setFallbackUsed(printed.renderer === "fallback");
     } catch (reason) {
-      setError(
-        reason instanceof DOMException && reason.name === "AbortError"
-          ? "Folder selection was cancelled; no PDFs were saved."
-          : describeBrowserError(reason, "The resume and cover letter could not be downloaded."),
-      );
+      if (cancel.signal.aborted) return;
+      const message = reason instanceof DOMException && reason.name === "AbortError"
+        ? "Folder selection was cancelled; no PDFs were saved."
+        : describeBrowserError(reason, "The resume and cover letter could not be downloaded.");
+      setRetryableError(reason instanceof RetryablePrintError ? message : null);
+      setError(message);
     } finally {
+      downloadingRef.current = false;
+      if (downloadCancelRef.current === cancel) downloadCancelRef.current = null;
       setDownloadStep(null);
     }
   }
@@ -228,7 +254,21 @@ export function PdfWorkspace({
               </select>
             </label>
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="theme-light h-[min(36vh,28rem)] min-h-[180px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
-            {error && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">{error}</p>}
+            {error && (
+              <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">
+                <p className="min-w-0 flex-1">{error}</p>
+                {retryableError === error && (
+                  <button
+                    className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={busy || !parsed || previewOutOfDate || !downloadDirectoryReady}
+                    onClick={() => void downloadPair()}
+                    type="button"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
             {previewOutOfDate && <p className="rounded-lg bg-blue-50 p-3 text-sm text-blue-900">The preview is showing the last valid JSON while the current edits are incomplete or invalid.</p>}
             {previewSource === example && <p className="text-xs text-amber-800">The preview currently shows sample template JSON. Enter valid resume data to update it.</p>}
             <div className="space-y-2 rounded-lg bg-slate-50 p-3">
@@ -320,23 +360,101 @@ function initialDocumentError(): string | null {
 
 const inputClass = "mt-1 min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
-// The server prints both PDFs with the same Chromium printing Generation uses, from the template
-// the preview draws: real pages with real, selectable text, never a line cut across pages.
-async function printPdfPair(data: PdfPackage, template: PdfTemplate): Promise<PrintedPdfs> {
-  const response = await fetch("/api/pdf/print", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ document: data, template }),
+// Both PDFs are printed from the template the preview draws: real pages with real, selectable
+// text, never a line cut across pages. The QTS extension in this Chrome prints them the way it
+// prints Generation's, which spends no server time; without it, the server prints them.
+async function printPdfPair(data: PdfPackage, template: PdfTemplate, signal: AbortSignal): Promise<PrintedPdfs> {
+  const inChrome = await printPdfPairInChrome(data, template);
+  if (inChrome) return inChrome;
+  signal.throwIfAborted();
+  return printPdfPairOnServer(data, template, signal);
+}
+
+/** A print that did not happen and may work when the Manager tries again; nothing was saved. */
+class RetryablePrintError extends Error {}
+
+// The server prints within its 60-second limit (src/app/api/pdf/print/route.ts). A request still
+// unanswered after this has stalled, as one sent on a connection the server had already closed
+// does, and is given up: that drops the connection, so a retry starts on a new one.
+const serverPrintLimitMs = 70_000;
+
+const seconds = (since: number) => `${((performance.now() - since) / 1000).toFixed(1)} s`;
+
+// Null when no extension here can print (none answers, or an older one) or its printing failed.
+async function printPdfPairInChrome(data: PdfPackage, template: PdfTemplate): Promise<PrintedPdfs | null> {
+  const ping = await askExtension({ type: "ping" }, 1500);
+  if (ping?.ok !== true || ping.print !== true) return null;
+  const started = performance.now();
+  // The extension gives up on printing after 60 seconds (extension/shared/chrome-pdf.js).
+  const printed = await askExtension(
+    { type: "print-documents", job: { template, data: toResumeTemplateData(data, template) } },
+    75_000,
+  );
+  // A request the extension refuses is not printed anywhere: the server would be sent the same document.
+  if (printed?.invalid === true) {
+    throw new Error(typeof printed.error === "string" ? printed.error : "The resume data could not be printed.");
+  }
+  if (printed?.ok !== true || typeof printed.resume !== "string" || typeof printed.coverLetter !== "string") {
+    console.warn(`[QTS Resume] Printing in this Chrome ${printed ? "failed" : "did not answer"} after ${seconds(started)}; QTS prints instead.`);
+    return null;
+  }
+  return { resume: base64Bytes(printed.resume), coverLetter: base64Bytes(printed.coverLetter), renderer: "template" };
+}
+
+/** Asks the QTS extension through its bridge on this site (content/qts-site-bridge.js); null on no answer. */
+function askExtension(message: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown> | null> {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    const done = (answer: Record<string, unknown> | null) => {
+      window.removeEventListener("message", listen);
+      clearTimeout(timer);
+      resolve(answer);
+    };
+    const listen = (event: MessageEvent) => {
+      if (event.source !== window || !isRecord(event.data) || event.data.source !== "qts-extension") return;
+      if (event.data.requestId === requestId) done(event.data);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    window.addEventListener("message", listen);
+    window.postMessage({ source: "qts-app", requestId, ...message }, window.location.origin);
   });
+}
+
+// `signal` cancels it when the page closes; it also stops by itself after serverPrintLimitMs.
+async function printPdfPairOnServer(data: PdfPackage, template: PdfTemplate, signal: AbortSignal): Promise<PrintedPdfs> {
+  const started = performance.now();
+  const limit = AbortSignal.timeout(serverPrintLimitMs);
+  let response: Response;
   let result: unknown = null;
   try {
-    result = await response.json();
-  } catch {
-    // A non-JSON response (for example a gateway timeout) is reported below.
+    response = await fetch("/api/pdf/print", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: data, template }),
+      signal: AbortSignal.any([signal, limit]),
+    });
+    try {
+      result = await response.json();
+    } catch (reason) {
+      // A non-JSON response (for example a gateway timeout) is reported below; running out of time is not.
+      if (limit.aborted || signal.aborted) throw reason;
+    }
+  } catch (reason) {
+    if (signal.aborted) throw reason;
+    console.warn(`[QTS Resume] The print request to QTS ${limit.aborted ? "had no answer" : "failed"} after ${seconds(started)}.`);
+    throw new RetryablePrintError(limit.aborted
+      ? `QTS did not answer within ${serverPrintLimitMs / 1000} seconds. Nothing was saved. Try again.`
+      : "QTS could not be reached. Nothing was saved. Check the connection and try again.");
   }
   const body = isRecord(result) ? result : {};
   if (!response.ok || body.success !== true || typeof body.resume !== "string" || typeof body.coverLetter !== "string") {
-    throw new Error(typeof body.message === "string" ? body.message : `QTS could not prepare the PDFs (HTTP ${response.status}).`);
+    const message = typeof body.message === "string" ? body.message : `QTS could not prepare the PDFs (HTTP ${response.status}).`;
+    // The server's own failures may pass; a refused request (signed out, invalid JSON) will not.
+    if (response.status >= 500 || response.ok) {
+      console.warn(`[QTS Resume] QTS could not print (HTTP ${response.status}) after ${seconds(started)}.`);
+      throw new RetryablePrintError(`${message} Nothing was saved.`);
+    }
+    throw new Error(message);
   }
   return {
     resume: base64Bytes(body.resume),
