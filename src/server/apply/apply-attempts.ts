@@ -401,9 +401,10 @@ export async function renewApplyAttempt(attemptId: string, managerId: string, br
   const updated = await db
     .update(applyAttempts)
     .set({
+      // Cast: inside a CASE the date parameters arrive as text, which Postgres won't assign to a timestamp.
       leaseExpiresAt: sql`case when ${applyAttempts.status} = 'claimed'
-        then ${leaseFor(APPLY_LEASE_SECONDS)}
-        else ${leaseFor(APPLY_REVIEW_LEASE_SECONDS)} end`,
+        then ${leaseFor(APPLY_LEASE_SECONDS)}::timestamptz
+        else ${leaseFor(APPLY_REVIEW_LEASE_SECONDS)}::timestamptz end`,
       updatedAt: new Date(),
     })
     .where(and(
