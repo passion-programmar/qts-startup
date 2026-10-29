@@ -6,6 +6,7 @@ import { db, neonSql } from "@/lib/db";
 import { generationHeldSql } from "@/server/generation/generation-hold";
 import { jobHasBid } from "@/server/jobs/job-bids";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
+import { dailyJobCountSql, dailyJobCountsKey } from "@/server/jobs/daily-job-counts";
 import { getJobRecordDate } from "@/server/jobs/job-record-time-zone";
 import { normalizeJobUrl } from "@/server/jobs/job-values";
 import { normalizeEmploymentType, normalizeWorkplaceType } from "@/server/apply/apply-values";
@@ -280,6 +281,11 @@ export async function insertGetJdJob(
 
   const results = await neonSql.transaction([
     ...lockKeys.map((key) => neonSql.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key])),
+    // Today's counts (the extension panel's URL and JOB), in the same trip as the insert below.
+    neonSql.query(
+      dailyJobCountSql(SAME_JOB_SQL),
+      [...sameJobParams, job.candidateId, job.managerId, dailyJobCountsKey(job.managerId), recordDate],
+    ),
     neonSql.query(
       `WITH base AS (
          SELECT relation_id, description, page_text, location, employment_type, workplace_type, salary
@@ -361,7 +367,7 @@ export async function insertGetJdJob(
     ),
   ]);
 
-  const [inserted] = results[lockKeys.length] as { id: string }[];
+  const [inserted] = results[lockKeys.length + 1] as { id: string }[];
   if (inserted) return { status: "saved", jobId: inserted.id };
   const duplicate = await findGetJdDuplicate(job.managerId, job, job.candidateId);
   return { status: duplicate ?? "job_list" };

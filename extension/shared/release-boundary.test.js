@@ -55,9 +55,9 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(launcher.includes("window.addEventListener('load', initializePageLauncherAfterLoad, { once: true })"));
   assert.ok(review.includes("window.addEventListener('load', initializeGetJdReviewAfterLoad, { once: true })"));
   assert.ok(highlighter.includes("window.addEventListener('load', startPageTextHighlighterAfterLoad, { once: true })"));
-  assert.ok(launcher.includes('conic-gradient(from 0deg'));
-  assert.ok(launcher.includes('qts-border-rotate'));
-  assert.ok(launcher.includes('animation: qts-border-rotate 4s linear infinite'));
+  // The launcher waits as a tab on the right edge, without endless animations; its actions open as a docked panel.
+  assert.equal(launcher.includes('infinite'), false);
+  assert.ok(launcher.includes("document.documentElement?.setAttribute('data-qts-menu-docked', open ? 'true' : 'false')"));
   // Signed out, the launcher is hidden and the toolbar icon toggles the Sign In card.
   assert.ok(launcher.includes('.launcher:not(.signed-in) { display: none; }'));
   assert.ok(launcher.includes("launcher.classList.toggle('signed-in', signedIn)"));
@@ -80,15 +80,15 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.equal(serviceWorker.includes('requestGeminiJson'), false);
   assert.ok(serviceWorker.includes('[GET_JD_ON_KEY]: true'));
   assert.ok(serviceWorker.includes("message: 'Get JD is on. QTS checks each job page you open.'"));
-  assert.ok(launcher.includes("active ? 'Cancel' : defaultLabel"));
+  assert.ok(launcher.includes("active ? `Cancel ${defaultLabel}` : defaultLabel"));
   assert.ok(launcher.includes("document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true'"));
   assert.ok(launcher.includes("attributeFilter: ['data-qts-get-jd-docked']"));
-  assert.ok(launcher.includes('.launcher { position: fixed; right: 180px; bottom: 24px;'));
-  assert.ok(launcher.includes('.generation { --x: -122px; --y: -88px; }'));
-  assert.ok(launcher.includes('.apply { --x: -46px; --y: -143px; }'));
-  assert.ok(launcher.includes('.logout { --x: 46px; --y: -143px; }'));
-  assert.ok(launcher.includes('.page-exclusions { --x: 150px; --y: 0px; }'));
-  assert.ok(launcher.includes('.launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }'));
+  assert.ok(launcher.includes('.launcher { position: fixed; top: 50%; right: 0;'));
+  assert.ok(launcher.includes('.launcher.get-jd-active { right: min(400px, 48vw); }'));
+  // The actions in order: Get JD, Generation, Apply, Custom, Highlight, Site Setting, then Sign Out.
+  const order = ["'get_jd', 'Get JD'", "'generation', 'Generation'", "'apply', 'Apply'", "'custom', 'Custom'",
+    "'text_highlights', 'Highlight'", "'page_exclusions', 'Site Setting'", "'session', 'Sign In'"].map((entry) => launcher.indexOf(entry));
+  assert.ok(order.every((index, i) => index > 0 && (i === 0 || index > order[i - 1])));
   assert.ok(serviceWorker.includes("[EXTENSION_STATUS_KEY]: 'cancel'"));
   assert.ok(launcher.includes("'Sign In'"));
   assert.ok(launcher.includes("'Sign Out'"));
@@ -547,7 +547,9 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes('profile-skeleton'));
   assert.ok(review.includes('profilesLoaded = true'));
   assert.ok(review.includes('managerSettingsOpen'));
-  assert.ok(review.includes('visible && profilesLoaded && extensionStatus === \'get_jd\''));
+  // The review opens only when asked (Review under Get JD in the QTS panel), never by itself.
+  assert.ok(review.includes('visible && reviewOpen && profilesLoaded && extensionStatus === \'get_jd\''));
+  assert.ok(review.includes('openReview() {'));
   assert.ok(review.includes('!profilesLoaded'));
   assert.ok(review.includes('Loading your candidate accounts...'));
   assert.ok(review.includes('prefers-reduced-motion: reduce'));
@@ -763,13 +765,16 @@ test('shared text highlights are manager-gated and available from the page launc
   assert.ok(workerApi.includes("path === '/api/extension/highlights'"));
   assert.ok(worker.includes("'/api/extension/highlights'"));
   assert.ok(worker.includes("'/api/extension/features/me'"));
-  assert.ok(launcher.includes("['text_highlights', 'Text Highlight', '✎', 'text-highlights']"));
+  assert.ok(launcher.includes("['text_highlights', 'Highlight', '✎', 'text-highlights']"));
   assert.ok(launcher.includes("type: 'GET_MANAGER_EXTENSION_FEATURES'"));
   assert.ok(launcher.includes('managerPanel.openManagerSettings(panel, response.tabId, {'));
   assert.ok(launcher.includes('await globalThis.__qtsInitializeGetJdReview?.()'));
   assert.ok(launcher.includes("highlightButton.hidden = response?.ok !== true || response.canManageTextHighlights !== true"));
   assert.ok(highlighter.includes('changes.authExpiresAt'));
-  assert.ok(highlighter.includes('changes.authExpiresAt'));
+  // Only a job page, and only while its tab is shown: a hidden tab is not watched.
+  assert.ok(highlighter.includes("chrome.runtime.sendMessage({ type: 'QTS_IS_JOB_PAGE' })"));
+  assert.ok(highlighter.includes("if (document.hidden) stopWatching();"));
+  assert.ok(worker.includes("msg.type === 'QTS_IS_JOB_PAGE'"));
   assert.ok(featureRoute.includes('managerCanManageTextHighlights(manager.id)'));
   assert.ok(highlightsRoute.includes('managerCanManageTextHighlights(manager.id)'));
   assert.ok(settingsPage.includes('<ManagerTextHighlightAccessForm'));
@@ -891,10 +896,13 @@ test('every page toast goes through the one shared stack', () => {
   const detectToast = read('content', 'detect-toast.js');
 
   assert.ok(pageScripts.indexOf('content/page-toast.js') < pageScripts.indexOf('content/page-launcher.js'));
-  for (const source of [launcher, panel, detectToast]) {
+  for (const source of [launcher, detectToast]) {
     assert.ok(source.includes('globalThis.__qtsPageToast?.show('));
     assert.equal(source.includes('toast-host'), false);
   }
+  // Get JD's results are said under Get JD in the QTS panel, not as toasts of the review panel.
+  assert.equal(panel.includes('__qtsPageToast'), false);
+  assert.equal(panel.includes('toast-host'), false);
 });
 
 test('disabled page UI removes its listeners and the queue alarm only runs during Generation', () => {

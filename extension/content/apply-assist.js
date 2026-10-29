@@ -24,7 +24,8 @@
   dock.textContent = `
     html[data-qts-apply-docked="true"] body { box-sizing: border-box !important; padding-right: ${PANEL_WIDTH} !important; }
     html body { transition: padding-right .28s cubic-bezier(.2,.8,.2,1); }
-    html[data-qts-apply-docked="true"] [data-qts-page-launcher] { display: none !important; }
+    /* While an application is open its own tab stands for QTS: the launcher's would be a second one. */
+    html:has(> [data-qts-apply-assist]) [data-qts-page-launcher] { display: none !important; }
   `;
   (document.head || document.documentElement).appendChild(dock);
 
@@ -105,8 +106,21 @@
     .submitted:hover:not(:disabled) { background: #059669; }
     .cancel { border: 1px solid #34425a; color: #cbd5e1; background: #111a2e; }
     .cancel:hover:not(:disabled) { background: #1a2438; }
+    .remove { border: 1px solid rgb(244 63 94 / .5); color: #fda4af; background: rgb(244 63 94 / .1); font-size: 16px; }
+    .actions .remove { padding: 0 12px; }
+    .remove:hover:not(:disabled) { background: rgb(244 63 94 / .2); }
     .no { border: 1px solid rgb(244 63 94 / .5); color: #fda4af; background: rgb(244 63 94 / .1); }
-    .tab { position: fixed; top: 40%; right: 0; padding: 12px 8px; border: 1px solid #243047; border-right: 0; border-radius: 10px 0 0 10px; background: #0d1526; color: #e2e8f0; box-shadow: -6px 0 18px rgb(0 0 0 / 35%); font-size: 11px; writing-mode: vertical-rl; }
+    /* The same tab as the QTS launcher's (Q · T · S), with the candidate's initials. */
+    .tab { position: fixed; top: 50%; right: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; width: 34px; padding: 10px 0 8px; border: 1px solid rgb(148 163 184 / .18); border-right: 0; border-radius: 14px 0 0 14px; background: linear-gradient(180deg, #131c31, #0a0f1c); box-shadow: -8px 0 24px rgb(2 6 23 / .45), inset 1px 0 0 rgb(255 255 255 / .05); font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transform: translateY(-50%); transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+    .tab::before { content: ""; position: absolute; top: 12px; bottom: 12px; left: -1px; width: 2px; border-radius: 2px; background: linear-gradient(180deg, #fcd34d, #e2e8f0 50%, #60a5fa); }
+    .tab:hover { transform: translate(-4px, -50%); }
+    .letter { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; }
+    .letter.q { background: rgb(252 211 77 / .12); color: #fcd34d; }
+    .letter.t { background: rgb(226 232 240 / .08); color: #e2e8f0; }
+    .letter.s { background: rgb(96 165 250 / .14); color: #60a5fa; }
+    .initials { margin-top: 4px; padding-top: 6px; border-top: 1px solid #243047; color: #6ee7b7; font-size: 10px; letter-spacing: .02em; }
+    .chev { color: #66758c; font-size: 13px; }
+    .tab:hover .chev { color: #e2e8f0; }
     .toast { position: fixed; right: 16px; bottom: 88px; padding: 8px 12px; border: 1px solid #243047; border-radius: 10px; background: #111a2e; color: #e2e8f0; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
     .toast.shown { opacity: 1; }
   `;
@@ -339,6 +353,18 @@
     return node;
   }
 
+  // Deletes the job row from the Jobs table (asked first) and closes the job's tabs.
+  function removeButton() {
+    const node = actionButton('🗑', 'remove', 'remove');
+    node.title = 'Remove this job from the Jobs table';
+    node.setAttribute('aria-label', 'Remove this job from the Jobs table');
+    node.addEventListener('click', (event) => {
+      if (busy) return;
+      if (!confirm(`Remove "${state.job.title}" at ${state.job.company} from the Jobs table?`)) event.stopImmediatePropagation();
+    }, { capture: true });
+    return node;
+  }
+
   function brandHeader() {
     const brand = element('header', 'brand');
     const logo = element('img', 'brand-logo');
@@ -371,7 +397,14 @@
     if (!state) return;
     panel.hidden = hidden;
     tab.hidden = !hidden;
-    tab.textContent = `QTS · ${state.candidate}`;
+    const initials = String(state.candidate || '').split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0].toUpperCase()).join('');
+    tab.replaceChildren(
+      ...['q', 't', 's'].map((letter) => element('span', `letter ${letter}`, letter.toUpperCase())),
+      ...(initials ? [element('span', 'initials', initials)] : []),
+      element('span', 'chev', '‹'),
+    );
+    tab.title = `Show the QTS panel · ${state.candidate}`;
+    tab.setAttribute('aria-label', `Show the QTS panel for ${state.candidate}`);
     setDocked(!hidden);
     if (hidden) return;
 
@@ -515,6 +548,7 @@
     actions.append(
       actionButton('Submitted', 'submitted', 'submitted', () => ({ answers: currentAnswers() })),
       actionButton('Cancel', 'cancel', 'cancel'),
+      removeButton(),
     );
     foot.append(actions);
     panel.append(brandHeader(), scroll, foot);

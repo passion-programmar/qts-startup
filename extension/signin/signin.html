@@ -4,36 +4,69 @@
   <meta charset="utf-8">
   <title>QTS Sign In</title>
   <style>
+    /* Shown inside the QTS panel (dark), as the panel's own controls are. */
     * { box-sizing: border-box; }
-    html, body { margin: 0; background: transparent; }
-    form { display: flex; flex-direction: column; gap: 12px; padding: 4px 4px 6px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-    .field { display: flex; flex-direction: column; gap: 6px; }
-    label { color: #475569; font: 700 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
-    input { width: 100%; height: 44px; padding: 0 14px; border: 1.5px solid #e2e8f0; border-radius: 12px; background: #fff; color: #0f172a; box-shadow: 0 1px 2px #0f172a0d; font: 600 14px/1 Inter, ui-sans-serif, system-ui, sans-serif; outline: none; transition: border-color .15s ease, box-shadow .15s ease; }
-    input:hover { border-color: #c7d2fe; }
-    input:focus { border-color: #8b5cf6; box-shadow: 0 0 0 4px #8b5cf62e; }
-    input:disabled { opacity: .7; }
-    button { height: 44px; margin-top: 2px; border: 0; border-radius: 12px; background: linear-gradient(110deg, #6366f1, #8b5cf6 45%, #d946ef 90%); background-size: 180% 100%; color: #fff; box-shadow: 0 12px 24px -10px #7c3aedcc; font: 800 14px/1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .02em; cursor: pointer; transition: background-position .4s ease, transform .15s ease, box-shadow .2s ease; }
-    button:hover { background-position: 100% 0; box-shadow: 0 14px 28px -10px #c026d3cc; transform: translateY(-1px); }
-    button:focus-visible { outline: 3px solid #a78bfa; outline-offset: 2px; }
-    button:disabled { opacity: .75; cursor: progress; transform: none; }
-    .error { margin: 0; padding: 9px 11px; border: 1px solid #fecaca; border-radius: 10px; background: #fef2f2; color: #b91c1c; font: 600 12px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; }
+    html, body { margin: 0; background: transparent; color-scheme: dark; }
+    form { display: flex; flex-direction: column; gap: 16px; padding: 3px 3px 6px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    .field { display: flex; flex-direction: column; gap: 7px; }
+    label { color: #cbd5e1; font: 600 12.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .control { position: relative; display: flex; align-items: center; }
+    .control .icon { position: absolute; left: 13px; width: 18px; height: 18px; color: #66758c; pointer-events: none; transition: color .15s ease; }
+    .control:focus-within .icon { color: #93c5fd; }
+    input { width: 100%; height: 46px; padding: 0 14px 0 41px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; color: #f1f5f9; font: 500 14px/1 Inter, ui-sans-serif, system-ui, sans-serif; outline: none; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+    input::placeholder { color: #4b5a72; }
+    input:hover { border-color: #34425a; }
+    input:focus { border-color: #60a5fa; background: #101a2e; box-shadow: 0 0 0 4px rgb(96 165 250 / .16); }
+    input:disabled { opacity: .6; }
+    #login-password { padding-right: 46px; }
+    .reveal { position: absolute; right: 6px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 9px; background: transparent; color: #66758c; cursor: pointer; transition: color .15s ease, background .15s ease; }
+    .reveal:hover { background: #1a2438; color: #e2e8f0; }
+    .reveal:focus-visible { outline: 2px solid #60a5fa; outline-offset: 1px; }
+    .reveal .icon { position: static; width: 18px; height: 18px; color: inherit; }
+    .reveal .hide-icon, .reveal[aria-pressed="true"] .show-icon { display: none; }
+    .reveal[aria-pressed="true"] .hide-icon { display: block; }
+    .caps { display: flex; align-items: center; gap: 6px; margin: 0; color: #fcd34d; font: 600 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .caps[hidden] { display: none; }
+    .submit { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; height: 46px; margin-top: 4px; border: 0; border-radius: 12px; background: #3b82f6; color: #fff; box-shadow: 0 8px 20px -8px rgb(59 130 246 / .8), inset 0 1px 0 rgb(255 255 255 / .18); font: 700 14px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background .15s ease, transform .15s ease, box-shadow .2s ease; }
+    .submit:hover { background: #2563eb; transform: translateY(-1px); }
+    .submit:active { transform: none; }
+    .submit:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+    .submit:disabled { cursor: progress; opacity: .85; transform: none; }
+    .submit .icon { width: 17px; height: 17px; transition: transform .15s ease; }
+    .submit:hover:not(:disabled) .icon { transform: translateX(3px); }
+    .spinner { display: none; width: 16px; height: 16px; border: 2px solid rgb(255 255 255 / .35); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
+    .submit.loading .spinner { display: block; }
+    .submit.loading .icon { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid rgb(244 63 94 / .35); border-radius: 10px; background: rgb(244 63 94 / .1); color: #fecdd3; font: 500 12.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; }
     .error[hidden] { display: none; }
-    @media (prefers-reduced-motion: reduce) { input, button { transition: none; } }
+    .error .icon { flex: none; width: 16px; height: 16px; margin-top: 1px; color: #fb7185; }
+    @media (prefers-reduced-motion: reduce) { input, .submit, .submit .icon, .reveal { transition: none; } }
   </style>
 </head>
 <body>
   <form aria-label="Manager sign in" novalidate>
     <div class="field">
       <label for="login-user">User Name</label>
-      <input id="login-user" type="text" autocomplete="username" required>
+      <div class="control">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5"/></svg>
+        <input id="login-user" type="text" autocomplete="username" placeholder="Your QTS user name" spellcheck="false" autocapitalize="off" required>
+      </div>
     </div>
     <div class="field">
       <label for="login-password">Password</label>
-      <input id="login-password" type="password" autocomplete="current-password" required>
+      <div class="control">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+        <input id="login-password" type="password" autocomplete="current-password" placeholder="Your password" required>
+        <button class="reveal" type="button" aria-label="Show password" aria-pressed="false" aria-controls="login-password">
+          <svg class="icon show-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="icon hide-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3 3.7M6.6 6.6C3.9 8.3 2.5 12 2.5 12S6 18.5 12 18.5c1.6 0 3-.4 4.2-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
+        </button>
+      </div>
+      <p class="caps" role="status" hidden><svg class="icon" style="width:14px;height:14px" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 4 12h4.5v7h7v-7H20Z"/></svg>Caps Lock is on</p>
     </div>
-    <p class="error" role="alert" hidden></p>
-    <button type="submit">Sign In</button>
+    <p class="error" role="alert" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/></svg><span class="error-text"></span></p>
+    <button class="submit" type="submit"><span class="spinner" aria-hidden="true"></span><span class="submit-label">Sign in</span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
   </form>
   <script src="signin.js"></script>
 </body>

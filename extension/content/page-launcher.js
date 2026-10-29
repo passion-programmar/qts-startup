@@ -26,72 +26,127 @@ async function initializeQtsPageLauncher() {
   host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483646;pointer-events:none;';
   const root = host.attachShadow({ mode: 'closed' });
 
+  // While the actions panel is open the page moves left, so the panel never covers it (the Apply
+  // and Get JD panels, which dock in the same place, take precedence).
+  const MENU_WIDTH = 'min(320px, 48vw)';
+  document.querySelectorAll('[data-qts-menu-dock]').forEach((node) => node.remove());
+  const dock = document.createElement('style');
+  dock.setAttribute('data-qts-menu-dock', '');
+  dock.textContent = `
+    html[data-qts-menu-docked="true"]:not([data-qts-apply-docked="true"]):not([data-qts-get-jd-docked="true"]) body { box-sizing: border-box !important; padding-right: ${MENU_WIDTH} !important; }
+    html body { transition: padding-right .28s cubic-bezier(.2,.8,.2,1); }
+  `;
+  (document.head || document.documentElement).appendChild(dock);
+
   const style = document.createElement('style');
   style.textContent = `
     :host { all: initial; }
     * { box-sizing: border-box; }
-    .launcher { position: fixed; right: 180px; bottom: 24px; width: 60px; height: 60px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transition: right .28s cubic-bezier(.2,.8,.2,1); }
+    /* Closed, the actions wait as a tab on the right edge, like the Apply panel when hidden. */
+    .launcher { position: fixed; top: 50%; right: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; transform: translateY(-50%); transition: right .28s cubic-bezier(.2,.8,.2,1); }
     /* Signed out, the launcher is hidden; the toolbar icon opens the Sign In card instead. */
     .launcher:not(.signed-in) { display: none; }
-    .launcher.signed-in { animation: qts-launcher-enter .7s cubic-bezier(.34,1.56,.64,1) both; }
-    @keyframes qts-launcher-enter { from { opacity: 0; transform: translateY(24px) scale(.3) rotate(-120deg); } to { opacity: 1; transform: none; } }
-    .launcher::after { content: ""; position: absolute; inset: -16px; z-index: 0; border-radius: 50%; background: radial-gradient(circle, #a78bfa73 0%, #22d3ee40 42%, transparent 70%); filter: blur(6px); animation: qts-breathe 3.2s ease-in-out infinite; pointer-events: none; }
-    @keyframes qts-breathe { 0%, 100% { opacity: .55; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.1); } }
-    .launcher::before { content: ""; position: absolute; inset: -3px; z-index: 1; border-radius: 50%; background: conic-gradient(from 0deg, #f59e0b, #f43f5e, #d946ef, #6366f1, #06b6d4, #10b981, #f59e0b); box-shadow: 0 0 20px #8b5cf670; animation: qts-border-rotate 4s linear infinite; pointer-events: none; }
-    .launcher.open::before { animation-duration: 1.6s; }
-    @keyframes qts-border-rotate { to { transform: rotate(360deg); } }
-    .burst { position: absolute; inset: 0; z-index: 0; border: 3px solid #8b5cf6; border-radius: 50%; opacity: 0; pointer-events: none; }
-    .launcher.activated .burst { animation: qts-burst 1.1s cubic-bezier(.2,.8,.2,1) .35s; }
-    .launcher.activated .burst + .burst { border-color: #22d3ee; animation-delay: .55s; }
-    @keyframes qts-burst { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(2.8); } }
-    .main { position: absolute; inset: 3px; z-index: 3; display: grid; place-items: center; width: 54px; height: 54px; padding: 0; overflow: hidden; border: 2px solid #fff; border-radius: 50%; background: radial-gradient(circle at 32% 26%, #fff 0%, #f8fafc 40%, #e0e7ff 100%); box-shadow: inset 0 -8px 16px #6366f12e, 0 10px 28px #4f46e559; cursor: pointer; transition: transform .35s cubic-bezier(.34,1.56,.64,1), box-shadow .2s ease, background .2s ease; }
-    .main::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 35%, #ffffffe6 50%, transparent 65%); transform: translateX(-130%); animation: qts-sheen 4.5s ease-in-out infinite; pointer-events: none; }
-    @keyframes qts-sheen { 0%, 72% { transform: translateX(-130%); } 100% { transform: translateX(130%); } }
-    .main:hover { transform: scale(1.08); box-shadow: inset 0 -8px 16px #6366f12e, 0 14px 36px #4f46e580; }
-    .launcher.open .main { transform: scale(.94); }
-    .launcher.not-job-page .main, .launcher.not-job-page .main:hover { border-color: #fecaca; background: radial-gradient(circle at 32% 26%, #fecaca 0%, #dc2626 100%); box-shadow: 0 0 0 6px #dc262633, 0 12px 32px #dc262666; animation: qts-shake .45s ease; }
-    .launcher.not-job-page::before { background: #ef4444; }
-    @keyframes qts-shake { 0%, 100% { translate: 0; } 20% { translate: -4px; } 40% { translate: 4px; } 60% { translate: -3px; } 80% { translate: 3px; } }
-    .main:focus-visible, .action:focus-visible, .close:focus-visible { outline: 3px solid #a78bfa; outline-offset: 3px; }
-    .brand-icon { position: relative; z-index: 1; display: block; width: 38px; height: 38px; object-fit: contain; object-position: center; filter: drop-shadow(0 2px 3px #0f172a47); transition: transform .35s cubic-bezier(.34,1.56,.64,1); }
-    .launcher.open .brand-icon { transform: rotate(-12deg) scale(.92); }
-    .busy-dot { position: absolute; top: -2px; right: -2px; z-index: 4; display: none; width: 15px; height: 15px; border: 2px solid #fff; border-radius: 50%; background: #10b981; animation: qts-ping 1.6s ease-out infinite; pointer-events: none; }
-    .launcher.busy .busy-dot { display: block; }
-    @keyframes qts-ping { 0% { box-shadow: 0 0 0 0 #10b981aa; } 100% { box-shadow: 0 0 0 11px #10b98100; } }
-    .action { --x: 0px; --y: 0px; --a1: #6366f1; --a2: #8b5cf6; --glow: #6366f166; position: absolute; top: 50%; left: 50%; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; width: 76px; height: 76px; margin: -38px 0 0 -38px; padding: 8px 4px; border: 1.5px solid transparent; border-radius: 24px; background: linear-gradient(160deg, #ffffffee, #f8fafcdb) padding-box, linear-gradient(135deg, var(--a1), var(--a2)) border-box; color: #0f172a; box-shadow: 0 12px 28px -8px var(--glow), 0 3px 8px #0f172a1f; backdrop-filter: blur(14px) saturate(1.5); font: 700 10px/1.1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .01em; text-align: center; cursor: pointer; opacity: 0; visibility: hidden; transform: translate(0, 0) scale(.3) rotate(-25deg); transition: transform .42s cubic-bezier(.34,1.56,.64,1), opacity .2s ease, visibility .42s, box-shadow .2s ease; }
+    /* Open, the docked panel takes its place. */
+    .launcher.open { display: none; }
+    /* Q · T · S stacked in the header's Quality + Time + Speed colours, on a slim edge. */
+    .main { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; width: 34px; padding: 10px 0 8px; border: 1px solid rgb(148 163 184 / .18); border-right: 0; border-radius: 14px 0 0 14px; background: linear-gradient(180deg, #131c31, #0a0f1c); box-shadow: -8px 0 24px rgb(2 6 23 / .45), inset 1px 0 0 rgb(255 255 255 / .05); font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: transform .2s cubic-bezier(.2,.8,.2,1), background .2s ease; }
+    .main::before { content: ""; position: absolute; top: 12px; bottom: 12px; left: -1px; width: 2px; border-radius: 2px; background: linear-gradient(180deg, #fcd34d, #e2e8f0 50%, #60a5fa); }
+    .letter { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; }
+    .letter.q { background: rgb(252 211 77 / .12); color: #fcd34d; }
+    .letter.t { background: rgb(226 232 240 / .08); color: #e2e8f0; }
+    .letter.s { background: rgb(96 165 250 / .14); color: #60a5fa; }
+    .chev { margin-top: 2px; color: #66758c; font-size: 13px; transition: color .2s ease, transform .2s ease; }
+    .main:hover .chev { color: #e2e8f0; transform: translateX(-2px); }
+    .main:hover { transform: translateX(-4px); background: linear-gradient(180deg, #18233b, #0d1526); }
+    .launcher.activated .main { animation: qts-pop .5s ease; }
+    @keyframes qts-pop { 50% { transform: translateX(-6px); } }
+    .main:focus-visible, .action:focus-visible, .close:focus-visible, .hide:focus-visible { outline: 3px solid #a78bfa; outline-offset: 3px; }
+    /* One dot, the most urgent state: needs you (orange) > failed (red) > running (green). */
+    .status-dot { position: absolute; top: -5px; left: -5px; z-index: 2; display: none; width: 12px; height: 12px; border: 2px solid #0a0f1c; border-radius: 50%; pointer-events: none; }
+    .launcher.running .status-dot { display: block; background: #10b981; }
+    .launcher.failed .status-dot { display: block; background: #ef4444; }
+    .launcher.needs .status-dot { display: block; background: #f97316; }
+    /* The actions, docked on the right like the Apply panel: the page moves left instead of being covered. */
+    .menu { position: fixed; inset: 0 0 0 auto; display: flex; flex-direction: column; width: ${MENU_WIDTH}; height: 100vh; height: 100dvh; border-left: 1px solid #243047; overflow: hidden; background: #0a0f1c; color: #e2e8f0; color-scheme: dark; box-shadow: -12px 0 32px rgb(0 0 0 / 35%); font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; }
+    .menu[hidden] { display: none; }
+    .brand { display: grid; flex: 0 0 64px; grid-template-columns: 42px 1fr auto; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid #243047; background: #0d1526; }
+    .brand-logo { width: 42px; height: 42px; border: 1px solid #243047; border-radius: 9px; object-fit: contain; background: #070b13; }
+    .brand-center { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 4px; }
+    .pills { display: flex; align-items: center; gap: 3px; }
+    .pill { padding: 4px 7px; border: 1px solid #34425a; border-radius: 999px; background: #111a2e; font-size: 10px; font-weight: 700; line-height: 1; white-space: nowrap; }
+    .pill.q { color: #fcd34d; } .pill.t { color: #e2e8f0; } .pill.s { color: #60a5fa; }
+    .plus { color: #66758c; font-size: 9px; }
+    .subline { color: #66758c; font-size: 7px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; white-space: nowrap; }
+    .hide { width: 30px; height: 30px; border: 1px solid #34425a; border-radius: 9px; background: #111a2e; color: #cbd5e1; font-size: 15px; cursor: pointer; }
+    .hide:hover { background: #1a2438; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 6px; }
+    .stat { display: flex; flex-direction: column; gap: 4px; padding: 9px 10px 8px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; }
+    .stat-label { font: 800 10px/1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .08em; }
+    .stat-value { color: #f1f5f9; font: 750 20px/1 Inter, ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+    .stat.urls .stat-label { color: #fcd34d; }
+    .stat.jobs .stat-label { color: #e2e8f0; }
+    .stat.applied .stat-label { color: #60a5fa; }
+    .menu-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding: 16px; scrollbar-color: #34425a transparent; scrollbar-width: thin; }
+    .label-top { margin-top: 6px; color: #94a3b8; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .label-top:first-child { margin-top: 0; }
+    .menu-foot { flex: 0 0 auto; padding: 12px 16px 14px; border-top: 1px solid #243047; background: #0d1526; }
+    .action { --tint: rgb(99 102 241 / .16); --ink: #a5b4fc; display: grid; grid-template-columns: 34px 1fr auto; align-items: center; column-gap: 10px; row-gap: 2px; width: 100%; min-height: 48px; padding: 7px 10px; border: 1px solid #243047; border-radius: 12px; background: #111a2e; color: #e2e8f0; font: 700 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
     .action[hidden] { display: none; }
-    .action-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 11px; background: linear-gradient(135deg, var(--a1), var(--a2)); color: #fff; font-size: 17px; line-height: 1; box-shadow: 0 6px 14px -4px var(--glow), inset 0 1px 0 #ffffff5c; text-shadow: 0 1px 1px #0f172a40; }
-    .launcher.open .action { opacity: 1; visibility: visible; transform: translate(var(--x), var(--y)) scale(1); transition-delay: calc(var(--i, 0) * 40ms); }
-    .launcher.open .action:hover { transform: translate(var(--x), calc(var(--y) - 4px)) scale(1.08); box-shadow: 0 18px 34px -8px var(--glow), 0 4px 10px #0f172a24; transition-delay: 0s; }
-    .launcher.open .action:disabled { opacity: .6; cursor: progress; }
-    .action.get-jd { --a1: #06b6d4; --a2: #3b82f6; --glow: #0ea5e966; }
-    .action.generation { --a1: #8b5cf6; --a2: #d946ef; --glow: #a855f766; }
-    .action.apply { --a1: #10b981; --a2: #14b8a6; --glow: #10b98166; }
-    .action.logout { --a1: #f43f5e; --a2: #fb923c; --glow: #f43f5e66; }
-    .action.text-highlights { --a1: #f59e0b; --a2: #eab308; --glow: #f59e0b66; }
-    .action.page-exclusions { --a1: #64748b; --a2: #6366f1; --glow: #6366f155; }
-    /* A running mode turns its button into a pulsing red Cancel. */
-    .action.running { --a1: #ef4444; --a2: #f97316; --glow: #ef444466; }
-    .action.running .action-icon { animation: qts-pulse 1.4s ease-in-out infinite; }
-    @keyframes qts-pulse { 50% { transform: scale(1.14); } }
-    .get-jd { --x: -150px; --y: 0px; }
-    .generation { --x: -122px; --y: -88px; }
-    .apply { --x: -46px; --y: -143px; }
-    .logout { --x: 46px; --y: -143px; }
-    .text-highlights { --x: 122px; --y: -88px; }
-    .page-exclusions { --x: 150px; --y: 0px; }
-    .sign-in-form { position: fixed; top: 16px; right: 16px; z-index: 5; width: min(328px, calc(100vw - 32px)); overflow: hidden; padding: 18px 16px 14px; border: 1px solid #ffffffb3; border-radius: 20px; background: linear-gradient(160deg, #ffffffeb, #f5f3ffe6); box-shadow: 0 28px 64px -14px #312e8173, 0 0 0 1px #6366f11f; backdrop-filter: blur(18px) saturate(1.6); color: #0f172a; font-family: Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; animation: qts-card-in .34s cubic-bezier(.2,.9,.3,1.2) both; }
-    .sign-in-form::before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(90deg, #f59e0b, #f43f5e, #d946ef, #6366f1, #06b6d4); }
+    .action:hover:not(:disabled) { border-color: #34425a; background: #1a2438; }
+    .action:disabled { opacity: .6; cursor: progress; }
+    .action-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--tint); color: var(--ink); font-size: 16px; line-height: 1; }
+    .action-tag { padding: 2px 7px; border: 1px solid #34425a; border-radius: 999px; color: #94a3b8; font-size: 10px; font-weight: 700; white-space: nowrap; }
+    .action-tag:empty { display: none; }
+    .action-tag.on { border-color: rgb(16 185 129 / .5); color: #6ee7b7; }
+    .action-tag.needs { border-color: rgb(249 115 22 / .55); color: #fdba74; }
+    .action-tag.failed { border-color: rgb(239 68 68 / .55); color: #fca5a5; }
+    /* What the mode is doing now, under its name; it stays until the next change. */
+    .action-detail { grid-column: 2 / -1; color: #94a3b8; font: 500 11.5px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; overflow-wrap: anywhere; }
+    .action-detail:empty { display: none; }
+    .action-detail.warn { color: #fdba74; }
+    .action-detail.error { color: #fca5a5; }
+    .action-detail.good { color: #6ee7b7; }
+    .action.busy { cursor: not-allowed; opacity: .7; }
+    /* A row's list (Apply's applications): items under the row, on a guide line. */
+    .row { display: flex; flex-direction: column; }
+    .action-sub { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px 26px; padding-left: 12px; border-left: 2px solid rgb(249 115 22 / .35); }
+    .action-sub[hidden] { display: none; }
+    .action-sub.running { border-left-color: rgb(16 185 129 / .4); }
+    .action-sub.failed { border-left-color: rgb(239 68 68 / .45); }
+    .sub-status { display: flex; align-items: center; gap: 7px; margin-top: 3px; color: #a7f3d0; font: 600 11px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .sub-status.error { color: #fca5a5; }
+    .sub-bar { flex: 0 0 46px; height: 4px; overflow: hidden; border-radius: 4px; background: #243047; }
+    .sub-fill { display: block; height: 100%; border-radius: 4px; background: #10b981; transition: width .3s ease; }
+    .sub-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border: 1px solid #243047; border-radius: 10px; background: #0d1526; color: #e2e8f0; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+    .sub-item:hover { border-color: rgb(249 115 22 / .5); background: #111a2e; }
+    .sub-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: rgb(16 185 129 / .14); color: #6ee7b7; font: 800 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .sub-text { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+    .sub-name, .sub-job { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sub-name { font: 650 12.5px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .sub-job { color: #94a3b8; font: 500 11.5px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .sub-go { color: #fdba74; font: 700 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; white-space: nowrap; }
+    .action.get-jd { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
+    .action.generation { --tint: rgb(168 85 247 / .16); --ink: #d8b4fe; }
+    .action.apply { --tint: rgb(16 185 129 / .16); --ink: #6ee7b7; }
+    .action.custom { --tint: rgb(100 116 139 / .2); --ink: #cbd5e1; }
+    .action.custom:disabled { cursor: not-allowed; }
+    .action.text-highlights { --tint: rgb(245 158 11 / .16); --ink: #fcd34d; }
+    .action.page-exclusions { --tint: rgb(99 102 241 / .16); --ink: #a5b4fc; }
+    .action.logout { --tint: rgb(244 63 94 / .16); --ink: #fda4af; }
+    /* A running mode: a green edge, and its icon becomes a red × that stops it. */
+    .action.running { --tint: rgb(244 63 94 / .18); --ink: #fda4af; border-color: rgb(16 185 129 / .45); background: rgb(16 185 129 / .06); }
+    /* Cards stay clear of the docked actions. */
+    :host([data-menu-open]) .preview, :host([data-menu-open]) .outcome { right: calc(${MENU_WIDTH} + 16px); }
+    /* Signed out, the panel holds only the sign-in form; signed in, only the actions. */
+    .menu.signed-out .menu-list, .menu.signed-out .menu-foot { display: none; }
+    .sign-in-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: auto; padding: 36px 20px 18px; }
+    .sign-in-mark { display: flex; justify-content: center; gap: 6px; margin-bottom: 18px; }
+    .sign-in-mark .letter { width: 40px; height: 40px; border-radius: 12px; font: 800 18px/1 Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: inset 0 1px 0 rgb(255 255 255 / .06); }
     .sign-in-form[hidden] { display: none; }
-    @keyframes qts-card-in { from { opacity: 0; transform: translateY(-12px) scale(.96); } to { opacity: 1; transform: none; } }
-    .sign-in-header { display: flex; align-items: center; gap: 11px; margin-bottom: 12px; }
-    .sign-in-logo { display: grid; flex: none; place-items: center; width: 40px; height: 40px; border-radius: 13px; background: radial-gradient(circle at 32% 26%, #fff 0%, #e0e7ff 100%); box-shadow: inset 0 -4px 10px #6366f12e, 0 6px 16px -4px #4f46e566; }
-    .sign-in-logo img { width: 28px; height: 28px; object-fit: contain; filter: drop-shadow(0 1px 2px #0f172a47); }
-    .sign-in-title { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
-    .sign-in-title strong { font: 800 15px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
-    .sign-in-title span { color: #64748b; font: 500 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
-    .sign-in-form .close { width: 28px; height: 28px; background: #eef2ff; color: #4338ca; font-size: 18px; }
-    .sign-in-form iframe { display: block; width: 100%; height: 206px; border: 0; background: transparent; color-scheme: normal; transition: height .2s ease; }
+    .sign-in-title { margin: 0 0 6px; color: #f8fafc; font: 750 21px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -.02em; text-align: center; }
+    .sign-in-note { margin: 0 auto 24px; max-width: 240px; color: #94a3b8; font: 500 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; text-align: center; }
+    .sign-in-secure { margin: auto 0 0; padding-top: 18px; color: #66758c; font: 500 11px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; text-align: center; }
+    .sign-in-form iframe { display: block; width: 100%; height: 206px; border: 0; background: transparent; color-scheme: dark; transition: height .2s ease; }
     .preview { position: fixed; top: 16px; right: 16px; width: min(390px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 17px; border: 1px solid #cbd5e1; border-radius: 13px; background: #fff; color: #0f172a; box-shadow: 0 14px 42px #0f172a38; font: 13px/1.45 system-ui, sans-serif; pointer-events: auto; }
     .preview[hidden] { display: none; }
     .preview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
@@ -108,10 +163,8 @@ async function initializeQtsPageLauncher() {
     .apply-pick .pick-account { display: block; width: 100%; margin-top: 8px; padding: 9px 12px; border: 1px solid #10b981; border-radius: 10px; background: #ecfdf5; color: #065f46; font: 700 13px/1.3 system-ui, sans-serif; text-align: left; cursor: pointer; }
     .apply-pick .pick-account:hover:not(:disabled) { background: #d1fae5; }
     .apply-pick .pick-account:disabled { opacity: .6; cursor: wait; }
-    .launcher.get-jd-active { right: calc(min(400px, 48vw) + 180px); }
+    .launcher.get-jd-active { right: min(400px, 48vw); }
     /* A Get JD page that needs the Manager keeps an orange badge until the notice is resolved. */
-    .notice-badge { position: absolute; top: -4px; left: -4px; z-index: 4; display: none; place-items: center; width: 20px; height: 20px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: #f97316; color: #fff; font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: 0 2px 8px #f9731688; cursor: pointer; }
-    .launcher.has-notice .notice-badge { display: grid; }
     .outcome { position: fixed; right: 16px; bottom: 100px; z-index: 5; width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; border: 1px solid #e2e8f0; border-left: 4px solid #10b981; border-radius: 14px; background: #fff; color: #0f172a; box-shadow: 0 18px 44px -12px #0f172a59; font: 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; animation: qts-card-in .28s cubic-bezier(.2,.9,.3,1.2) both; }
     .outcome[hidden] { display: none; }
     .outcome.tone-info { border-left-color: #3b82f6; }
@@ -129,21 +182,9 @@ async function initializeQtsPageLauncher() {
     .outcome-actions button.primary { border-color: #4f46e5; background: #4f46e5; color: #fff; }
     .outcome-actions button:disabled { opacity: .6; cursor: progress; }
     .outcome-auto { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: #64748b; font-size: 12px; cursor: pointer; }
-    @media (max-width: 520px) {
-      .launcher { right: calc(50vw - 30px); bottom: 18px; }
-      .action { width: 66px; height: 66px; margin: -33px 0 0 -33px; border-radius: 21px; }
-      .action-icon { width: 28px; height: 28px; font-size: 15px; }
-      .get-jd { --x: -112px; --y: 0px; }
-      .generation { --x: -91px; --y: -66px; }
-      .apply { --x: -35px; --y: -106px; }
-      .logout { --x: 35px; --y: -106px; }
-      .text-highlights { --x: 91px; --y: -66px; }
-      .page-exclusions { --x: 112px; --y: 0px; }
-      .launcher.get-jd-active { right: calc(50vw - 30px); }
-    }
     @media (prefers-reduced-motion: reduce) {
-      .main, .action, .launcher, .brand-icon, .sign-in-form iframe { transition: none; }
-      .launcher, .launcher::before, .launcher::after, .main::after, .burst, .busy-dot, .action-icon, .main, .sign-in-form { animation: none !important; }
+      .main, .action, .launcher, .sign-in-form iframe { transition: none; }
+      .main { animation: none !important; }
     }
 `;
 
@@ -154,41 +195,88 @@ async function initializeQtsPageLauncher() {
   main.type = 'button';
   main.setAttribute('aria-label', 'Open QTS actions');
   main.setAttribute('aria-expanded', 'false');
-  const brandIcon = document.createElement('img');
-  brandIcon.className = 'brand-icon';
-  brandIcon.src = chrome.runtime.getURL('assets/wys-launcher.png');
-  brandIcon.alt = '';
-  brandIcon.setAttribute('aria-hidden', 'true');
-  main.appendChild(brandIcon);
-  const busyDot = document.createElement('span');
-  busyDot.className = 'busy-dot';
-  // Two rings ripple out once when the launcher activates after sign-in.
-  const bursts = [0, 1].map(() => {
-    const ring = document.createElement('span');
-    ring.className = 'burst';
-    return ring;
-  });
-  const noticeBadge = document.createElement('button');
-  noticeBadge.className = 'notice-badge';
-  noticeBadge.type = 'button';
-  noticeBadge.textContent = '!';
-  noticeBadge.setAttribute('aria-label', 'Show what Get JD needs on this page');
-  launcher.append(...bursts, main, busyDot, noticeBadge);
+  for (const letter of ['q', 't', 's']) {
+    main.append(Object.assign(document.createElement('span'), { className: `letter ${letter}`, textContent: letter.toUpperCase() }));
+  }
+  main.append(Object.assign(document.createElement('span'), { className: 'chev', textContent: '‹' }));
+  main.title = 'Show the QTS panel';
+  const statusDot = document.createElement('span');
+  statusDot.className = 'status-dot';
+  launcher.append(main, statusDot);
 
+  // The actions panel, docked on the right like the Apply panel (same header).
+  const menu = document.createElement('aside');
+  menu.className = 'menu';
+  menu.hidden = true;
+  menu.setAttribute('aria-label', 'QTS actions');
+  const menuBrand = document.createElement('header');
+  menuBrand.className = 'brand';
+  const menuLogo = document.createElement('img');
+  menuLogo.className = 'brand-logo';
+  menuLogo.alt = 'WYS';
+  menuLogo.src = chrome.runtime.getURL('assets/account-logo.png');
+  const menuBrandCenter = document.createElement('div');
+  menuBrandCenter.className = 'brand-center';
+  const pills = document.createElement('div');
+  pills.className = 'pills';
+  for (const [className, text] of [['pill q', 'Quality'], ['plus', '+'], ['pill t', 'Time'], ['plus', '+'], ['pill s', 'Speed']]) {
+    pills.append(Object.assign(document.createElement('span'), { className, textContent: text }));
+  }
+  menuBrandCenter.append(pills, Object.assign(document.createElement('span'), { className: 'subline', textContent: 'Built for precision bidding' }));
+  const menuHide = document.createElement('button');
+  menuHide.className = 'hide';
+  menuHide.type = 'button';
+  menuHide.textContent = '›';
+  menuHide.title = 'Hide the panel';
+  menuHide.setAttribute('aria-label', 'Close QTS actions');
+  menuBrand.append(menuLogo, menuBrandCenter, menuHide);
+  const menuList = document.createElement('div');
+  menuList.className = 'menu-list';
+  const menuFoot = document.createElement('div');
+  menuFoot.className = 'menu-foot';
+  menu.append(menuBrand, menuList, menuFoot);
+
+  // In this order; Highlight and Site Setting show only for a Manager assigned them, Custom is not built yet.
   const actions = [
+    ['Work'],
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
     ['generation', 'Generation', '▤', 'generation'],
-    ['text_highlights', 'Text Highlight', '✎', 'text-highlights'],
-    ['page_exclusions', 'URL Settings', '⊘', 'page-exclusions'],
     ['apply', 'Apply', '→', 'apply'],
+    ['custom', 'Custom', '✦', 'custom'],
+    ['Tools'],
+    ['text_highlights', 'Highlight', '✎', 'text-highlights'],
+    ['page_exclusions', 'Site Setting', '⊘', 'page-exclusions'],
     ['session', 'Sign In', '↪', 'logout'],
   ];
-  // Buttons fan out left to right around the arc.
-  const revealOrder = ['get-jd', 'generation', 'apply', 'logout', 'text-highlights', 'page-exclusions'];
-  for (const [action, label, icon, positionClass] of actions) {
+  // Today's counts, above the actions: new job URLs (each job once), job rows added, applications.
+  const stats = document.createElement('div');
+  stats.className = 'stats';
+  for (const [key, label, title] of [
+    ['urls', 'URL', 'New jobs added today: each job once, however many candidates got it'],
+    ['jobs', 'JOB', 'Job rows added today: one per candidate'],
+    ['applied', 'APPLY', 'Applications submitted today'],
+  ]) {
+    const tile = document.createElement('div');
+    tile.className = `stat ${key}`;
+    tile.title = title;
+    tile.append(
+      Object.assign(document.createElement('span'), { className: 'stat-label', textContent: label }),
+      Object.assign(document.createElement('span'), { className: 'stat-value', textContent: '–' }),
+    );
+    stats.append(tile);
+  }
+  menuList.append(Object.assign(document.createElement('div'), { className: 'label-top', textContent: 'Today' }), stats);
+
+  for (const [action, label, icon, className] of actions) {
+    if (!label) {
+      const heading = document.createElement('div');
+      heading.className = 'label-top';
+      heading.textContent = action;
+      menuList.appendChild(heading);
+      continue;
+    }
     const button = document.createElement('button');
-    button.className = `action ${positionClass}`;
-    button.style.setProperty('--i', String(revealOrder.indexOf(positionClass)));
+    button.className = `action ${className}`;
     button.type = 'button';
     button.dataset.action = action;
     button.setAttribute('aria-label', label);
@@ -197,39 +285,54 @@ async function initializeQtsPageLauncher() {
     iconElement.textContent = icon;
     const labelElement = document.createElement('span');
     labelElement.textContent = label;
-    button.append(iconElement, labelElement);
-    launcher.appendChild(button);
+    const tag = document.createElement('span');
+    tag.className = 'action-tag';
+    const detail = document.createElement('span');
+    detail.className = 'action-detail';
+    button.append(iconElement, labelElement, tag, detail);
+    if (action === 'custom') {
+      button.disabled = true;
+      tag.textContent = 'Coming soon';
+    }
+    if (['get_jd', 'generation', 'apply'].includes(action)) {
+      // A work row: its button, then a list under it (the applications waiting, for Apply).
+      const row = document.createElement('div');
+      row.className = 'row';
+      const sub = document.createElement('div');
+      sub.className = 'action-sub';
+      sub.dataset.subFor = action;
+      sub.hidden = true;
+      row.append(button, sub);
+      menuList.appendChild(row);
+      continue;
+    }
+    (action === 'session' ? menuFoot : menuList).appendChild(button);
   }
+  // The Tools heading shows only when one of its tools does.
+  const toolsHeading = [...menuList.querySelectorAll('.label-top')].find((heading) => heading.textContent === 'Tools');
 
   // Credentials are typed in an extension-origin frame, never in this page's DOM,
   // so page scripts and session-replay tools cannot observe the key presses.
-  const signInForm = document.createElement('div');
+  // It is a section of the actions panel: signed out, the panel shows only this.
+  const signInForm = document.createElement('section');
   signInForm.className = 'sign-in-form';
   signInForm.hidden = true;
-  signInForm.setAttribute('role', 'dialog');
   signInForm.setAttribute('aria-label', 'QTS Manager sign in');
-  const signInHeader = document.createElement('div');
-  signInHeader.className = 'sign-in-header';
-  const signInLogo = document.createElement('span');
-  signInLogo.className = 'sign-in-logo';
-  const signInLogoImage = document.createElement('img');
-  signInLogoImage.src = chrome.runtime.getURL('assets/wys-launcher.png');
-  signInLogoImage.alt = '';
-  signInLogo.appendChild(signInLogoImage);
-  const signInTitle = document.createElement('div');
-  signInTitle.className = 'sign-in-title';
-  const signInHeading = document.createElement('strong');
-  signInHeading.textContent = 'QTS Manager';
-  const signInSubtitle = document.createElement('span');
-  signInSubtitle.textContent = '';
-  signInTitle.append(signInHeading, signInSubtitle);
-  const signInClose = document.createElement('button');
-  signInClose.className = 'close';
-  signInClose.type = 'button';
-  signInClose.setAttribute('aria-label', 'Close sign in');
-  signInClose.textContent = '×';
-  signInHeader.append(signInLogo, signInTitle, signInClose);
-  signInForm.appendChild(signInHeader);
+  const signInMark = document.createElement('div');
+  signInMark.className = 'sign-in-mark';
+  for (const letter of ['q', 't', 's']) {
+    signInMark.append(Object.assign(document.createElement('span'), { className: `letter ${letter}`, textContent: letter.toUpperCase() }));
+  }
+  const signInSecure = document.createElement('p');
+  signInSecure.className = 'sign-in-secure';
+  signInSecure.textContent = '🔒 Typed in QTS’s own secure frame: this page cannot see it.';
+  signInForm.append(
+    signInMark,
+    Object.assign(document.createElement('h2'), { className: 'sign-in-title', textContent: 'Welcome back' }),
+    Object.assign(document.createElement('p'), { className: 'sign-in-note', textContent: 'Sign in to your QTS Manager account to start bidding.' }),
+    signInSecure,
+  );
+  menu.insertBefore(signInForm, menuFoot);
   let signInFrame = null;
 
   const preview = document.createElement('section');
@@ -344,11 +447,14 @@ async function initializeQtsPageLauncher() {
     };
   }
 
-  root.append(style, cleanupStyle, launcher, signInForm, preview, applyPick, outcomeCard, cleanup);
+  root.append(style, cleanupStyle, launcher, menu, preview, applyPick, outcomeCard, cleanup);
   (document.documentElement || document.body).appendChild(host);
 
   function setOpen(open) {
     launcher.classList.toggle('open', open);
+    menu.hidden = !open;
+    host.toggleAttribute('data-menu-open', open);
+    document.documentElement?.setAttribute('data-qts-menu-docked', open ? 'true' : 'false');
     main.setAttribute('aria-expanded', String(open));
     main.setAttribute(
       'aria-label',
@@ -360,6 +466,8 @@ async function initializeQtsPageLauncher() {
 
   function syncGetJdDocking() {
     const docked = document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true';
+    // The Get JD panel docks where the actions panel does: it takes the place.
+    if (docked && launcher.classList.contains('open')) setOpen(false);
     launcher.classList.toggle('get-jd-active', docked);
     outcomeCard.classList.toggle('get-jd-active', docked);
   }
@@ -443,24 +551,28 @@ async function initializeQtsPageLauncher() {
   }
 
   function showSignInForm() {
-    setOpen(false);
+    menu.classList.add('signed-out');
+    setOpen(true);
     if (!signInFrame) {
       signInFrame = document.createElement('iframe');
       signInFrame.title = 'QTS Manager sign in';
       signInFrame.src = chrome.runtime.getURL('signin/signin.html');
       signInFrame.addEventListener('load', () => signInFrame?.focus(), { once: true });
-      signInForm.appendChild(signInFrame);
+      signInForm.insertBefore(signInFrame, signInSecure);
     } else {
       signInFrame.focus();
     }
     signInForm.hidden = false;
   }
 
-  function hideSignInForm() {
+  // closePanel: false when signing in succeeded, so the panel turns to the actions.
+  function hideSignInForm(closePanel = true) {
+    const shown = !signInForm.hidden;
     signInForm.hidden = true;
     // Removing the frame discards anything typed into it.
     signInFrame?.remove();
     signInFrame = null;
+    if (shown && closePanel && menu.classList.contains('signed-out')) setOpen(false);
   }
 
   // The toolbar icon: signed out it shows or hides the Sign In card; signed in it opens or closes the actions.
@@ -489,13 +601,14 @@ async function initializeQtsPageLauncher() {
   };
 
   async function syncTextHighlightAction() {
-    const highlightButton = launcher.querySelector('[data-action="text_highlights"]');
-    const exclusionsButton = launcher.querySelector('[data-action="page_exclusions"]');
+    const highlightButton = menu.querySelector('[data-action="text_highlights"]');
+    const exclusionsButton = menu.querySelector('[data-action="page_exclusions"]');
     if (!highlightButton && !exclusionsButton) return;
     const signedIn = await syncSessionAction();
     if (!signedIn) {
       if (highlightButton) highlightButton.hidden = true;
       if (exclusionsButton) exclusionsButton.hidden = true;
+      toolsHeading.hidden = true;
       return;
     }
     const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_EXTENSION_FEATURES' });
@@ -508,6 +621,7 @@ async function initializeQtsPageLauncher() {
         || (response.canManagePageExclusions !== true && response.canManageJobDetectionUrlRules !== true);
       exclusionsButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
     }
+    toolsHeading.hidden = Boolean(highlightButton?.hidden !== false && exclusionsButton?.hidden !== false);
   }
 
   // The Get JD panel is injected on demand instead of on every page.
@@ -589,7 +703,7 @@ async function initializeQtsPageLauncher() {
     clearOutcomeTimers();
     currentOutcome = null;
     outcomeCard.hidden = true;
-    launcher.classList.remove('has-notice');
+    syncModeActions().catch(() => {});
   }
 
   const OUTCOME_ACTIONS = {
@@ -612,7 +726,7 @@ async function initializeQtsPageLauncher() {
       return;
     }
     if (action === 'never_on_site') {
-      const urlButton = launcher.querySelector('[data-action="page_exclusions"]');
+      const urlButton = menu.querySelector('[data-action="page_exclusions"]');
       outcomeCard.hidden = true;
       await openPageExclusionPanel(urlButton || button, { prefillBlockedUrl: outcome.blockedUrlFragment || '' });
       return;
@@ -655,8 +769,8 @@ async function initializeQtsPageLauncher() {
         button.addEventListener('click', () => runOutcomeAction(action, button));
         outcomeActions.appendChild(button);
       });
-    launcher.classList.toggle('has-notice', outcome.kind === 'notice');
     outcomeCard.hidden = false;
+    syncModeActions().catch(() => {});
     const seconds = Number(outcome.closeInSeconds) || 0;
     if (outcome.kind !== 'done') {
       outcomeCountdown.hidden = true;
@@ -705,16 +819,13 @@ async function initializeQtsPageLauncher() {
   }
 
   outcomeClose.addEventListener('click', () => {
-    // Hiding a notice keeps its badge; hiding a countdown also keeps the tab open.
+    // Hiding a notice keeps the orange dot (opening the panel shows it again); hiding a countdown also keeps the tab open.
     if (currentOutcome?.kind === 'notice') {
       clearOutcomeTimers();
       outcomeCard.hidden = true;
     } else {
       clearOutcome();
     }
-  });
-  noticeBadge.addEventListener('click', () => {
-    if (currentOutcome?.kind === 'notice') outcomeCard.hidden = !outcomeCard.hidden;
   });
   outcomeAutoInput.addEventListener('change', () => {
     const enabled = outcomeAutoInput.checked;
@@ -748,13 +859,14 @@ async function initializeQtsPageLauncher() {
   }
 
   async function syncSessionAction() {
-    const button = launcher.querySelector('[data-action="session"], [data-session-action]');
+    const button = menu.querySelector('[data-action="session"], [data-session-action]');
     if (!button) return launcher.classList.contains('signed-in');
     // The service worker publishes only the session expiry; the token never reaches this page.
     const stored = await chrome.storage.local.get(['authExpiresAt']);
     const expiresAt = Number(stored.authExpiresAt) || 0;
     const signedIn = expiresAt > Date.now();
     launcher.classList.toggle('signed-in', signedIn);
+    menu.classList.toggle('signed-out', !signedIn);
     button.dataset.sessionAction = signedIn ? 'sign_out' : 'sign_in';
     button.setAttribute('aria-label', signedIn ? 'Sign Out' : 'Sign In');
     const icon = button.querySelector('.action-icon');
@@ -763,9 +875,9 @@ async function initializeQtsPageLauncher() {
     if (label) label.textContent = signedIn ? 'Sign Out' : 'Sign In';
     // Signed out, an open Sign In card stays put: sign-in clears the old session first, which lands here mid-login.
     if (signedIn) {
-      hideSignInForm();
+      hideSignInForm(false);
     } else {
-      setOpen(false);
+      if (signInForm.hidden) setOpen(false);
       preview.hidden = true;
       if (expiresAt > 0) {
         chrome.storage.local.set({ qtsExtensionStatus: null, qtsGetJdOn: false }).catch((error) => {
@@ -776,30 +888,193 @@ async function initializeQtsPageLauncher() {
     return signedIn;
   }
 
+  // Every status has one home: each mode's row (a chip and one line of what it is doing), this
+  // page's Get JD result in its card, and the tab's one dot for the most urgent state. What a click
+  // answered (a failure, or a warning) stays under its row until the next click: [text, 'error' | 'warn'].
+  const rowNotes = new Map();
+  let pageNote = null;
+
+  // A row's list: one card per item (an application waiting, the job Generation writes). Each card
+  // has who and which job, an optional status line (with a step bar), and Open, which shows its tab.
+  // tone colours the list's guide line: needs (orange), running (green) or failed (red).
+  function renderSub(action, items, tone = '') {
+    const list = menu.querySelector(`[data-sub-for="${action}"]`);
+    list.replaceChildren();
+    list.hidden = !items.length;
+    list.className = `action-sub ${tone}`.trim();
+    for (const entry of items) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'sub-item';
+      item.title = entry.openTitle || 'Show its page';
+      const initials = entry.avatar || String(entry.name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0].toUpperCase()).join('');
+      const text = document.createElement('span');
+      text.className = 'sub-text';
+      text.append(
+        Object.assign(document.createElement('span'), { className: 'sub-name', textContent: entry.name || 'Candidate' }),
+        Object.assign(document.createElement('span'), { className: 'sub-job', textContent: [entry.company, entry.title].filter(Boolean).join(' · ') }),
+      );
+      if (entry.status) {
+        const status = Object.assign(document.createElement('span'), { className: `sub-status ${entry.statusType || ''}`.trim() });
+        if (entry.progress != null) {
+          const bar = Object.assign(document.createElement('span'), { className: 'sub-bar' });
+          const fill = Object.assign(document.createElement('span'), { className: 'sub-fill' });
+          fill.style.width = `${Math.round(Math.min(Math.max(entry.progress, 0), 1) * 100)}%`;
+          bar.append(fill);
+          status.append(bar);
+        }
+        status.append(Object.assign(document.createElement('span'), { textContent: entry.status }));
+        text.append(status);
+      }
+      item.append(
+        Object.assign(document.createElement('span'), { className: 'sub-avatar', textContent: initials || '?' }),
+        text,
+        Object.assign(document.createElement('span'), { className: 'sub-go', textContent: entry.goLabel || 'Open ›' }),
+      );
+      item.addEventListener('click', async () => {
+        const reply = entry.onOpen ? await entry.onOpen().catch((error) => ({ ok: false, error: error?.message })) : await chrome.runtime.sendMessage(entry.open).catch(() => null);
+        if (!reply?.ok) showToast(reply?.error || 'QTS could not show that page.', 'error');
+      });
+      list.appendChild(item);
+    }
+  }
+
+  // Today's counts, read while the panel is open: when it opens, and (at most every 5 seconds)
+  // after a job is saved or an application changes.
+  let countsAskedAt = 0;
+  let countsTimer = null;
+  function refreshDailyCounts(now = false) {
+    if (!launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
+    clearTimeout(countsTimer);
+    const wait = now ? 0 : Math.max(0, countsAskedAt + 5000 - Date.now());
+    countsTimer = setTimeout(async () => {
+      countsAskedAt = Date.now();
+      const reply = await chrome.runtime.sendMessage({ type: 'QTS_DAILY_COUNTS' }).catch(() => null);
+      if (!reply?.ok) return;
+      for (const key of ['urls', 'jobs', 'applied']) {
+        stats.querySelector(`.stat.${key} .stat-value`).textContent = String(Number(reply[key]) || 0);
+      }
+    }, wait);
+  }
+
+  // Generation's steps, as its browser state names them (6 in all).
+  const GENERATION_STEPS = {
+    preparing_prompt: [1, 'Preparing the prompt'],
+    opening_chatgpt: [2, 'Opening ChatGPT'],
+    sending_prompt: [3, 'Sending the prompt'],
+    waiting_for_response: [4, 'ChatGPT is writing'],
+    validating_response: [5, 'Checking the answer'],
+    response_saved: [6, 'Making the PDFs'],
+    downloading: [6, 'Downloading the PDFs'],
+  };
+
   // Two switches per Chrome: Get JD on/off (qtsGetJdOn) and the work slot (qtsExtensionStatus:
   // generation or apply). Each running mode turns its own button into its own Cancel.
   async function syncModeActions() {
-    const stored = await chrome.storage.local.get(['qtsExtensionStatus', 'qtsGetJdOn']);
+    const stored = await chrome.storage.local.get([
+      'qtsExtensionStatus', 'qtsGetJdOn', 'qtsGenerationBrowserState', 'qtsGenerationNotice', 'qtsApplyState',
+    ]);
     const workStatus = stored.qtsExtensionStatus;
     const getJdOn = stored.qtsGetJdOn === true;
-    const labels = {
-      get_jd: 'Get JD',
-      generation: 'Generation',
-      apply: 'Apply',
+    const rows = {
+      get_jd: { label: 'Get JD', icon: '⌕', active: getJdOn },
+      generation: { label: 'Generation', icon: '▤', active: workStatus === 'generation' },
+      apply: { label: 'Apply', icon: '→', active: workStatus === 'apply' },
     };
-    launcher.classList.toggle('busy', getJdOn || workStatus === 'generation' || workStatus === 'apply');
-    for (const [action, defaultLabel] of Object.entries(labels)) {
-      const button = launcher.querySelector(`[data-action="${action}"]`);
-      if (!button) continue;
-      const active = action === 'get_jd' ? getJdOn : workStatus === action;
-      button.classList.toggle('running', active);
-      button.dataset.modeAction = active ? (action === 'get_jd' ? 'cancel_get_jd' : 'cancel_status') : action;
-      button.setAttribute('aria-label', active ? `Cancel ${defaultLabel}` : defaultLabel);
-      const icon = button.querySelector('.action-icon');
-      const label = button.querySelector('.action-icon + span');
-      if (icon) icon.textContent = active ? '×' : action === 'get_jd' ? '⌕' : action === 'generation' ? '▤' : '→';
-      if (label) label.textContent = active ? 'Cancel' : defaultLabel;
+
+    if (getJdOn) {
+      rows.get_jd.chip = ['On', 'on'];
+      rows.get_jd.detail = currentOutcome?.kind === 'notice'
+        ? ['This page needs you: see the card beside the panel.', 'warn']
+        : pageNote?.url === location.href ? [pageNote.text, ''] : ['Checking each job page you open.', ''];
     }
+    // Generation's latest step (with its job) or notice, whichever is newer.
+    const state = stored.qtsGenerationBrowserState || {};
+    const notice = stored.qtsGenerationNotice || {};
+    const fromState = state.message ? { text: state.message, type: state.messageType, at: Date.parse(state.updatedAt) || 0, job: true } : null;
+    const latest = [
+      fromState,
+      notice.message && { text: notice.message, type: 'info', at: Date.parse(notice.updatedAt) || 0 },
+    ].filter(Boolean).sort((left, right) => right.at - left.at)[0];
+    const step = GENERATION_STEPS[state.phase];
+    const jobFailed = latest?.job === true && latest.type === 'error';
+    let generationCards = [];
+    if (rows.generation.active || latest?.type === 'error') {
+      rows.generation.chip = latest?.type === 'error' ? ['Failed', 'failed'] : ['Running', 'on'];
+      if (state.jobId && (jobFailed || (rows.generation.active && step))) {
+        // The job it writes (or the one that failed) in a card under the row.
+        generationCards = [{
+          name: state.candidateName,
+          company: state.company,
+          title: state.jobTitle,
+          status: jobFailed ? state.message : `${step[0]}/6 · ${step[1]}`,
+          statusType: jobFailed ? 'error' : '',
+          progress: jobFailed ? null : step[0] / 6,
+          open: { type: 'QTS_SHOW_GENERATION' },
+          openTitle: 'Show the ChatGPT tab writing it',
+        }];
+        rows.generation.detail = jobFailed
+          ? ['This job failed: see why below.', 'error']
+          : ['Writing the résumé and cover letter, one job at a time.', ''];
+      } else {
+        rows.generation.detail = latest ? [latest.text, latest.type === 'error' ? 'error' : ''] : ['Looking for the next ready job.', ''];
+      }
+    }
+    renderSub('generation', generationCards, jobFailed ? 'failed' : 'running');
+
+    const open = Array.isArray(stored.qtsApplyState?.open) ? stored.qtsApplyState.open : [];
+    if (rows.apply.active) {
+      rows.apply.chip = open.length ? ['Waiting for you', 'needs'] : ['Running', 'on'];
+      rows.apply.detail = open.length
+        ? [open.length === 1
+          ? 'Fill the form, then click Submitted on its panel.'
+          : `${open.length} applications waiting: fill each form, then click Submitted on its panel.`, 'warn']
+        : ['Looking for a ready job.', ''];
+    }
+
+    // One work slot per Chrome: the other mode says why it cannot start instead of failing on a click.
+    const busy = {
+      generation: workStatus === 'apply' ? 'Apply is running in this Chrome. Stop it first.' : '',
+      apply: workStatus === 'generation' ? 'Generation is running in this Chrome. Stop it first.' : '',
+    };
+
+    let failed = false;
+    for (const [action, row] of Object.entries(rows)) {
+      const button = menu.querySelector(`[data-action="${action}"]`);
+      if (!button) continue;
+      const note = rowNotes.get(action);
+      const chip = note?.[1] === 'error' ? ['Failed', 'failed'] : busy[action] ? ['Busy', ''] : row.chip;
+      const detail = note || (busy[action] ? [busy[action], ''] : row.detail);
+      if (chip?.[1] === 'failed') failed = true;
+      const active = row.active;
+      button.classList.toggle('running', active);
+      button.classList.toggle('busy', Boolean(busy[action]));
+      button.disabled = Boolean(busy[action]);
+      button.dataset.modeAction = active ? (action === 'get_jd' ? 'cancel_get_jd' : 'cancel_status') : action;
+      const defaultLabel = row.label;
+      button.setAttribute('aria-label', active ? `Cancel ${defaultLabel}` : defaultLabel);
+      button.querySelector('.action-icon').textContent = active ? '×' : row.icon;
+      button.querySelector('.action-icon + span').textContent = active ? `Cancel ${defaultLabel}` : defaultLabel;
+      const tag = button.querySelector('.action-tag');
+      tag.textContent = chip?.[0] || '';
+      tag.className = `action-tag ${chip?.[1] || ''}`.trim();
+      const line = button.querySelector('.action-detail');
+      line.textContent = detail?.[0] || '';
+      line.className = `action-detail ${detail?.[1] || ''}`.trim();
+    }
+
+    renderSub('apply', rows.apply.active ? open.map((entry) => ({
+      name: entry.candidate,
+      company: entry.company,
+      title: entry.title,
+      open: { type: 'QTS_SHOW_APPLICATION', attemptId: entry.attemptId },
+      openTitle: 'Show this application',
+    })) : [], 'needs');
+
+    const needs = currentOutcome?.kind === 'notice' || (rows.apply.active && open.length > 0);
+    launcher.classList.toggle('needs', needs);
+    launcher.classList.toggle('failed', !needs && failed);
+    launcher.classList.toggle('running', !needs && !failed && Object.values(rows).some((row) => row.active));
   }
 
   async function runAction(action, button) {
@@ -811,7 +1086,10 @@ async function initializeQtsPageLauncher() {
       await openPageExclusionPanel(button);
       return;
     }
-    setOpen(false);
+    // The panel stays open: the row itself shows what the click changed.
+    const row = ['get_jd', 'generation', 'apply'].includes(action) ? action : null;
+    if (row) rowNotes.delete(row);
+    else setOpen(false);
     button.disabled = true;
     try {
       const resolvedAction = action === 'session'
@@ -836,17 +1114,16 @@ async function initializeQtsPageLauncher() {
         globalThis.__qtsPageToast?.clear();
         await syncSessionAction();
       } else if (['get_jd', 'generation', 'apply', 'cancel_status', 'cancel_get_jd'].includes(resolvedAction)) {
-        showToast(
-          response.message || (resolvedAction.startsWith('cancel_') ? 'Cancelled.' : 'Started.'),
-          response.warning ? 'warn' : 'info',
-        );
+        if (row && response.warning) rowNotes.set(row, [response.message || 'Started with a warning.', 'warn']);
         if (resolvedAction === 'get_jd' && response.appliedCleanupCount > 0) askAppliedCleanup(response.appliedCleanupCount);
         await syncModeActions();
       }
     } catch (error) {
-      showToast(error?.message || 'Could not run this QTS action.', 'error');
+      if (row) rowNotes.set(row, [error?.message || 'Could not run this QTS action.', 'error']);
+      else showToast(error?.message || 'Could not run this QTS action.', 'error');
     } finally {
       button.disabled = false;
+      if (row) await syncModeActions().catch(() => {});
     }
   }
 
@@ -859,12 +1136,19 @@ async function initializeQtsPageLauncher() {
     if (opening) chrome.runtime.sendMessage({ type: 'QTS_ACTIVITY' }).catch(() => {});
     // While Apply is on, a page with saved jobs offers its accounts ("Apply this page").
     if (opening) showApplyPick().catch(() => {});
+    if (opening) refreshDailyCounts(true);
+    // A Get JD notice hidden earlier shows again beside the panel (the orange dot stands for it).
+    if (opening && currentOutcome?.kind === 'notice') outcomeCard.hidden = false;
   });
-  launcher.querySelectorAll('[data-action]').forEach((button) => {
+  menu.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
   });
+  // Signed out, closing the panel also discards what was typed into the sign-in form.
+  menuHide.addEventListener('click', () => {
+    if (!signInForm.hidden) hideSignInForm();
+    else setOpen(false);
+  });
   close.addEventListener('click', () => { preview.hidden = true; });
-  signInClose.addEventListener('click', hideSignInForm);
   // Page-wide listeners belong to this launcher instance and are removed by disable().
   const onStorageChanged = (changes, area) => {
     if (area !== 'local') return;
@@ -873,36 +1157,36 @@ async function initializeQtsPageLauncher() {
         .then(() => syncTextHighlightAction())
         .catch(() => {});
       // Sign-in always clears the previous session first, so a fresh expiry means a new sign-in.
+      // The panel stays open and turns to the actions: that is the confirmation.
       if (changes.authExpiresAt.newValue && !changes.authExpiresAt.oldValue) {
-        hideSignInForm();
+        hideSignInForm(false);
         playActivation();
-        showToast('Signed in. QTS actions are ready.', 'success');
       }
     }
-    if (changes.qtsExtensionStatus || changes.qtsGetJdOn) syncModeActions().catch(() => {});
+    if (changes.qtsExtensionStatus || changes.qtsGetJdOn || changes.qtsGenerationBrowserState
+      || changes.qtsGenerationNotice || changes.qtsApplyState) syncModeActions().catch(() => {});
+    // An application ended (submitted or not): APPLY may have changed.
+    if (changes.qtsApplyState) refreshDailyCounts();
   };
-  let notJobPageTimer = null;
   const onRuntimeMessage = (message) => {
     if (message?.type === 'QTS_HIDE_SIGN_IN_FRAME') {
       hideSignInForm();
+      return;
+    }
+    // A job saved here changes today's counts.
+    if (message?.type === 'QTS_GET_JD_RESULT_UPDATED') {
+      if (['complete', 'saved'].includes(message.result?.status)) refreshDailyCounts();
       return;
     }
     if (message?.type === 'QTS_GET_JD_OUTCOME') {
       showOutcome(message.outcome).catch(() => {});
       return;
     }
-    // Get JD found no job on this page: flash the launcher red once instead of showing a toast.
+    // Get JD found no job on this page: said once, under Get JD in the panel, for this address.
     if (message?.type === 'QTS_NOT_JOB_PAGE') {
-      clearTimeout(notJobPageTimer);
-      launcher.classList.add('not-job-page');
-      notJobPageTimer = setTimeout(() => launcher.classList.remove('not-job-page'), 1200);
-      return;
+      pageNote = { url: location.href, text: 'This page is not a job page.' };
+      syncModeActions().catch(() => {});
     }
-    if (message?.type !== 'QTS_GENERATION_PROGRESS') return;
-    showToast(
-      String(message.message || 'Generation updated.'),
-      message.statusType || 'info',
-    );
   };
   const onKeydown = (event) => {
     if (event.key === 'Escape') {
@@ -946,6 +1230,8 @@ async function initializeQtsPageLauncher() {
       chrome.runtime.onMessage.removeListener(onRuntimeMessage);
       document.removeEventListener('keydown', onKeydown);
       window.removeEventListener('message', onWindowMessage);
+      document.documentElement?.removeAttribute('data-qts-menu-docked');
+      dock.remove();
       host.remove();
       globalThis.__qtsPageLauncher = { excluded: true };
     },

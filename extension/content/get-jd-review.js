@@ -29,13 +29,15 @@ async function initializeGetJdReviewOnce() {
   const RESULT_MESSAGE = 'QTS_GET_JD_RESULT_UPDATED';
   let host = null;
   let root = null;
-  let lastToastKey = '';
   let managerProfiles = [];
   let currentResult = null;
   let selectionUpdateInProgress = false;
   let extensionStatus = null;
   let signedIn = false;
   let profilesLoaded = false;
+  // The review opens only when the Manager asks (Review in the QTS panel's Get JD row): a checked
+  // job page shows its short result in that row instead of this panel.
+  let reviewOpen = false;
   let profileLoadError = '';
   let panelHideTimer = null;
   let managerSettingsOpen = false;
@@ -277,7 +279,7 @@ async function initializeGetJdReviewOnce() {
     const shouldShow =
       signedIn && (
         managerSettingsOpen
-        || (visible && profilesLoaded && extensionStatus === 'get_jd')
+        || (visible && reviewOpen && profilesLoaded && extensionStatus === 'get_jd')
       );
     const panel = host?.__qtsElements?.panel;
     if (panel) {
@@ -946,30 +948,6 @@ async function initializeGetJdReviewOnce() {
     return 'New job — not in your Jobs or Bids yet.';
   }
 
-  function saveResultToast(response) {
-    const saved = Number(response.savedCount) || 0;
-    const removed = Number(response.removedCount) || 0;
-    const failed = Number(response.failedCount) || 0;
-    const candidates = (count) => `${count} candidate${count === 1 ? '' : 's'}`;
-    const changes = [
-      saved ? `added ${candidates(saved)}` : '',
-      removed ? `removed ${candidates(removed)}` : '',
-    ].filter(Boolean).join(' and ');
-    if (failed && changes) {
-      return { type: 'warn', message: `Jobs updated: ${changes}; ${candidates(failed)} could not be changed. Review and retry.` };
-    }
-    if (failed) return { type: 'error', message: 'No candidates could be changed. Review the list and retry.' };
-    if (changes) return { type: 'success', message: `Jobs updated: ${changes}.` };
-    return { type: 'info', message: 'The selected candidates already have this job.' };
-  }
-
-  function showToast(message, type, key) {
-    if (key && key === lastToastKey) return;
-    if (key) lastToastKey = key;
-    // All toasts on the page share one stack (content/page-toast.js).
-    globalThis.__qtsPageToast?.show(message, { type, key });
-  }
-
   function appendDetail(container, label, value, extraClass = '') {
     const wrapper = document.createElement('div');
     const term = document.createElement('dt');
@@ -1286,15 +1264,9 @@ async function initializeGetJdReviewOnce() {
         selectionUpdateInProgress = false;
       }
     };
-    elements.cancel.onclick = async () => {
-      elements.cancel.disabled = true;
-      try {
-        const response = await chrome.runtime.sendMessage({ type: 'CANCEL_GET_JD_REVIEW' });
-        if (!response?.ok) throw new Error(response?.error || 'Could not cancel this review.');
-      } catch (error) {
-        elements.message.textContent = error.message || 'Could not cancel this review.';
-        elements.cancel.disabled = false;
-      }
+    elements.cancel.onclick = () => {
+      reviewOpen = false;
+      setPanelVisible(false);
     };
   }
 
@@ -1413,6 +1385,7 @@ async function initializeGetJdReviewOnce() {
 
   function applyResult(result) {
     ensureRoot();
+    if (result?.pageUrl !== currentResult?.pageUrl) reviewOpen = false;
     if (!result || result.pageUrl !== location.href) {
       currentResult = null;
       renderCurrentResult();
@@ -1424,21 +1397,17 @@ async function initializeGetJdReviewOnce() {
     if (!signedIn) return;
     const elements = host.__qtsElements;
     setPanelVisible(true);
-    const toastKey = `${result.runId || result.updatedAt || ''}:${result.status}`;
     if (result.status === 'duplicate') {
       const message = result.toastMessage || jobPresenceMessage(result);
       renderIdlePanel(result.message || message);
-      showToast(message, result.inBids ? 'applied' : 'info', toastKey);
       return;
     }
     if (result.status === 'new') {
       renderIdlePanel(result.message || jobPresenceMessage(result));
-      showToast(result.message || jobPresenceMessage(result), 'success', toastKey);
       return;
     }
     if (result.status === 'error') {
       renderIdlePanel(result.message || 'Could not check this job.');
-      showToast(result.message || 'Could not check this job.', 'error', toastKey);
       return;
     }
     if (result.status === 'cancelled') {
@@ -1448,8 +1417,6 @@ async function initializeGetJdReviewOnce() {
     }
     if (result.status === 'saved') {
       renderSaveResult(result);
-      const saveToast = saveResultToast(result.saveResponse || {});
-      showToast(saveToast.message, saveToast.type, toastKey);
       return;
     }
     if (result.status !== 'complete' || !result.classification) {
@@ -1461,11 +1428,6 @@ async function initializeGetJdReviewOnce() {
       setPanelVisible(false);
       return;
     }
-    showToast(
-      result.toastMessage || jobPresenceMessage(result),
-      result.toastKind === 'new' ? 'success' : result.toastKind === 'applied' ? 'applied' : 'info',
-      `${result.runId || result.updatedAt}:candidate-review`,
-    );
     renderReview(result);
   }
 
@@ -1506,6 +1468,11 @@ async function initializeGetJdReviewOnce() {
   globalThis.__qtsGetJdReview = {
     excluded: false,
     applyResult,
+    // From the QTS panel's Get JD row: show this page's candidates to change who gets the job.
+    openReview() {
+      reviewOpen = true;
+      renderCurrentResult();
+    },
     openManagerSettings,
     disable() {
       setPanelVisible(false);

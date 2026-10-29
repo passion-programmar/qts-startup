@@ -590,6 +590,31 @@ async function evaluateJobPageForManager(tabId, settle = null) {
   );
 }
 
+// Text highlights show only on job pages: Get JD's check (no Gemini), once per tab and address,
+// retried as Get JD does while the page is still loading.
+const textHighlightJobPages = new Map();
+function isTextHighlightJobPage(tabId, url) {
+  const key = `${tabId} ${url}`;
+  if (!textHighlightJobPages.has(key)) {
+    for (const old of textHighlightJobPages.keys()) if (old.startsWith(`${tabId} `)) textHighlightJobPages.delete(old);
+    textHighlightJobPages.set(key, (async () => {
+      if (await isPageBlockedForManager(url)) return false;
+      for (const attempt of GET_JD_DETECTION_ATTEMPTS) {
+        if (attempt.delayMs) await sleep(attempt.delayMs);
+        if ((await getTab(tabId))?.url !== url) return false;
+        const evaluation = await evaluateJobPageForManager(tabId, attempt).catch(() => null);
+        if (evaluation?.isJobPage) return true;
+        if (!evaluation || evaluation.reason === 'closed') return false;
+      }
+      return false;
+    })());
+  }
+  return textHighlightJobPages.get(key);
+}
+chrome.tabs.onRemoved.addListener((tabId) => {
+  for (const key of textHighlightJobPages.keys()) if (key.startsWith(`${tabId} `)) textHighlightJobPages.delete(key);
+});
+
 async function isPageDetectedAsJobForManager(tabId) {
   try {
     return (await evaluateJobPageForManager(tabId))?.isJobPage === true;
@@ -3187,17 +3212,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     return results[0]?.result;
   }
 
-  async function showGenerationPageStatus(jobTabId, message, type = 'info') {
-    if (!Number.isInteger(jobTabId)) return;
-    try {
-      await chrome.tabs.sendMessage(jobTabId, {
-        type: 'QTS_GENERATION_PROGRESS',
-        message,
-        statusType: type,
-      });
-    } catch {
-      // The source page may have navigated while ChatGPT was generating.
-    }
+  // Generation's progress lives in one place: its browser state, shown by the QTS panel's
+  // Generation row (and the tab's dot) in every tab, never as messages on the job page.
+  async function showGenerationPageStatus(_jobTabId, message, type = 'info') {
+    await updateGenerationBrowserState({ message: String(message || ''), messageType: type }).catch(() => {});
   }
 
   async function updateGenerationBrowserState(values) {
@@ -3723,6 +3741,12 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         jobId: queuedJob.id,
         jobTabId,
         jobUrl: queuedJob.jobUrl,
+        jobTitle: queuedJob.jobTitle || '',
+        company: queuedJob.company || '',
+        candidateName: queuedJob.candidateName || '',
+        // A new job starts with no message: the last job's (or failure's) is not carried over.
+        message: '',
+        messageType: 'info',
       });
       await ensureQueuedGenerationIsActive(queuedJob.id);
       await showGenerationPageStatus(jobTabId, 'Preparing the prompt from the saved job and candidate profile...');
@@ -5770,6 +5794,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         message: error instanceof Error ? error.message : 'Could not update shared text highlights.',
       });
     });
+    return true;
+  }
+  // The panel's Generation card: "Open" brings the ChatGPT tab writing the job to the front.
+  // The panel's counts for today (URL · JOB · APPLY), asked for while it is open.
+  if (msg.type === 'QTS_DAILY_COUNTS') {
+    workerApiRequest('GET', '/api/extension/stats')
+      .then((result) => sendResponse(result?.success
+        ? { ok: true, urls: result.urls, jobs: result.jobs, applied: result.applied }
+        : { ok: false, error: result?.message || 'Could not read today\'s counts.' }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (msg.type === 'QTS_SHOW_GENERATION') {
+    (async () => {
+      const state = (await chrome.storage.local.get(GENERATION_BROWSER_STATE_KEY))[GENERATION_BROWSER_STATE_KEY];
+      const tab = Number.isInteger(state?.chatTabId) ? await getTab(state.chatTabId) : null;
+      if (!tab) return { ok: false, error: 'The ChatGPT tab for this job is no longer open.' };
+      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+      await chrome.tabs.update(tab.id, { active: true });
+      return { ok: true };
+    })().then(sendResponse, () => sendResponse({ ok: false, error: 'QTS could not show the ChatGPT tab.' }));
+    return true;
+  }
+  if (msg.type === 'QTS_IS_JOB_PAGE') {
+    if (sender.tab?.id == null || !sender.tab?.url || sender.frameId !== 0) {
+      sendResponse({ ok: false, jobPage: false });
+      return false;
+    }
+    isTextHighlightJobPage(sender.tab.id, sender.tab.url)
+      .then((jobPage) => sendResponse({ ok: true, jobPage }))
+      .catch(() => sendResponse({ ok: false, jobPage: false }));
     return true;
   }
   if (msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED') {

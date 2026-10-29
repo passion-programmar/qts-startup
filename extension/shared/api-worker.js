@@ -34,6 +34,7 @@ function workerSupportedApiPath(path) {
     || path.startsWith('/api/extension/generation/')
     || path.startsWith('/api/extension/apply/')
     || path === '/api/extension/browsers/heartbeat'
+    || path === '/api/extension/stats'
     || path.startsWith('/api/extension/auth/');
 }
 

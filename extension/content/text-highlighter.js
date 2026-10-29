@@ -147,19 +147,54 @@ async function startPageTextHighlighter() {
     });
   }
 
+  // Hidden, the page is not watched at all; shown again, it is highlighted once and watched again.
+  function stopWatching() {
+    observer.disconnect();
+    pendingNodes.clear();
+    clearTimeout(batchTimer);
+    batchTimer = null;
+  }
+
+  // Highlights show only on a job page (asked once per address) while its tab is shown.
+  let jobPageUrl = '';
+  let jobPageCheck = null;
+  let sharedRulesUrl = '';
+  function isJobPage() {
+    if (jobPageUrl !== location.href) {
+      jobPageUrl = location.href;
+      jobPageCheck = chrome.runtime.sendMessage({ type: 'QTS_IS_JOB_PAGE' })
+        .then((reply) => reply?.jobPage === true)
+        .catch(() => false);
+    }
+    return jobPageCheck;
+  }
+
   async function loadAndApply() {
     await waitForDocumentBody();
+    if (document.hidden) {
+      stopWatching();
+      return;
+    }
     currentStorageKey = highlighting.getGlobalStorageKey();
     const stored = await chrome.storage.local.get([
       currentStorageKey,
       'authExpiresAt',
     ]);
     currentRules = highlighting.normalizeRules(stored[currentStorageKey] || []);
-    if ((Number(stored.authExpiresAt) || 0) <= Date.now()) {
+    if ((Number(stored.authExpiresAt) || 0) <= Date.now() || !currentRules.length) {
+      applyRules([]);
+      return;
+    }
+    const url = location.href;
+    const jobPage = await isJobPage();
+    if (document.hidden || url !== location.href) return;
+    if (!jobPage) {
       applyRules([]);
       return;
     }
     applyRules(currentRules);
+    if (sharedRulesUrl === url) return;
+    sharedRulesUrl = url;
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_GLOBAL_TEXT_HIGHLIGHTS' });
       if (!response?.success) {
@@ -194,6 +229,10 @@ async function startPageTextHighlighter() {
   });
   window.addEventListener('hashchange', () => {
     loadAndApply().catch((error) => console.error('[QTS text highlights] Could not follow page navigation:', error));
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopWatching();
+    else loadAndApply().catch((error) => console.error('[QTS text highlights] Could not apply saved rules:', error));
   });
 
   loadAndApply().catch((error) => console.error('[QTS text highlights] Could not load saved rules:', error));

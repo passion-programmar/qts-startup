@@ -1331,7 +1331,7 @@ const APPLY_REVIEW_REMINDER_MS = 10 * 60 * 1000;
 // click during a fill): kept and handled as soon as it waits again, never lost.
 const earlyDecisions = new Map();
 // An ending replaces a click kept earlier; a click never replaces an ending.
-const ENDING_ACTIONS = new Set(['closed', 'cancel', 'stopped', 'later', 'lost']);
+const ENDING_ACTIONS = new Set(['closed', 'cancel', 'remove', 'stopped', 'later', 'lost']);
 
 function waitForManager(attemptId) {
   const early = earlyDecisions.get(attemptId);
@@ -1530,6 +1530,8 @@ async function answerAssistWithoutRunner(msg, tabId) {
   } else if (action === 'cancel') {
     result = await post('release', { mode: 'drop', reason: 'Cancelled by the Manager.' });
     if (result?.success) await noteCancelledJob(msg.jobId);
+  } else if (action === 'remove') {
+    result = await post('release', { mode: 'remove', reason: 'Removed by the Manager.' });
   } else {
     return { ok: false, error: 'Apply restarted in this Chrome: if the site took the application, click Submitted; else Cancel.' };
   }
@@ -1544,6 +1546,36 @@ async function answerAssistWithoutRunner(msg, tabId) {
 // The application each tab holds while it waits for the Manager: the panel comes back after the
 // page reloads or moves to the site's next step.
 const activeReviews = new Map();
+
+// The applications open in this Chrome, for the QTS panel's Apply row in every tab.
+const APPLY_STATE_KEY = 'qtsApplyState';
+function publishApplyState() {
+  const open = [...activeReviews.values()].map((review) => ({
+    attemptId: review.attemptId,
+    candidate: review.candidate,
+    title: review.job?.title || '',
+    company: review.job?.company || '',
+  }));
+  try {
+    Promise.resolve(chrome.storage?.local?.set({ [APPLY_STATE_KEY]: { open } })).catch(() => {});
+  } catch {
+    // Only the panel's Apply row reads it.
+  }
+}
+// A worker that restarted holds none until it takes its pages up again.
+publishApplyState();
+
+// The panel's list of open applications: a click brings that application's page to the front.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== 'QTS_SHOW_APPLICATION') return false;
+  const tabId = activeReviews.get(msg.attemptId)?.tabId;
+  if (tabId == null) {
+    sendResponse({ ok: false, error: 'That application is no longer open in this Chrome.' });
+    return false;
+  }
+  focusApplyTab(tabId).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: 'QTS could not show that page.' }));
+  return true;
+});
 
 /** The tabs an application lives in: the assistant's job page and the tabs opened from it. */
 const tabsOf = (review) => review.tabIds || new Set(review.tabId != null ? [review.tabId] : []);
@@ -1648,6 +1680,7 @@ async function runApplication(application, recipe) {
     panel: null,
   };
   activeReviews.set(application.attemptId, review);
+  publishApplyState();
   const reviewState = (mode, extra = {}) => ({
     attemptId: application.attemptId,
     mode,
@@ -1860,6 +1893,7 @@ async function runApplication(application, recipe) {
   } finally {
     clearInterval(heartbeat);
     activeReviews.delete(application.attemptId);
+    publishApplyState();
     reviewWaiters.delete(application.attemptId);
     await clearManagerNotice(application.attemptId).catch(() => {});
     if (tab?.id != null) {
@@ -2147,6 +2181,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     panel: null,
   };
   activeReviews.set(attemptId, review);
+  publishApplyState();
   const assistant = {
     used: {}, handled: new Set(), tries: new Map(), problems: [], filling: false, stopped: false, keepAlive, show: null,
     // Pages whose embedded job-board form was opened in their tab (once each).
@@ -2309,6 +2344,18 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
         return;
       }
       if (decision.action === 'lost') return;
+      // Remove on the panel: the job row is deleted and its tabs closed.
+      if (decision.action === 'remove' && !marked) {
+        assistant.stopped = true;
+        const removed = await report('release', { mode: 'remove', reason: 'Removed by the Manager.' });
+        if (!removed.success) {
+          await showPanel('assist', { message: removed.message || 'QTS did not remove the job; try again.' });
+          startFiller();
+          continue;
+        }
+        await closeTabs();
+        return;
+      }
       // Cancel, all its tabs closed, or Apply turned off: nothing recorded.
       if (marked) {
         await notifyApply(`${application.job.company}: answer "Submitted successfully?" on the Jobs page.`);
@@ -2331,6 +2378,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     assistant.stopped = true;
     clearInterval(heartbeat);
     activeReviews.delete(attemptId);
+    publishApplyState();
     reviewWaiters.delete(attemptId);
     earlyDecisions.delete(attemptId);
     // Ended here (a worker that stops never gets here, so its pages are taken up again after a restart).

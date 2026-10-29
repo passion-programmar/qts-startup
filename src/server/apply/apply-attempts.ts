@@ -447,8 +447,10 @@ async function recordApplyRun(jobId: string, outcome: string, reason: string | n
  * - "test": test mode stopped before Submit on purpose; like "later".
  * - "drop": the assistant's page ended without a bid (Cancel, a closed page, Apply turned off, an
  *   error): nothing is recorded; the job is exactly as it was before it was opened.
+ * - "remove": the panel's Remove: the job row is deleted (its attempts with it); never while
+ *   Generation still writes it.
  */
-export type ReleaseMode = "error" | "skip" | "later" | "test" | "drop";
+export type ReleaseMode = "error" | "skip" | "later" | "test" | "drop" | "remove";
 
 export async function releaseApplyAttempt(
   attemptId: string,
@@ -461,6 +463,14 @@ export async function releaseApplyAttempt(
   const before = and(ownedBy(attemptId, managerId, browserId), inArray(applyAttempts.status, ["claimed", "waiting_review"]));
   if (mode === "drop") {
     const removed = await db.delete(applyAttempts).where(before).returning({ id: applyAttempts.id });
+    return removed.length > 0;
+  }
+  if (mode === "remove") {
+    const removed = await db.delete(jobs).where(and(
+      eq(jobs.managerId, managerId),
+      sql`not ${generationHeldSql()}`,
+      sql`${jobs.id} = (select ${applyAttempts.jobId} from ${applyAttempts} where ${before})`,
+    )).returning({ id: jobs.id });
     return removed.length > 0;
   }
   if (mode === "later" || mode === "test") {

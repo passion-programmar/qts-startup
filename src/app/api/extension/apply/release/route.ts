@@ -3,10 +3,11 @@ import { releaseApplyAttempt, type ReleaseMode } from "@/server/apply/apply-atte
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { parseAppliedAnswers } from "@/server/apply/apply-values";
 
-const MODES = new Set<ReleaseMode>(["error", "skip", "later", "test", "drop"]);
+const MODES = new Set<ReleaseMode>(["error", "skip", "later", "test", "drop", "remove"]);
 
 // Ends a claimed application before Submit: an error returns it to the list, Skip keeps it from
-// being offered again, Later (and test mode) gives it back without counting as a return.
+// being offered again, Later (and test mode) gives it back without counting as a return, and
+// Remove deletes the job row.
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
@@ -26,7 +27,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     return released
       ? NextResponse.json({ success: true })
       : NextResponse.json(
-        { success: false, message: "This application is no longer held by this Chrome, or it was submitted." },
+        {
+          success: false,
+          message: body.mode === "remove"
+            ? "QTS could not remove this job: it is no longer held by this Chrome, or Generation is still writing it."
+            : "This application is no longer held by this Chrome, or it was submitted.",
+        },
         { status: 409 },
       );
   } catch (error) {

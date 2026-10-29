@@ -89,6 +89,9 @@ export async function POST(request: Request): Promise<NextResponse> {
             workplaceType: jobs.workplaceType,
             salary: jobs.salary,
             description: effectiveJobDescription(),
+            // For the extension panel's Generation card only.
+            firstName: profiles.firstName,
+            lastName: profiles.lastName,
           })
           .from(jobs)
           .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -153,6 +156,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             workplaceType: candidate.workplaceType ?? "",
             salary: candidate.salary ?? "",
             description: candidate.description ?? "",
+            candidateName: [candidate.firstName, candidate.lastName].filter(Boolean).join(" "),
           },
         });
     }
