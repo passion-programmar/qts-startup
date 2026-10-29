@@ -30,7 +30,8 @@ importScripts(
   '../shared/idle-pacing.js',
   '../shared/chrome-pdf.js',
   '../shared/resume-print-requests.js',
-  'apply-runner.js'
+  'apply-runner.js',
+  'auto-apply-runner.js'
 );
 
 function isExtractablePageUrl(url) {
@@ -5444,8 +5445,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'cancel_status') {
-        const stored = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+        const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, self.__qtsAutoApply.KIND_KEY]);
         const cancelledStatus = stored[EXTENSION_STATUS_KEY];
+        const cancelledAuto = cancelledStatus === 'apply' && stored[self.__qtsAutoApply.KIND_KEY] === 'auto';
         let serverCancelError = '';
         if (cancelledStatus === 'generation') {
           // Stop locally even if the server is unreachable; the run's cancel path retries server-side.
@@ -5462,7 +5464,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const cancelledLabel = cancelledStatus === 'generation'
             ? 'Generation'
             : cancelledStatus === 'apply'
-              ? 'Apply'
+              ? cancelledAuto ? 'Auto Apply' : 'Apply'
               : 'Current action';
         sendResponse({
           ok: true,
@@ -5483,7 +5485,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         const currentStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
-          sendResponse({ ok: true, status: 'apply', message: 'Apply is already running.' });
+          sendResponse(await self.__qtsAutoApply.isOn()
+            ? { ok: false, error: 'Auto Apply is running in this Chrome. Stop it first, or run Apply in another Chrome.' }
+            : { ok: true, status: 'apply', message: 'Apply is already running.' });
           return;
         }
         if (currentStatus[EXTENSION_STATUS_KEY] === 'generation') {
@@ -5495,6 +5499,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
           return;
         }
+        await chrome.storage.local.remove(self.__qtsAutoApply.KIND_KEY);
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'apply' });
         const dryRun = (await chrome.storage.local.get(self.__qtsApplyRunner.APPLY_DRY_RUN_KEY))[self.__qtsApplyRunner.APPLY_DRY_RUN_KEY] === true;
         sendResponse({
@@ -5506,6 +5511,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         self.__qtsApplyRunner.processApplyQueue().catch((error) => {
           console.error('[QTS Apply] Queue worker failed:', error);
+        });
+        return;
+      }
+      // Auto Apply: Apply's claims and checks, filled by the automatic engine (approved answers and
+      // profile facts only), one application at a time; the Manager clicks each site's Submit.
+      if (action === 'auto_apply') {
+        const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
+        if (!token) {
+          sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Auto Apply.' });
+          return;
+        }
+        const currentStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
+          sendResponse(await self.__qtsAutoApply.isOn()
+            ? { ok: true, status: 'apply', message: 'Auto Apply is already running.' }
+            : { ok: false, error: 'Apply is running in this Chrome. Stop it first, or run Auto Apply in another Chrome.' });
+          return;
+        }
+        if (currentStatus[EXTENSION_STATUS_KEY] === 'generation') {
+          sendResponse({ ok: false, error: 'Generation is running in this Chrome. Stop it first, or run Auto Apply in another Chrome.' });
+          return;
+        }
+        const features = await workerApiRequest('GET', '/api/extension/features/me');
+        if (features.success !== true || features.features?.canUseApply !== true) {
+          sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+          return;
+        }
+        await chrome.storage.local.set({ [self.__qtsAutoApply.KIND_KEY]: 'auto', [EXTENSION_STATUS_KEY]: 'apply' });
+        sendResponse({
+          ok: true,
+          status: 'apply',
+          message: 'Auto Apply started. It fills each form from the profile and approved answers; you click Submit.',
+        });
+        self.__qtsApplyRunner.processApplyQueue().catch((error) => {
+          console.error('[QTS Auto Apply] Queue worker failed:', error);
         });
         return;
       }

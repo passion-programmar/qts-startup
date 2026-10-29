@@ -128,6 +128,7 @@ async function initializeQtsPageLauncher() {
     .action.get-jd { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
     .action.generation { --tint: rgb(168 85 247 / .16); --ink: #d8b4fe; }
     .action.apply { --tint: rgb(16 185 129 / .16); --ink: #6ee7b7; }
+    .action.auto-apply { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
     .action.custom { --tint: rgb(100 116 139 / .2); --ink: #cbd5e1; }
     .action.custom:disabled { cursor: not-allowed; }
     .action.text-highlights { --tint: rgb(245 158 11 / .16); --ink: #fcd34d; }
@@ -242,6 +243,7 @@ async function initializeQtsPageLauncher() {
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
     ['generation', 'Generation', '▤', 'generation'],
     ['apply', 'Apply', '→', 'apply'],
+    ['auto_apply', 'Auto Apply', '⇉', 'auto-apply'],
     ['custom', 'Custom', '✦', 'custom'],
     ['Tools'],
     ['text_highlights', 'Highlight', '✎', 'text-highlights'],
@@ -294,7 +296,7 @@ async function initializeQtsPageLauncher() {
       button.disabled = true;
       tag.textContent = 'Coming soon';
     }
-    if (['get_jd', 'generation', 'apply'].includes(action)) {
+    if (['get_jd', 'generation', 'apply', 'auto_apply'].includes(action)) {
       // A work row: its button, then a list under it (the applications waiting, for Apply).
       const row = document.createElement('div');
       row.className = 'row';
@@ -973,13 +975,17 @@ async function initializeQtsPageLauncher() {
   async function syncModeActions() {
     const stored = await chrome.storage.local.get([
       'qtsExtensionStatus', 'qtsGetJdOn', 'qtsGenerationBrowserState', 'qtsGenerationNotice', 'qtsApplyState',
+      'qtsApplyKind', 'qtsAutoApplyState',
     ]);
     const workStatus = stored.qtsExtensionStatus;
     const getJdOn = stored.qtsGetJdOn === true;
+    // Apply and Auto Apply share the work slot ('apply'); qtsApplyKind says which holds it.
+    const autoApplyOn = workStatus === 'apply' && stored.qtsApplyKind === 'auto';
     const rows = {
       get_jd: { label: 'Get JD', icon: '⌕', active: getJdOn },
       generation: { label: 'Generation', icon: '▤', active: workStatus === 'generation' },
-      apply: { label: 'Apply', icon: '→', active: workStatus === 'apply' },
+      apply: { label: 'Apply', icon: '→', active: workStatus === 'apply' && !autoApplyOn },
+      auto_apply: { label: 'Auto Apply', icon: '⇉', active: autoApplyOn },
     };
 
     if (getJdOn) {
@@ -1032,10 +1038,32 @@ async function initializeQtsPageLauncher() {
         : ['Looking for a ready job.', ''];
     }
 
+    // Auto Apply's application: its step and what it waits for, from its own run state.
+    const autoRun = autoApplyOn ? (stored.qtsAutoApplyState?.runs || [])[0] : null;
+    const AUTO_PHASES = {
+      starting: 'Opening the form',
+      filling: 'Filling',
+      ai: 'Asking the AI about the questions left',
+      next: 'Going to the next step',
+      needs_you: 'Needs you: see the panel on the form',
+      final: 'Ready: check it, then click the site\'s Submit',
+      submitted: 'Submitted? Answer on the panel',
+    };
+    if (autoApplyOn) {
+      const waiting = ['needs_you', 'final', 'submitted'].includes(autoRun?.phase);
+      rows.auto_apply.chip = waiting ? ['Waiting for you', 'needs'] : ['Running', 'on'];
+      rows.auto_apply.detail = autoRun
+        ? [`Step ${autoRun.step || 1} · ${autoRun.phase === 'ai' && autoRun.ai ? `Asking ${autoRun.ai.provider}${autoRun.ai.focused ? ' (its tab is shown while it answers)' : ' (in the background)'}` : AUTO_PHASES[autoRun.phase] || 'Working'}${autoRun.unresolved ? ` · ${autoRun.unresolved} left for you` : ''}`, waiting ? 'warn' : '']
+        : ['Looking for a ready job.', ''];
+    }
+
     // One work slot per Chrome: the other mode says why it cannot start instead of failing on a click.
     const busy = {
-      generation: workStatus === 'apply' ? 'Apply is running in this Chrome. Stop it first.' : '',
-      apply: workStatus === 'generation' ? 'Generation is running in this Chrome. Stop it first.' : '',
+      generation: workStatus === 'apply' ? `${autoApplyOn ? 'Auto Apply' : 'Apply'} is running in this Chrome. Stop it first.` : '',
+      apply: workStatus === 'generation' ? 'Generation is running in this Chrome. Stop it first.'
+        : autoApplyOn ? 'Auto Apply is running in this Chrome. Stop it first.' : '',
+      auto_apply: workStatus === 'generation' ? 'Generation is running in this Chrome. Stop it first.'
+        : workStatus === 'apply' && !autoApplyOn ? 'Apply is running in this Chrome. Stop it first.' : '',
     };
 
     let failed = false;
@@ -1070,8 +1098,18 @@ async function initializeQtsPageLauncher() {
       open: { type: 'QTS_SHOW_APPLICATION', attemptId: entry.attemptId },
       openTitle: 'Show this application',
     })) : [], 'needs');
+    renderSub('auto_apply', autoRun ? [{
+      name: autoRun.candidate,
+      company: autoRun.company,
+      title: autoRun.title,
+      status: `Step ${autoRun.step || 1} · ${AUTO_PHASES[autoRun.phase] || 'Working'}`,
+      statusType: ['needs_you', 'final', 'submitted'].includes(autoRun.phase) ? 'warn' : '',
+      open: { type: 'QTS_SHOW_APPLICATION', attemptId: autoRun.attemptId },
+      openTitle: 'Show this application',
+    }] : [], 'running');
 
-    const needs = currentOutcome?.kind === 'notice' || (rows.apply.active && open.length > 0);
+    const needs = currentOutcome?.kind === 'notice' || (rows.apply.active && open.length > 0)
+      || ['needs_you', 'final', 'submitted'].includes(autoRun?.phase);
     launcher.classList.toggle('needs', needs);
     launcher.classList.toggle('failed', !needs && failed);
     launcher.classList.toggle('running', !needs && !failed && Object.values(rows).some((row) => row.active));
@@ -1087,7 +1125,7 @@ async function initializeQtsPageLauncher() {
       return;
     }
     // The panel stays open: the row itself shows what the click changed.
-    const row = ['get_jd', 'generation', 'apply'].includes(action) ? action : null;
+    const row = ['get_jd', 'generation', 'apply', 'auto_apply'].includes(action) ? action : null;
     if (row) rowNotes.delete(row);
     else setOpen(false);
     button.disabled = true;
@@ -1113,7 +1151,7 @@ async function initializeQtsPageLauncher() {
         hideSignInForm();
         globalThis.__qtsPageToast?.clear();
         await syncSessionAction();
-      } else if (['get_jd', 'generation', 'apply', 'cancel_status', 'cancel_get_jd'].includes(resolvedAction)) {
+      } else if (['get_jd', 'generation', 'apply', 'auto_apply', 'cancel_status', 'cancel_get_jd'].includes(resolvedAction)) {
         if (row && response.warning) rowNotes.set(row, [response.message || 'Started with a warning.', 'warn']);
         if (resolvedAction === 'get_jd' && response.appliedCleanupCount > 0) askAppliedCleanup(response.appliedCleanupCount);
         await syncModeActions();
@@ -1164,7 +1202,7 @@ async function initializeQtsPageLauncher() {
       }
     }
     if (changes.qtsExtensionStatus || changes.qtsGetJdOn || changes.qtsGenerationBrowserState
-      || changes.qtsGenerationNotice || changes.qtsApplyState) syncModeActions().catch(() => {});
+      || changes.qtsGenerationNotice || changes.qtsApplyState || changes.qtsApplyKind || changes.qtsAutoApplyState) syncModeActions().catch(() => {});
     // An application ended (submitted or not): APPLY may have changed.
     if (changes.qtsApplyState) refreshDailyCounts();
   };

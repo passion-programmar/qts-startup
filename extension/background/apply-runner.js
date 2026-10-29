@@ -16,6 +16,8 @@ const APPLY_CHAT_TAB_KEY = 'qtsApplyChatTab';
 // Test mode: fills everything, then stops right before Submit and gives the job back.
 const APPLY_DRY_RUN_KEY = 'qtsApplyDryRun';
 const APPLY_HEARTBEAT_MS = 30 * 1000;
+// Auto Apply renews its claim more often, so a Stop all on the Jobs page (which ends the claim) is seen sooner.
+const AUTO_APPLY_HEARTBEAT_MS = 15 * 1000;
 const APPLY_FORM_WAIT_MS = 25 * 1000;
 const APPLY_APPLICATIONS_PER_CHAT_TAB = 10;
 const APPLY_MAX_FORM_PAGES = 5;
@@ -112,10 +114,12 @@ async function openApplyTab(url, { active = true } = {}) {
 }
 
 /** Apply's ChatGPT tab in its window, reused for up to ten applications with a new chat each. */
-async function applyChatTab() {
+async function applyChatTab(onTab = () => {}) {
   const stored = await chrome.storage.session.get(APPLY_CHAT_TAB_KEY);
   const saved = stored[APPLY_CHAT_TAB_KEY];
   if (saved && Number.isInteger(saved.id) && saved.uses < APPLY_APPLICATIONS_PER_CHAT_TAB && await getTab(saved.id)) {
+    // onTab: the tab is known before it is made ready (Auto Apply may show it meanwhile).
+    await onTab(saved.id);
     await startNewChatGptChat(saved.id);
     await chrome.storage.session.set({ [APPLY_CHAT_TAB_KEY]: { id: saved.id, uses: saved.uses + 1 } });
     return saved.id;
@@ -124,6 +128,7 @@ async function applyChatTab() {
   const windowId = await applyWindowId();
   const tab = await chrome.tabs.create({ windowId, url: 'https://chatgpt.com/', active: false, pinned: true });
   await tabOwnership.markTab(tab.id, 'apply');
+  await onTab(tab.id);
   await ensureChatGptReady(tab.id);
   await chrome.storage.session.set({ [APPLY_CHAT_TAB_KEY]: { id: tab.id, uses: 1 } });
   return tab.id;
@@ -148,14 +153,15 @@ async function inForm(tabId, func, args = []) {
 }
 
 /** The form's fields once the page has built them (Ashby fetches its form after loading). */
-async function waitForFormFields(tabId) {
+async function waitForFormFields(tabId, { minFields = 3 } = {}) {
   const deadline = Date.now() + APPLY_FORM_WAIT_MS;
   let previous = -1;
   while (Date.now() < deadline) {
     const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()).catch(() => null);
     const visible = (fields || []).filter((field) => !field.hidden && !field.disabled);
-    // Two scans in a row with the same number of fields: the form is built.
-    if (visible.length > 2 && visible.length === previous) return fields;
+    // Two scans in a row with the same number of fields: the form is built. A later step (the form
+    // already open) may hold a single question, such as a consent box before Submit.
+    if (visible.length >= minFields && visible.length === previous) return fields;
     previous = visible.length;
     await sleep(1000);
   }
@@ -458,6 +464,8 @@ async function readComboboxOptions(tabId, fields) {
 /** The answer prompt for a page's open questions: Super Admin's prompt for the AI mode, or the default. */
 function answerPromptFor(application, fields) {
   return self.__qtsApplyAnswers.buildAnswerPrompt({
+    // Auto Apply sends only the context open questions need.
+    minimal: application.minimalPrompt === true,
     template: application.answerPrompt?.template,
     job: application.job,
     candidate: application.candidate,
@@ -474,8 +482,29 @@ function answerPromptFor(application, fields) {
 // Gemini through the QTS server. Everything around it (checks, follow-up, filling, review) is shared.
 const aiName = (application) => (application.aiMode === 'gemini' ? 'Gemini' : 'ChatGPT');
 
-async function askAiForAnswers(application, fields, keepAlive) {
+// Auto Apply's limit of AI requests per application (application.aiBudget): past it, open questions
+// stay for the Manager.
+function spendAiRequest(application) {
+  if (application.aiBudget && (application.aiCalls || 0) >= application.aiBudget) {
+    throw new Error(`the limit of ${application.aiBudget} AI requests for this application is reached`);
+  }
   application.aiCalls = (application.aiCalls || 0) + 1;
+}
+
+// A round's follow-up counts against the limit too; past it, the follow-up is not sent and the
+// questions it was for are the Manager's (the round's other answers are kept).
+function followUpAllowed(application, needed, fields) {
+  try {
+    spendAiRequest(application);
+    return true;
+  } catch (error) {
+    noteUnanswered(application, needed.map((entry) => ({ ...entry, reason: error.message })), fields);
+    return false;
+  }
+}
+
+async function askAiForAnswers(application, fields, keepAlive) {
+  spendAiRequest(application);
   diag('ai-request', { questions: fields.length, mode: application.aiMode });
   return application.aiMode === 'gemini'
     ? askGeminiForAnswers(application, fields)
@@ -483,7 +512,7 @@ async function askAiForAnswers(application, fields, keepAlive) {
 }
 
 async function askAiToFix(application, problems, fields, keepAlive) {
-  application.aiCalls = (application.aiCalls || 0) + 1;
+  spendAiRequest(application);
   return application.aiMode === 'gemini'
     ? askGeminiToFix(application, problems, fields)
     : askChatGptToFix(application, problems, fields, keepAlive);
@@ -492,8 +521,21 @@ async function askAiToFix(application, problems, fields, keepAlive) {
 async function askGemini(application, turns) {
   diag('ai-send', { turns: turns.length, characters: turns.reduce((sum, turn) => sum + String(turn.text || '').length, 0) });
   // A reply that never comes ends as "did not answer" (the Manager writes it, or asks again), never a stall.
-  const result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, { timeoutMs: APPLY_AI_TIMEOUT_MS });
+  const timeoutMs = application.aiTimeoutMs || APPLY_AI_TIMEOUT_MS;
+  const sent = Date.now();
+  let result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, { timeoutMs });
+  // Auto Apply (application.aiRetryWaits): a busy key pool (429), an unavailable server (503, 504) or
+  // no answer in time is tried again a bounded number of times, waiting longer each time. A failed
+  // Gemini call (500, 502: the server already tried its other keys) is not: asking again would only
+  // spend the keys' per-minute limits.
+  for (const wait of application.aiRetryWaits || []) {
+    if (result.success === true || ![0, 429, 503, 504].includes(Number(result._httpStatus) || 0)) break;
+    diag('ai-retry', { status: result._httpStatus || 0, waitMs: wait });
+    await sleep(wait);
+    result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, { timeoutMs });
+  }
   diag('ai-reply', { ok: result.success === true, characters: String(result.reply || '').length });
+  (application.aiTimings ||= []).push({ phase: 'gemini', ms: Date.now() - sent, ok: result.success === true, status: result._httpStatus || 0 });
   if (result.success !== true) throw new Error(result.message || 'Gemini did not answer.');
   return String(result.reply || '');
 }
@@ -507,7 +549,7 @@ async function askGeminiForAnswers(application, fields) {
   const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields);
   noteForReview(application, review, fields);
   const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
-  if (!needed.length) return answers;
+  if (!needed.length || !followUpAllowed(application, needed, fields)) return answers;
   return { ...answers, ...(await askGeminiToFix(application, needed, fields)) };
 }
 
@@ -529,9 +571,14 @@ async function askGeminiToFix(application, problems, fields) {
  * (or the default), with one fix-up for answers that do not fit their field.
  */
 async function askChatGptForAnswers(application, fields, keepAlive) {
+  // Auto Apply (application.chatFocus set): its own focus rules, timings, and indication.
+  if (application.chatFocus !== undefined) return askChatGptForAutoApply(application, fields, keepAlive);
   // A new chat per round; its follow-up goes to the same chat so ChatGPT keeps the context.
+  const started = Date.now();
   const chatTabId = await applyChatTab();
   application.chatTabId = chatTabId;
+  diag('chatgpt-tab', { ms: Date.now() - started });
+  (application.aiTimings ||= []).push({ phase: 'chatgpt-tab', ms: Date.now() - started });
   const helpers = self.__qtsApplyAnswers;
   const first = answerPromptFor(application, fields);
   const reply = await askChatGpt(chatTabId, application, first, keepAlive);
@@ -542,27 +589,171 @@ async function askChatGptForAnswers(application, fields, keepAlive) {
   return { ...answers, ...(await askChatGptToFix(application, needed, fields, keepAlive)) };
 }
 
+// Auto Apply's switch to the ChatGPT tab while it answers ({ attemptId, chatTabId, formTabId, windowId }),
+// kept in session storage so the application's tab can be given back after Cancel, Stop all, or a
+// restarted worker too. One at a time: Auto Apply works on one application per Chrome.
+const AUTO_APPLY_CHAT_SWITCH_KEY = 'qtsAutoApplyChatSwitch';
+
+/**
+ * Gives the application's tab back after Auto Apply's switch to ChatGPT, but only while that switch
+ * is still Auto Apply's: the ChatGPT tab still the one its window shows (no other tab shown in the
+ * last moment) and the application's tab still open. attemptId: only that application's switch.
+ * Returns whether the tab was given back.
+ */
+async function giveBackChatTab(attemptId = null) {
+  const held = (await chrome.storage.session.get(AUTO_APPLY_CHAT_SWITCH_KEY))[AUTO_APPLY_CHAT_SWITCH_KEY];
+  if (!held || (attemptId != null && held.attemptId !== attemptId)) return false;
+  await chrome.storage.session.remove(AUTO_APPLY_CHAT_SWITCH_KEY);
+  const [shown] = await chrome.tabs.query({ windowId: held.windowId, active: true }).catch(() => []);
+  if (shown?.id !== held.chatTabId || !(await getTab(held.formTabId))) return false;
+  await chrome.tabs.update(held.formTabId, { active: true }).catch(() => {});
+  return true;
+}
+
+// While Auto Apply holds the switch to ChatGPT, another tab shown in the Apply window (the Manager's
+// click, or a page) gives way to ChatGPT again after this long: ChatGPT writes fast only when shown.
+const AUTO_APPLY_CHAT_KEEP_MS = 1000;
+
+/**
+ * Keeps ChatGPT's tab shown in its window until the returned function is called: whenever another
+ * tab of that window is shown, ChatGPT's is selected again (only the tab; the window is left as it
+ * is), as long as this application still holds the switch. counts.kept: how many times.
+ */
+function keepChatTabShown(attemptId, chatTabId, windowId, counts) {
+  let timer = null;
+  const onShown = ({ tabId, windowId: shownIn }) => {
+    if (shownIn !== windowId || tabId === chatTabId) return;
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const held = (await chrome.storage.session.get(AUTO_APPLY_CHAT_SWITCH_KEY))[AUTO_APPLY_CHAT_SWITCH_KEY];
+      if (held?.attemptId !== attemptId || held.chatTabId !== chatTabId || !(await getTab(chatTabId))) return;
+      const [shown] = await chrome.tabs.query({ windowId, active: true }).catch(() => []);
+      if (!shown || shown.id === chatTabId) return;
+      await chrome.tabs.update(chatTabId, { active: true }).catch(() => {});
+      counts.kept = (counts.kept || 0) + 1;
+    }, AUTO_APPLY_CHAT_KEEP_MS);
+  };
+  chrome.tabs.onActivated.addListener(onShown);
+  return () => {
+    clearTimeout(timer);
+    chrome.tabs.onActivated.removeListener(onShown);
+  };
+}
+
+/**
+ * Auto Apply's ChatGPT round. With "Focus ChatGPT while answering" on (application.chatFocus), the
+ * ChatGPT tab is selected in the Apply window while it is made ready, sent the questions, and
+ * answers (Chrome slows down a tab its window does not show), when the application's tab is the one
+ * that window shows as the round starts, even if another program (or Chrome window) has the
+ * keyboard; until the answer is in, any other tab shown in that window gives way to ChatGPT again
+ * (keepChatTabShown). Only the tab changes: no window is brought to the front or given the
+ * keyboard. The application's tab comes back afterwards (answered, failed, timed out, or stopped)
+ * through giveBackChatTab. Off: ChatGPT works behind the application. Each round's times (making
+ * the tab ready, sending, answering, parsing) and where the Manager was (the window focused or not,
+ * at the start and the end) are kept in application.aiTimings; application.onAi hears when it
+ * starts and ends.
+ */
+async function askChatGptForAutoApply(application, fields, keepAlive) {
+  const helpers = self.__qtsApplyAnswers;
+  const timing = { phase: 'chatgpt', focusMode: application.chatFocus ? 'on' : 'off', focused: false, restored: false, ok: false };
+  // A follow-up in this round adds its times to the same record.
+  application.chatRound = timing;
+  const started = Date.now();
+  const formTab = application.formTabId != null ? await getTab(application.formTabId) : null;
+  const windowFocused = async () => {
+    const lastFocused = await chrome.windows.getLastFocused().catch(() => null);
+    return Boolean(formTab && lastFocused?.focused && lastFocused.id === formTab.windowId);
+  };
+  timing.windowFocused = await windowFocused();
+  timing.windowState = formTab ? (await chrome.windows.get(formTab.windowId).catch(() => null))?.state || null : null;
+  let stopKeeping = () => {};
+  const show = async (id) => {
+    const chatTab = await getTab(id);
+    if (!application.chatFocus || !formTab?.active || !chatTab || chatTab.windowId !== formTab.windowId) return;
+    // Still the application's tab shown (the Manager did not move on while this round got ready).
+    const [shown] = await chrome.tabs.query({ windowId: formTab.windowId, active: true }).catch(() => []);
+    if (shown?.id !== formTab.id) return;
+    await chrome.storage.session.set({ [AUTO_APPLY_CHAT_SWITCH_KEY]: { attemptId: application.attemptId, chatTabId: id, formTabId: formTab.id, windowId: formTab.windowId } });
+    await chrome.tabs.update(id, { active: true }).catch(() => {});
+    timing.focused = true;
+    stopKeeping = keepChatTabShown(application.attemptId, id, formTab.windowId, timing);
+  };
+  application.onAi?.({ state: 'asking', provider: 'ChatGPT', focused: false });
+  try {
+    const tabId = await applyChatTab(show);
+    application.chatTabId = tabId;
+    timing.prepareMs = Date.now() - started;
+    if (timing.focused) application.onAi?.({ state: 'asking', provider: 'ChatGPT', focused: true });
+    const reply = await askChatGpt(tabId, application, answerPromptFor(application, fields), keepAlive, timing);
+    const parseStarted = Date.now();
+    const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields);
+    timing.parseMs = Date.now() - parseStarted;
+    noteForReview(application, review, fields);
+    const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
+    const fixed = needed.length && followUpAllowed(application, needed, fields) ? await askChatGptToFix(application, needed, fields, keepAlive) : {};
+    timing.ok = true;
+    return { ...answers, ...fixed };
+  } catch (error) {
+    timing.error = String(error instanceof Error ? error.message : error).slice(0, 160);
+    throw error;
+  } finally {
+    stopKeeping();
+    application.chatRound = null;
+    timing.totalMs = Date.now() - started;
+    timing.windowFocusedEnd = await windowFocused();
+    if (timing.focused) timing.restored = await giveBackChatTab(application.attemptId);
+    diag('chatgpt-round', timing);
+    (application.aiTimings ||= []).push(timing);
+    application.onAi?.({ state: 'done', provider: 'ChatGPT', ok: timing.ok });
+  }
+}
+
 // ChatGPT writes at full speed only in the tab its window shows, so the ChatGPT tab is shown while it
 // answers, then the tab shown before (the job page) comes back. Only tabs switch; the window is left
 // as it is. Applications in this Chrome share the ChatGPT tab, so the switch back waits for the last.
 let chatGptTurns = 0;
 let tabBeforeChatGpt = null;
 
-async function askChatGpt(chatTabId, application, prompt, keepAlive) {
+async function askChatGpt(chatTabId, application, prompt, keepAlive, timing = null) {
   const marker = application.attemptId;
-  const chatTab = await getTab(chatTabId);
-  if (chatGptTurns === 0 && chatTab) {
+  // Auto Apply decides about the ChatGPT tab itself (askChatGptForAutoApply): no switching here.
+  const switchTabs = application.chatFocus === undefined;
+  const chatTab = switchTabs ? await getTab(chatTabId) : null;
+  if (switchTabs && chatGptTurns === 0 && chatTab) {
     const [shown] = await chrome.tabs.query({ windowId: chatTab.windowId, active: true }).catch(() => []);
     tabBeforeChatGpt = shown && shown.id !== chatTabId ? shown.id : null;
   }
-  chatGptTurns += 1;
-  await chrome.tabs.update(chatTabId, { active: true }).catch(() => {});
+  if (switchTabs) {
+    chatGptTurns += 1;
+    await chrome.tabs.update(chatTabId, { active: true }).catch(() => {});
+  }
+  // The answer wait checks in every 3 seconds; the claim is renewed no more often than every 15.
+  let renewed = 0;
+  const server = async () => {
+    if (Date.now() - renewed < AUTO_APPLY_HEARTBEAT_MS) return;
+    renewed = Date.now();
+    await keepAlive();
+  };
   try {
+    const sendStarted = Date.now();
     await sendGenerationPromptWithRecovery(chatTabId, self.__qtsGenerationChatGpt.buildTaskPrompt(prompt, marker));
-    return await waitForGenerationAnswer(chatTabId, marker, { local: () => {}, server: keepAlive });
+    const answerStarted = Date.now();
+    const answer = await waitForGenerationAnswer(chatTabId, marker, { local: () => {}, server });
+    const measured = { sendMs: answerStarted - sendStarted, answerMs: Date.now() - answerStarted, promptChars: prompt.length, replyChars: answer.length };
+    diag('chatgpt-timing', measured);
+    // Auto Apply's round adds them to its own record; a follow-up's add up there too.
+    if (timing) {
+      timing.sendMs = (timing.sendMs || 0) + measured.sendMs;
+      timing.answerMs = (timing.answerMs || 0) + measured.answerMs;
+      timing.promptChars = (timing.promptChars || 0) + measured.promptChars;
+      timing.replyChars = (timing.replyChars || 0) + measured.replyChars;
+    } else {
+      (application.aiTimings ||= []).push({ phase: 'chatgpt-answer', ...measured });
+    }
+    return answer;
   } finally {
-    chatGptTurns -= 1;
-    if (chatGptTurns === 0 && tabBeforeChatGpt != null) {
+    if (switchTabs) chatGptTurns -= 1;
+    if (switchTabs && chatGptTurns === 0 && tabBeforeChatGpt != null) {
       await chrome.tabs.update(tabBeforeChatGpt, { active: true }).catch(() => {});
       tabBeforeChatGpt = null;
     }
@@ -573,7 +764,7 @@ async function askChatGpt(chatTabId, application, prompt, keepAlive) {
 async function askChatGptToFix(application, problems, fields, keepAlive) {
   const helpers = self.__qtsApplyAnswers;
   const retryFields = fields.filter((field) => problems.some((entry) => entry.id === field.id));
-  const reply = await askChatGpt(application.chatTabId, application, helpers.buildFixPrompt(problems, retryFields), keepAlive);
+  const reply = await askChatGpt(application.chatTabId, application, helpers.buildFixPrompt(problems, retryFields), keepAlive, application.chatRound || null);
   const retried = helpers.parseAnswerReply(reply, retryFields);
   noteForReview(application, retried.review, retryFields);
   noteUnanswered(application, retried.invalid, retryFields);
@@ -586,7 +777,8 @@ async function askChatGptToFix(application, problems, fields, keepAlive) {
  */
 function noteForReview(application, review, fields) {
   // Questions the AI found nothing to answer with (status "review"): required ones go to the
-  // Manager; optional ones are left empty.
+  // Manager; optional ones are left empty. Auto Apply does not ask about them again.
+  for (const entry of review || []) application.aiRefused?.set(entry.label, `${aiName(application)} found nothing that supports an answer${entry.reason ? ` (${entry.reason})` : ''}`);
   const required = (review || []).filter((entry) => fields.find((field) => field.id === entry.id)?.required);
   (application.aiReview ||= []).push(...required);
 }
@@ -743,6 +935,15 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   const helpers = self.__qtsApplyAnswers;
   const assist = options.assist === true;
   const skip = options.skip || (() => false);
+  // The sources a box may be filled from (the assistant: documents, profile, reusable answers;
+  // Auto Apply passes its own), and options.noAi (Auto Apply): no AI is asked; what no source answers
+  // is listed as unresolved instead.
+  const allowed = assist ? ASSIST_SOURCES : options.sources || null;
+  const noAi = options.noAi === true;
+  const unresolved = [];
+  // Auto Apply: AI answers filled though the documents and approved facts do not show them, with why;
+  // provisional until the Manager accepts or edits each (the site's Submit waits for that).
+  const provisional = [];
   const used = {};
   const problems = [];
   let canAskAgain = false;
@@ -807,7 +1008,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     for (const field of plain) {
       const answer = again.answers[field.id];
       const reopened = again.open.find((entry) => entry.id === field.id);
-      if (answer && !answer.file && (!assist || ASSIST_SOURCES.has(answer.source))) {
+      if (answer && !answer.file && (!allowed || allowed.has(answer.source))) {
         const outcome = await fillAndCheck(tabId, field, answer, null, seen);
         if (outcome.ok) {
           used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
@@ -841,6 +1042,15 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     for (const field of fields) {
       const answer = answersById[field.id];
       if (!answer) continue;
+      // Auto Apply (application.factSources): the AI's answer is filled (it writes from the job
+      // description, résumé, and profile); one the documents and approved facts do not show is
+      // provisional until the Manager accepts or edits it.
+      if (application.factSources) {
+        const verdict = helpers.verifyAiAnswer(field, answer.value, application.factSources);
+        if (!verdict.ok && !provisional.some((entry) => entry.id === field.id)) {
+          provisional.push({ id: field.id, label: field.label, value: answerText(answer.value).slice(0, 400), reason: verdict.reason });
+        }
+      }
       if (helpers.keepsMeaning(field, answer.value)) {
         if (answer.alternatives) answer.alternatives = answer.alternatives.filter((value) => helpers.keepsMeaning(field, value));
         continue;
@@ -852,10 +1062,12 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     return answersById;
   };
   for (let round = 0; round < APPLY_FILL_ROUNDS + 1; round += 1) {
+    // A caller that can be stopped (Auto Apply: Cancel, Stop all, a lost claim) stops between rounds.
+    if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
     const fields = assist
       ? await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist())
       : round === 0
-        ? await waitForFormFields(tabId)
+        ? await waitForFormFields(tabId, { minFields: step > 1 ? 1 : 3 })
         : await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm());
     if (round === 0 && !assist) {
       await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
@@ -960,7 +1172,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     const { answers } = resolved;
     // The assistant fills only the documents, the profile's facts, and reusable answers (no rules,
     // no consent ticks): the rest is the Manager's.
-    if (assist) for (const [id, answer] of Object.entries(answers)) if (!ASSIST_SOURCES.has(answer.source)) delete answers[id];
+    if (allowed) for (const [id, answer] of Object.entries(answers)) if (!allowed.has(answer.source)) delete answers[id];
     diag('resolved', { step, round, answered: Object.keys(answers).length, toAi: resolved.open.length, byHand: (resolved.byHand || []).length });
     // A personal fact the profile lacks is the Manager's to fill, never the AI's to guess.
     for (const entry of resolved.byHand || []) problem(entry.message, entry, assist ? 'profile' : 'field');
@@ -968,6 +1180,14 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     const open = resolved.open.filter((field) => {
       // What the site filled from the résumé is kept, not asked of the AI again.
       if (application.siteFilledFromResume && field.filled) return false;
+      // Auto Apply: a question the AI's answer to was refused earlier in this application stays the
+      // Manager's, without asking the AI again.
+      const refused = HAS_WORDS.test(field.label || '') && application.aiRefused?.get(field.label);
+      if (refused) {
+        if (!unresolved.some((entry) => entry.id === field.id)) unresolved.push({ id: field.id, label: field.label, required: Boolean(field.required), reason: refused });
+        if (field.required) problem(`Review "${field.label}": ${aiName(application)}'s answer was not filled because ${refused}.`, field);
+        return false;
+      }
       const cached = HAS_WORDS.test(field.label || '') && application.answerCache?.get(field.label);
       if (!cached) return true;
       answers[field.id] = cached;
@@ -1048,8 +1268,9 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
           }
         }
         // The value that did not fit goes to ChatGPT with what it was (the profile's fact or a
-        // reusable answer and its note), the site's reason, and the choices the field showed.
-        if (assist) {
+        // reusable answer and its note), the site's reason, and the choices the field showed;
+        // without AI it is the Manager's.
+        if (assist || noAi) {
           problem(`Fill by hand: "${field.label}" — the site did not take ${answer.source === 'reusable' ? 'the reusable answer' : 'the profile\'s'} "${meant}".`, field, 'check');
           continue;
         }
@@ -1073,7 +1294,10 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
     // memory): it is filled without the AI, which is asked only when the site still rejects it.
     const remaining = [];
     for (const field of toAsk) {
-      const choice = helpers.findRememberedChoice(field, field.intended, application.rememberedChoices);
+      // A caller's own sources decide whether remembered choices may fill a box at all.
+      const choice = options.sources && !options.sources.has('saved')
+        ? null
+        : helpers.findRememberedChoice(field, field.intended, application.rememberedChoices);
       if (!choice || !helpers.keepsMeaning(field, choice)) {
         remaining.push(field);
         continue;
@@ -1085,7 +1309,13 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
       } else if (!outcome.gone) remaining.push(field);
     }
     toAsk = await refreshDependentChoices(remaining, position, lastFilledChoice);
-    if (toAsk.length && !assist) {
+    if (toAsk.length && noAi) {
+      // Nothing QTS knows for sure answers these: they stay for the Manager (a required one also
+      // shows as "Still empty" below and stops the step).
+      for (const field of toAsk) {
+        if (!unresolved.some((entry) => entry.id === field.id)) unresolved.push({ id: field.id, label: field.label, required: Boolean(field.required) });
+      }
+    } else if (toAsk.length && !assist) {
       try {
         const aiStarted = Date.now();
         const aiAnswers = keepProfileMeaning(await askAiForAnswers(application, toAsk, keepAlive), toAsk);
@@ -1139,6 +1369,13 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
           problem(`${aiName(application)} did not answer "${field.label}" (${reason}). Write it, or Ask ${aiName(application)} again.`, field, 'chatgpt');
         }
       }
+      // Auto Apply: every open question the AI left empty stays listed for the Manager.
+      if (options.listUnresolved) {
+        for (const field of toAsk) {
+          if (Object.values(used).some((answer) => answer.fieldId === field.id) || unresolved.some((entry) => entry.id === field.id)) continue;
+          unresolved.push({ id: field.id, label: field.label, required: Boolean(field.required) });
+        }
+      }
     }
     // Let the page show the questions these answers unlock before looking again.
     await sleep(1000);
@@ -1174,7 +1411,10 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   }, (application.aiCalls || 0) - aiCallsBefore);
   diag('step-report', report);
   stepAttempts = null;
-  return { used, problems, canAskAgain, report };
+  // Unresolved: questions no source answered that are still not answered (another round may have).
+  const left = unresolved.filter((entry) => !(HAS_WORDS.test(entry.label || '') && used[entry.label]));
+  // Provisional: only the answers that were filled in the end.
+  return { used, problems, canAskAgain, report, unresolved: left, provisional: provisional.filter((entry) => used[entry.label]?.fieldId === entry.id) };
 }
 
 async function browserName() {
@@ -1345,7 +1585,9 @@ function waitForManager(attemptId) {
 function answerManager(attemptId, decision) {
   const resolve = reviewWaiters.get(attemptId);
   if (!resolve) {
-    if (!activeReviews.get(attemptId)?.assist) return false;
+    const waiting = activeReviews.get(attemptId);
+    // The assistant keeps any choice for its next wait; Auto Apply only one that ends the application.
+    if (!waiting?.assist && !(waiting?.auto && ENDING_ACTIONS.has(decision.action))) return false;
     const kept = earlyDecisions.get(attemptId);
     if (!kept || (ENDING_ACTIONS.has(decision.action) && !ENDING_ACTIONS.has(kept.action))) earlyDecisions.set(attemptId, decision);
     return true;
@@ -1458,7 +1700,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const review = activeReviews.get(msg.attemptId);
       return review?.resumeFolder ? openDownloadedFolder(review.resumeFolder) : { ok: false, error: 'No résumé folder for this job.' };
     }
-    if (answerManager(msg.attemptId, { action: msg.action, answers: msg.answers || null, noticed: msg.noticed === true, tabId: sender.tab?.id })) {
+    if (answerManager(msg.attemptId, { action: msg.action, answers: msg.answers || null, noticed: msg.noticed === true, tabId: sender.tab?.id, label: typeof msg.label === 'string' ? msg.label : null })) {
       return { ok: true };
     }
     return msg.assist
@@ -1645,17 +1887,43 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
  * it went through. Problems (a CAPTCHA, a rejected field, ChatGPT failing, an upload) come to the
  * review marked, never ending the application quietly.
  */
-async function runApplication(application, recipe) {
+/**
+ * The automatic engine: fills each step, clicks Next, and stops for the Manager. auto (Auto Apply,
+ * extension/background/auto-apply-runner.js): only documents, profile facts and approved reusable
+ * answers fill boxes (no AI); every step without a problem goes on by itself; the last step always
+ * waits for the Manager, who clicks the site's Submit (Auto Apply never does, whatever automatic
+ * Submit says); and a job given back is only given back (never marked skipped or failed), so
+ * assisted Apply can still take it. onProgress hears each step.
+ */
+async function runApplication(application, recipe, { auto = false, onProgress = () => {}, resume = null } = {}) {
   let lostClaim = false;
+  // Auto Apply: Cancel, Stop all, or a lost claim interrupts the work at once (the step being filled,
+  // a wait), not only between steps; the form's tab closes, which ends whatever was still running there.
+  let signalStop = () => {};
+  const stopped = new Promise((resolve) => { signalStop = resolve; });
+  const onStatusChange = (changes, area) => {
+    if (area === 'local' && changes[EXTENSION_STATUS_KEY] && changes[EXTENSION_STATUS_KEY].newValue !== 'apply') signalStop('Auto Apply was stopped.');
+  };
+  if (auto) chrome.storage.onChanged.addListener(onStatusChange);
+  const interruptible = (work) => (auto
+    ? Promise.race([work, stopped.then((reason) => { throw new ApplyStop(reason, { skip: false, keepTab: false }); })])
+    : work);
   // While the Manager reviews, the server holds the application longer (it says how long), so the
-  // hold is renewed less often; any other time, every 30 seconds.
+  // hold is renewed less often; any other time, every 30 seconds (Auto Apply: every 15, so a Stop all
+  // on the Jobs page, which ends the claim, is noticed sooner).
   let renewedAt = 0;
   let waitingLeaseSeconds = 0;
   const keepAlive = async () => {
     const waiting = reviewWaiters.has(application.attemptId);
-    if (waiting && Date.now() - renewedAt < self.__qtsIdlePacing.renewEveryMs(waitingLeaseSeconds)) return;
+    const renewEvery = self.__qtsIdlePacing.renewEveryMs(waitingLeaseSeconds);
+    if (waiting && Date.now() - renewedAt < (auto ? Math.min(renewEvery, AUTO_APPLY_HEARTBEAT_MS) : renewEvery)) return;
     const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId: application.attemptId });
-    if (renewed._httpStatus === 409) lostClaim = true;
+    if (renewed._httpStatus === 409) {
+      lostClaim = true;
+      signalStop('This application was stopped on the Jobs page, or another Chrome holds it.');
+      // A review waiting for the Manager ends too: the job is no longer this Chrome's.
+      if (auto) answerManager(application.attemptId, { action: 'lost' });
+    }
     // Super Admin may change the review mode or automatic Submit during an application: the next step uses it.
     if (renewed.success === true) {
       renewedAt = Date.now();
@@ -1664,10 +1932,37 @@ async function runApplication(application, recipe) {
       if (typeof renewed.autoSubmit === 'boolean') application.autoSubmit = renewed.autoSubmit;
     }
   };
-  const heartbeat = setInterval(() => keepAlive().catch(() => {}), APPLY_HEARTBEAT_MS);
-  const answersUsed = {};
-  application.answerCache = new Map();
-  const dryRun = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
+  const heartbeat = setInterval(() => keepAlive().catch(() => {}), auto ? AUTO_APPLY_HEARTBEAT_MS : APPLY_HEARTBEAT_MS);
+  // resume (Auto Apply after its worker restarted): the answers so far, and the step it was on.
+  const answersUsed = { ...(resume?.used || {}) };
+  application.answerCache = new Map(resume?.cache || []);
+  // Auto Apply: questions whose AI answer was refused (or that the AI could not answer), with why.
+  if (auto) application.aiRefused = new Map(resume?.refused || []);
+  const dryRun = !auto && (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
+  // Auto Apply reviews once, before Submit, and never submits itself.
+  const reviewBeforeSubmit = () => auto || application.reviewMode === 'before_submit';
+  const submitsItself = () => !auto && application.autoSubmit;
+  const unresolved = new Map((resume?.unresolved || []).map((entry) => [entry.label, entry]));
+  // Auto Apply: provisional AI answers by question ({ id, label, value, reason, step, accepted }).
+  const provisional = new Map((resume?.provisional || []).map((entry) => [entry.label, entry]));
+  // What a restarted worker needs to go on: kept by the Auto Apply controller at every step's end.
+  const memory = () => ({
+    tabId: tab?.id ?? null, used: answersUsed, cache: [...application.answerCache], unresolved: [...unresolved.values()],
+    refused: [...(application.aiRefused || [])], aiCalls: application.aiCalls || 0, provisional: [...provisional.values()],
+  });
+  let notice = null;
+  let currentStep = resume?.step || 1;
+  // Auto Apply: the panel and the launcher say while the AI is answering (and whether its tab is shown).
+  if (auto) {
+    application.onAi = ({ state, provider, focused }) => {
+      if (tab?.id == null) return;
+      if (state === 'asking') {
+        review.panel = reviewState('working', { step: currentStep, workingText: `Asking ${provider} about the questions left${focused ? ' (its tab is shown while it answers)' : ' (it answers in the background)'}…` });
+        showReviewPanel(tab.id, review.panel).catch(() => {});
+      }
+      onProgress({ step: currentStep, phase: state === 'asking' ? 'ai' : 'filling', ai: { state, provider, focused: Boolean(focused) } });
+    };
+  }
   await loadApplyDebug();
   diag('application', { attempt: String(application.attemptId).slice(0, 8), site: recipe.site, aiMode: application.aiMode });
   const review = {
@@ -1678,6 +1973,8 @@ async function runApplication(application, recipe) {
     job: application.job,
     resumeFolder: application.job.resumeFolder,
     panel: null,
+    // Auto Apply: Cancel or Stop all before its review waits (panel and notice still being shown) is kept.
+    ...(auto ? { auto: true } : {}),
   };
   activeReviews.set(application.attemptId, review);
   publishApplyState();
@@ -1708,6 +2005,11 @@ async function runApplication(application, recipe) {
       profileValue: answer.fact && answer.intended && simpleText(answer.intended) !== simpleText(answerText(answer.value)) ? String(answer.intended).slice(0, 200) : null,
       valueFrom: answer.fact === 'answer' ? 'reusable answer' : 'profile',
     })),
+    // Auto Apply: the questions nothing QTS knows for sure answered, for the Manager.
+    unresolved: [...unresolved.values()],
+    // Auto Apply: AI answers to accept or edit before the site's Submit.
+    provisional: [...provisional.values()],
+    auto,
     ...extra,
   });
   const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId: application.attemptId, ...body });
@@ -1729,10 +2031,13 @@ async function runApplication(application, recipe) {
     return askManager(review, reviewState('review', { step: stepNumber, final: false, problems: [{ message, fieldId: null }] }), 'problem', 'The site asks for an email first.');
   };
   try {
-    tab = await openApplyTab(recipe.formUrl);
+    // Resumed after a restart: the form is already open in its tab, at its step.
+    const resumedTab = resume?.tabId != null ? await chrome.tabs.get(resume.tabId).catch(() => null) : null;
+    if (resume && !resumedTab) throw new ApplyStop('The form\'s tab was closed while QTS restarted.', { skip: false, keepTab: false });
+    tab = resumedTab || await openApplyTab(recipe.formUrl);
     review.tabId = tab.id;
-    await waitForTabComplete(tab.id, 45 * 1000);
-    if (recipe.findStart) {
+    if (!resumedTab) await interruptible(waitForTabComplete(tab.id, 45 * 1000));
+    if (recipe.findStart && !resumedTab) {
       try {
         tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
       } catch (error) {
@@ -1753,17 +2058,38 @@ async function runApplication(application, recipe) {
       }
     }
 
-    let step = 1;
+    let step = resume?.step || 1;
     let fillAgain = false;
+    // A restart while the last step waited for the Manager: the page may already be past the form
+    // (the Manager clicked Submit). Then nothing is filled or given back; the Manager says what happened.
+    let checkResumedPage = Boolean(resume) && ['final', 'needs_you'].includes(resume.phase);
     for (;;) {
       if (!(await isApplyOn())) throw new ApplyStop('Apply was cancelled.', { skip: false, keepTab: false });
       if (lostClaim) throw new ApplyStop('This Chrome lost the application to another one.', { skip: false, keepTab: false });
+      application.formTabId = tab.id;
+      currentStep = step;
       await report('review', { review: false, appliedAnswers: appliedAnswers(answersUsed) });
       review.panel = reviewState('working', { step, workingText: fillAgain ? 'Filling again…' : `Filling step ${step}…` });
       await showReviewPanel(tab.id, review.panel).catch(() => {});
+      onProgress({ step, phase: 'filling' });
       let filled;
+      if (checkResumedPage) {
+        checkResumedPage = false;
+        const shown = await inForm(tab.id, () => globalThis.__qtsApplyForm.scanForm()).catch(() => []);
+        if (!(shown || []).some((field) => !field.hidden && !field.disabled)) {
+          filled = { used: {}, unresolved: [], pageGone: true, problems: [{ fieldId: null,
+            message: 'QTS restarted, and this page no longer shows the form. If you clicked the site\'s Submit, click "I submitted it". If not, go back to the form and click Fill again.' }] };
+        } else {
+          // The step was waiting for the Manager: nothing is filled again (what the Manager changed
+          // stays); the review comes back with what is still empty.
+          const empty = await inForm(tab.id, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
+          filled = { used: {}, unresolved: [], problems: (empty || []).map((entry) => ({ message: `Still empty: "${entry.label}".`, fieldId: entry.id })) };
+        }
+      }
       try {
-        filled = await fillFormPage(tab.id, application, keepAlive, step);
+        filled ||= await interruptible(fillFormPage(tab.id, application, keepAlive, step, auto
+          ? { sources: ASSIST_SOURCES, noAi: application.autoAi === false, listUnresolved: true, stop: async () => lostClaim || !(await isApplyOn()) }
+          : undefined));
       } catch (error) {
         // A form address that opened on an email-first step: the Manager goes past it (once).
         if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application' || emailFirstAsked) throw error;
@@ -1776,17 +2102,23 @@ async function runApplication(application, recipe) {
       for (const [label, answer] of Object.entries(filled.used)) {
         if (!answer.file) application.answerCache.set(label, answer);
       }
+      for (const entry of filled.unresolved || []) unresolved.set(entry.label, { ...entry, step });
+      for (const label of Object.keys(filled.used)) unresolved.delete(label);
+      // A new provisional answer (or a changed one, after Fill again) waits for the Manager again.
+      for (const entry of filled.provisional || []) {
+        if (provisional.get(entry.label)?.value !== entry.value) provisional.set(entry.label, { ...entry, step, accepted: false });
+      }
       let buttons = await inForm(tab.id, () => globalThis.__qtsApplyForm.buttons());
       // Sites keep Submit disabled while an upload finishes; give it a moment before judging.
       for (let waited = 0; waited < 15000 && !buttons?.submit && buttons?.submitDisabled; waited += 1000) {
         await sleep(1000);
         buttons = await inForm(tab.id, () => globalThis.__qtsApplyForm.buttons());
       }
-      const final = Boolean(buttons?.submit) || !buttons?.next;
+      const final = filled.pageGone || Boolean(buttons?.submit) || !buttons?.next;
       const problems = [...filled.problems];
       const blockers = await inForm(tab.id, () => globalThis.__qtsApplyForm.detectBlockers()).catch(() => []);
       if (blockers?.includes('captcha')) problems.unshift({ message: 'Solve the CAPTCHA on this page.', fieldId: null });
-      if (final && !buttons?.submit) {
+      if (final && !buttons?.submit && !filled.pageGone) {
         problems.push({ message: buttons?.submitDisabled
           ? 'The Submit button stays disabled: a requirement may not be met, or an answer was not accepted.'
           : 'No single Submit or Next button was found: finish the form by hand.', fieldId: null });
@@ -1809,15 +2141,16 @@ async function runApplication(application, recipe) {
 
       // Review before Submit only (Super Admin's per-Manager mode): the steps before the last go on by
       // themselves while nothing needs the Manager; the last step waits for one review of everything.
-      if (application.reviewMode === 'before_submit' && !application.autoSubmit && !final && !problems.length) {
+      onProgress({ step, phase: final ? 'final' : problems.length ? 'needs_you' : 'next', problems: problems.length, unresolved: unresolved.size, aiCalls: application.aiCalls || 0, aiTimings: application.aiTimings || [], memory: memory() });
+      if (reviewBeforeSubmit() && !submitsItself() && !final && !problems.length) {
         await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
-        await sleep(2500);
+        await interruptible(sleep(2500));
         step += 1;
         continue;
       }
 
       // Automatic Submit (Super Admin's option): no stops while nothing needs the Manager.
-      if (application.autoSubmit && !problems.length) {
+      if (submitsItself() && !problems.length) {
         if (!final) {
           await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
           await sleep(2500);
@@ -1835,28 +2168,49 @@ async function runApplication(application, recipe) {
 
       await report('review', { review: true, appliedAnswers: appliedAnswers(answersUsed) });
       const problemFieldIds = problems.map((entry) => entry.fieldId).filter(Boolean);
-      const decision = await askManager(
-        review,
-        reviewState('review', { step, final, problems, problemFieldIds, canAskAgain: filled.canAskAgain, reviewAll: application.reviewMode === 'before_submit' }),
-        // One "Ready for review" per application, at its first stop; problems always alert.
-        problems.length ? 'problem' : review.notified ? null : 'review',
-        problems.length ? `${problems.length} thing${problems.length === 1 ? '' : 's'} need${problems.length === 1 ? 's' : ''} you.` : 'Check the answers, then Continue or Submit.',
-      );
+      let decision;
+      for (;;) {
+        decision = await askManager(
+          review,
+          reviewState('review', {
+            step, final, problems, problemFieldIds, reviewAll: reviewBeforeSubmit(), notice,
+            canAskAgain: (!auto || application.autoAi !== false) && filled.canAskAgain, aiOn: auto && application.autoAi !== false,
+          }),
+          // One "Ready for review" per application, at its first stop; problems always alert.
+          problems.length ? 'problem' : review.notified ? null : 'review',
+          problems.length ? `${problems.length} thing${problems.length === 1 ? '' : 's'} need${problems.length === 1 ? 's' : ''} you.` : 'Check the answers, then Continue or Submit.',
+        );
+        // Auto Apply: the Manager accepts a provisional AI answer as it is; the review stays open.
+        if (auto && decision.action === 'accept_provisional') {
+          const entry = provisional.get(decision.label);
+          if (entry) entry.accepted = true;
+          onProgress({ step, phase: final ? 'final' : 'needs_you', quiet: true, memory: memory() });
+          continue;
+        }
+        // Auto Apply: the Manager's corrections go to Super Admin as draft reusable answers (never
+        // approved by this); the review stays open.
+        if (!(auto && decision.action === 'propose')) break;
+        notice = await proposeCorrections(application, submittedAnswers(answersUsed, decision.answers || []));
+      }
+      notice = null;
       fillAgain = false;
       if (decision.action === 'continue') {
         await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
-        await sleep(2500);
+        await interruptible(sleep(2500));
         step += 1;
         continue;
       }
       if (decision.action === 'continue_manual') {
-        await sleep(1500);
+        await interruptible(sleep(1500));
         step += 1;
         continue;
       }
       if (decision.action === 'fill_again' || decision.action === 'ask_again') {
         // Fill again reuses the answers (no ChatGPT for known questions); Ask again forgets ChatGPT's failures.
-        if (decision.action === 'ask_again') application.answerCache.clear();
+        if (decision.action === 'ask_again') {
+          application.answerCache.clear();
+          application.aiRefused?.clear();
+        }
         fillAgain = true;
         continue;
       }
@@ -1865,12 +2219,14 @@ async function runApplication(application, recipe) {
         const marked = await report('submitted', { appliedAnswers: submittedAnswers(answersUsed, current), learned: learnedAnswers(answersUsed, current) });
         if (!marked.success) throw new ApplyStop(marked.message || 'QTS did not record the Submit.', { skip: false, keepTab: false });
         submitted = true;
+        onProgress({ step, phase: 'submitted', memory: memory() });
         const outcome = await waitForConfirmation(review, reviewState, answersUsed, current, report, () => tab?.id);
         if (outcome === 'back_to_review') {
           submitted = false;
           fillAgain = false;
           continue;
         }
+        onProgress({ phase: 'ended', reason: outcome });
         return;
       }
       return await finishBeforeSubmit(decision.action);
@@ -1882,7 +2238,13 @@ async function runApplication(application, recipe) {
       return;
     }
     const stop = error instanceof ApplyStop ? error : new ApplyStop(error instanceof Error ? error.message : 'Apply failed.', { skip: false });
-    await release(stop.dryRun ? 'test' : stop.skip ? 'skip' : 'error', stop.message).catch(() => {});
+    // Stopped while ChatGPT answered with its tab selected: the application's tab first (its own
+    // closing below then shows the Manager's tab it was opened from).
+    if (auto) await giveBackChatTab(application.attemptId).catch(() => {});
+    // Auto Apply only gives the job back (not opened again in this Chrome until Apply restarts).
+    await release(stop.dryRun ? 'test' : auto ? 'later' : stop.skip ? 'skip' : 'error', stop.message).catch(() => {});
+    if (auto) await noteCancelledJob(application.job.id).catch(() => {});
+    onProgress({ phase: 'ended', reason: stop.message });
     // Test mode gives the job back, so the same job would be claimed again at once: one test per click.
     if (stop.dryRun) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
     if (stop.keepTab) {
@@ -1892,9 +2254,11 @@ async function runApplication(application, recipe) {
     }
   } finally {
     clearInterval(heartbeat);
+    if (auto) chrome.storage.onChanged.removeListener(onStatusChange);
     activeReviews.delete(application.attemptId);
     publishApplyState();
     reviewWaiters.delete(application.attemptId);
+    earlyDecisions.delete(application.attemptId);
     await clearManagerNotice(application.attemptId).catch(() => {});
     if (tab?.id != null) {
       await removeReviewPanel(tab.id);
@@ -1905,7 +2269,9 @@ async function runApplication(application, recipe) {
 
   // Skip, Later, a closed tab, or Apply turned off during review: the job is given back.
   async function finishBeforeSubmit(action) {
-    const mode = action === 'skip' ? 'skip' : 'later';
+    const mode = action === 'skip' && !auto ? 'skip' : 'later';
+    if (auto) await noteCancelledJob(application.job.id).catch(() => {});
+    onProgress({ phase: 'ended', reason: action });
     const reason = action === 'skip' ? 'Skipped by the Manager.'
       : action === 'closed' ? 'The review tab was closed; the job went back to the list.'
         : 'The Manager will apply later.';
@@ -1941,6 +2307,62 @@ async function waitForConfirmation(review, reviewState, answersUsed, current, re
       return decision.action;
     }
     // A second Submit click (the site asked again) changes nothing: the question stays.
+  }
+}
+
+/**
+ * Auto Apply: the Manager's corrections (an answer changed on the form, or written where QTS left a
+ * box) proposed to Super Admin as draft reusable answers, never approved by this. The server refuses
+ * personal and per-candidate questions. Returns the panel's notice.
+ */
+async function proposeCorrections(application, answers) {
+  const items = (answers || []).filter((entry) => entry.source === 'manager')
+    .map((entry) => ({ question: entry.question, answer: entry.answer })).slice(0, 10);
+  if (!items.length) return 'Nothing to propose: change an answer on the form first.';
+  const reply = await workerApiRequest('POST', '/api/extension/apply/propose-answers', { attemptId: application.attemptId, items });
+  if (reply.success !== true) return reply.message || 'QTS could not send the proposals.';
+  const results = Array.isArray(reply.results) ? reply.results : [];
+  const sent = results.filter((entry) => entry.ok).length;
+  const refused = results.filter((entry) => !entry.ok);
+  return `${sent} proposal${sent === 1 ? '' : 's'} sent to Super Admin as draft reusable answers.${refused.length
+    ? ` Not sent: ${refused.map((entry) => `"${entry.question}" (${entry.reason})`).join('; ')}.` : ''}`;
+}
+
+/**
+ * Auto Apply after its worker restarted, for an application already submitted: only the Manager's
+ * Yes/No (nothing is filled or submitted again). The claim is renewed meanwhile.
+ */
+async function resumeSubmittedApplication(record) {
+  const { attemptId } = record;
+  const review = {
+    attemptId,
+    tabId: record.tabId,
+    chromeName: await browserName(),
+    candidate: record.candidate,
+    job: { title: record.title, company: record.company },
+    resumeFolder: null,
+    panel: null,
+  };
+  activeReviews.set(attemptId, review);
+  publishApplyState();
+  const keepAlive = () => workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId }).catch(() => {});
+  const heartbeat = setInterval(keepAlive, APPLY_HEARTBEAT_MS);
+  keepAlive();
+  const reviewState = (mode, extra = {}) => ({
+    attemptId, mode, chromeName: review.chromeName, candidate: record.candidate, auto: true, answers: [], unresolved: [],
+    job: { title: record.title, company: record.company, location: '', workType: '', salary: null, url: record.url || '' },
+    ...extra,
+  });
+  const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
+  try {
+    return await waitForConfirmation(review, reviewState, record.used || {}, [], report, () => review.tabId);
+  } finally {
+    clearInterval(heartbeat);
+    activeReviews.delete(attemptId);
+    publishApplyState();
+    reviewWaiters.delete(attemptId);
+    await clearManagerNotice(attemptId).catch(() => {});
+    if (review.tabId != null) await removeReviewPanel(review.tabId).catch(() => {});
   }
 }
 
@@ -2404,12 +2826,17 @@ async function processApplyQueue() {
     });
     running.add(run);
   };
+  // Auto Apply (its own controller, extension/background/auto-apply-runner.js) shares this queue and
+  // its claims, one application at a time; it never takes up the assistant's pages.
+  const autoApply = await self.__qtsAutoApply?.isOn?.() === true;
   try {
     // Pages still open from before the extension restarted are taken up first (they count as open).
-    if (await isApplyOn()) for (const run of await resumeApplySessions(APPLY_TABS_PER_CHROME)) track(run);
+    if (await isApplyOn() && !autoApply) for (const run of await resumeApplySessions(APPLY_TABS_PER_CHROME)) track(run);
+    // Auto Apply: its applications left open by a restarted worker go on first (one at a time).
+    if (await isApplyOn() && autoApply) for (const run of await self.__qtsAutoApply.resumeRuns()) track(run);
     while (await isApplyOn()) {
       const testMode = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
-      if (running.size >= (testMode ? 1 : APPLY_TABS_PER_CHROME)) {
+      if (running.size >= (testMode || autoApply ? 1 : APPLY_TABS_PER_CHROME)) {
         await Promise.race(running);
         continue;
       }
@@ -2433,15 +2860,19 @@ async function processApplyQueue() {
       await self.__qtsIdlePacing.noteActivity();
       const recipe = self.__qtsApplyRecipes.recipeFor(application.job.url);
       // The Manager signs in to a site that needs an account; only a link that is no web page is skipped.
-      if (recipe.unsupported && (testMode || recipe.site !== 'account')) {
+      // Auto Apply leaves every such job as it was (for assisted Apply) and does not take it again here.
+      if (recipe.unsupported && (testMode || autoApply || recipe.site !== 'account')) {
         await workerApiRequest('POST', '/api/extension/apply/release', {
           attemptId: application.attemptId,
-          mode: 'skip',
+          mode: autoApply ? 'later' : 'skip',
           reason: recipe.unsupported,
         });
+        if (autoApply) await noteCancelledJob(application.job.id);
         continue;
       }
-      track(testMode ? runApplication(application, recipe) : runAssistedApplication(application));
+      track(testMode ? runApplication(application, recipe)
+        : autoApply ? self.__qtsAutoApply.run(application, recipe)
+          : runAssistedApplication(application));
     }
   } finally {
     await Promise.allSettled([...running]);
@@ -2458,6 +2889,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const tab = sender.tab;
     if (tab?.id == null || !/^https?:/i.test(tab.url || '')) return { ok: false, error: 'Open the job\'s page first.' };
     if (!(await isApplyOn())) return { ok: true, applyOn: false, applications: [] };
+    // Auto Apply in this Chrome: no assisted application starts beside it (one mode per Chrome).
+    if (await self.__qtsAutoApply?.isOn?.() === true) {
+      return msg.type === 'QTS_APPLY_PAGE_ACCOUNTS'
+        ? { ok: true, applyOn: false, applications: [] }
+        : { ok: false, error: 'Auto Apply is running in this Chrome. Stop it first.' };
+    }
     const owner = [...activeReviews.values()].find((review) => review.assist && tabsOf(review).has(tab.id));
     if (msg.type === 'QTS_APPLY_PAGE_ACCOUNTS') {
       if (owner) return { ok: true, applyOn: true, openHere: owner.candidate, applications: [] };

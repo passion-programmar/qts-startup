@@ -2,7 +2,8 @@
 // It shows the job, the résumé folder, and every answer with where it came from (ChatGPT answers
 // flagged), marks what needs the Manager, and carries the Manager's choices back to the worker:
 // Continue / Skip / Later / Fill again / Ask ChatGPT (or Gemini) again / I submitted it, then Yes / No / Not
-// submitted. On the last step it notices the Manager's own click on the site's Submit.
+// submitted. On the last step it notices the Manager's own click on the site's Submit; with Auto Apply it
+// holds that Submit back while a provisional AI answer is neither accepted nor edited.
 (function initApplyReview(global) {
   if (global.__qtsApplyReview) return;
 
@@ -31,6 +32,12 @@
     .problems strong { display: block; margin-bottom: 4px; }
     .problems li { margin-left: 16px; cursor: pointer; }
     .ok { margin: 8px 0; padding: 6px 8px; border-radius: 8px; background: #ecfdf5; color: #065f46; }
+    .provisional { margin: 8px 0; padding: 8px; border-radius: 8px; background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+    .provisional strong { display: block; margin-bottom: 4px; }
+    .provisional li { margin: 4px 0 4px 16px; cursor: pointer; }
+    .provisional button { margin-left: 6px; padding: 1px 8px; border-radius: 6px; border: 1px solid #d97706; background: #fff; color: #92400e; font: 600 11px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .provisional .done { margin-left: 6px; color: #065f46; font-weight: 600; }
+    .provisional .held { margin-top: 6px; font-weight: 700; color: #9f1239; }
     .section { margin-top: 10px; font-weight: 700; color: #334155; }
     .answer { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; padding: 5px 0; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
     .answer:hover { background: #f8fafc; }
@@ -60,6 +67,8 @@
   let state = null;
   let busy = false;
   let collapsed = false;
+  // The site's Submit was held back because provisional answers were still waiting.
+  let submitHeld = false;
 
   const element = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -110,7 +119,7 @@
     const head = element('div', 'head');
     const headText = element('div', 'head-text');
     headText.append(
-      element('div', 'head-title', state.mode === 'confirm' ? 'Submitted successfully?' : state.mode === 'working' ? 'Apply is working…' : state.final ? 'Review, then Submit' : `Review step ${state.step}`),
+      element('div', 'head-title', state.mode === 'confirm' ? 'Submitted successfully?' : state.mode === 'working' ? `${state.auto ? 'Auto Apply' : 'Apply'} is working…` : state.final ? 'Review, then Submit' : `Review step ${state.step}`),
       element('div', 'head-sub', `${state.chromeName} · ${state.candidate}`),
     );
     const toggle = element('button', 'icon-button', collapsed ? '▾' : '▴');
@@ -150,7 +159,48 @@
       box.append(list);
       body.append(box);
     } else if (state.mode !== 'working') {
-      body.append(element('div', 'ok', `✓ Nothing marked for you. Check the ${state.aiName || 'ChatGPT'} ⚑ answers first.`));
+      body.append(element('div', 'ok', state.auto && !state.aiOn
+        ? '✓ Nothing marked for you. Every answer came from the profile, the documents, or an approved reusable answer.'
+        : `✓ Nothing marked for you. Check the ${state.aiName || 'ChatGPT'} ⚑ answers first.`));
+    }
+    if (state.notice) body.append(element('div', 'ok', state.notice));
+    // Auto Apply: questions nothing QTS knows for sure answered (AI answers come later); the required
+    // ones are also listed above as still empty.
+    if (state.auto && state.unresolved?.length) {
+      const box = element('div', 'problems');
+      box.append(element('strong', '', state.aiOn
+        ? `Left for you (${state.unresolved.length}): nothing supports an answer`
+        : `Left for you (${state.unresolved.length}): no profile fact or approved answer`));
+      const list = element('ul', '');
+      for (const entry of state.unresolved) {
+        const item = element('li', '', `${entry.label}${entry.required ? ' (required)' : ''} · step ${entry.step}${entry.reason ? ` · not filled: ${entry.reason}` : ''}`);
+        if (entry.id) item.addEventListener('click', () => global.__qtsApplyForm?.focusField?.(entry.id));
+        list.append(item);
+      }
+      box.append(list);
+      body.append(box);
+    }
+
+    // Auto Apply: AI answers the documents do not show, filled but provisional until the Manager
+    // accepts each as it is or edits it on the form; the site's Submit waits for that.
+    if (state.auto && state.provisional?.length) {
+      const entries = provisionalStatus();
+      const waiting = entries.filter((entry) => !entry.accepted && !entry.edited).length;
+      const box = element('div', 'provisional');
+      box.append(element('strong', '', waiting
+        ? `Provisional ${state.aiName || 'ChatGPT'} answers: accept or edit ${waiting} of ${entries.length} before Submit`
+        : `Provisional ${state.aiName || 'ChatGPT'} answers: all ${entries.length} accepted or edited`));
+      const list = element('ul', '');
+      for (const entry of entries) {
+        const item = element('li', '', `${entry.label} = "${entry.value}" · step ${entry.step} · ${entry.reason}`);
+        if (entry.accepted || entry.edited) item.append(element('span', 'done', entry.edited ? '✓ edited' : '✓ accepted'));
+        else if (state.mode === 'review') item.append(button('Accept', '', 'accept_provisional', { label: entry.label }));
+        if (entry.id) item.addEventListener('click', (event) => { if (event.target === item) global.__qtsApplyForm?.focusField?.(entry.id); });
+        list.append(item);
+      }
+      box.append(list);
+      if (submitHeld && waiting) box.append(element('div', 'held', 'Submit was held: accept or edit each provisional answer first.'));
+      body.append(box);
     }
 
     const steps = [...new Set((state.answers || []).map((answer) => answer.step))].sort((a, b) => a - b);
@@ -185,13 +235,20 @@
           : 'Check this step, fix what is marked, then Continue.'));
       if (!state.blocked && !state.final) buttons.append(button('Continue →', 'primary', 'continue'));
       if (!state.blocked && state.final) {
-        buttons.append(button('I submitted it', '', 'submitted', () => ({ answers: currentAnswers() })));
+        const submittedButton = button('I submitted it', '', 'submitted', () => ({ answers: currentAnswers() }));
+        if (pendingProvisional().length) {
+          submittedButton.disabled = true;
+          submittedButton.title = 'Accept or edit each provisional answer first.';
+        }
+        buttons.append(submittedButton);
       }
       buttons.append(button('Skip', '', 'skip'));
       if (!state.blocked) {
         buttons.append(button('Later', '', 'later'));
         buttons.append(button('Fill again', '', 'fill_again'));
-        if (state.canAskAgain) buttons.append(button(`Ask ${state.aiName || 'ChatGPT'} again`, '', 'ask_again'));
+        if (state.canAskAgain && (!state.auto || state.aiOn)) buttons.append(button(`Ask ${state.aiName || 'ChatGPT'} again`, '', 'ask_again'));
+        // Auto Apply: the answers the Manager changed go to Super Admin as drafts (never approved by this).
+        if (state.auto) buttons.append(button('Propose my changes', '', 'propose', () => ({ answers: currentAnswers() })));
       }
       foot.append(buttons);
     }
@@ -206,6 +263,30 @@
     }
   }
 
+  // Provisional answers as the form has them now: edited when the box no longer holds the AI's answer.
+  const plain = (value) => String(Array.isArray(value) ? value.join(', ') : value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  function provisionalStatus() {
+    const now = new Map(currentAnswers().map((entry) => [entry.id, entry.value]));
+    return (state?.provisional || []).map((entry) => ({ ...entry, edited: now.has(entry.id) && plain(now.get(entry.id)) !== plain(entry.value) }));
+  }
+  function pendingProvisional() {
+    return state?.auto ? provisionalStatus().filter((entry) => !entry.accepted && !entry.edited) : [];
+  }
+
+  // Auto Apply's last step: the site's Submit is held back while a provisional answer waits; the
+  // first one is shown on the form. True when held.
+  function holdSubmit(event) {
+    if (!state || !state.auto || state.mode !== 'review' || !state.final) return false;
+    const waiting = pendingProvisional();
+    if (!waiting.length) return false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    submitHeld = true;
+    render();
+    global.__qtsApplyForm?.focusField?.(waiting[0].id);
+    return true;
+  }
+
   // On the last step, the Manager's own click on the site's Submit moves the panel to Yes/No. The
   // form's values are read at that moment, before the page changes.
   let submitNoticedAt = 0;
@@ -216,9 +297,21 @@
     send('submitted', { answers: currentAnswers(), noticed: true });
   }
   document.addEventListener('click', (event) => {
-    if (global.__qtsApplyForm?.isSubmitControl?.(event.target)) noticeSubmit();
+    if (!global.__qtsApplyForm?.isSubmitControl?.(event.target)) return;
+    if (!holdSubmit(event)) noticeSubmit();
   }, true);
-  document.addEventListener('submit', () => noticeSubmit(), true);
+  document.addEventListener('submit', (event) => {
+    if (!holdSubmit(event)) noticeSubmit();
+  }, true);
+  // An edit on the form may settle a provisional answer: the panel shows it shortly after.
+  let editRender = null;
+  const onEdit = () => {
+    if (!state?.provisional?.length) return;
+    clearTimeout(editRender);
+    editRender = setTimeout(render, 300);
+  };
+  document.addEventListener('input', onEdit, true);
+  document.addEventListener('change', onEdit, true);
 
   // The worker sleeps when idle; the panel keeps it awake while the Manager reviews.
   setInterval(() => { if (state) send('ping'); }, 20000);

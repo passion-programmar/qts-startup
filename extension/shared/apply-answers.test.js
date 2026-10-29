@@ -909,3 +909,37 @@ test('an upload named only "Upload file" takes the document its section heading 
   const both = resolve(field('Resume/CV', { kind: 'file' }), field('Attach file', { kind: 'file', required: false, section: 'Cover letter (optional)' }));
   assert.deepEqual([both['Resume/CV'].file, both['Attach file'].file], ['resume', 'coverLetter']);
 });
+
+test('Auto Apply checks an AI answer against the documents and approved facts before it is filled', () => {
+  const sources = answers.factSources({
+    candidate: { firstName: 'Ana', yearsOfExperience: 6 },
+    resumeText: 'Backend engineer since 2019. Python, Django, AWS, PostgreSQL. Led a team of 4.',
+    savedAnswers: [{ questionKey: 'do you require visa sponsorship', questionText: 'Do you require visa sponsorship?', answer: 'No' }],
+    job: { description: 'We need Kubernetes, Terraform and Python. Strong communication. 5+ years.', title: 'Backend Engineer', company: 'Globex' },
+  });
+  const field = (label, kind = 'textarea', options) => ({ label, kind, options });
+  const verdict = (f, value) => answers.verifyAiAnswer(f, value, sources);
+  // Supported by the résumé: filled.
+  assert.equal(verdict(field('Describe your backend experience'), 'I have built Python and Django services on AWS since 2019 and led a team of 4.').ok, true);
+  assert.equal(verdict(field('Why Globex?'), 'Strong communication matters to me. Globex builds reliable systems.').ok, true);
+  assert.equal(verdict(field('Years of experience with Python?', 'select', ['1-3', '4-5', '6+']), '6+').ok, true);
+  // Not supported: a skill only the job names, an invented number, more years than the profile, a contradiction.
+  assert.match(verdict(field('Describe your backend experience'), 'I run Kubernetes clusters with Terraform.').reason, /Kubernetes, Terraform/);
+  assert.match(verdict(field('Describe your backend experience'), 'Kubernetes is what I use daily.').reason, /Kubernetes/);
+  assert.match(verdict(field('Team size you managed'), 'I managed 12 engineers.').reason, /number 12/);
+  assert.match(verdict(field('How many years of experience with Python do you have?', 'number'), '8').reason, /8\+ years/);
+  assert.match(verdict(field('Will you require visa sponsorship?', 'radio', ['Yes', 'No']), 'Yes').reason, /approved answer says "No"/);
+  // Without sources (the assistant, the dormant engine) nothing is checked.
+  assert.equal(answers.verifyAiAnswer(field('Anything'), 'Kubernetes 12', null).ok, true);
+});
+
+test('Auto Apply\'s prompt leaves out contact and diversity facts and shortens the job description', () => {
+  const job = { title: 'Engineer', company: 'Acme', description: 'x'.repeat(9000) };
+  const fields = [{ id: 'q1', label: 'Why Acme?', kind: 'textarea' }];
+  const full = answers.buildAnswerPrompt({ job, candidate: { ...candidate, genderIdentity: 'woman' }, resumeText: 'CV', coverLetterText: 'Letter', fields, today: new Date('2026-10-29') });
+  const minimal = answers.buildAnswerPrompt({ job, candidate: { ...candidate, genderIdentity: 'woman' }, resumeText: 'CV', coverLetterText: 'Letter', fields, today: new Date('2026-10-29'), minimal: true });
+  assert.match(full, /anna@example\.com/);
+  assert.doesNotMatch(minimal, /anna@example\.com|600 100 200|linkedin\.com/);
+  assert.ok(minimal.length < full.length - 2500, `minimal ${minimal.length} vs full ${full.length}`);
+  assert.match(minimal, /Why Acme\?/);
+});

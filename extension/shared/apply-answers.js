@@ -1056,7 +1056,11 @@
     '- Willingness questions the candidate facts and reusable answers do not cover (travel, assessments, background checks, interview availability): Yes.',
   ].join('\n');
 
-  function candidateFacts(candidate, job, fields, exchangeRates, today) {
+  // Facts the AI never needs for open questions (the profile answers contact and diversity questions
+  // itself): left out of Auto Apply's prompts.
+  const NOT_FOR_AI = ['email', 'phone', 'address', 'linkedin', 'github', 'portfolio', 'diversityAnswers'];
+
+  function candidateFacts(candidate, job, fields, exchangeRates, today, { minimal = false } = {}) {
     const facts = {
       name: [candidate.firstName, candidate.lastName].filter(Boolean).join(' '),
       email: candidate.email,
@@ -1094,6 +1098,7 @@
       facts.salaryExpectation = salaryText(candidate);
       facts.salaryEquivalents = salaryEquivalents(candidate, asked, exchangeRates);
     }
+    if (minimal) for (const key of NOT_FOR_AI) delete facts[key];
     return Object.fromEntries(Object.entries(facts).filter(([, value]) => value !== null && value !== undefined && value !== ''));
   }
 
@@ -1127,7 +1132,7 @@
    * The AI request for a page's open questions: Super Admin's prompt (or the default) with its
    * placeholders filled, then the fixed reply format. One message, answered as strict JSON.
    */
-  function buildAnswerPrompt({ template, job, candidate: profile, resumeText, coverLetterText, documentsJson, fields, exchangeRates, today, savedAnswers }) {
+  function buildAnswerPrompt({ template, job, candidate: profile, resumeText, coverLetterText, documentsJson, fields, exchangeRates, today, savedAnswers, minimal = false }) {
     // The AI sees the salary, notice, and sponsorship Apply uses: Super Admin's reusable ones first.
     const candidate = withReusableFacts(profile, savedAnswers, exchangeRates);
     const questions = JSON.stringify(questionList(fields));
@@ -1135,8 +1140,9 @@
       .map((row) => `${row.questionText}: ${row.answer}${row.note ? ` (note: ${row.note})` : ''}`)
       .join('\n') || '(none)';
     // The delivered résumé and cover letter as plain text, complete; older callers pass the JSON.
+    // minimal (Auto Apply): the résumé complete, the cover letter and job description shortened.
     const resume = String(resumeText || '').trim();
-    const coverLetter = String(coverLetterText || '').trim();
+    const coverLetter = String(coverLetterText || '').trim().slice(0, minimal ? 2500 : undefined);
     const documents = resume || coverLetter
       ? [resume && `Résumé:\n${resume}`, coverLetter && `Cover letter:\n${coverLetter}`].filter(Boolean).join('\n\n')
       : String(documentsJson || '').slice(0, 15000);
@@ -1144,9 +1150,9 @@
       job_title: job.title || '',
       company: job.company || '',
       job_location: job.location || 'not stated',
-      job_description: String(job.description || '').slice(0, 12000),
+      job_description: String(job.description || '').slice(0, minimal ? 6000 : 12000),
       today: formatDate(new Date(today || Date.now())),
-      candidate_profile: JSON.stringify(candidateFacts(candidate, job, fields, exchangeRates, today)),
+      candidate_profile: JSON.stringify(candidateFacts(candidate, job, fields, exchangeRates, today, { minimal })),
       resume: resume || '(none)',
       cover_letter: coverLetter || '(none)',
       resume_and_cover_letter: documents,
@@ -1296,7 +1302,92 @@
     return hit ? field.options.find((option) => String(option).trim() === String(hit.choice).trim()) ?? null : null;
   }
 
-  const api = { normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, DEFAULT_ANSWER_PROMPT };
+  // ---- Auto Apply: an AI answer is filled only when what the candidate's documents and approved
+  // facts say supports it ----
+
+  /** What an AI answer may draw on: the résumé, cover letter, profile facts, approved answers; and the job. */
+  function factSources({ candidate = {}, resumeText = '', coverLetterText = '', savedAnswers = [], job = {} }) {
+    const profileText = Object.values(candidate).filter((value) => ['string', 'number'].includes(typeof value)).join(' \n ');
+    const approvedText = (savedAnswers || []).map((row) => `${row.questionText} ${row.answer}`).join(' \n ');
+    return {
+      evidence: [resumeText, coverLetterText, profileText, approvedText].join(' \n ').toLowerCase(),
+      job: [job.description, job.title].filter(Boolean).join(' \n ').toLowerCase(),
+      jobText: [job.description, job.title].filter(Boolean).join(' \n '),
+      company: String(job.company || '').toLowerCase(),
+      years: Number.isFinite(Number(candidate.yearsOfExperience)) && candidate.yearsOfExperience !== null ? Number(candidate.yearsOfExperience) : null,
+      savedAnswers: savedAnswers || [],
+      thisYear: new Date().getFullYear(),
+    };
+  }
+
+  const wordIn = (text, word) => new RegExp(`(^|[^a-z0-9])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`, 'i').test(text);
+  // Words that look like a skill or technology: an inner capital, a digit or symbol, or all capitals.
+  const SKILL_LIKE = /^(?:[A-Z]{2,}[a-z]*|[A-Za-z]*[a-z][A-Z][A-Za-z0-9]*|[A-Za-z]+[+#]+|[A-Za-z]+\.[A-Za-z]+|[A-Za-z]+\d+[A-Za-z]*)$/;
+  const SKILL_STOP = new Set(['I', 'OK', 'USA', 'UK', 'EU', 'CV', 'AM', 'PM']);
+  // Words that start sentences everywhere: never taken for a name.
+  const COMMON_START = new Set(['The', 'We', 'You', 'Your', 'Our', 'This', 'That', 'These', 'In', 'For', 'If', 'As', 'At', 'And', 'With', 'My', 'It', 'Its', 'To', 'On', 'Of', 'A', 'An', 'Join', 'Experience', 'Strong', 'Good', 'Excellent']);
+
+  /**
+   * Auto Apply's check of one AI answer: { ok: true } or { ok: false, reason }. Not filled (the
+   * Manager decides) when it gives a number or year the documents and profile do not show, claims
+   * more years than the candidate has, contradicts an approved yes/no answer to the same question,
+   * or names a skill the job asks for that nothing about the candidate shows.
+   */
+  function verifyAiAnswer(field, value, sources) {
+    if (!sources) return { ok: true };
+    const text = String(Array.isArray(value) ? value.join(' | ') : value ?? '').trim();
+    if (!text) return { ok: true };
+    const asked = [field.label, field.note, field.placeholder, ...(field.options || [])].filter(Boolean).join(' ').toLowerCase();
+    const chosen = (field.options || []).some((option) => String(option).trim().toLowerCase() === text.toLowerCase());
+
+    // Years of experience: never more than the candidate's (ranges count by their lowest number).
+    if (/\byears?\b/i.test(field.label || '') && /experience|worked|using|with/i.test(field.label || '') && sources.years !== null) {
+      const numbers = (text.match(/\d+(?:\.\d+)?/g) || []).map(Number);
+      if (numbers.length && Math.min(...numbers) > sources.years) {
+        return { ok: false, reason: `it says ${Math.min(...numbers)}+ years; the profile says ${sources.years} years of experience in all` };
+      }
+    }
+    // Numbers and years in a written answer must come from the documents, the profile, or the question.
+    if (!chosen) {
+      for (const number of new Set(text.match(/\d+(?:[.,]\d+)?/g) || [])) {
+        if (Number(number) === sources.thisYear || wordIn(asked, number) || wordIn(sources.evidence, number)) continue;
+        if (sources.years !== null && Number(number) <= sources.years && /years?/i.test(text)) continue;
+        return { ok: false, reason: `the number ${number} is not in the résumé, profile, or approved answers` };
+      }
+    }
+    // An approved yes/no answer to the same question wins.
+    const approved = matchSavedAnswer(field, sources.savedAnswers);
+    if (approved) {
+      const word = (input) => String(input).trim().split(/[\s,.]/)[0];
+      const [mine, theirs] = [word(text), word(approved.answer)];
+      if ((YES.test(mine) && NO.test(theirs)) || (NO.test(mine) && YES.test(theirs))) {
+        return { ok: false, reason: `the approved answer says "${approved.answer}"` };
+      }
+    }
+    // A skill the job asks for that the candidate's documents and profile never show.
+    if (!chosen && ['text', 'textarea'].includes(field.kind)) {
+      // A capitalised word inside a sentence ("I run Kubernetes") counts as a name too.
+      const tokens = [...text.matchAll(/[A-Za-z][A-Za-z0-9+#.]*[A-Za-z0-9+#]/g)]
+        .filter((match) => {
+          if (SKILL_LIKE.test(match[0])) return true;
+          if (!/^[A-Z][a-z]/.test(match[0])) return false;
+          const startsSentence = /(^|[.!?:]\s*)$/.test(text.slice(0, match.index));
+          // At a sentence start only when the job writes it the same way ("Kubernetes"), never a common word.
+          return !startsSentence || (!COMMON_START.has(match[0]) && new RegExp(`(^|[^A-Za-z0-9])${match[0]}($|[^A-Za-z0-9])`).test(sources.jobText || ''));
+        })
+        .map((match) => match[0].replace(/\.$/, ''));
+      const unsupported = [...new Set(tokens)]
+        .filter((token) => !SKILL_STOP.has(token))
+        .filter((token) => wordIn(sources.job, token.toLowerCase()) && !wordIn(sources.evidence, token.toLowerCase())
+          && !wordIn(asked, token.toLowerCase()) && !sources.company.includes(token.toLowerCase()));
+      if (unsupported.length) {
+        return { ok: false, reason: `it names ${unsupported.slice(0, 3).join(', ')}, which the job asks for but the résumé and profile do not show` };
+      }
+    }
+    return { ok: true };
+  }
+
+  const api = { normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

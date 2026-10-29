@@ -92,6 +92,8 @@ test('after the extension restarts, Apply takes an open job page up again, and S
   // session reaches the new worker, where an old handle would hang.
   const connect = async (target) => {
     const session = await target.createCDPSession();
+    // A worker reached as it starts may be paused for the debugger: let it run, or nothing answers.
+    await session.send('Runtime.runIfWaitingForDebugger').catch(() => {});
     return {
       evaluate: (fn, ...args) => session.send('Runtime.evaluate', {
         expression: `(${fn})(...${JSON.stringify(args)})`, awaitPromise: true, returnByValue: true,
@@ -151,7 +153,8 @@ test('after the extension restarts, Apply takes an open job page up again, and S
       }
       return null;
     }, 90000);
-    assert.equal(await worker.evaluate(() => activeReviews.size), 0);
+    // (Not checked: whether the new worker has taken the page up yet. Opening the popup to wake it
+    // makes it check for work at once, so it may already have; either way it is taken up once, below.)
 
     // Apply (on again after an update): the same tab is taken up, nothing new is claimed or opened.
     await turnOn();
