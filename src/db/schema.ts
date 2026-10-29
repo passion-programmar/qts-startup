@@ -710,6 +710,9 @@ export const candidateSavedAnswers = pgTable(
 // Super Admin's reusable answers for application questions every candidate may meet ("How did you
 // hear about us?"). Apply uses one when its question matches and the answer fits the field; when it
 // does not fit, ChatGPT gets it as a hint. Profile facts come first and are never overridden.
+// Every row here is approved: Apply reads the whole table. Drafts wait in reusable_answer_drafts and
+// earlier versions are kept in reusable_answer_versions, so code that reads only this table (Apply,
+// or an older release) never sees an unreviewed answer.
 export const reusableAnswers = pgTable(
   "reusable_answers",
   {
@@ -721,9 +724,15 @@ export const reusableAnswers = pgTable(
     note: text("note"),
     // Added by Apply's learning (a choice question every candidate answered the same way), not by hand.
     autoAdded: boolean("auto_added").default(false).notNull(),
+    // Who it came from: "manual" (Super Admin), "learned" (Apply's question memory), "manager" (a
+    // Manager's proposal), or "ai" (an AI answer saved from a review).
+    source: text("source").default("manual").notNull(),
     createdByUserId: uuid("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
+    // Super Admin who approved it from a draft (empty for answers Super Admin wrote).
+    reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true, mode: "date" }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -731,7 +740,81 @@ export const reusableAnswers = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => [uniqueIndex("reusable_answers_question_key_unique").on(table.questionKey)],
+  (table) => [
+    uniqueIndex("reusable_answers_question_key_unique").on(table.questionKey),
+    check("reusable_answers_source_check", sql`${table.source} in ('manual', 'learned', 'manager', 'ai')`),
+  ],
+);
+
+// Reusable answers waiting for Super Admin ("draft") or turned down ("rejected", kept so Apply's
+// learning does not propose them again). Apply never reads this table. Approving moves a draft into
+// reusable_answers; a draft may propose a new answer to an approved question.
+export const reusableAnswerDrafts = pgTable(
+  "reusable_answer_drafts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    questionKey: text("question_key").notNull(),
+    questionText: text("question_text").notNull(),
+    answer: text("answer").notNull(),
+    note: text("note"),
+    status: text("status").default("draft").notNull(),
+    source: text("source").notNull(),
+    // The Manager who proposed it, or Super Admin for learned drafts.
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true, mode: "date" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    // At most one draft waiting per question.
+    uniqueIndex("reusable_answer_drafts_waiting_question_unique")
+      .on(table.questionKey)
+      .where(sql`${table.status} = 'draft'`),
+    index("reusable_answer_drafts_creator_index").on(table.createdByUserId, table.status),
+    check("reusable_answer_drafts_status_check", sql`${table.status} in ('draft', 'rejected')`),
+    check("reusable_answer_drafts_source_check", sql`${table.source} in ('learned', 'manager', 'ai')`),
+  ],
+);
+
+// Earlier approved versions of reusable answers, saved just before one is edited, replaced by an
+// approved draft, restored over, or deleted, so Super Admin can restore it. At most 20 per question.
+export const reusableAnswerVersions = pgTable(
+  "reusable_answer_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // The reusable_answers row it was (no foreign key: the history outlives a deleted answer).
+    answerId: uuid("answer_id").notNull(),
+    questionKey: text("question_key").notNull(),
+    questionText: text("question_text").notNull(),
+    answer: text("answer").notNull(),
+    note: text("note"),
+    autoAdded: boolean("auto_added").notNull(),
+    source: text("source").notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true, mode: "date" }),
+    // When that version was first saved and last changed.
+    answerCreatedAt: timestamp("answer_created_at", { withTimezone: true, mode: "date" }).notNull(),
+    answerUpdatedAt: timestamp("answer_updated_at", { withTimezone: true, mode: "date" }).notNull(),
+    // Why it stopped being current: "edited", "replaced" (by an approved draft), "restored" (an older
+    // version was restored over it), or "deleted"; by whom and when.
+    reason: text("reason").notNull(),
+    replacedByUserId: uuid("replaced_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    replacedAt: timestamp("replaced_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("reusable_answer_versions_question_index").on(table.questionKey, table.replacedAt),
+    check("reusable_answer_versions_reason_check", sql`${table.reason} in ('edited', 'replaced', 'restored', 'deleted')`),
+  ],
 );
 
 // What Apply learned about one application question, kept small: one row per question (not per

@@ -6,7 +6,7 @@ const item = (overrides: Partial<LearnedAnswer> = {}): LearnedAnswer => ({
   question: "Do you consent to a background check?",
   kind: "choice",
   answer: "Yes",
-  source: "ai",
+  source: "manager",
   options: ["Yes", "No"],
   intended: null,
   ...overrides,
@@ -61,6 +61,26 @@ test("a question becomes reusable by itself only when it is safe", () => {
   const mixed = mergeLearned(row, item({ answer: "No" }), "c3");
   assert.equal(safeAutoAnswer(mixed, "Do you consent to a background check?"), null);
   assert.equal(safeAutoAnswer(row!, "Do you have experience with Kubernetes?"), null);
+});
+
+test("AI answers are counted as sightings but never make a question reusable", () => {
+  // Five AI answers from five candidates: seen five times, nothing kept to grow an answer from.
+  let ai: MemoryRow | null = null;
+  for (const candidate of ["c1", "c2", "c3", "c4", "c5"]) ai = mergeLearned(ai, item({ source: "ai" }), candidate);
+  assert.equal(ai!.timesSeen, 5);
+  assert.deepEqual(ai!.answers, []);
+  assert.equal(safeAutoAnswer(ai!, "Do you consent to a background check?"), null);
+  // Three answers from people plus two from AI: still not enough without the AI ones.
+  let mixed: MemoryRow | null = null;
+  for (const [candidate, source] of [["c1", "manager"], ["c2", "reusable"], ["c3", "rule"], ["c4", "ai"], ["c5", "ai"]]) {
+    mixed = mergeLearned(mixed, item({ source }), candidate);
+  }
+  assert.equal(mixed!.timesSeen, 5);
+  assert.equal(mixed!.answers[0].count, 3);
+  assert.equal(safeAutoAnswer(mixed!, "Do you consent to a background check?"), null);
+  // A remembered choice from an AI answer is still kept: it maps a value onto a list, it is no answer.
+  const choice = mergeLearned(null, item({ source: "ai", question: "Right to work?", answer: "Yes, I have ILR", options: ["Yes, I have ILR", "No"], intended: "Yes" }), "c1");
+  assert.equal(choice.choices.length, 1);
 });
 
 test("personal facts are never learned or suggested: location, where one lives, birthday", () => {

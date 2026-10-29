@@ -10,7 +10,6 @@ import {
   jobs,
   profiles,
   prompts,
-  reusableAnswers,
   users,
 } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -33,6 +32,7 @@ import {
 import { type ExchangeRates, loadExchangeRates } from "./exchange-rates";
 import { type RememberedChoice, recordLearnedAnswers, rememberedChoices } from "./question-memory";
 import { type LearnedAnswer } from "./question-memory-values";
+import { loadApprovedReusableAnswers } from "./reusable-answers";
 import { decryptSiteAccountPassword } from "./site-account-password";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
@@ -230,16 +230,9 @@ async function loadApplication(attemptId: string): Promise<ClaimedApplication | 
     .limit(1);
   if (!row) return null;
 
-  // Only Super Admin's reusable answers, the same for every candidate. Answers from earlier
-  // applications are never reused: each job's questions are answered for that job.
-  const savedAnswers = (await db
-    .select({
-      questionKey: reusableAnswers.questionKey,
-      questionText: reusableAnswers.questionText,
-      answer: reusableAnswers.answer,
-      note: reusableAnswers.note,
-    })
-    .from(reusableAnswers))
+  // Only Super Admin's approved reusable answers, the same for every candidate; drafts never reach
+  // Apply. Answers from earlier applications are never reused: each job's questions are answered for that job.
+  const savedAnswers = (await loadApprovedReusableAnswers())
     .map((entry) => ({ ...entry, scope: "everyone" as const }));
 
   const {

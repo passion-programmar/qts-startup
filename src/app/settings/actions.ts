@@ -13,9 +13,16 @@ import {
   PromptVersionError,
   savePromptVersion,
 } from "@/server/prompts/prompt-versions";
-import { reusableAnswers, settings, users } from "@/db/schema";
+import { settings, users } from "@/db/schema";
 import { parseReusableAnswer } from "@/server/apply/apply-values";
 import { dismissQuestionSuggestion } from "@/server/apply/question-memory";
+import {
+  approveReusableAnswer,
+  deleteReusableAnswer,
+  rejectReusableAnswer,
+  restoreReusableAnswerVersion,
+  saveApprovedReusableAnswer,
+} from "@/server/apply/reusable-answers";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 
@@ -504,8 +511,9 @@ function logPromptActionFailure(stage: string, error: unknown): void {
   console.error(`Prompt action failed while ${stage} (code: ${code}).`);
 }
 
-// Super Admin's reusable answers for Apply: one per question, used for every candidate whose
-// application asks it. Saving the same question again updates its answer.
+// Super Admin's reusable answers for Apply: one approved answer per question, used for every
+// candidate whose application asks it. Super Admin's own answers are approved when saved; drafts
+// (learned, or Managers' proposals) are approved or rejected below.
 export async function saveReusableAnswerAction(
   _previousState: PromptActionState,
   formData: FormData,
@@ -524,31 +532,20 @@ export async function saveReusableAnswerAction(
   if (typeof parsed === "string") return { ...emptyState, error: parsed };
 
   try {
-    const [clash] = await db
-      .select({ id: reusableAnswers.id })
-      .from(reusableAnswers)
-      .where(eq(reusableAnswers.questionKey, parsed.questionKey))
-      .limit(1);
-    if (clash && clash.id !== answerId) {
-      return { ...emptyState, error: "That question already has a reusable answer; edit it instead." };
-    }
-    // A Super Admin's save makes an automatically added answer their own.
-    const values = { ...parsed, autoAdded: false, updatedAt: new Date() };
-    if (answerId) {
-      const updated = await db.update(reusableAnswers).set(values).where(eq(reusableAnswers.id, answerId)).returning({ id: reusableAnswers.id });
-      if (!updated.length) return { ...emptyState, error: "That answer was deleted. Refresh the page." };
-    } else {
-      await db.insert(reusableAnswers).values({ ...values, createdByUserId: actor.id });
-    }
+    // An edit keeps the version before it in the answer's history.
+    const outcome = await saveApprovedReusableAnswer(actor.id, answerId || null, parsed);
+    if (!outcome.ok) return { ...emptyState, error: outcome.error };
   } catch (error) {
     logPromptActionFailure("saving a reusable answer", error);
     return { ...emptyState, error: "The answer could not be saved. Please try again." };
   }
 
   revalidatePath("/settings");
-  return { error: null, success: answerId ? "Answer updated." : "Answer added." };
+  revalidatePath("/profile");
+  return { error: null, success: answerId ? "Answer updated. The previous version is kept in its history." : "Answer added." };
 }
 
+// Deleting an approved answer keeps it in the history (it can be restored); a rejected draft just goes.
 export async function deleteReusableAnswerAction(
   _previousState: PromptActionState,
   formData: FormData,
@@ -560,13 +557,86 @@ export async function deleteReusableAnswerAction(
   const answerId = readText(formData, "answerId", 36);
   if (!isUuid(answerId)) return { ...emptyState, error: "Refresh the page and try again." };
   try {
-    await db.delete(reusableAnswers).where(eq(reusableAnswers.id, answerId));
+    if (!(await deleteReusableAnswer(actor.id, answerId))) {
+      return { ...emptyState, error: "That answer was already deleted. Refresh the page." };
+    }
   } catch (error) {
     logPromptActionFailure("deleting a reusable answer", error);
     return { ...emptyState, error: "The answer could not be deleted. Please try again." };
   }
   revalidatePath("/settings");
+  revalidatePath("/profile");
   return { error: null, success: "Answer deleted." };
+}
+
+/**
+ * Super Admin's review of one draft: Approve (as edited in its form; Apply uses it from the next
+ * claimed application on, and an approved answer it replaces is kept in the history) or Reject
+ * (kept as rejected so Apply's learning does not propose it again). The message names the question,
+ * since the draft leaves the list.
+ */
+export async function reviewReusableAnswerAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can review reusable answers." };
+  }
+  const draftId = readText(formData, "answerId", 36);
+  if (!isUuid(draftId)) return { ...emptyState, error: "Refresh the page and try again." };
+  const parsed = parseReusableAnswer({
+    question: formData.get("question"),
+    answer: formData.get("answer"),
+    note: formData.get("note"),
+  });
+  const reject = formData.get("intent") === "reject";
+  if (!reject && typeof parsed === "string") return { ...emptyState, error: parsed };
+  const question = typeof parsed === "string" ? "the draft" : `“${parsed.questionText}”`;
+  try {
+    if (reject) {
+      if (!(await rejectReusableAnswer(actor.id, draftId))) {
+        return { ...emptyState, error: "That draft was already reviewed or withdrawn. Refresh the page." };
+      }
+    } else {
+      const outcome = await approveReusableAnswer(actor.id, draftId, parsed as Exclude<typeof parsed, string>);
+      if (!outcome.ok) return { ...emptyState, error: outcome.error };
+    }
+  } catch (error) {
+    logPromptActionFailure(reject ? "rejecting a reusable answer" : "approving a reusable answer", error);
+    return { ...emptyState, error: `The draft could not be ${reject ? "rejected" : "approved"}. Please try again.` };
+  }
+  revalidatePath("/settings");
+  revalidatePath("/profile");
+  return {
+    error: null,
+    success: reject
+      ? `Rejected ${question}. It is kept under Rejected, so it is not proposed again.`
+      : `Approved ${question}. Apply uses it from the next application.`,
+  };
+}
+
+// An earlier version becomes the approved answer again; the one it replaces is kept in the history.
+export async function restoreReusableAnswerVersionAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can restore reusable answers." };
+  }
+  const versionId = readText(formData, "versionId", 36);
+  if (!isUuid(versionId)) return { ...emptyState, error: "Refresh the page and try again." };
+  try {
+    const outcome = await restoreReusableAnswerVersion(actor.id, versionId);
+    if (!outcome.ok) return { ...emptyState, error: outcome.error };
+  } catch (error) {
+    logPromptActionFailure("restoring a reusable answer", error);
+    return { ...emptyState, error: "The version could not be restored. Please try again." };
+  }
+  revalidatePath("/settings");
+  revalidatePath("/profile");
+  return { error: null, success: "Version restored. Apply uses it from the next application." };
 }
 
 export async function dismissQuestionSuggestionAction(

@@ -11,17 +11,26 @@ import {
   ManagerJobDetectionUrlAccessForm,
 } from "@/app/settings/prompt-forms";
 import { groupVersions } from "@/app/prompts/prompt-groups";
-import { prompts, reusableAnswers, users } from "@/db/schema";
+import { prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { JobRecordTimeZoneForm } from "@/app/settings/job-record-time-zone-form";
-import { DismissSuggestionButton, ReusableAnswerForm } from "@/app/settings/reusable-answers";
+import {
+  DeleteReusableAnswerButton,
+  DismissSuggestionButton,
+  DraftReviewList,
+  ReusableAnswerForm,
+  VersionList,
+  WarningList,
+} from "@/app/settings/reusable-answers";
 import { SettingsCard } from "@/app/settings/settings-card";
 import { getJobRecordTimeZone } from "@/server/jobs/job-record-time-zone";
 import { listQuestionSuggestions } from "@/server/apply/question-memory";
+import { answerWarnings, describeWarning, SOURCE_LABELS, VERSION_REASON_LABELS } from "@/server/apply/reusable-answer-values";
+import { type AnswerVersion, listLibrary, listVersions } from "@/server/apply/reusable-answers";
 
 export const instant = false;
 
@@ -59,8 +68,9 @@ export default async function SettingsPage() {
     managerRows,
     managerPromptRows,
     jobRecordTimeZone,
-    reusableAnswerRows,
+    libraryRows,
     questionSuggestions,
+    answerVersions,
   ] = await Promise.all([
     // Super Admin's library: the active version of each prompt.
     db
@@ -125,18 +135,27 @@ export default async function SettingsPage() {
       .where(and(isNotNull(prompts.ownerManagerId), isNull(prompts.archivedAt)))
       .orderBy(desc(prompts.version)),
     getJobRecordTimeZone(),
-    db
-      .select({
-        id: reusableAnswers.id,
-        questionText: reusableAnswers.questionText,
-        answer: reusableAnswers.answer,
-        note: reusableAnswers.note,
-        autoAdded: reusableAnswers.autoAdded,
-      })
-      .from(reusableAnswers)
-      .orderBy(asc(reusableAnswers.questionText)),
+    listLibrary(),
     listQuestionSuggestions(),
+    listVersions(),
   ]);
+  // Approved answers are what Apply uses; drafts wait for review; rejected ones are kept so learning
+  // does not propose them again. Each answer lists what it repeats or contradicts, and its earlier
+  // versions; versions of deleted answers are listed on their own.
+  const reusableAnswerRows = libraryRows.filter((row) => row.status === "approved");
+  const draftRows = libraryRows.filter((row) => row.status === "draft");
+  const rejectedRows = libraryRows.filter((row) => row.status === "rejected");
+  const warningsOf = (row: (typeof libraryRows)[number]) => answerWarnings(row, libraryRows).map(describeWarning);
+  const approvedKeys = new Set(reusableAnswerRows.map((row) => row.questionKey));
+  const versionItem = (version: AnswerVersion) => ({
+    id: version.id,
+    questionText: version.questionText,
+    answer: version.answer,
+    note: version.note,
+    label: `${VERSION_REASON_LABELS[version.reason]}${version.replacedBy ? ` by ${version.replacedBy}` : ""} · ${version.replacedAt.slice(0, 16).replace("T", " ")} UTC`,
+  });
+  const versionsOf = (questionKey: string) => answerVersions.filter((version) => version.questionKey === questionKey).map(versionItem);
+  const deletedVersions = answerVersions.filter((version) => !approvedKeys.has(version.questionKey)).map(versionItem);
   const versionsByGroup = new Map<string, PromptVersion[]>();
   for (const row of libraryVersionRows) {
     const versions = versionsByGroup.get(row.promptGroupId) ?? [];
@@ -244,23 +263,41 @@ export default async function SettingsPage() {
         </SettingsCard>
 
         <SettingsCard
-          summary={`${reusableAnswerRows.length} answers${questionSuggestions.length ? ` · ${questionSuggestions.length} suggestions` : ""}`}
+          summary={`${reusableAnswerRows.length} answers${draftRows.length ? ` · ${draftRows.length} drafts to review` : ""}${questionSuggestions.length ? ` · ${questionSuggestions.length} suggestions` : ""}`}
           title="Reusable answers"
         >
           <p className="mb-4 text-xs leading-5 text-slate-500">
-            Answers to application questions, the same for every candidate. Salary, notice, sponsorship, relocation, right to work, job preferences, and diversity questions (gender, ethnicity, veteran, disability) come from here; without a diversity answer Apply declines. The candidate&apos;s static profile facts (name, contacts, nationality, languages) come first for everything else. An answer that does not fit a field goes to ChatGPT as a hint.
+            Answers to application questions, the same for every candidate. Salary, notice, sponsorship, relocation, right to work, job preferences, and diversity questions (gender, ethnicity, veteran, disability) come from here; without a diversity answer Apply declines. The candidate&apos;s static profile facts (name, contacts, nationality, languages) come first for everything else. An answer that does not fit a field goes to ChatGPT as a hint. Apply uses approved answers only.
           </p>
           <div className="space-y-3">
-            {reusableAnswerRows.map((answer) => (
-              <SettingsCard
-                item
-                key={answer.id}
-                summary={answer.autoAdded ? `${answer.answer} · Added automatically` : answer.answer}
-                title={answer.questionText}
-              >
-                <ReusableAnswerForm answer={answer} />
-              </SettingsCard>
-            ))}
+            {reusableAnswerRows.map((answer) => {
+              const warnings = warningsOf(answer);
+              return (
+                <SettingsCard
+                  item
+                  key={answer.id}
+                  summary={[
+                    answer.answer,
+                    answer.autoAdded ? "Added automatically" : answer.source !== "manual" ? SOURCE_LABELS[answer.source] : null,
+                    warnings.length ? `${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}` : null,
+                  ].filter(Boolean).join(" · ")}
+                  title={answer.questionText}
+                >
+                  <WarningList warnings={warnings} />
+                  <ReusableAnswerForm answer={answer} />
+                  {versionsOf(answer.questionKey).length > 0 && (
+                    <details className="mt-3">
+                      <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">
+                        Previous versions ({versionsOf(answer.questionKey).length})
+                      </summary>
+                      <div className="mt-2">
+                        <VersionList versions={versionsOf(answer.questionKey)} />
+                      </div>
+                    </details>
+                  )}
+                </SettingsCard>
+              );
+            })}
             {/* A new key after each added answer empties the form for the next one. */}
             <SettingsCard item key={`new-${reusableAnswerRows.length}`} summary="A question and its answer" title="Add an answer">
               <ReusableAnswerForm />
@@ -268,10 +305,54 @@ export default async function SettingsPage() {
           </div>
 
           <h3 className="mb-1 mt-6 text-xs font-semibold text-slate-700">
+            Drafts waiting for review ({draftRows.length})
+          </h3>
+          <p className="mb-3 text-xs leading-5 text-slate-500">
+            Answers learned from confirmed applications and Managers&apos; proposals. Apply never uses a draft. Edit it if needed, then Approve to use it for every candidate, or Reject it. Approving a draft for a question that already has an approved answer replaces that answer; the replaced answer is kept under its Previous versions.
+          </p>
+          <DraftReviewList
+            drafts={draftRows.map((draft) => {
+              const warnings = warningsOf(draft);
+              return {
+                answer: { id: draft.id, questionText: draft.questionText, answer: draft.answer, note: draft.note },
+                summary: `${draft.answer} · ${SOURCE_LABELS[draft.source]}${draft.source === "manager" ? ` (${draft.createdBy})` : ""}${warnings.length ? ` · ${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}` : ""}`,
+                warnings,
+              };
+            })}
+          />
+
+          {rejectedRows.length > 0 && (
+            <>
+              <h3 className="mb-1 mt-6 text-xs font-semibold text-slate-700">Rejected ({rejectedRows.length})</h3>
+              <p className="mb-3 text-xs leading-5 text-slate-500">
+                Kept so Apply&apos;s learning does not propose them again. Delete one to let it be proposed again.
+              </p>
+              <div className="space-y-3">
+                {rejectedRows.map((row) => (
+                  <SettingsCard item key={row.id} summary={`${row.answer} · ${SOURCE_LABELS[row.source]}${row.reviewedBy ? ` · rejected by ${row.reviewedBy}` : ""}`} title={row.questionText}>
+                    <p className="mb-3 whitespace-pre-wrap text-xs text-slate-700">{row.answer}</p>
+                    <DeleteReusableAnswerButton answer={row} />
+                  </SettingsCard>
+                ))}
+              </div>
+            </>
+          )}
+
+          {deletedVersions.length > 0 && (
+            <>
+              <h3 className="mb-1 mt-6 text-xs font-semibold text-slate-700">Deleted answers ({deletedVersions.length} versions)</h3>
+              <p className="mb-3 text-xs leading-5 text-slate-500">
+                Approved answers that were deleted, kept so they can be restored. The 20 newest versions of each question are kept.
+              </p>
+              <VersionList versions={deletedVersions} />
+            </>
+          )}
+
+          <h3 className="mb-1 mt-6 text-xs font-semibold text-slate-700">
             Suggestions from applications ({questionSuggestions.length})
           </h3>
           <p className="mb-3 text-xs leading-5 text-slate-500">
-            Questions met in 2 or more confirmed applications that have no reusable answer yet, the most frequent first. Add one to answer it the same way for every candidate, or Dismiss a personal or one-off question. A choice question answered the same way 5 or more times by 3 or more candidates is added by itself and marked “Added automatically”.
+            Questions met in 2 or more confirmed applications that have no reusable answer yet, the most frequent first. Add one to answer it the same way for every candidate, or Dismiss a personal or one-off question. A choice question answered the same way 5 or more times (not counting AI answers) by 3 or more candidates is proposed by itself as a draft above.
           </p>
           {questionSuggestions.length ? (
             <div className="space-y-3">

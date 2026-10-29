@@ -1,7 +1,7 @@
 import "server-only";
 
 import { and, desc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
-import { applyQuestionMemory, reusableAnswers, users } from "@/db/schema";
+import { applyQuestionMemory, reusableAnswerDrafts, reusableAnswers, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { normalizeQuestionKey } from "./apply-values";
 import {
@@ -17,7 +17,8 @@ import {
 
 // Apply's question memory: what confirmed applications teach. Each question has one small row;
 // Super Admin sees the frequent ones without a reusable answer as suggestions, and a choice
-// question every candidate answered the same way becomes a reusable answer by itself.
+// question every candidate answered the same way is proposed as a draft reusable answer, which
+// Apply uses only after Super Admin approves it.
 
 const MEMORY_DAYS = 90;
 
@@ -34,9 +35,10 @@ const excluded = (column: string) => sql.raw(`excluded."${column}"`);
 
 /**
  * Learns from one application the Manager confirmed (Yes): each question's row grows, safe
- * questions become reusable answers, and rows unseen for 90 days are removed. Two database trips
- * however many questions the form had: one to read, one to write. Returns the reusable answers
- * added by itself.
+ * questions become draft reusable answers, and rows unseen for 90 days are removed. Two database
+ * trips however many questions the form had: one to read, one to write. A question that already
+ * has an answer in any state (approved, waiting, or rejected) gets no new draft. Returns the
+ * drafts added.
  */
 export async function recordLearnedAnswers(candidateId: string, items: LearnedAnswer[]): Promise<string[]> {
   const byKey = new Map<string, LearnedAnswer>();
@@ -46,16 +48,17 @@ export async function recordLearnedAnswers(candidateId: string, items: LearnedAn
   }
   if (!byKey.size) return [];
   const keys = [...byKey.keys()];
-  const [existing, reusable, [author]] = await db.batch([
+  const [existing, reusable, drafts, [author]] = await db.batch([
     db.select().from(applyQuestionMemory).where(inArray(applyQuestionMemory.questionKey, keys)),
     db.select({ questionKey: reusableAnswers.questionKey }).from(reusableAnswers).where(inArray(reusableAnswers.questionKey, keys)),
+    db.select({ questionKey: reusableAnswerDrafts.questionKey }).from(reusableAnswerDrafts).where(inArray(reusableAnswerDrafts.questionKey, keys)),
     db.select({ id: users.id }).from(users).where(eq(users.role, "super_admin")).limit(1),
   ]);
   const rows = new Map(existing.map((row) => [row.questionKey, row]));
-  const covered = new Set(reusable.map((row) => row.questionKey));
+  const covered = new Set([...reusable, ...drafts].map((row) => row.questionKey));
   const now = new Date();
   const memory: (typeof applyQuestionMemory.$inferInsert)[] = [];
-  const autoAnswers: (typeof reusableAnswers.$inferInsert)[] = [];
+  const autoAnswers: (typeof reusableAnswerDrafts.$inferInsert)[] = [];
 
   for (const [key, item] of byKey) {
     const before = rows.get(key);
@@ -77,7 +80,8 @@ export async function recordLearnedAnswers(candidateId: string, items: LearnedAn
         questionText: item.question,
         answer,
         note: `Added automatically: answered "${answer}" every time (${next.timesSeen} applications, ${next.answers[0].candidates.length} candidates).`,
-        autoAdded: true,
+        status: "draft",
+        source: "learned",
         createdByUserId: author.id,
       });
     }
@@ -108,7 +112,7 @@ export async function recordLearnedAnswers(candidateId: string, items: LearnedAn
   const [, , inserted] = await db.batch([
     upsert,
     forget,
-    db.insert(reusableAnswers).values(autoAnswers).onConflictDoNothing().returning({ questionText: reusableAnswers.questionText }),
+    db.insert(reusableAnswerDrafts).values(autoAnswers).onConflictDoNothing().returning({ questionText: reusableAnswerDrafts.questionText }),
   ]);
   return inserted.map((row) => row.questionText);
 }
@@ -123,9 +127,10 @@ export type QuestionSuggestion = {
   lastSeenAt: string;
 };
 
-/** Frequent questions without a reusable answer, the most frequent first, for Settings. */
+/** Frequent questions without a reusable answer in any state, the most frequent first, for Settings. */
 export async function listQuestionSuggestions(limit = 100): Promise<QuestionSuggestion[]> {
   const covered = db.select({ key: reusableAnswers.questionKey }).from(reusableAnswers);
+  const drafted = db.select({ key: reusableAnswerDrafts.questionKey }).from(reusableAnswerDrafts);
   const rows = await db
     .select()
     .from(applyQuestionMemory)
@@ -133,6 +138,7 @@ export async function listQuestionSuggestions(limit = 100): Promise<QuestionSugg
       eq(applyQuestionMemory.dismissed, false),
       gte(applyQuestionMemory.timesSeen, SUGGEST_MIN_TIMES),
       notInArray(applyQuestionMemory.questionKey, covered),
+      notInArray(applyQuestionMemory.questionKey, drafted),
     ))
     .orderBy(desc(applyQuestionMemory.timesSeen), desc(applyQuestionMemory.lastSeenAt))
     .limit(limit);

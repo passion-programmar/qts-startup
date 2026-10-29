@@ -1,6 +1,6 @@
 // Rules for Apply's question memory (apply_question_memory): what a confirmed application teaches,
-// how one question's row grows, and when a question is safe to become a reusable answer by
-// itself. Pure, so the rules are testable without a database.
+// how one question's row grows, and when a question is safe to be proposed as a reusable answer
+// (a draft Super Admin reviews). Pure, so the rules are testable without a database.
 
 export type LearnedAnswer = {
   question: string;
@@ -93,8 +93,9 @@ export function mergeLearned(row: MemoryRow | null, item: LearnedAnswer, candida
   if (item.options.length && !next.options.some((list) => optionsKey(list) === optionsKey(item.options)) && next.options.length < MAX_OPTION_LISTS) {
     next.options.push(item.options);
   }
-  // Only short answers to choice questions are kept; long free text is counted, never stored.
-  if (item.kind === "choice" && item.answer.length <= MAX_STORED_ANSWER) {
+  // Only short answers to choice questions are kept; long free text is counted, never stored. An AI
+  // answer is counted too, but never kept as one of the answers a reusable answer may grow from.
+  if (item.kind === "choice" && item.answer.length <= MAX_STORED_ANSWER && item.source !== "ai") {
     const existing = next.answers.find((entry) => same(entry.answer) === same(item.answer));
     if (existing) {
       existing.count += 1;
@@ -122,12 +123,15 @@ export function mergeLearned(row: MemoryRow | null, item: LearnedAnswer, candida
 }
 
 /**
- * The answer a question may become a reusable answer with by itself, or null: a choice question,
- * not personal or about experience, seen 5+ times, always answered the same, by 3+ candidates.
+ * The answer a question may be proposed with by itself (a draft for Super Admin), or null: a choice
+ * question, not personal or about experience, seen 5+ times, always answered the same, 5+ of those
+ * answers not from AI, by 3+ candidates.
  */
 export function safeAutoAnswer(row: MemoryRow, questionText: string): string | null {
   if (row.kind !== "choice" || row.timesSeen < AUTO_ADD_MIN_TIMES || row.answers.length !== 1) return null;
   if (PERSONAL_QUESTION.test(questionText) || EXPERIENCE_QUESTION.test(questionText)) return null;
   const [only] = row.answers;
-  return only.candidates.length >= AUTO_ADD_MIN_CANDIDATES && only.answer.length <= MAX_STORED_ANSWER ? only.answer : null;
+  return only.count >= AUTO_ADD_MIN_TIMES && only.candidates.length >= AUTO_ADD_MIN_CANDIDATES && only.answer.length <= MAX_STORED_ANSWER
+    ? only.answer
+    : null;
 }
