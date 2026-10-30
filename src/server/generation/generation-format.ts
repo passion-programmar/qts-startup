@@ -67,7 +67,7 @@ export const DOCUMENT_FORMAT_RULES: readonly string[] = [
  "Each bullet is one plain string, and each cover-letter paragraph at most 1000 characters.",
  "coverLetter.bodyParagraphs contains 1 to 6 non-empty paragraphs. coverLetter.recipient.address is [] unless the job data gives real address lines; never put an empty line in it. subject, salutation and closing are non-empty, and signatureName is the candidate's fullName.",
  "Write plain text: no Markdown except **bold** in resume.summary and in bullets, no emojis or decorative symbols, no HTML, and no placeholders such as [Company], [Your Name] or {{job_title}}; use the real company name, job title and candidate details from the data.",
- "In the skills section, use item.heading for the category and item.bullets for its skills as plain names",
+"In the skills section, preserve each generated skill category as a separate item using item.heading for the category name and item.bullets for its associated skills. Use plain skill names only, without years of experience, proficiency levels, descriptions, or additional formatting. Do not flatten categorized skills into a single list. Generate valid JSON matching the required schema. Include only categories containing skills, avoid duplicate skills across items, and preserve the category names and skill ordering produced by the skills-generation instructions. If no meaningful categories can be generated, use a single heading-free item containing a flat skill list.",
  "Use no keys other than those in the output shape below (plus workMode as described). Repeat items as needed; the shape shows one of each.",
  `Output shape:\n${JSON.stringify(DOCUMENT_OUTPUT_SHAPE, null, 2)}`,
 ];
