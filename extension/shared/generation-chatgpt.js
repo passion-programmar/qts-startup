@@ -1,4 +1,11 @@
 (function initQtsGenerationChatGpt(global) {
+  // The server composes the contract, so a current extension must not send a legacy server's prompt.
+  function generationContractIssue(result) {
+    return result?.resumeJsonVersion === 2
+      ? ''
+      : 'The QTS server returned an outdated Generation contract. Rebuild or update the QTS server to the V2 résumé version before retrying.';
+  }
+
   function buildTaskMarker(generationId) {
     const id = String(generationId || '').trim();
     if (!/^[0-9a-f-]{36}$/i.test(id)) return '';
@@ -50,6 +57,7 @@
   }
 
   global.__qtsGenerationChatGpt = {
+    generationContractIssue,
     buildTaskMarker,
     buildTaskPrompt,
     extractJsonObject,

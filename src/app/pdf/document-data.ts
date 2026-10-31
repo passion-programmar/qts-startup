@@ -96,12 +96,31 @@ export type PdfPackage = {
   theme?: DocumentTheme;
 };
 
+export type ResumeJsonVersion = 1 | 2;
+const version2ResumeKeys = [
+  "targetCompany",
+  "applyJobTitle",
+  "name",
+  "title",
+  "contact",
+  "summary",
+  "skills",
+  "experience",
+  "education",
+];
+
+/** Identifies the persisted résumé shape without rewriting old Generation results. */
+export function resumeJsonVersion(value: unknown): ResumeJsonVersion | null {
+  if (!record(value)) return null;
+  if ("candidate" in value || "sections" in value) return 1;
+  return version2ResumeKeys.every((key) => key in value) ? 2 : null;
+}
+
 /**
- * Reads the one resume and cover-letter JSON format every template prints from. Sections get
- * their fixed id (see resume-sections.ts); Languages, Volunteering, unrecognised and empty
- * sections are dropped. requireCoreSections, for newly generated JSON, also demands the summary
- * and the Skills, Experience and Education sections, each with an entry that prints; stored
- * packages print without it.
+ * Reads both persisted résumé versions and the unchanged cover-letter format into the package
+ * every template prints from. V1 sections get fixed ids; unsupported and empty sections are
+ * dropped. With requireCoreSections, V1 requires Skills, Experience, Projects and Education,
+ * while V2 requires Skills, Experience and Education; both require a summary.
  */
 export function parsePdfPackage(
   source: string,
@@ -119,11 +138,86 @@ export function parsePdfPackage(
 
   const resume = value.resume;
   const coverLetter = value.coverLetter;
-  const rootCandidate = record(value.candidate)
+  const version = resumeJsonVersion(resume);
+  if (!version) throw new Error("resume does not match a supported JSON structure.");
+  const rootCandidate = version === 1 && record(value.candidate)
     ? candidate(value.candidate, "candidate")
     : null;
-  const resumeCandidate = rootCandidate ?? candidate(resume.candidate, "resume");
+  const normalizedResume = version === 2
+    ? parseVersion2Resume(resume, requireCoreSections)
+    : parseVersion1Resume(resume, rootCandidate, requireCoreSections);
+  const resumeCandidate = normalizedResume.candidate;
   const coverCandidate = rootCandidate ?? candidate(coverLetter.candidate, "coverLetter");
+  const targetRole = normalizedResume.targetRole;
+  const sections = normalizedResume.sections;
+  const summary = normalizedResume.summary;
+  const resumeCompany = normalizedResume.targetCompany;
+  if (
+    normalize(resumeCandidate.fullName) !== normalize(coverCandidate.fullName)
+    || normalize(resumeCandidate.email) !== normalize(coverCandidate.email)
+  ) {
+    throw new Error("Resume and cover-letter candidate names and email addresses must match.");
+  }
+
+  const paragraphs = coverLetter.bodyParagraphs ?? coverLetter.paragraphs;
+  if (
+    !Array.isArray(paragraphs)
+    || paragraphs.length < 1
+    || paragraphs.length > 6
+    || !paragraphs.every((paragraph) => typeof paragraph === "string" && paragraph.trim() && paragraph.length <= 900)
+  ) {
+    throw new Error("coverLetter.bodyParagraphs must contain 1 to 6 text paragraphs of 900 characters or fewer.");
+  }
+
+  if (
+    normalize(targetRole) !== normalize(optional(coverLetter.targetRole, 300) ?? targetRole)
+  ) {
+    throw new Error("Resume and cover-letter target roles must match.");
+  }
+  const coverRole = optional(coverLetter.targetRole, 300) ?? targetRole;
+  const recipient = parseRecipient(coverLetter.recipient);
+  const coverCompany =
+    optional(coverLetter.targetCompany, 500)
+    ?? recipient?.company
+    ?? resumeCompany;
+  if (!coverCompany) {
+    throw new Error("coverLetter.targetCompany or coverLetter.recipient.company is required.");
+  }
+  if (resumeCompany && normalize(resumeCompany) !== normalize(coverCompany)) {
+    throw new Error("Resume and cover-letter target companies must match.");
+  }
+
+  return {
+    resume: {
+      candidate: resumeCandidate,
+      targetRole,
+      targetCompany: resumeCompany,
+      targetJobsite: version === 1 ? optional(resume.targetJobsite, 2048) : undefined,
+      summary,
+      sections,
+    },
+    coverLetter: {
+      candidate: coverCandidate,
+      targetRole: coverRole,
+      targetCompany: coverCompany,
+      date: optional(coverLetter.date, 100),
+      salutation: optional(coverLetter.salutation ?? coverLetter.greeting, 300),
+      recipient,
+      subject: optional(coverLetter.subject, 500),
+      bodyParagraphs: paragraphs.map((paragraph) => paragraph.trim()),
+      closing: optional(coverLetter.closing, 300),
+      signatureName: optional(coverLetter.signatureName ?? coverLetter.signature, 300),
+    },
+    theme: parseTheme(value.theme),
+  };
+}
+
+function parseVersion1Resume(
+  resume: Record<string, unknown>,
+  rootCandidate: DocumentCandidate | null,
+  requireCoreSections: boolean,
+) {
+  const resumeCandidate = rootCandidate ?? candidate(resume.candidate, "resume");
   const targetRole = required(resume.targetRole, "resume.targetRole", 300);
   const sectionsRaw = resume.sections;
   if (!Array.isArray(sectionsRaw) || sectionsRaw.length > 20) {
@@ -180,63 +274,116 @@ export function parsePdfPackage(
     }
   }
 
-  const paragraphs = coverLetter.bodyParagraphs ?? coverLetter.paragraphs;
-  if (
-    !Array.isArray(paragraphs)
-    || paragraphs.length < 1
-    || paragraphs.length > 6
-    || !paragraphs.every((paragraph) => typeof paragraph === "string" && paragraph.trim() && paragraph.length <= 900)
-  ) {
-    throw new Error("coverLetter.bodyParagraphs must contain 1 to 6 text paragraphs of 900 characters or fewer.");
-  }
-
-  if (
-    normalize(resumeCandidate.fullName) !== normalize(coverCandidate.fullName)
-    || normalize(resumeCandidate.email) !== normalize(coverCandidate.email)
-  ) {
-    throw new Error("Resume and cover-letter candidate names and email addresses must match.");
-  }
-
-  const coverRole = optional(coverLetter.targetRole, 300) ?? targetRole;
-  if (normalize(targetRole) !== normalize(coverRole)) {
-    throw new Error("Resume and cover-letter target roles must match.");
-  }
-  const recipient = parseRecipient(coverLetter.recipient);
-  const resumeCompany = optional(resume.targetCompany, 500);
-  const coverCompany =
-    optional(coverLetter.targetCompany, 500)
-    ?? recipient?.company
-    ?? resumeCompany;
-  if (!coverCompany) {
-    throw new Error("coverLetter.targetCompany or coverLetter.recipient.company is required.");
-  }
-  if (resumeCompany && normalize(resumeCompany) !== normalize(coverCompany)) {
-    throw new Error("Resume and cover-letter target companies must match.");
-  }
-
   return {
-    resume: {
-      candidate: resumeCandidate,
-      targetRole,
-      targetCompany: resumeCompany,
-      targetJobsite: optional(resume.targetJobsite, 2048),
-      summary: optional(resume.summary, 5000),
-      sections,
-    },
-    coverLetter: {
-      candidate: coverCandidate,
-      targetRole: coverRole,
-      targetCompany: coverCompany,
-      date: optional(coverLetter.date, 100),
-      salutation: optional(coverLetter.salutation ?? coverLetter.greeting, 300),
-      recipient,
-      subject: optional(coverLetter.subject, 500),
-      bodyParagraphs: paragraphs.map((paragraph) => paragraph.trim()),
-      closing: optional(coverLetter.closing, 300),
-      signatureName: optional(coverLetter.signatureName ?? coverLetter.signature, 300),
-    },
-    theme: parseTheme(value.theme),
+    candidate: resumeCandidate,
+    targetRole,
+    targetCompany: optional(resume.targetCompany, 500),
+    summary: optional(resume.summary, 5000),
+    sections,
   };
+}
+
+function parseVersion2Resume(resume: Record<string, unknown>, requireCoreSections: boolean) {
+  exactKeys(resume, version2ResumeKeys, "resume");
+  const contact = objectField(resume.contact, "resume.contact");
+  exactKeys(contact, ["location", "email", "linkedin", "phone"], "resume.contact");
+  const resumeCandidate = candidate({
+    fullName: textField(resume.name, "resume.name", 300),
+    headline: textField(resume.title, "resume.title", 500),
+    email: textField(contact.email, "resume.contact.email", 320),
+    phone: textField(contact.phone, "resume.contact.phone", 100),
+    location: textField(contact.location, "resume.contact.location", 500),
+    linkedinUrl: textField(contact.linkedin, "resume.contact.linkedin", 2048),
+  }, "resume");
+  const targetRole = required(resume.applyJobTitle, "resume.applyJobTitle", 300);
+  const targetCompany = required(resume.targetCompany, "resume.targetCompany", 500);
+  const summary = optional(resume.summary, 5000);
+  if (requireCoreSections && !summary) throw new Error("resume.summary is required.");
+
+  const skills = arrayField(resume.skills, "resume.skills", 50).map((entry, index) => {
+    const skillGroup = objectField(entry, `resume.skills[${index}]`);
+    exactKeys(skillGroup, ["category", "items"], `resume.skills[${index}]`);
+    const heading = required(skillGroup.category, `resume.skills[${index}].category`, 300);
+    const items = textField(skillGroup.items, `resume.skills[${index}].items`, 5000)
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (items.length > 50 || items.some((item) => item.length > 500)) {
+      throw new Error(`resume.skills[${index}].items must contain no more than 50 skills of 500 characters or fewer.`);
+    }
+    return { heading, bullets: items };
+  });
+  const experience = arrayField(resume.experience, "resume.experience", 50).map((entry, index) => {
+    const job = objectField(entry, `resume.experience[${index}]`);
+    exactKeys(job, ["company", "location", "role", "dates", "bullets"], `resume.experience[${index}]`);
+    const bullets = arrayField(job.bullets, `resume.experience[${index}].bullets`, 50);
+    if (!bullets.every((bullet) => typeof bullet === "string" && bullet.length <= 500)) {
+      throw new Error(`resume.experience[${index}].bullets must be strings of 500 characters or fewer.`);
+    }
+    return {
+      heading: required(job.role, `resume.experience[${index}].role`, 500),
+      subheading: required(job.company, `resume.experience[${index}].company`, 500),
+      location: optionalTextField(job.location, `resume.experience[${index}].location`, 200),
+      dateRange: optionalTextField(job.dates, `resume.experience[${index}].dates`, 200),
+      bullets: bullets as string[],
+    };
+  });
+  const education = arrayField(resume.education, "resume.education", 50).map((entry, index) => {
+    const school = objectField(entry, `resume.education[${index}]`);
+    exactKeys(school, ["institution", "location", "degree", "field", "dates"], `resume.education[${index}]`);
+    const degree = required(school.degree, `resume.education[${index}].degree`, 500);
+    const field = optionalTextField(school.field, `resume.education[${index}].field`, 500);
+    return {
+      heading: field ? `${degree}, ${field}` : degree,
+      subheading: required(school.institution, `resume.education[${index}].institution`, 500),
+      location: optionalTextField(school.location, `resume.education[${index}].location`, 200),
+      dateRange: optionalTextField(school.dates, `resume.education[${index}].dates`, 200),
+    };
+  });
+  if (requireCoreSections) {
+    if (!skills.some((item) => item.bullets.length)) throw new Error("resume.skills must include at least one skill.");
+    if (!experience.length) throw new Error("resume.experience must include at least one entry.");
+    if (!education.length) throw new Error("resume.education must include at least one entry.");
+  }
+  const sections = [
+    ...(skills.length ? [{ id: "skills", title: "Skills", type: "skills" as const, items: skills }] : []),
+    ...(experience.length ? [{ id: "experience", title: "Professional Experience", type: "standard" as const, items: experience }] : []),
+    ...(education.length ? [{ id: "education", title: "Education", type: "standard" as const, items: education }] : []),
+  ];
+  return { candidate: resumeCandidate, targetRole, targetCompany, summary, sections };
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[], path: string): void {
+  if (
+    value === null
+    || expected.some((key) => !(key in value))
+    || Object.keys(value).some((key) => !expected.includes(key))
+  ) {
+    throw new Error(`${path} must contain exactly: ${expected.join(", ")}.`);
+  }
+}
+
+function objectField(value: unknown, path: string): Record<string, unknown> {
+  if (!record(value)) throw new Error(`${path} must be an object.`);
+  return value;
+}
+
+function arrayField(value: unknown, path: string, maxLength: number): unknown[] {
+  if (!Array.isArray(value) || value.length > maxLength) {
+    throw new Error(`${path} must be a list of no more than ${maxLength} entries.`);
+  }
+  return value;
+}
+
+function textField(value: unknown, path: string, max: number): string {
+  if (typeof value !== "string" || value.length > max) {
+    throw new Error(`${path} must be a string of ${max} characters or fewer.`);
+  }
+  return value.trim();
+}
+
+function optionalTextField(value: unknown, path: string, max: number): string | undefined {
+  return textField(value, path, max) || undefined;
 }
 
 /**

@@ -57,7 +57,7 @@ export default async function ManagerPromptsPage() {
       <main className="py-1 text-slate-900">
         <div className="mx-auto max-w-4xl space-y-6">
           <PageHeader
-            description="Generation rotates through your prompts one by one, and through every PDF template. With no prompts of your own, Super Admin's default prompt is used."
+            description="Generation rotates through your prompts by least-recent use, or you can choose an active prompt for a queued job. Candidate/job data and the protected output format are supplied automatically. With no prompts of your own, Super Admin's default prompt is used."
             title="My AI prompts"
           />
 
@@ -66,7 +66,7 @@ export default async function ManagerPromptsPage() {
               ? "You have no prompts yet, so Generation uses the default prompt. Click + to add one."
               : myPrompts.length === 1
                 ? "Generation uses your prompt for every job."
-                : `Generation uses your ${myPrompts.length} prompts in turn, the one used longest ago first.`}
+                : `Generation uses your ${myPrompts.length} prompts in least-recent-use order unless you choose one for a queued job.`}
             {" "}Click a prompt to open it. Saving a change adds a version; earlier versions are kept and can be put back in use.
           </p>
 

@@ -36,11 +36,105 @@ const generatedPackage = {
   },
 };
 
+const version2Package = {
+  resume: {
+    targetCompany: "Example",
+    applyJobTitle: "Platform Engineer",
+    name: "Test Candidate",
+    title: "Platform Engineer | Cloud",
+    contact: {
+      location: "Cluj-Napoca, Romania",
+      email: "test@example.com",
+      linkedin: "linkedin.com/in/test-candidate",
+      phone: "+40 123 456 789",
+    },
+    summary: "Platform engineer with **AWS** experience.",
+    skills: [
+      { category: "Cloud", items: "AWS, Kubernetes, Terraform" },
+      { category: "Programming", items: "TypeScript, Go" },
+    ],
+    experience: [{
+      company: "Example Ltd",
+      location: "Cluj-Napoca, Romania",
+      role: "Platform Engineer",
+      dates: "Nov 2022 – Present",
+      bullets: ["Built **reliable** cloud infrastructure.", "Automated production deployments."],
+    }],
+    education: [{
+      institution: "Example University",
+      location: "Cluj-Napoca, Romania",
+      degree: "BSc",
+      field: "Computer Science",
+      dates: "Oct 2018 – Jun 2022",
+    }],
+  },
+  coverLetter: {
+    candidate: {
+      fullName: "Test Candidate",
+      email: "test@example.com",
+      phone: "+40 123 456 789",
+      location: "Cluj-Napoca, Romania",
+      linkedinUrl: "linkedin.com/in/test-candidate",
+    },
+    targetRole: "Platform Engineer",
+    targetCompany: "Example",
+    recipient: { name: "", title: "Hiring Manager", company: "Example", address: [] },
+    subject: "Application for Platform Engineer",
+    salutation: "Dear Hiring Manager,",
+    bodyParagraphs: ["I am applying for the Platform Engineer role."],
+    closing: "Kind regards,",
+    signatureName: "Test Candidate",
+  },
+};
+
 test("PDF document data accepts one resume and cover-letter JSON object", () => {
   const parsed = parsePdfPackage(JSON.stringify(validPackage));
   assert.equal(parsed.resume.targetRole, "Engineer");
   assert.equal(parsed.resume.sections[0].id, "experience");
   assert.equal(parsed.coverLetter.targetCompany, "Example");
+});
+
+test("Version 1 saved résumé identity must continue to match the cover letter", () => {
+  assert.throws(() => parsePdfPackage(JSON.stringify({
+    ...validPackage,
+    coverLetter: {
+      ...validPackage.coverLetter,
+      candidate: { fullName: "Different Candidate", email: "other@example.com" },
+    },
+  })), /candidate names and email addresses must match/);
+});
+
+test("Version 2 résumé normalizes for every existing template without projects", () => {
+  const parsed = parsePdfPackage(JSON.stringify(version2Package), { requireCoreSections: true });
+  assert.deepEqual(parsed.resume.sections.map((section) => section.id), ["skills", "experience", "education"]);
+  assert.equal(parsed.resume.candidate.fullName, "Test Candidate");
+  assert.equal(parsed.resume.candidate.headline, "Platform Engineer | Cloud");
+  assert.equal(parsed.resume.candidate.linkedinUrl, "linkedin.com/in/test-candidate");
+  assert.equal(parsed.resume.sections[0].type, "skills");
+  assert.deepEqual(parsed.resume.sections[0].items[0].bullets, ["AWS", "Kubernetes", "Terraform"]);
+  assert.equal(parsed.resume.sections[1].items[0].heading, "Platform Engineer");
+  assert.equal(parsed.resume.sections[1].items[0].subheading, "Example Ltd");
+  assert.equal(parsed.resume.sections[1].items[0].dateRange, "Nov 2022 – Present");
+  assert.deepEqual(parsed.resume.sections[1].items[0].bullets, version2Package.resume.experience[0].bullets);
+  assert.equal(parsed.resume.sections[2].items[0].heading, "BSc, Computer Science");
+  assert.equal(parsed.resume.sections[2].items[0].subheading, "Example University");
+  assert.equal(parsed.coverLetter.bodyParagraphs[0], version2Package.coverLetter.bodyParagraphs[0]);
+  for (const template of pdfTemplateValues) {
+    const data = toResumeTemplateData(parsed, template);
+    assert.deepEqual(data.resume.sections.map((section) => section.id).sort(), ["education", "experience", "skills"], template);
+    assert.equal(data.coverLetter.paragraphs[0], version2Package.coverLetter.bodyParagraphs[0], template);
+  }
+});
+
+test("Version 2 résumé rejects unknown fields and mismatched cover-letter identity", () => {
+  assert.throws(() => parsePdfPackage(JSON.stringify({
+    ...version2Package,
+    resume: { ...version2Package.resume, projects: [] },
+  }), { requireCoreSections: true }), /resume must contain exactly/);
+  assert.throws(() => parsePdfPackage(JSON.stringify({
+    ...version2Package,
+    coverLetter: { ...version2Package.coverLetter, candidate: { ...version2Package.coverLetter.candidate, email: "other@example.com" } },
+  }), { requireCoreSections: true }), /candidate names and email addresses must match/);
 });
 
 test("sections get their fixed ids; languages, volunteering and empty sections are dropped", () => {

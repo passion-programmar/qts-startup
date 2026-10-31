@@ -39,7 +39,7 @@
   const BULLET_SIZES = ["11pt"];
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
-  let MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
+  let MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
 
   const FALLBACK_SETTINGS = {
     headerAlign: "start",
@@ -823,7 +823,7 @@
     }
     if (pages > MAX_PAGES) {
       const what = DOCUMENT === "resume" ? "resume" : "cover letter";
-      warnings.push(`The ${what} needs about ${pages} pages; shorten it to fit ${MAX_PAGES}.`);
+      warnings.push(`The ${what} needs about ${pages} pages and exceeds the ${MAX_PAGES}-page limit.`);
     }
     return pages;
   }
@@ -944,7 +944,7 @@
     if (context?.mount && context?.root && context?.styleRoot) {
       directRenderMode = true;
       DOCUMENT = context.documentType === "cover-letter" ? "cover-letter" : "resume";
-      MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
+      MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
       root = context.root;
       mount = context.mount;
       styleRoot = context.styleRoot;

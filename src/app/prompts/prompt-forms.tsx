@@ -39,8 +39,11 @@ export function ManagerPromptForm({
         required
       />
       <label className="block text-[11px] font-semibold text-slate-600" htmlFor={`managerPromptText-${fieldKey}`}>
-        Resume and cover-letter prompt
+        Résumé and cover-letter writing instructions
       </label>
+      <p className="text-[11px] leading-5 text-slate-500">
+        Use this for writing style and ATS guidance only. Candidate details, job data, and the protected JSON format are added automatically. Do not include candidate histories or job descriptions here.
+      </p>
       <textarea
         className="min-h-80 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs leading-5 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
         defaultValue={promptTemplate}

@@ -62,7 +62,7 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(launcher.includes('.launcher:not(.signed-in) { display: none; }'));
   assert.ok(launcher.includes("launcher.classList.toggle('signed-in', signedIn)"));
   assert.ok(launcher.includes("message?.type === 'QTS_TOOLBAR_ICON_CLICKED'"));
-  assert.ok(launcher.includes('if (signInForm.hidden) showSignInForm();\n    else hideSignInForm();'));
+  assert.match(launcher, /if \(signInForm.hidden\) showSignInForm\(\);\r?\n\s*else hideSignInForm\(\);/);
   assert.equal(launcher.includes("launcher.classList.toggle('loading'"), false);
 });
 
@@ -621,9 +621,9 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(jobsPage.includes('<JobEditAction'));
   assert.ok(jobsPage.includes('<JobDeleteAction'));
   assert.ok(jobsPage.includes('<JobGenerationQueueAction'));
-  assert.ok(jobsPage.includes('label: "Candidate Name"'));
-  assert.ok(jobsPage.includes('label: "Job Title"'));
-  assert.ok(jobsPage.includes('label: "Resume Path"'));
+  assert.ok(jobsPage.includes('label: "Name"'));
+  assert.ok(jobsPage.includes('label: "Job title"'));
+  assert.ok(jobsPage.includes('label: "Résumé"'));
   assert.ok(jobsPage.includes('target="_blank"'));
   assert.ok(actions.includes('export async function updateJobAction'));
   assert.ok(actions.includes('eq(jobs.managerId, manager.id)'));
@@ -692,7 +692,7 @@ test('the prompt and template flow from the Generation run to the job and its bi
   const finalize = read('src', 'app', 'api', 'extension', 'generation', 'finalize', 'route.ts');
   const applyAttempts = read('src', 'server', 'apply', 'apply-attempts.ts');
 
-  assert.ok(start.includes('const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);'));
+  assert.match(start, /getManagerGenerationSetup\(\s*manager\.id,\s*savedJob\.generationPromptId,?\s*\)/);
   assert.ok(finalize.includes('promptId: run.promptId,'));
   assert.ok(finalize.includes('pdfTemplate: run.pdfTemplate,'));
   // The bid keeps the prompt and template by name, copied from the job when the Manager confirms the application.
@@ -973,7 +973,7 @@ test('Local Count never calls CountTokens; Gemini Count records both counts on t
   assert.ok(route.includes('gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, contents, config) : null'));
   assert.ok(usage.includes('localInputTokens: tokenCounts.local ?? null'));
   assert.ok(usage.includes('geminiInputTokens: tokenCounts.gemini ?? null'));
-  assert.ok(page.includes('{ label: "No", className: "w-[5%]" }'));
+  assert.ok(page.includes('{ label: "No",'));
   assert.ok(page.includes('{ label: "Local tokens"'));
   assert.ok(page.includes('{ label: "Gemini tokens"'));
   assert.ok(modeForm.includes('label: "Local Count"'));

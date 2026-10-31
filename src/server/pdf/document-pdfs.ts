@@ -1,10 +1,10 @@
 import "server-only";
 
 import type { PdfPackage } from "@/app/pdf/document-data";
+import { DocumentPageLimitError } from "@/app/pdf/document-page-limit-error";
 import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import type { PdfTemplate } from "@/server/pdf/pdf-templates";
 import {
-  DocumentPageLimitError,
   renderTemplatePdfPackage,
   type TemplatePdfPackage,
 } from "@/server/pdf/template-pdf";

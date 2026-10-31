@@ -120,12 +120,28 @@ export default async function JobsPage() {
     // A job that already has a bid lives on the Bids page, so it is left out here.
     .where(and(eq(jobs.managerId, currentUser.id), sql`not ${jobHasBid()}`))
     .orderBy(desc(jobs.date), desc(jobs.createdAt));
-  const candidateRows = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
-    .from(profiles).innerJoin(users, eq(users.id, profiles.userId))
-    // Blocked candidates are read-only: no job can be moved to one.
-    .where(and(eq(users.parentUserId, currentUser.id), isNull(users.blockedAt)))
-    .orderBy(asc(profiles.firstName), asc(profiles.lastName));
+  const [candidateRows, generationPromptRows] = await Promise.all([
+    db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
+      .from(profiles).innerJoin(users, eq(users.id, profiles.userId))
+      // Blocked candidates are read-only: no job can be moved to one.
+      .where(and(eq(users.parentUserId, currentUser.id), isNull(users.blockedAt)))
+      .orderBy(asc(profiles.firstName), asc(profiles.lastName)),
+    db.select({ id: prompts.id, name: prompts.name, version: prompts.version })
+      .from(prompts)
+      .where(and(
+        eq(prompts.ownerManagerId, currentUser.id),
+        eq(prompts.provider, "openai"),
+        eq(prompts.purpose, "document_generation"),
+        eq(prompts.isActive, true),
+        isNull(prompts.archivedAt),
+      ))
+      .orderBy(asc(prompts.name), asc(prompts.version)),
+  ]);
   const candidateOptions = candidateRows.map((candidate) => ({ id: candidate.id, name: [candidate.firstName, candidate.lastName].filter(Boolean).join(" ") || "Candidate" }));
+  const generationPromptOptions = generationPromptRows.map((prompt) => ({
+    id: prompt.id,
+    name: `${prompt.name} · v${prompt.version}`,
+  }));
 
   return (
     <WorkspaceShell activeHref="/jobs" user={currentUser}>
@@ -236,7 +252,7 @@ export default async function JobsPage() {
                   <div className="flex flex-wrap items-start gap-2">
                     <JobEditAction candidates={candidateOptions} record={editableJob} track={track} />
                     <JobDeleteAction record={editableJob} />
-                    <JobGenerationQueueAction record={editableJob} />
+                    <JobGenerationQueueAction prompts={generationPromptOptions} record={editableJob} />
                   </div>
                   {row.applyAttempt && ["waiting_confirmation", "submitting"].includes(row.applyAttempt.status) && (
                     <AnswerApplicationButtons attemptId={row.applyAttempt.id} title={`${row.title} — ${row.company}`} />

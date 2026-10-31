@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import type { PdfPackage } from "@/app/pdf/document-data";
+import { DocumentPageLimitError } from "@/app/pdf/document-page-limit-error";
 import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import {
   isPdfTemplate,
@@ -51,7 +52,7 @@ test("every one-column template renders a valid resume and cover letter PDF", as
     assert.equal(Buffer.from(rendered.coverLetter).subarray(0, 4).toString(), "%PDF", template);
     const resume = await PDFDocument.load(rendered.resume);
     const coverLetter = await PDFDocument.load(rendered.coverLetter);
-    assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 2, template);
+    assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 3, template);
     assert.equal(coverLetter.getPageCount(), 1, template);
   }
 });
@@ -66,7 +67,7 @@ test("templates are numbered QTS Template 1 to 24 in rotation order and exclude 
   assert.equal(isPdfTemplate("orchid"), false);
 });
 
-test("full resume sections and bullets fit without exceeding two pages", async () => {
+test("full resume sections and bullets fit without exceeding three pages", async () => {
   const fullResume: PdfPackage = {
     ...data,
     resume: {
@@ -128,7 +129,7 @@ test("full resume sections and bullets fit without exceeding two pages", async (
   for (const template of pdfTemplateValues) {
     const rendered = await renderPdfPackage(fullResume, template);
     const resume = await PDFDocument.load(rendered.resume);
-    assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 2, template);
+    assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 3, template);
   }
 });
 
@@ -165,26 +166,54 @@ test("flat skills render through the safe inline fallback", async () => {
   assert.equal(resume.getPageCount(), 1);
 });
 
-test("Modern Serif renders Romanian Unicode punctuation", async () => {
+test("all templates render Romanian characters in both documents", async () => {
   const unicodePackage: PdfPackage = {
     ...data,
     resume: {
       ...data.resume,
       candidate: {
         ...data.resume.candidate,
-        location: "Iași, România",
+        fullName: "Ștefan Popescu",
+        location: "Brașov, Iași, România",
       },
+      summary: "ă â î ș ț Ă Â Î Ș Ț",
       sections: [{
         title: "Education",
         items: [{
           heading: "Bachelor’s Degree in Computer Science",
-          subheading: "Universitatea Tehnică din Cluj-Napoca",
+          subheading: "Babeș-Bolyai University · Brașov, România",
           dateRange: "2011 – 2015",
+          bullets: ["ă", "ă â î ș ț Ă Â Î Ș Ț"],
         }],
       }],
     },
+    coverLetter: {
+      ...data.coverLetter,
+      bodyParagraphs: ["Brașov, România: ă â î ș ț Ă Â Î Ș Ț."],
+    },
   };
-  const rendered = await renderPdfPackage(unicodePackage, "modern-serif");
-  const resume = await PDFDocument.load(rendered.resume);
-  assert.equal(resume.getPageCount(), 1);
+  for (const template of pdfTemplateValues) {
+    const rendered = await renderPdfPackage(unicodePackage, template);
+    const resume = await PDFDocument.load(rendered.resume);
+    const coverLetter = await PDFDocument.load(rendered.coverLetter);
+    assert.ok(resume.getPageCount() >= 1 && resume.getPageCount() <= 3, template);
+    assert.equal(coverLetter.getPageCount(), 1, template);
+  }
+});
+
+test("the fallback rejects a résumé that exceeds three pages without truncation", async () => {
+  const overlong: PdfPackage = {
+    ...data,
+    resume: {
+      ...data.resume,
+      summary: "Long document content. ".repeat(5000),
+      sections: [],
+    },
+  };
+  await assert.rejects(
+    renderPdfPackage(overlong, "minimal"),
+    (error: unknown) => error instanceof DocumentPageLimitError
+      && /3 A4 pages/.test(error.message)
+      && /not truncated/.test(error.message),
+  );
 });

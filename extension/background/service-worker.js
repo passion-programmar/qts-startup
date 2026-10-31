@@ -28,6 +28,7 @@ importScripts(
   '../shared/apply-recipes.js',
   '../shared/apply-pdf.js',
   '../shared/idle-pacing.js',
+  '../vendor/pdf-lib/pdf-lib.min.js',
   '../shared/chrome-pdf.js',
   '../shared/resume-print-requests.js',
   'apply-runner.js',
@@ -3781,6 +3782,12 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         throw error;
       }
       generationId = started.generationId;
+      const contractIssue = self.__qtsGenerationChatGpt.generationContractIssue(started);
+      if (contractIssue) {
+        const error = new Error(contractIssue);
+        error.name = 'GenerationSetupError';
+        throw error;
+      }
       const generationPrompt = self.__qtsGenerationChatGpt?.buildTaskPrompt?.(
         started.prompt,
         generationId,

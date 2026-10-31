@@ -1,6 +1,8 @@
 // Values and rules shared by the Apply and Chrome-registry routes. Pure, so they are testable
 // without a database.
 
+import { resumeJsonVersion } from "@/app/pdf/document-data";
+
 /** Job pages open at once per Chrome (any number of Chromes may work at the same time). */
 export const APPLY_PARALLEL_LIMIT = 2;
 /** A claim being filled lives this long without a heartbeat; Chromes renew it every 30 seconds. */
@@ -123,6 +125,55 @@ export function resumeText(resume: unknown): string | null {
   const clean = (text: unknown) =>
     typeof text === "string" ? text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\s+/g, " ").trim() : "";
   const lines: string[] = [];
+  if (resumeJsonVersion(value) === 2) {
+    for (const line of [clean(value.name), clean(value.title)]) if (line) lines.push(line);
+    const contact = value.contact && typeof value.contact === "object"
+      ? value.contact as Record<string, unknown>
+      : {};
+    for (const line of [clean(contact.email), clean(contact.phone), clean(contact.linkedin), clean(contact.location)]) {
+      if (line) lines.push(line);
+    }
+    const summary = clean(value.summary);
+    if (summary) lines.push("", "Summary", summary);
+    for (const group of Array.isArray(value.skills) ? value.skills : []) {
+      if (!group || typeof group !== "object") continue;
+      const skillGroup = group as Record<string, unknown>;
+      const category = clean(skillGroup.category);
+      const items = typeof skillGroup.items === "string"
+        ? skillGroup.items.split(",").map(clean).filter(Boolean)
+        : [];
+      if (category || items.length) lines.push("", category || "Skills");
+      if (items.length) lines.push(items.join(", "));
+    }
+    for (const entry of Array.isArray(value.experience) ? value.experience : []) {
+      if (!entry || typeof entry !== "object") continue;
+      const job = entry as Record<string, unknown>;
+      lines.push("");
+      const heading = [clean(job.role), clean(job.company), clean(job.location), clean(job.dates)]
+        .filter(Boolean)
+        .join(" · ");
+      if (heading) lines.push(heading);
+      for (const bullet of Array.isArray(job.bullets) ? job.bullets : []) {
+        const text = clean(bullet);
+        if (text) lines.push(`- ${text}`);
+      }
+    }
+    for (const entry of Array.isArray(value.education) ? value.education : []) {
+      if (!entry || typeof entry !== "object") continue;
+      const school = entry as Record<string, unknown>;
+      lines.push("");
+      const heading = [
+        clean(school.degree),
+        clean(school.field),
+        clean(school.institution),
+        clean(school.location),
+        clean(school.dates),
+      ].filter(Boolean).join(" · ");
+      if (heading) lines.push(heading);
+    }
+    const text = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    return text ? text.slice(0, 30000) : null;
+  }
   const candidate = (value.candidate && typeof value.candidate === "object" ? value.candidate : {}) as Record<string, unknown>;
   for (const line of [clean(candidate.fullName), clean(candidate.headline)]) if (line) lines.push(line);
   const summary = clean(value.summary);

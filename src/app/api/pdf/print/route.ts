@@ -9,7 +9,7 @@ import {
   generationIdPattern,
   loadGenerationDocuments,
 } from "@/server/generation/generation-documents";
-import { renderDocumentPdfs } from "@/server/pdf/document-pdfs";
+import { DocumentPageLimitError, renderDocumentPdfs } from "@/server/pdf/document-pdfs";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 
 // Chromium's first launch on a cold instance takes a few seconds.
@@ -44,13 +44,15 @@ async function printGenerationDownloads(request: Request, generationId: string):
     if (!documents) {
       return NextResponse.json({ success: false, message: "The completed document package was not found." }, { status: 404 });
     }
-    // No page limit: a longer résumé or cover letter is delivered as it is.
-    const pdfs = await renderDocumentPdfs(documents.data, documents.template, { enforcePageLimits: false });
+    const pdfs = await renderDocumentPdfs(documents.data, documents.template, { enforcePageLimits: true });
     return NextResponse.json(
       { success: true, files: generationDownloadFiles(documents, pdfs) },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
+    if (error instanceof DocumentPageLimitError) {
+      return NextResponse.json({ success: false, message: error.message }, { status: 422 });
+    }
     console.error("Could not generate local Generation download files.", error);
     return NextResponse.json({ success: false, message: "QTS could not prepare the three download files." }, { status: 500 });
   }
@@ -71,7 +73,7 @@ async function printApplyDocuments(request: Request, attemptId: string | null): 
         { status: 404 },
       );
     }
-    const pdfs = await renderDocumentPdfs(source.data, source.template, { enforcePageLimits: false });
+    const pdfs = await renderDocumentPdfs(source.data, source.template, { enforcePageLimits: true });
     // Chromium printing only: when it failed, Apply waits and tries again rather than uploading the
     // plainer fallback design.
     if (pdfs.renderer === "fallback") throw new ApplyDocumentsUnavailableError();
@@ -82,6 +84,9 @@ async function printApplyDocuments(request: Request, attemptId: string | null): 
     };
     return NextResponse.json({ success: true, documents }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
+    if (error instanceof DocumentPageLimitError) {
+      return NextResponse.json({ success: false, retry: false, message: error.message }, { status: 422 });
+    }
     if (error instanceof ApplyDocumentsUnavailableError) {
       return NextResponse.json({ success: false, retry: true, message: error.message }, { status: 503 });
     }
@@ -130,8 +135,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    // Manual downloads have never been limited to two pages; the preview warns about long content.
-    const pdfs = await renderDocumentPdfs(data, body.template, { enforcePageLimits: false });
+    const pdfs = await renderDocumentPdfs(data, body.template, { enforcePageLimits: true });
     return NextResponse.json(
       {
         success: true,
@@ -143,6 +147,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
+    if (error instanceof DocumentPageLimitError) {
+      return NextResponse.json({ success: false, message: error.message }, { status: 422 });
+    }
     console.error("Could not print Resume page PDFs.", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json(
       { success: false, message: "QTS could not prepare the resume and cover letter PDFs. Try again." },

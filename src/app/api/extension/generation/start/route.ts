@@ -10,6 +10,7 @@ import {
   MissingDocumentPromptError,
 } from "@/server/generation/manager-prompt";
 import { generationHeld } from "@/server/generation/generation-hold";
+import { GENERATION_RESUME_JSON_VERSION } from "@/server/generation/generation-format";
 import { normalizeJobUrl } from "@/server/jobs/job-values";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
 
@@ -55,6 +56,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           salary: jobs.salary,
           description: effectiveJobDescription(),
           resumeLocalPath: jobs.resumeLocalPath,
+          generationPromptId: jobs.generationPromptId,
           candidateId: profiles.userId,
           firstName: profiles.firstName,
           lastName: profiles.lastName,
@@ -167,7 +169,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       jobDescription: savedJob.description,
     };
     // The rotation is read from past runs, so it moves on only when the run below is saved.
-    const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);
+    const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(
+      manager.id,
+      savedJob.generationPromptId,
+    );
     const composedPrompt = composeGenerationPrompt(promptTemplate, normalizedJob, candidateProfile);
     // An earlier unfinished run of this job goes: only delivered runs are kept.
     await db
@@ -197,6 +202,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       success: true,
       generationId: run.id,
       prompt: composedPrompt,
+      resumeJsonVersion: GENERATION_RESUME_JSON_VERSION,
     });
   } catch (error) {
     console.error("Could not start extension generation.", error);

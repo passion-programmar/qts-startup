@@ -2,7 +2,7 @@
 
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { applyAttempts, jobs, profiles, users } from "@/db/schema";
+import { applyAttempts, jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
 import { jobHasBid } from "@/server/jobs/job-bids";
@@ -144,8 +144,29 @@ export async function setJobGenerationQueueAction(
   }
   const id = text(formData, "id", 36);
   const intent = text(formData, "intent", 20);
-  if (!uuid(id) || !["queue", "cancel", "reset"].includes(intent)) {
+  const selectedPromptId = text(formData, "generationPromptId", 36);
+  if (
+    !uuid(id)
+    || !["queue", "cancel", "reset"].includes(intent)
+    || (selectedPromptId && !uuid(selectedPromptId))
+  ) {
     return { error: "Invalid Generation queue action.", success: null };
+  }
+  if (intent === "queue" && selectedPromptId) {
+    const [selectedPrompt] = await db.select({ id: prompts.id })
+      .from(prompts)
+      .where(and(
+        eq(prompts.id, selectedPromptId),
+        eq(prompts.ownerManagerId, manager.id),
+        eq(prompts.provider, "openai"),
+        eq(prompts.purpose, "document_generation"),
+        eq(prompts.isActive, true),
+        isNull(prompts.archivedAt),
+      ))
+      .limit(1);
+    if (!selectedPrompt) {
+      return { error: "Choose one of your active Generation prompts.", success: null };
+    }
   }
 
   const [job] = await db
@@ -170,6 +191,7 @@ export async function setJobGenerationQueueAction(
       generationStatus: "not_queued",
       generationAttemptCount: 0,
       generationError: null,
+      generationPromptId: null,
       generationLeaseExpiresAt: null,
       updatedAt: new Date(),
     }).where(and(
@@ -198,6 +220,7 @@ export async function setJobGenerationQueueAction(
     const [queued] = await db.update(jobs).set({
       generationStatus: "queued",
       generationError: null,
+      generationPromptId: selectedPromptId || null,
       generationLeaseExpiresAt: null,
       updatedAt: new Date(),
     }).where(and(
@@ -215,6 +238,7 @@ export async function setJobGenerationQueueAction(
     const processing = job.generationStatus === "processing";
     const [cancelled] = await db.update(jobs).set({
       generationStatus: "cancelled",
+      generationPromptId: null,
       ...(processing
         ? { generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)` }
         : {}),
