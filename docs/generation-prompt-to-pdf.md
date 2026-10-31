@@ -89,6 +89,8 @@ Deploy the built server and reload the updated extension together. The Generatio
 
 Explicit prompt selection requires migration `0080_generation_prompt_selection.sql`, which adds the nullable `jobs.generation_prompt_id` foreign key. Verify the intended deployment database has this schema before promotion. Rebuilding or changing a Manager prompt does not apply database migrations.
 
+`node scripts/generation-schema-preflight.cjs` checks this prerequisite without writes. For an authorized release, `--apply` applies only migration 0080, with a transaction and lock/statement timeouts, and records its existing Drizzle hash. It refuses earlier pending migrations, incompatible columns and inconsistent migration history. Run it in the intended deployment environment so its database connection remains private; it is not part of normal application startup.
+
 After deployment, verify the deployed commit and an actual composed prompt. Manager text is loaded separately from the compiled protected contract, so current Manager text alone does not establish that the server build is current.
 
 - Selection/composition: `src/server/generation/manager-prompt.ts`, `generation-prompt.ts`, `generation-format.ts`
