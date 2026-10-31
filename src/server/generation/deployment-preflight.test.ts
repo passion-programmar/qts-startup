@@ -51,3 +51,11 @@ test("an already recorded and verified 0080 migration performs no writes", async
   assert.equal(db.transactionCalls, 0);
   assert.ok(db.queries.every((query) => query.startsWith("select")));
 });
+
+test("runtime schema verification needs no migration-ledger permissions", async () => {
+  const db = database({ applied: true });
+  assert.equal(await runPreflight({ sql: db.sql, migrations: [previous, current] }), "schema verified (read-only)");
+  assert.equal(db.transactionCalls, 0);
+  assert.equal(db.queries.length, 1);
+  assert.ok(db.queries.every((query) => !query.includes("__drizzle_migrations")));
+});

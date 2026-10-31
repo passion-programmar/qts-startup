@@ -1,5 +1,6 @@
 // Release-only schema check. --apply permits only the already-reviewed 0080 migration.
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { readMigrationFiles } = require('drizzle-orm/migrator');
 
 const schemaQuery = `select
@@ -13,15 +14,18 @@ async function runPreflight({ sql, migrations, apply = false }) {
   if (!migration || !previous || migration.sql.filter((statement) => statement.trim()).length !== 2) {
     throw new Error('Expected the established 0079 and 0080 migration files.');
   }
-  const [latest] = await sql.query('select hash, created_at from drizzle.__drizzle_migrations order by created_at desc limit 1');
   const [state] = await sql.query(schemaQuery);
+  if (!apply) {
+    if (!state.column_ok || !state.constraint_ok) throw new Error('Migration 0080_generation_prompt_selection is required before this release.');
+    return 'schema verified (read-only)';
+  }
+  const [latest] = await sql.query('select hash, created_at from drizzle.__drizzle_migrations order by created_at desc limit 1');
   const alreadyRecorded = Number(latest?.created_at) === migration.folderMillis && latest?.hash === migration.hash;
   if (alreadyRecorded && state.column_ok && state.constraint_ok) return 'already applied';
   if (Number(latest?.created_at) !== previous.folderMillis || latest?.hash !== previous.hash) {
     throw new Error('Migration history is not at the expected 0079 state. Refusing to run other migrations or repair inconsistent history.');
   }
   if (state.column_exists && !state.column_ok) throw new Error('Existing generation_prompt_id column has an incompatible definition.');
-  if (!apply) throw new Error('Migration 0080_generation_prompt_selection is required before this release.');
   const statements = migration.sql.filter((statement) => statement.trim());
   await sql.transaction([
     sql.query("set local lock_timeout = '5s'"),
@@ -48,6 +52,9 @@ if (require.main === module) {
   (async () => {
     if (process.argv.slice(2).some((argument) => argument !== '--apply')) throw new Error('Usage: node scripts/generation-schema-preflight.cjs [--apply]');
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required in the intended deployment environment.');
+    const target = new URL(process.env.DATABASE_URL);
+    const fingerprint = createHash('sha256').update(target.hostname.replace(/-pooler(?=\.)/, '') + target.pathname).digest('hex');
+    console.log(`Generation database target fingerprint: ${fingerprint}`);
     const { neon } = require('@neondatabase/serverless');
     const result = await runPreflight({
       sql: neon(process.env.DATABASE_URL),
