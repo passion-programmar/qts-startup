@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
 
-const { runPreflight } = createRequire(`${process.cwd()}/package.json`)("./scripts/generation-schema-preflight.cjs");
+const { runPreflight, readReleaseMigrations } = createRequire(`${process.cwd()}/package.json`)("./scripts/generation-schema-preflight.cjs");
 const previous = { folderMillis: 1793258510114, hash: "previous", sql: [] };
 const current = { folderMillis: 1793260000000, hash: "current", sql: ["ALTER TABLE jobs ADD COLUMN generation_prompt_id uuid;", "ALTER TABLE jobs ADD CONSTRAINT jobs_generation_prompt_id_prompts_id_fk FOREIGN KEY (generation_prompt_id) REFERENCES prompts(id);"] };
 
@@ -58,4 +58,10 @@ test("runtime schema verification needs no migration-ledger permissions", async 
   assert.equal(db.transactionCalls, 0);
   assert.equal(db.queries.length, 1);
   assert.ok(db.queries.every((query) => !query.includes("__drizzle_migrations")));
+});
+
+test("migration checksums retain committed LF hashes on Windows", () => {
+  const migrations: { folderMillis: number; hash: string }[] = readReleaseMigrations("drizzle");
+  assert.equal(migrations.find((entry) => entry.folderMillis === previous.folderMillis)?.hash,
+    "3dde1c3b3263aa45eb54c94bd1bc7ae6492fa549f7c3c96915e5557890436fe7");
 });

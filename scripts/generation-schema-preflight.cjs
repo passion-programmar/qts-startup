@@ -1,7 +1,18 @@
 // Release-only schema check. --apply permits only the already-reviewed 0080 migration.
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { readFileSync } = require('node:fs');
 const { readMigrationFiles } = require('drizzle-orm/migrator');
+
+function readReleaseMigrations(folder) {
+  const journal = JSON.parse(readFileSync(path.join(folder, 'meta', '_journal.json'), 'utf8'));
+  return readMigrationFiles({ migrationsFolder: folder }).map((migration) => {
+    const entry = journal.entries.find((item) => item.when === migration.folderMillis);
+    // Git stores these SQL files with LF; Windows checkout conversion must not change ledger hashes.
+    const committedText = readFileSync(path.join(folder, `${entry.tag}.sql`), 'utf8').replace(/\r\n/g, '\n');
+    return { ...migration, hash: createHash('sha256').update(committedText).digest('hex') };
+  });
+}
 
 const schemaQuery = `select
   exists(select 1 from information_schema.columns where table_schema='public' and table_name='jobs' and column_name='generation_prompt_id') as column_exists,
@@ -46,7 +57,7 @@ async function runPreflight({ sql, migrations, apply = false }) {
   return 'applied and verified';
 }
 
-module.exports = { runPreflight };
+module.exports = { runPreflight, readReleaseMigrations };
 
 if (require.main === module) {
   (async () => {
@@ -58,7 +69,7 @@ if (require.main === module) {
     const { neon } = require('@neondatabase/serverless');
     const result = await runPreflight({
       sql: neon(process.env.DATABASE_URL),
-      migrations: readMigrationFiles({ migrationsFolder: path.join(__dirname, '..', 'drizzle') }),
+      migrations: readReleaseMigrations(path.join(__dirname, '..', 'drizzle')),
       apply: process.argv.includes('--apply'),
     });
     console.log(`Generation schema: ${result}.`);
