@@ -2,7 +2,11 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
 const { pathToFileURL } = require('node:url');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const chromePdf = require('./chrome-pdf.js');
+const { PDFDocument } = require('pdf-lib');
+global.PDFLib = { PDFDocument };
 
 test('the print settings are what the server sends Chrome through puppeteer', async () => {
   const util = path.join(__dirname, '..', '..', 'node_modules', 'puppeteer-core', 'lib', 'puppeteer', 'common', 'util.js');
@@ -40,7 +44,7 @@ test('the template page is the QTS site\'s, as the server prints it', () => {
 });
 
 // A stand-in for Chrome's tabs and debugger: `renderState` is what each template page reports.
-function fakeChrome({ renderState = 'ready', printFails = false } = {}) {
+function fakeChrome({ renderState = 'ready', printFails = false, resumePages = 3, coverPages = 1, invalidPdf = false } = {}) {
   const calls = [];
   const state = { tabs: new Set(), attached: new Set(), page: '' };
   global.chrome = {
@@ -60,7 +64,11 @@ function fakeChrome({ renderState = 'ready', printFails = false } = {}) {
         }
         if (method === 'Page.printToPDF') {
           if (printFails) throw new Error('Printing is not available.');
-          return { data: Buffer.from(`%PDF ${state.page}`).toString('base64') };
+          if (invalidPdf) return { data: Buffer.from('not a PDF').toString('base64') };
+          const pdf = await PDFDocument.create();
+          const pages = state.page.includes('/resume.html') ? resumePages : coverPages;
+          for (let index = 0; index < pages; index += 1) pdf.addPage([595.28, 841.89]);
+          return { data: await pdf.saveAsBase64() };
         }
         return {};
       },
@@ -75,8 +83,8 @@ test('prints both documents in a hidden tab with the data, then closes it', asyn
   const { calls, state } = fakeChrome();
   try {
     const printed = await chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com', windowId: 3 });
-    assert.match(Buffer.from(printed.resume, 'base64').toString(), /\/resume-templates\/resume\.html\?template=qts-standard$/);
-    assert.match(Buffer.from(printed['cover-letter'], 'base64').toString(), /\/resume-templates\/cover-letter\.html\?template=qts-standard$/);
+    assert.equal((await PDFDocument.load(printed.resume)).getPageCount(), 3);
+    assert.equal((await PDFDocument.load(printed['cover-letter'])).getPageCount(), 1);
     assert.deepEqual(calls[0], ['create', { url: 'about:blank', active: false, windowId: 3 }]);
     // Marked as printing before any page loads, so the QTS button stays off it.
     assert.deepEqual(calls[1], ['attach', 7, true]);
@@ -95,7 +103,7 @@ test('prints both documents in a hidden tab with the data, then closes it', asyn
 });
 
 test('any failure gives null so the server prints, and the tab still closes', async () => {
-  for (const options of [{ renderState: 'error' }, { printFails: true }]) {
+  for (const options of [{ renderState: 'error' }, { printFails: true }, { invalidPdf: true }]) {
     const { state } = fakeChrome(options);
     try {
       assert.equal(await chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' }), null);
@@ -114,4 +122,34 @@ test('any failure gives null so the server prints, and the tab still closes', as
   } finally {
     delete global.chrome;
   }
+});
+
+test('rejects actual oversized PDFs without returning downloadable files, and cleans up', async () => {
+  for (const options of [{ resumePages: 4 }, { coverPages: 2 }]) {
+    const { state, calls } = fakeChrome(options);
+    try {
+      await assert.rejects(chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' }), {
+        name: 'DocumentPageLimitError',
+        message: options.resumePages
+          ? 'The résumé exceeds three A4 pages. Its content was not truncated.'
+          : 'The cover letter exceeds one A4 page. Shorten its paragraphs.',
+      });
+      assert.equal(calls.filter(([method]) => method === 'Page.printToPDF').length, options.resumePages ? 1 : 2);
+      assert.equal(state.tabs.size, 0);
+      assert.equal(state.attached.size, 0);
+    } finally {
+      delete global.chrome;
+    }
+  }
+});
+
+test('the packaged PDF validator reads compressed PDF page trees', async () => {
+  // Service-worker globals, without Node's require/module or a DOM: exercise the browser UMD path.
+  const context = vm.createContext({ setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/pdf-lib/pdf-lib.min.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'chrome-pdf.js'), 'utf8'), context);
+  const pdf = await PDFDocument.create();
+  for (let index = 0; index < 4; index += 1) pdf.addPage();
+  context.base64 = await pdf.saveAsBase64({ useObjectStreams: true });
+  await assert.rejects(vm.runInContext('__qtsChromePdf.validatePdf(base64, "resume")', context), { name: 'DocumentPageLimitError' });
 });

@@ -1,16 +1,19 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type {
   CoverLetterDocument,
   DocumentBullet,
   PdfPackage,
   ResumeDocument,
 } from "@/app/pdf/document-data";
+import { DocumentPageLimitError } from "@/app/pdf/document-page-limit-error";
 import { orderResumeSections } from "@/app/pdf/resume-sections";
 import {
   pdfTemplateDesigns,
   type PdfTemplate,
   type LegacyPdfTemplate,
 } from "@/server/pdf/pdf-templates";
-import type { PDFFont } from "pdf-lib";
+import type { PDFFont, PDFPage } from "pdf-lib";
 
 type PdfWriter = {
   header(title: string, detail: string, size?: number): void;
@@ -33,6 +36,33 @@ type PdfWriter = {
 };
 
 type ResumeSectionItem = ResumeDocument["sections"][number]["items"][number];
+type PdfDrawTextOptions = NonNullable<Parameters<PDFPage["drawText"]>[1]>;
+
+const romanianCharacters = new Set([
+  "\u0102", "\u0103", "\u00C2", "\u00E2", "\u00CE",
+  "\u00EE", "\u0218", "\u0219", "\u021A", "\u021B",
+]);
+
+type RomanianFallbackFonts = {
+  regular: Uint8Array;
+  bold: Uint8Array;
+  italic: Uint8Array;
+};
+
+let romanianFallbackFontsPromise: Promise<RomanianFallbackFonts> | undefined;
+
+function loadRomanianFallbackFonts(): Promise<RomanianFallbackFonts> {
+  romanianFallbackFontsPromise ??= Promise.all([
+    readFile(path.join(process.cwd(), "public", "resume-templates", "fonts", "noto-sans", "NotoSans-Regular.ttf")),
+    readFile(path.join(process.cwd(), "public", "resume-templates", "fonts", "noto-sans", "NotoSans-Bold.ttf")),
+    readFile(path.join(process.cwd(), "public", "resume-templates", "fonts", "noto-sans", "NotoSans-Italic.ttf")),
+  ]).then(([regular, bold, italic]) => ({ regular, bold, italic }));
+  return romanianFallbackFontsPromise;
+}
+
+function containsRomanianCharacters(document: object): boolean {
+  return [...(JSON.stringify(document) ?? "")].some((character) => romanianCharacters.has(character));
+}
 
 function pdfBulletText(bullet: DocumentBullet): string {
   const text = typeof bullet === "string"
@@ -63,7 +93,7 @@ async function renderResumePdf(
   document: ResumeDocument,
   template: PdfTemplate | LegacyPdfTemplate,
 ): Promise<Uint8Array> {
-  const pdf = await createWriter(template, 2);
+  const pdf = await createWriter(template, 3, containsRomanianCharacters(document));
   const headline = document.candidate.headline ?? document.targetRole;
   const contactParts = template === "flowcv" ? [
     document.candidate.location,
@@ -118,7 +148,7 @@ async function renderCoverLetterPdf(
   document: CoverLetterDocument,
   template: PdfTemplate | LegacyPdfTemplate,
 ): Promise<Uint8Array> {
-  const pdf = await createWriter(template, 1);
+  const pdf = await createWriter(template, 1, containsRomanianCharacters(document));
   const coverContactParts = [
     document.candidate.email,
     document.candidate.phone,
@@ -154,6 +184,7 @@ async function renderCoverLetterPdf(
 async function createWriter(
   template: PdfTemplate | LegacyPdfTemplate,
   maxPages: number,
+  needsRomanianFallback: boolean,
 ): Promise<PdfWriter> {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const document = await PDFDocument.create();
@@ -167,13 +198,14 @@ async function createWriter(
   let regular: PDFFont;
   let bold: PDFFont;
   let italic: PDFFont;
-  if (isFlowCv) {
-    const [{ default: fontkit }, { loadAlegreyaFonts }] = await Promise.all([
-      import("@pdf-lib/fontkit"),
-      import("@/app/pdf/alegreya-fonts"),
-    ]);
-    const fonts = await loadAlegreyaFonts();
+  let romanianFonts: { regular: PDFFont; bold: PDFFont; italic: PDFFont } | null = null;
+  if (isFlowCv || needsRomanianFallback) {
+    const { default: fontkit } = await import("@pdf-lib/fontkit");
     document.registerFontkit(fontkit);
+  }
+  if (isFlowCv) {
+    const { loadAlegreyaFonts } = await import("@/app/pdf/alegreya-fonts");
+    const fonts = await loadAlegreyaFonts();
     [regular, bold, italic] = await Promise.all([
       document.embedFont(fonts.regular, { subset: true }),
       document.embedFont(fonts.bold, { subset: true }),
@@ -186,6 +218,19 @@ async function createWriter(
       design.font === "serif" ? StandardFonts.TimesRomanItalic : StandardFonts.HelveticaOblique,
     );
   }
+  if (needsRomanianFallback) {
+    const fonts = await loadRomanianFallbackFonts();
+    const [romanianRegular, romanianBold, romanianItalic] = await Promise.all([
+      document.embedFont(fonts.regular, { subset: true }),
+      document.embedFont(fonts.bold, { subset: true }),
+      document.embedFont(fonts.italic, { subset: true }),
+    ]);
+    romanianFonts = {
+      regular: romanianRegular,
+      bold: romanianBold,
+      italic: romanianItalic,
+    };
+  }
   const width = 595.28;
   const height = 841.89;
   const accent = rgb(...design.accent);
@@ -194,10 +239,11 @@ async function createWriter(
   const margin = design.margin;
   const bodyLeading = isFlowCv ? 13.5 : 13.8;
   const bulletLeading = isFlowCv ? 13.5 : 13;
-  const bulletGap = isFlowCv ? 0 : 2.5;
-  const entryGap = isFlowCv ? 7 : design.compact ? 10 : 12;
-  const sectionBefore = isFlowCv ? 14.25 : design.compact ? 8 : 10;
-  const sectionAfter = isFlowCv ? 8.5 : design.compact ? 8 : 9;
+  const isLedgerResume = template === "ledger" && maxPages > 1;
+  const bulletGap = isFlowCv ? 0 : isLedgerResume ? 1.5 : 2.5;
+  const entryGap = isFlowCv ? 7 : isLedgerResume ? 9 : design.compact ? 10 : 12;
+  const sectionBefore = isFlowCv ? 14.25 : isLedgerResume ? 8 : design.compact ? 8 : 10;
+  const sectionAfter = isFlowCv ? 8.5 : isLedgerResume ? 7 : design.compact ? 8 : 9;
   let page = document.addPage([width, height]);
   let y = height - margin;
   const clean = (text: string) => isFlowCv
@@ -208,18 +254,61 @@ async function createWriter(
       .replaceAll("â€œ", "“")
       .replaceAll("â€", "”")
       .replace(/[\u0000-\u001F\u007F]/g, " ")
-    : text.normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+    : text.normalize("NFC")
     .replace(/[—−]/g, "–")
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, "\"")
-    .replace(/[^\x20-\x7E\xA0-\xFF\u2013\u2022]/g, "?");
+    .replace(/[^\x20-\x7E\xA0-\xFF\u2013\u2022\u0102\u0103\u0218-\u021B]/g, "?");
+  const fontRuns = (text: string, font: PDFFont) => {
+    const runs: { text: string; font: PDFFont }[] = [];
+    for (const character of text) {
+      const nextFont = romanianFonts && romanianCharacters.has(character)
+        ? font === bold
+          ? romanianFonts.bold
+          : font === italic
+            ? romanianFonts.italic
+            : romanianFonts.regular
+        : font;
+      const lastRun = runs.at(-1);
+      if (lastRun?.font === nextFont) lastRun.text += character;
+      else runs.push({ text: character, font: nextFont });
+    }
+    return runs;
+  };
+  const measureText = (text: string, size: number, font: PDFFont = regular) =>
+    fontRuns(text, font).reduce(
+      (widthAtSize, run) => widthAtSize + run.font.widthOfTextAtSize(run.text, size),
+      0,
+    );
+  const drawText = (
+    text: string,
+    options: PdfDrawTextOptions,
+  ) => {
+    const primaryFont = options.font ?? regular;
+    const runs = fontRuns(text, primaryFont);
+    if (runs.length === 1 && runs[0].font === primaryFont) {
+      page.drawText(text, options);
+      return;
+    }
+    const maxWidth = options.maxWidth;
+    let x = options.x ?? 0;
+    const size = options.size ?? 12;
+    for (const run of runs) {
+      page.drawText(run.text, {
+        ...options,
+        x,
+        font: run.font,
+        ...(maxWidth === undefined ? {} : { maxWidth: Math.max(0, maxWidth - (x - (options.x ?? 0))) }),
+      });
+      x += run.font.widthOfTextAtSize(run.text, size);
+    }
+  };
   const ensure = (needed = 18) => {
     if (y < margin + needed) {
       if (document.getPageCount() >= maxPages) {
-        throw new Error(maxPages === 1
+        throw new DocumentPageLimitError(maxPages === 1
           ? "The cover letter exceeds one A4 page. Shorten its paragraphs."
-          : "The résumé exceeds two A4 pages. Shorten its content.");
+          : `The résumé exceeds ${maxPages} A4 pages. Its content was not truncated.`);
       }
       page = document.addPage([width, height]);
       y = height - margin;
@@ -236,7 +325,7 @@ async function createWriter(
     let line = "";
     for (const word of words) {
       const next = line ? `${line} ${word}` : word;
-      if (font.widthOfTextAtSize(next, size) <= maxWidth || !line) {
+      if (measureText(next, size, font) <= maxWidth || !line) {
         line = next;
       } else {
         lines.push(line);
@@ -259,7 +348,7 @@ async function createWriter(
     for (const word of words) {
       const next = line ? `${line} ${word}` : word;
       const availableWidth = lines.length === 0 ? firstLineWidth : remainingLineWidth;
-      if (font.widthOfTextAtSize(next, size) <= availableWidth || !line) {
+      if (measureText(next, size, font) <= availableWidth || !line) {
         line = next;
       } else {
         lines.push(line);
@@ -278,8 +367,8 @@ async function createWriter(
   ) => {
     for (const part of wrap(text, size, width - margin * 2 - inset * 2)) {
       ensure(size + 5);
-      const textWidth = regular.widthOfTextAtSize(part, size);
-      page.drawText(part, {
+      const textWidth = measureText(part, size);
+      drawText(part, {
         x: centered ? Math.max(margin, (width - textWidth) / 2) : margin + inset,
         y,
         size,
@@ -295,8 +384,8 @@ async function createWriter(
   const heading = (text: string, size = 12) => {
     ensure(size + 7);
     const cleaned = clean(text);
-    const textWidth = bold.widthOfTextAtSize(cleaned, size);
-    page.drawText(clean(text), {
+    const textWidth = measureText(cleaned, size, bold);
+    drawText(clean(text), {
       x: design.align === "center" ? Math.max(margin, (width - textWidth) / 2) : margin,
       y,
       size,
@@ -320,7 +409,7 @@ async function createWriter(
     const availableWidth = width - margin * 2;
     const measure = (fontSize: number) => items.reduce(
       (total, item) => total + iconSize + iconTextGap
-        + regular.widthOfTextAtSize(clean(item.value), fontSize),
+        + measureText(clean(item.value), fontSize),
       Math.max(0, items.length - 1) * itemGap,
     );
     let fontSize = preferredSize;
@@ -333,8 +422,8 @@ async function createWriter(
       drawFlowCvContactIcon(item.iconIndex, x, y + 1, iconSize);
       x += iconSize + iconTextGap;
       const cleaned = clean(item.value);
-      page.drawText(cleaned, { x, y, size: fontSize, font: regular, color: ink });
-      x += regular.widthOfTextAtSize(cleaned, fontSize) + itemGap;
+      drawText(cleaned, { x, y, size: fontSize, font: regular, color: ink });
+      x += measureText(cleaned, fontSize) + itemGap;
     });
   };
   const drawFlowCvContactIcon = (
@@ -393,8 +482,8 @@ async function createWriter(
       const contactSize = 11;
       ensure(102);
       const cleanedTitle = clean(title);
-      const titleWidth = bold.widthOfTextAtSize(cleanedTitle, nameSize);
-      page.drawText(cleanedTitle, {
+      const titleWidth = measureText(cleanedTitle, nameSize, bold);
+      drawText(cleanedTitle, {
         x: Math.max(margin, (width - titleWidth) / 2),
         y,
         size: nameSize,
@@ -405,8 +494,8 @@ async function createWriter(
       const [headline = "", contact = ""] = detail.split("\n", 2);
       if (headline) {
         for (const part of wrap(headline, headlineSize, width - margin * 2, italic)) {
-          const partWidth = italic.widthOfTextAtSize(part, headlineSize);
-          page.drawText(part, {
+          const partWidth = measureText(part, headlineSize, italic);
+          drawText(part, {
             x: Math.max(margin, (width - partWidth) / 2),
             y,
             size: headlineSize,
@@ -431,8 +520,8 @@ async function createWriter(
         thickness: 0.55,
         color: muted,
       });
-      const titleWidth = bold.widthOfTextAtSize(clean(title), size);
-      page.drawText(clean(title), {
+      const titleWidth = measureText(clean(title), size, bold);
+      drawText(clean(title), {
         x: Math.max(margin, (width - titleWidth) / 2),
         y,
         size,
@@ -444,8 +533,8 @@ async function createWriter(
       if (detail) {
         for (const part of wrap(detail, 10, width - margin * 2)) {
           ensure(15);
-          const textWidth = regular.widthOfTextAtSize(part, 10);
-          page.drawText(part, {
+          const textWidth = measureText(part, 10);
+          drawText(part, {
             x: Math.max(margin, (width - textWidth) / 2),
             y,
             size: 10,
@@ -493,9 +582,9 @@ async function createWriter(
       });
     }
     const cleanedTitle = clean(title);
-    const titleWidth = bold.widthOfTextAtSize(cleanedTitle, size);
+    const titleWidth = measureText(cleanedTitle, size, bold);
     const centered = design.align === "center";
-    page.drawText(cleanedTitle, {
+    drawText(cleanedTitle, {
       x: centered ? Math.max(margin, (width - titleWidth) / 2) : margin,
       y,
       size,
@@ -507,8 +596,8 @@ async function createWriter(
     });
     y -= size + 9;
     for (const part of wrap(detail, 9, width - margin * 2)) {
-      const detailWidth = regular.widthOfTextAtSize(part, 9);
-      page.drawText(part, {
+      const detailWidth = measureText(part, 9);
+      drawText(part, {
         x: centered ? Math.max(margin, (width - detailWidth) / 2) : margin,
         y,
         size: 9,
@@ -536,9 +625,9 @@ async function createWriter(
     const layout = design.sectionHeadingLayout;
     const label = clean(text.toUpperCase());
     const labelSize = isFlowCv ? 14 : 10.5;
-    const labelWidth = bold.widthOfTextAtSize(label, labelSize);
+    const labelWidth = measureText(label, labelSize, bold);
     if (isFlowCv) {
-      page.drawText(label, {
+      drawText(label, {
         x: margin,
         y,
         size: labelSize,
@@ -571,7 +660,7 @@ async function createWriter(
         thickness: 0.55,
         color: muted,
       });
-      page.drawText(label, {
+      drawText(label, {
         x: labelLeft,
         y,
         size: labelSize,
@@ -588,7 +677,7 @@ async function createWriter(
     } else if (layout === "marker") {
       page.drawRectangle({ x: margin, y: y - 2, width: 5, height: 14, color: accent });
     }
-    page.drawText(label, {
+    drawText(label, {
       x: margin + (layout === "marker" ? 12 : layout === "pill" ? 10 : 0),
       y,
       size: labelSize,
@@ -639,7 +728,7 @@ async function createWriter(
       ? clean(dateRange).replace(/\s+(?:\?|-)\s+/g, " – ")
       : "";
     const dateWidth = cleanedDate
-      ? regular.widthOfTextAtSize(cleanedDate, detailSize)
+      ? measureText(cleanedDate, detailSize)
       : 0;
     const titleWidth = width - margin * 2 - dateWidth - (dateWidth ? 12 : 0);
     const titleLines = title ? wrap(title, titleSize, titleWidth) : [];
@@ -658,7 +747,7 @@ async function createWriter(
     if (titleLines.length || cleanedDate) {
       const rowY = y;
       titleLines.forEach((part, index) => {
-        page.drawText(part, {
+        drawText(part, {
           x: margin,
           y: rowY - index * titleLeading,
           size: titleSize,
@@ -668,7 +757,7 @@ async function createWriter(
         });
       });
       if (cleanedDate) {
-        page.drawText(cleanedDate, {
+        drawText(cleanedDate, {
           x: width - margin - dateWidth,
           y: rowY,
           size: detailSize,
@@ -680,7 +769,7 @@ async function createWriter(
     }
     if (subheading) {
       for (const part of wrap(subheading, detailSize, width - margin * 2)) {
-        page.drawText(part, {
+        drawText(part, {
           x: margin,
           y,
           size: detailSize,
@@ -711,7 +800,7 @@ async function createWriter(
             color: ink,
           });
         }
-        page.drawText(part, {
+        drawText(part, {
           x: margin + (isFlowCv ? 10 : 17),
           y,
           size: bulletSize,
@@ -731,13 +820,13 @@ async function createWriter(
     let x = startX;
     for (const item of items) {
       const token = `• ${clean(item)}`;
-      const tokenWidth = regular.widthOfTextAtSize(token, size);
+      const tokenWidth = measureText(token, size);
       if (x > startX && x + tokenWidth > maxX) {
         y -= bulletLeading + bulletGap;
         ensure(bulletLeading + bulletGap);
         x = startX;
       }
-      page.drawText(token, { x, y, size, font: regular, color: ink });
+      drawText(token, { x, y, size, font: regular, color: ink });
       x += tokenWidth + 10;
     }
     y -= bulletLeading;
@@ -759,7 +848,7 @@ async function createWriter(
       let rows = 1;
       let rowWidth = 0;
       for (const item of groups.flatMap((group) => group.skills)) {
-        const tokenWidth = regular.widthOfTextAtSize(`• ${clean(item)}`, measuredSkillSize) + 10;
+        const tokenWidth = measureText(`• ${clean(item)}`, measuredSkillSize) + 10;
         if (rowWidth && rowWidth + tokenWidth > contentWidth) {
           rows += 1;
           rowWidth = 0;
@@ -797,15 +886,18 @@ async function createWriter(
       );
     } else {
       measured = groups.reduce((sum, group) => {
-        const labelWidth = bold.widthOfTextAtSize(`${clean(group.heading)}:`, measuredHeadingSize);
+        const labelWidth = measureText(`${clean(group.heading)}:`, measuredHeadingSize, bold);
         const body = group.skills.join(", ");
         const inline = Boolean(body) && labelWidth <= contentWidth * .45;
         if (inline) {
+          const continuationInset = template === "flowcv"
+            ? 0
+            : Math.min(labelWidth + 6, 120);
           return sum + Math.max(1, wrapWithFirstLineWidth(
             body,
             measuredSkillSize,
             contentWidth - labelWidth - 4,
-            contentWidth,
+            contentWidth - continuationInset,
           ).length) * bulletLeading + measuredGroupGap;
         }
         return sum + wrap(group.heading, measuredHeadingSize, contentWidth, bold).length * 13.5
@@ -856,25 +948,27 @@ async function createWriter(
     };
     const drawStacked = () => {
       groups.forEach((group, groupIndex) => {
-        const needed = Math.min(
-          groupHeight(group, contentWidth),
-          groupHeadingSize * 1.35 + contentGap + bulletLeading * 2,
-        );
-        ensure(needed);
+        const headingParts = group.heading
+          ? wrap(group.heading, groupHeadingSize, contentWidth, bold)
+          : [];
+        const bodyParts = wrap(groupBody(group), skillSize, contentWidth);
+        const needed = headingParts.length * 13.5
+          + (headingParts.length && bodyParts.length ? contentGap : 0)
+          + bodyParts.length * bulletLeading
+          + groupGap;
+        ensure(Math.min(needed, height - margin * 2));
         if (group.heading) {
-          for (const part of wrap(group.heading, groupHeadingSize, contentWidth, bold)) {
-            page.drawText(part, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
+          for (const part of headingParts) {
+            ensure(13.5);
+            drawText(part, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
             y -= 13.5;
           }
         }
-        const body = groupBody(group);
-        if (body) {
-          if (group.heading) y -= contentGap;
-          for (const part of wrap(body, skillSize, contentWidth)) {
-            ensure(bulletLeading);
-            page.drawText(part, { x: margin, y, size: skillSize, font: regular, color: ink });
-            y -= bulletLeading;
-          }
+        if (bodyParts.length && group.heading) y -= contentGap;
+        for (const part of bodyParts) {
+          ensure(bulletLeading);
+          drawText(part, { x: margin, y, size: skillSize, font: regular, color: ink });
+          y -= bulletLeading;
         }
         if (groupIndex < groups.length - 1) y -= groupGap;
       });
@@ -884,35 +978,44 @@ async function createWriter(
         const label = group.heading ? `${clean(group.heading)}:` : "";
         const body = groupBody(group);
         const labelWidth = label
-          ? bold.widthOfTextAtSize(label, groupHeadingSize)
+          ? measureText(label, groupHeadingSize, bold)
           : 0;
         const labelFitsInline = Boolean(body) && labelWidth <= contentWidth * .45;
-        ensure(bulletLeading * 2 + (groupIndex < groups.length - 1 ? 4 : 0));
+        const inlineGap = isFlowCv ? 2.5 : 6;
+        const continuationInset = template === "flowcv"
+          ? 0
+          : Math.min(labelWidth + 6, 120);
+        const parts = labelFitsInline
+          ? wrapWithFirstLineWidth(
+            body,
+            skillSize,
+            contentWidth - labelWidth - inlineGap,
+            contentWidth - continuationInset,
+          )
+          : wrap(body, skillSize, contentWidth);
+        const needed = (
+          labelFitsInline
+            ? parts.length * bulletLeading
+            : (label ? 13.5 + (body ? contentGap : 0) : 0) + parts.length * bulletLeading
+        ) + (groupIndex < groups.length - 1 && !isFlowCv ? 4 : 0);
+        ensure(Math.min(needed, height - margin * 2));
         if (!labelFitsInline) {
           if (label) {
-            page.drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
+            ensure(13.5);
+            drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
             y -= 13.5 + (body ? contentGap : 0);
           }
-          for (const part of wrap(body, skillSize, contentWidth)) {
+          for (const part of parts) {
             ensure(bulletLeading);
-            page.drawText(part, { x: margin, y, size: skillSize, font: regular, color: ink });
+            drawText(part, { x: margin, y, size: skillSize, font: regular, color: ink });
             y -= bulletLeading;
           }
         } else {
-          page.drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
-          const inlineGap = isFlowCv ? 2.5 : 6;
-          const firstLineWidth = contentWidth - labelWidth - inlineGap;
-          const parts = wrapWithFirstLineWidth(
-            body,
-            skillSize,
-            firstLineWidth,
-            contentWidth,
-          );
-          const continuationInset = template === "flowcv"
-            ? 0
-            : Math.min(labelWidth + 6, 120);
+          ensure(bulletLeading);
+          drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
           parts.forEach((part, index) => {
-            page.drawText(part, {
+            if (index > 0) ensure(bulletLeading);
+            drawText(part, {
               x: margin + (index === 0 ? labelWidth + inlineGap : continuationInset),
               y,
               size: skillSize,
@@ -962,7 +1065,7 @@ async function createWriter(
         column.forEach((group) => {
           if (group.heading) {
             for (const part of wrap(group.heading, groupHeadingSize, columnWidth, bold)) {
-              page.drawText(part, { x, y: columnY, size: groupHeadingSize, font: bold, color: ink });
+              drawText(part, { x, y: columnY, size: groupHeadingSize, font: bold, color: ink });
               columnY -= 13.5;
             }
           }
@@ -970,7 +1073,7 @@ async function createWriter(
           if (body) {
             if (group.heading) columnY -= contentGap;
             for (const part of wrap(body, skillSize, columnWidth)) {
-              page.drawText(part, { x, y: columnY, size: skillSize, font: regular, color: ink });
+              drawText(part, { x, y: columnY, size: skillSize, font: regular, color: ink });
               columnY -= bulletLeading;
             }
           }

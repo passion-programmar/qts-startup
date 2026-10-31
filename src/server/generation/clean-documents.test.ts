@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkSummaryBold, cleanGeneratedDocuments, cleanText } from "@/server/generation/clean-documents";
+import { cleanGeneratedDocuments, cleanText } from "@/server/generation/clean-documents";
 
 const context = {
   company: "N-iX",
   jobTitle: "Senior DevOps Engineer",
   candidateName: "Andrei Sava",
-  jobDescription: "We need Kubernetes, Terraform, AWS and GitOps experience for our EKS platform.",
-  profileText: "Infrastructure automation with Terraform, Ansible, Kubernetes and AWS at Automaly.",
 };
 
 test("stray symbols, HTML, emojis and invisible characters are removed; normal punctuation stays", () => {
@@ -25,16 +23,18 @@ test("placeholders are filled from the job and candidate, or taken out", () => {
   assert.equal(cleanText("Improved uptime (XX%).", context), "Improved uptime.");
 });
 
-test("summary bold stays only for job keywords the candidate has, six at most", () => {
-  assert.equal(
-    checkSummaryBold("Engineer with **Kubernetes**, **Terraform**, **GitOps** and **Azure**.", context.jobDescription, context.profileText),
-    "Engineer with **Kubernetes**, **Terraform**, GitOps and Azure.",
-  );
-  const many = Array.from({ length: 8 }, () => "**AWS**").join(" ");
-  assert.equal((checkSummaryBold(many, "AWS", "AWS").match(/\*\*/g) ?? []).length, 12);
+test("cleanup preserves Manager-selected summary emphasis without keyword matching or a bold quota", () => {
+  const summary = Array.from({ length: 8 }, (_, index) => `**Technical phrase ${index}**`).join(" ");
+  for (const resume of [{ summary, candidate: {}, sections: [] }, {
+    targetCompany: "N-iX", applyJobTitle: "Senior DevOps Engineer", name: "Andrei Sava",
+    title: "Tailored headline", contact: {}, summary, skills: [], experience: [], education: [],
+  }]) {
+    const cleaned = cleanGeneratedDocuments({ resume }, context);
+    assert.equal((cleaned.resume as Record<string, unknown>).summary, summary);
+  }
 });
 
-test("the package is cleaned without failing: bold only in summary and bullets, broken bullets left out", () => {
+test("the package is cleaned without failing: allowed bold and short bullets stay", () => {
   const cleaned = cleanGeneratedDocuments({
     resume: {
       candidate: { fullName: "**Andrei Sava**", email: "a@example.com" },
@@ -54,15 +54,75 @@ test("the package is cleaned without failing: bold only in summary and bullets, 
   const resume = cleaned.resume as Record<string, unknown>;
   assert.equal((resume.candidate as Record<string, unknown>).fullName, "Andrei Sava");
   assert.equal(resume.targetRole, "Senior DevOps Engineer");
-  assert.equal(resume.summary, "Engineer building **AWS** platforms with **Terraform** at N-iX and Azure.");
+  assert.equal(resume.summary, "Engineer building **AWS** platforms with **Terraform** at N-iX and **Azure**.");
   const [experience, skills] = resume.sections as Record<string, unknown>[];
   assert.equal(experience.title, "Experience");
   const job = (experience.items as Record<string, unknown>[])[0];
   assert.equal(job.heading, "Automation Engineer");
-  assert.deepEqual(job.bullets, ["Automated **Terraform** modules for 30 teams.", "Reduced deploy time by 40%."]);
+  assert.deepEqual(job.bullets, ["Automated **Terraform** modules for 30 teams.", "Improved.", "Reduced deploy time by 40%."]);
   assert.deepEqual((skills.items as Record<string, unknown>[])[0].bullets, ["AWS", "Terraform"]);
   const letter = cleaned.coverLetter as Record<string, unknown>;
   assert.equal(letter.salutation, "Dear N-iX team,");
   assert.deepEqual(letter.bodyParagraphs, ["I bring Kubernetes experience."]);
   assert.equal(letter.signatureName, "Andrei Sava");
+});
+
+test("Version 2 résumé cleaning preserves its JSON shape, all bullets, skills, and Manager-selected bold", () => {
+  const cleaned = cleanGeneratedDocuments({
+    resume: {
+      targetCompany: "N-iX",
+      applyJobTitle: "Senior DevOps Engineer",
+      name: "Andrei Sava",
+      title: "Platform Engineer",
+      contact: {
+        location: "Cluj-Napoca, Romania",
+        email: "a@example.com",
+        linkedin: "linkedin.com/in/andrei",
+        phone: "+40 123",
+      },
+      summary: "Engineer with **AWS** experience.",
+      skills: [{ category: "Cloud", items: "AWS, Terraform, Kubernetes" }],
+      experience: [{
+        company: "Automaly",
+        location: "Romania",
+        role: "Platform Engineer",
+        dates: "2020 – Present",
+        bullets: ["Built **AWS** infrastructure across teams.", "Improved deployment reliability."],
+      }],
+      education: [{
+        institution: "University",
+        location: "Romania",
+        degree: "BSc",
+        field: "Computer Science",
+        dates: "2015 – 2019",
+      }],
+    },
+    coverLetter: {
+      candidate: { fullName: "Andrei Sava", email: "a@example.com" },
+      targetRole: "Senior DevOps Engineer",
+      targetCompany: "N-iX",
+      recipient: { name: "", title: "Hiring Manager", company: "N-iX", address: [] },
+      subject: "Application",
+      salutation: "Dear Hiring Manager,",
+      bodyParagraphs: ["I bring **AWS** experience."],
+      closing: "Kind regards,",
+      signatureName: "Andrei Sava",
+    },
+  }, context);
+  const resume = cleaned.resume as Record<string, unknown>;
+  assert.deepEqual(Object.keys(resume), [
+    "targetCompany", "applyJobTitle", "name", "title", "contact", "summary", "skills", "experience", "education",
+  ]);
+  assert.equal(resume.summary, "Engineer with **AWS** experience.");
+  assert.deepEqual((resume.skills as { items: string }[])[0].items, "AWS, Terraform, Kubernetes");
+  const experience = (resume.experience as Record<string, unknown>[])[0];
+  assert.deepEqual(experience.bullets, [
+    "Built **AWS** infrastructure across teams.",
+    "Improved deployment reliability.",
+  ]);
+  assert.deepEqual(Object.keys(cleaned.coverLetter as Record<string, unknown>), [
+    "candidate", "targetRole", "targetCompany", "recipient", "subject", "salutation",
+    "bodyParagraphs", "closing", "signatureName",
+  ]);
+  assert.deepEqual((cleaned.coverLetter as Record<string, unknown>).bodyParagraphs, ["I bring AWS experience."]);
 });

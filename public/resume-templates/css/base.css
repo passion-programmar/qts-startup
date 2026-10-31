@@ -730,6 +730,11 @@ a {
   border-block: var(--title-rule);
 }
 
+.doc[data-template="qts-standard"][data-title-style="double"] .section-title {
+  border-top: 0;
+  border-bottom: var(--title-rule);
+}
+
 /* A header ruled underneath already sets off the first section, so its title
    draws no top line of its own: the two would print as a double rule. */
 .doc:is([data-header-style="plain-rule"], [data-header-style="centered-rules"])[data-title-style="double"] .resume-body > .section:first-child .section-title {
@@ -867,7 +872,7 @@ li {
 /* 12. Density ---------------------------------------------------------------------
    render.js adds .doc--compact when content runs past its page budget
    (density "auto") or when asked ("compact"): spacing only. When a resume
-   still runs over, it adds .doc--small-bullets and sets --text-bullet to 11pt
+   still runs over, it adds .doc--small-bullets and sets --text-bullet to 10.5pt
    on the document, but only when that brings it within its pages. No other
    text shrinks. */
 
@@ -879,6 +884,23 @@ li {
   --space-title: 3pt;
   --space-item: 7pt;
   --space-bullet: 0.5pt;
+}
+
+.doc--compact:is(
+  [data-template="bold"],
+  [data-template="timeline"],
+  [data-template="modern-serif"],
+  [data-template="nordic"],
+  [data-template="swiss"],
+  [data-template="slate"]
+) {
+  --font-scale: 0.97;
+  --leading-body: 1.2;
+  --space-header: 6pt;
+  --space-section: 6pt;
+  --space-title: 2pt;
+  --space-item: 5pt;
+  --space-bullet: 0;
 }
 
 

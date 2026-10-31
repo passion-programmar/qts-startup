@@ -62,7 +62,7 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(launcher.includes('.launcher:not(.signed-in) { display: none; }'));
   assert.ok(launcher.includes("launcher.classList.toggle('signed-in', signedIn)"));
   assert.ok(launcher.includes("message?.type === 'QTS_TOOLBAR_ICON_CLICKED'"));
-  assert.ok(launcher.includes('if (signInForm.hidden) showSignInForm();\n    else hideSignInForm();'));
+  assert.match(launcher, /if \(signInForm.hidden\) showSignInForm\(\);\r?\n\s*else hideSignInForm\(\);/);
   assert.equal(launcher.includes("launcher.classList.toggle('loading'"), false);
 });
 
@@ -78,7 +78,7 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
 
   assert.ok(serviceWorker.includes("'/api/extension/get-jd/check'"));
   assert.equal(serviceWorker.includes('requestGeminiJson'), false);
-  assert.ok(serviceWorker.includes('[GET_JD_ON_KEY]: true'));
+  assert.ok(serviceWorker.includes('await getJdNavigation.enable()'));
   assert.ok(serviceWorker.includes("message: 'Get JD is on. QTS checks each job page you open.'"));
   assert.ok(launcher.includes("active ? `Cancel ${defaultLabel}` : defaultLabel"));
   assert.ok(launcher.includes("document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true'"));
@@ -156,7 +156,8 @@ test('Get JD applies Manager URL blocks, then settled job-page detection, before
   assert.ok(blockedRuleIndex > completedPageIndex);
   assert.ok(detectionIndex > blockedRuleIndex);
   assert.ok(extractionIndex > detectionIndex);
-  assert.ok(duplicateCheckIndex > extractionIndex);
+  assert.ok(duplicateCheckIndex > detectionIndex);
+  assert.ok(duplicateCheckIndex < extractionIndex);
   assert.equal(serviceWorker.includes('classifyJobPageEvidence({'), false);
   assert.equal(serviceWorker.includes("status: 'not_job_page'"), false);
   assert.ok(serviceWorker.includes("msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED'"));
@@ -168,7 +169,7 @@ test('Get JD applies Manager URL blocks, then settled job-page detection, before
   assert.equal(serviceWorker.includes("const ignored = new Set(["), false);
   assert.equal(serviceWorker.includes("await processGetJdPage(tabId, url, 'complete');"), false);
   const domReadyListener = serviceWorker.slice(serviceWorker.indexOf('chrome.webNavigation.onDOMContentLoaded.addListener'));
-  assert.ok(domReadyListener.slice(0, 600).includes('processGetJdPage(details.tabId, details.url'));
+  assert.ok(domReadyListener.slice(0, 600).includes("getJdNavigation.handle('ready', details)"));
   assert.ok(serviceWorker.includes("chrome.tabs.sendMessage(tabId, { type: 'QTS_NOT_JOB_PAGE' }"));
   assert.ok(serviceWorker.includes('func: waitForPageToSettleInPage'));
   const committedListener = serviceWorker.slice(
@@ -254,7 +255,8 @@ test('Manager URL rule CRUD is permission-gated and scoped to its owner', () => 
   assert.ok(managerSettings.includes('ManagerJobDetectionUrlAccessForm'));
   assert.ok(serviceWorker.includes('isManagerBlockedUrl'));
   assert.ok(serviceWorker.includes('isPageDetectedAsJobForManager'));
-  assert.ok(serviceWorker.includes('countPageDetectionKeywordMatches'));
+  assert.equal(serviceWorker.includes('countPageDetectionKeywordMatches'), false);
+  assert.ok(serviceWorker.includes('__qtsJobPageDetection.evaluateJobPage(snapshot)'));
   assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_PAGE_EXCLUSION'"));
   const popup = fs.readFileSync(
     path.join(extensionRoot, 'popup', 'popup.js'),
@@ -287,7 +289,7 @@ test('Manager blocked URL rules update UI and workflows across SPA navigation', 
 
   assert.ok(navigationHandler.indexOf('notifyPageUrlAccess') < navigationHandler.indexOf('if (!isExtractablePageUrl'));
   assert.ok(serviceWorker.includes('changes[JOB_DETECTION_URL_RULES_STORAGE_KEY]'));
-  assert.ok(serviceWorker.includes('recheckLoadedPagesForManagerJobRules'));
+  assert.ok(serviceWorker.includes('refreshLauncherForManagerJobRules'));
   assert.ok(serviceWorker.includes("type: 'QTS_PAGE_URL_CHANGED'"));
   assert.ok(launcher.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
   assert.ok(review.includes("message?.type !== 'QTS_PAGE_URL_CHANGED'"));
@@ -570,7 +572,7 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes("if (result.inJobs) return 'Already added — this job is in your Jobs list.';"));
   assert.ok(review.includes('result.toastMessage || jobPresenceMessage(result)'));
   assert.ok(evaluationRoute.includes('insertGetJdJob(jobToSave)'));
-  assert.ok(evaluationRoute.includes('updateExistingGetJdJobDetails(jobToSave)'));
+  assert.equal(evaluationRoute.includes('updateExistingGetJdJobDetails(jobToSave)'), false);
   const detailUpdater = duplicateHelper.slice(
     duplicateHelper.indexOf('export async function updateExistingGetJdJobDetails'),
   );
@@ -621,9 +623,9 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(jobsPage.includes('<JobEditAction'));
   assert.ok(jobsPage.includes('<JobDeleteAction'));
   assert.ok(jobsPage.includes('<JobGenerationQueueAction'));
-  assert.ok(jobsPage.includes('label: "Candidate Name"'));
-  assert.ok(jobsPage.includes('label: "Job Title"'));
-  assert.ok(jobsPage.includes('label: "Resume Path"'));
+  assert.ok(jobsPage.includes('label: "Name"'));
+  assert.ok(jobsPage.includes('label: "Job title"'));
+  assert.ok(jobsPage.includes('label: "Résumé"'));
   assert.ok(jobsPage.includes('target="_blank"'));
   assert.ok(actions.includes('export async function updateJobAction'));
   assert.ok(actions.includes('eq(jobs.managerId, manager.id)'));
@@ -692,7 +694,7 @@ test('the prompt and template flow from the Generation run to the job and its bi
   const finalize = read('src', 'app', 'api', 'extension', 'generation', 'finalize', 'route.ts');
   const applyAttempts = read('src', 'server', 'apply', 'apply-attempts.ts');
 
-  assert.ok(start.includes('const { promptTemplate, pdfTemplate, promptId } = await getManagerGenerationSetup(manager.id);'));
+  assert.match(start, /getManagerGenerationSetup\(\s*manager\.id,\s*savedJob\.generationPromptId,?\s*\)/);
   assert.ok(finalize.includes('promptId: run.promptId,'));
   assert.ok(finalize.includes('pdfTemplate: run.pdfTemplate,'));
   // The bid keeps the prompt and template by name, copied from the job when the Manager confirms the application.
@@ -834,15 +836,16 @@ test('the Get JD panel is injected on demand instead of on every page', () => {
   const worker = read('background', 'service-worker.js');
   const launcher = read('content', 'page-launcher.js');
   const saveResult = worker.slice(
-    worker.indexOf('async function saveGetJdResult('),
+    worker.indexOf('async function writeGetJdResult('),
     worker.indexOf('async function readGetJdResultForTab('),
   );
 
   assert.equal(pageScripts.includes('content/get-jd-review.js'), false);
-  assert.ok(saveResult.includes('await ensureGetJdPanel(tabId)'));
+  assert.ok(saveResult.includes('ensureGetJdPanel(tabId).catch'));
+  assert.equal(saveResult.includes('await ensureGetJdPanel(tabId)'), false);
   assert.ok(worker.includes("msg.type === 'QTS_ENSURE_GET_JD_PANEL'"));
   assert.ok(launcher.includes("type: 'QTS_ENSURE_GET_JD_PANEL'"));
-  assert.ok(launcher.includes('stored.qtsGetJdOn !== true'));
+  assert.equal(launcher.includes("chrome.storage.local.get(['qtsGetJdOn', 'authExpiresAt'])"), false);
 });
 
 test('the text highlighter only rescans changed nodes, in batches, and skips ChatGPT', () => {
@@ -912,8 +915,9 @@ test('disabled page UI removes its listeners and the queue alarm only runs durin
   const worker = read('background', 'service-worker.js');
   const disableBody = (source) => source.slice(source.indexOf('disable() {'), source.indexOf('disable() {') + 600);
 
-  assert.ok(disableBody(launcher).includes('chrome.storage.onChanged.removeListener(onStorageChanged)'));
-  assert.ok(disableBody(launcher).includes("document.removeEventListener('keydown', onKeydown)"));
+  assert.ok(disableBody(launcher).includes('detachListeners()'));
+  assert.ok(launcher.includes('chrome.storage.onChanged.removeListener(onStorageChanged)'));
+  assert.ok(launcher.includes("document.removeEventListener('keydown', onKeydown)"));
   assert.ok(disableBody(panel).includes('chrome.storage.onChanged.removeListener(onStorageChanged)'));
   assert.ok(launcher.includes('pageLauncherInitialization = initializeQtsPageLauncher().finally('));
   assert.ok(panel.includes("document.querySelector('style[data-qts-get-jd-dock-style]')"));
@@ -953,8 +957,10 @@ test('Get JD saves use shared job keys, explicit removals, and skip Gemini when 
   assert.ok(jobsHelper.includes('CASE WHEN m.description IS NULL THEN m.page_text END'));
   assert.ok(saveRoute.includes('readProfileIds(body, "removeProfileIds")'));
   assert.ok(saveRoute.includes('removeGetJdJobAccount(manager.id, rowId)'));
-  assert.ok(geminiRoute.includes('skippedEvaluation: true'));
-  assert.ok(geminiRoute.indexOf('availableProfiles.length === 0') < geminiRoute.indexOf('requestGeminiJson(apiKey, promptText, tokenCounts)'));
+  assert.ok(geminiRoute.includes('getPrecheckTickets().verify'));
+  assert.equal(geminiRoute.includes('findGetJdDuplicateDetails('), false);
+  assert.equal(geminiRoute.includes('findManagerJobPresence('), false);
+  assert.ok(geminiRoute.includes('classification.job.description = pageText'));
   assert.ok(jobActions.includes('eq(jobs.relationId, existingJob.relationId)'));
   assert.ok(jobActions.includes('Delete the bid on the Bids page first.'));
   assert.ok(claimRoute.includes('hasEffectiveJobDescription()'));
@@ -973,7 +979,7 @@ test('Local Count never calls CountTokens; Gemini Count records both counts on t
   assert.ok(route.includes('gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, contents, config) : null'));
   assert.ok(usage.includes('localInputTokens: tokenCounts.local ?? null'));
   assert.ok(usage.includes('geminiInputTokens: tokenCounts.gemini ?? null'));
-  assert.ok(page.includes('{ label: "No", className: "w-[5%]" }'));
+  assert.ok(page.includes('{ label: "No",'));
   assert.ok(page.includes('{ label: "Local tokens"'));
   assert.ok(page.includes('{ label: "Gemini tokens"'));
   assert.ok(modeForm.includes('label: "Local Count"'));

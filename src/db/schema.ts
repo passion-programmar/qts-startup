@@ -492,6 +492,8 @@ export const jobs = pgTable(
     googleDrivePath: text("google_drive_path"),
     // The prompt version and template of the delivered Generation, shown on Jobs and Bids.
     promptId: uuid("prompt_id").references(() => prompts.id, { onDelete: "set null" }),
+    // Optional prompt chosen for this queued run; null keeps the Manager's least-recent-use rotation.
+    generationPromptId: uuid("generation_prompt_id").references(() => prompts.id, { onDelete: "set null" }),
     pdfTemplate: text("pdf_template"),
     generationStatus: generationQueueStatus("generation_status")
       .default("not_queued")

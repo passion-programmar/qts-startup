@@ -343,8 +343,9 @@ async function initializeGetJdReviewOnce() {
         </div>
         <div class="manager-settings-view" data-settings-view="page-exclusions" hidden>
           <section class="manager-settings-group" data-page-exclusions-group hidden>
-            <h3>Job-page detection keywords</h3>
-            <p>A page is treated as a job page when two saved keywords appear in its visible text as whole words (plurals count). Pages without them can still pass on other job signals, such as an Apply button or job-posting sections.</p>
+            <h3>Built-in job-page detection</h3>
+            <p>All Managers use the detection rules shipped with this extension. Keyword updates require a new extension version. Blocked URL rules remain configurable below.</p>
+            <div hidden>
             <button type="button" class="manager-settings-suggest" data-exclusion-suggest>Add suggested keywords</button>
             <form data-exclusion-form>
               <label class="manager-settings-label" for="qts-manager-exclusion-url">Keyword or phrase</label>
@@ -355,6 +356,7 @@ async function initializeGetJdReviewOnce() {
               </div>
             </form>
             <ul class="manager-settings-list" data-exclusion-list></ul>
+            </div>
           </section>
           <section class="manager-settings-group" data-job-detection-group hidden>
             <h3>Blocked URL rules</h3>
@@ -571,7 +573,7 @@ async function initializeGetJdReviewOnce() {
     } else {
       settings.pageView.appendChild(settings.status);
     }
-    settings.exclusionGroup.hidden = !managerSettingsPermissions.canManagePageExclusions;
+    settings.exclusionGroup.hidden = false;
     settings.jobDetectionGroup.hidden = !managerSettingsPermissions.canManageJobDetectionUrlRules;
     setPanelVisible(true);
     try {
@@ -718,12 +720,6 @@ async function initializeGetJdReviewOnce() {
 
   async function loadUrlSettings() {
     const requests = [];
-    if (managerSettingsPermissions.canManagePageExclusions) {
-      requests.push(
-        sendSettingsMessage({ type: 'GET_MANAGER_PAGE_EXCLUSIONS' })
-          .then((response) => { pageExclusionRules = response.exclusions || []; }),
-      );
-    }
     if (managerSettingsPermissions.canManageJobDetectionUrlRules) {
       requests.push(
         sendSettingsMessage({ type: 'GET_MANAGER_JOB_DETECTION_URL_RULES' })

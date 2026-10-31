@@ -10,10 +10,10 @@ const evaluate = (snapshot, rules = keywords) => detection.evaluateJobPage(
   countPageDetectionKeywordMatches,
 );
 
-test('two Manager keywords always pass, as before', () => {
+test('Manager keyword settings cannot make unrelated pages pass', () => {
   const result = evaluate({ text: 'Responsibilities and qualifications for this role' });
-  assert.equal(result.isJobPage, true);
-  assert.equal(result.reason, 'keywords');
+  assert.equal(result.isJobPage, false);
+  assert.equal(evaluate({ title: 'Backend Engineer', text: 'Responsibilities include building reliable services.' }, []).isJobPage, true);
 });
 
 test('structured JobPosting data passes even without keywords', () => {
@@ -46,17 +46,17 @@ test('closed or expired postings without a description are rejected even with ke
   assert.equal(result.reason, 'closed');
 });
 
-test('a closed notice beside a full description does not reject the job', () => {
+test('a current closed notice rejects a job even when its description remains', () => {
   assert.equal(evaluate({
     text: 'Responsibilities, qualifications. Applications are closed for the internship program.',
     hasJobPostingData: true,
-  }).isJobPage, true);
+  }).isJobPage, false);
   assert.equal(evaluate({
     url: 'https://boards.greenhouse.io/acme/jobs/123',
     text: 'Applications are closed for our 2025 program.',
     headingMatches: 3,
     hasApplyControl: true,
-  }).isJobPage, true);
+  }).isJobPage, false);
 });
 
 test('a closed notice on a page without job signals is not a closed job', () => {
@@ -81,8 +81,8 @@ test('a browser check or sign-in page on a job site is reported as not loaded', 
   assert.equal(result.reason, 'not-loaded');
 });
 
-test('one strong job signal short of passing is uncertain, but a list of jobs is not', () => {
-  assert.equal(evaluate({ url: 'https://talent.example.com/apply', hasCvUpload: true }, []).reason, 'uncertain');
+test('plausible individual postings proceed without a Manager approval step', () => {
+  assert.equal(evaluate({ url: 'https://talent.example.com/jobs/engineer', title: 'Engineer', specificUrl: true }, []).reason, 'plausible');
   assert.equal(evaluate({ url: 'https://jobs.lever.co/acme', jobLinkCount: 40 }, []).reason, 'not-job');
   assert.equal(evaluate({ text: 'Breaking news' }, []).reason, 'not-job');
 });
@@ -122,7 +122,7 @@ test('a closed notice that the page does not show does not reject it', () => {
 
 test('job lists are penalized, but a list with a selected job is judged on that job', () => {
   const list = { url: 'https://www.linkedin.com/jobs/search/?keywords=engineer', hasApplyControl: true, headingMatches: 2, jobLinkCount: 25 };
-  assert.equal(evaluate(list, []).isJobPage, true);
+  assert.equal(evaluate(list, []).isJobPage, false);
   assert.equal(evaluate({ ...list, headingMatches: 0 }, []).isJobPage, false);
   assert.equal(evaluate({ ...list, headingMatches: 0, url: `${list.url}&currentJobId=4012345678` }, []).isJobPage, true);
 });
@@ -132,3 +132,39 @@ test('an embedded job board frame counts as a job signal', () => {
   assert.equal(evaluate(embeddingPage, []).isJobPage, true);
   assert.equal(evaluate({ url: 'https://acme.com/about', hasJobBoardFrame: true }, []).isJobPage, false);
 });
+
+test('built-in vocabulary is grouped and ships without remote settings', () => {
+  const size=Object.values(detection.KEYWORDS).flat().length;
+  assert.ok(size>=60 && size<=110, String(size));
+  assert.equal(detection.keywordGroups('Responsibilities responsibilities responsibilities').responsibilities,true);
+});
+const labeled = [
+  ['custom no structured data',true,{title:'Backend Engineer',text:'Responsibilities include developing services.'}],
+  ['custom no Apply control',true,{title:'Finance Analyst',text:'Requirements include accounting experience.'}],
+  ['unusual headings',true,{title:'Platform Engineer',text:'You will build deployment tooling and improve our systems.'}],
+  ['healthcare',true,{title:'Clinical Nurse',text:'Your work includes caring for patients and coordinating treatment.'}],
+  ['manufacturing',true,{title:'Machine Operator',text:'We seek operators for the production line.'}],
+  ['retail',true,{title:'Store Associate',text:'Join us to support customers and manage inventory.'}],
+  ['hospitality',true,{title:'Commis Chef',text:'What you bring: kitchen experience and food safety training.'}],
+  ['legal',true,{title:'Legal Counsel',text:'Required qualifications include professional registration.'}],
+  ['remote unknown ATS',true,{title:'Data Engineer',specificUrl:true,url:'https://acme.test/jobs/data-engineer',text:'Remote'}],
+  ['Greenhouse',true,{url:'https://boards.greenhouse.io/acme/jobs/123',hasApplyControl:true}],
+  ['Lever',true,{url:'https://jobs.lever.co/acme/123',hasApplyControl:true}],
+  ['Workday',true,{url:'https://acme.myworkdayjobs.com/job/req123',hasApplyControl:true}],
+  ['Indeed',true,{url:'https://indeed.com/viewjob?jk=12345678',hasApplyControl:true}],
+  ['LinkedIn selected job',true,{url:'https://linkedin.com/jobs/search/?currentJobId=123',hasJobDetailPane:true,hasApplyControl:true}],
+  ['current structured metadata',true,{hasJobPostingData:true}],
+  ['plain job overview',true,{title:'Security Analyst',text:'Position overview: investigate security events.'}],
+  ['qualifications only',true,{title:'Research Fellow',text:'Qualifications: relevant doctorate.'}],
+  ['specific plausible role',true,{title:'Systems Architect',specificUrl:true,url:'https://acme.test/jobs/architect'}],
+  ['article',false,{title:'Remote Work News',articlePage:true,text:'Responsibilities and qualifications for remote work.'}],
+  ['career advice',false,{title:'How to write a resume',text:'Your role and responsibilities, requirements and qualifications.'}],
+  ['career homepage',false,{title:'Careers',text:'Join our team. Responsibilities and requirements. Full-time opportunities.'}],
+  ['job list',false,{title:'Open positions',jobLinkCount:20,structuredCount:4,hasApplyControl:true}],
+  ['unrelated',false,{title:'Mountain photography',text:'Explore our latest pictures.'}],
+  ['closed primary posting',false,{title:'Engineer',text:'This job has expired.',hasJobPostingData:true}],
+  ['metadata expiry',false,{title:'Engineer',postingExpired:true,hasJobPostingData:true}],
+  ['browser challenge',false,{blocked:true,url:'https://acme.test/jobs/engineer'}],
+  ['loading shell',false,{title:'Loading...',specificUrl:true,url:'https://acme.test/jobs/engineer'}],
+];
+for(const [label,expected,snapshot] of labeled) test('labeled detector fixture: '+label,()=>assert.equal(evaluate(snapshot,[]).isJobPage,expected));

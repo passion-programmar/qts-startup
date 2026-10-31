@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# Local verification artifacts, exported documents, test dependencies and worktrees
+/.pdf-verification/
+
 # next.js
 /.next/
 /out/

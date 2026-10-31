@@ -25,6 +25,31 @@ test('rejects JSON without both document objects', () => {
   assert.equal(helper.extractJsonObject('{"resume":{}}'), null);
 });
 
+test('refuses a legacy server contract before a Generation prompt is sent', () => {
+  const helper = loadHelper();
+  for (const result of [null, {}, { resumeJsonVersion: 1 }, { resumeJsonVersion: '2' }]) {
+    assert.match(helper.generationContractIssue(result), /outdated Generation contract/);
+  }
+  assert.equal(helper.generationContractIssue({ resumeJsonVersion: 2 }), '');
+});
+
+test('the real worker preparation stops on a legacy server and preserves a current server prompt', async () => {
+  const helper = loadHelper();
+  const source = fs.readFileSync(path.join(__dirname, '../background/service-worker.js'), 'utf8');
+  const start = source.indexOf('      const started = await workerApiRequest(', source.indexOf('  async function runGenerationForTab('));
+  const end = source.indexOf('      ensureGenerationIsActive(cancellationKey, cancellationToken);', start);
+  assert.ok(start > 0 && end > start);
+  const prepare = source.slice(start, end);
+  for (const version of [undefined, 1, 2]) {
+    const prompt = 'Manager instructions and protected V2 contract';
+    const result = { success: true, generationId: '807bc8f8-64c3-4072-936a-598ffe85af8b', prompt, resumeJsonVersion: version };
+    const context = vm.createContext({ self: { __qtsGenerationChatGpt: helper }, queuedJob: { id: 'job' }, workerApiRequest: async () => result, generationId: '' });
+    const pending = vm.runInContext(`(async () => { ${prepare}; return generationPrompt; })()`, context);
+    if (version === 2) assert.ok((await pending).endsWith(prompt));
+    else await assert.rejects(pending, { name: 'GenerationSetupError' });
+  }
+});
+
 test('builds a task-specific prompt without asking ChatGPT to return transport metadata', () => {
   const helper = loadHelper();
   const id = '807bc8f8-64c3-4072-936a-598ffe85af8b';

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { readFile } from "node:fs/promises";
+import { DocumentPageLimitError } from "@/app/pdf/document-page-limit-error";
 import type { Browser, HTTPRequest } from "puppeteer-core";
 import { type PdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
 import type { PdfTemplate } from "@/server/pdf/pdf-templates";
@@ -8,19 +9,12 @@ import { resolveTemplateRenderAsset, templateRenderOrigin } from "@/server/pdf/t
 
 const renderTimeoutMs = 25_000;
 
-// The same limits the built-in renderer enforces; the templates shrink to compact density
-// first, so content that still overflows has to be shortened.
+// The templates compact content first; this check prevents a successful PDF from exceeding
+// the résumé and cover-letter page policies without silently truncating content.
 const pageLimits = {
-  resume: { pages: 2, message: "The résumé exceeds two A4 pages. Shorten its content." },
+  resume: { pages: 3, message: "The résumé exceeds three A4 pages. Its content was not truncated." },
   "cover-letter": { pages: 1, message: "The cover letter exceeds one A4 page. Shorten its paragraphs." },
 } as const;
-
-export class DocumentPageLimitError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "DocumentPageLimitError";
-  }
-}
 
 export type TemplatePdfPackage = {
   resume: Uint8Array;
@@ -31,7 +25,7 @@ export type TemplatePdfPackage = {
 
 /**
  * Prints the résumé and cover letter with the HTML templates in public/resume-templates.
- * Callers fall back to the built-in renderer on error.
+ * Callers use the built-in renderer if Chromium fails, except when a document exceeds its page limit.
  */
 export async function renderTemplatePdfPackage(
   data: PdfPackage,

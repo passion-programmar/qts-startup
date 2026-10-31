@@ -3082,14 +3082,21 @@ async function processApplyQueue() {
     // Pages still open from before the extension restarted are taken up first (they count as open).
     if (await isApplyOn() && !autoApply) for (const run of await resumeApplySessions(APPLY_TABS_PER_CHROME)) track(run);
     // Auto Apply: its applications left open by a restarted worker go on first (one at a time).
-    if (await isApplyOn() && autoApply) for (const run of await self.__qtsAutoApply.resumeRuns()) track(run);
+    if (await isApplyOn() && autoApply) {
+      const scope = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
+      for (const run of await self.__qtsAutoApply.resumeRuns(scope?.mode === 'auto_apply' ? scope : undefined)) track(run);
+    }
     while (await isApplyOn()) {
       const testMode = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
       if (running.size >= (testMode || autoApply ? 1 : APPLY_TABS_PER_CHROME)) {
         await Promise.race(running);
         continue;
       }
-      const claim = await workerApiRequest('POST', '/api/extension/apply/claim', { skipJobIds: await cancelledJobIds() });
+      const scope = autoApply ? (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection : null;
+      const claim = await workerApiRequest('POST', '/api/extension/apply/claim', {
+        skipJobIds: await cancelledJobIds(),
+        ...(scope?.mode === 'auto_apply' ? { selection: scope } : {}),
+      });
       if (claim.success !== true) {
         if ([401, 403, 426].includes(claim._httpStatus)) {
           await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });

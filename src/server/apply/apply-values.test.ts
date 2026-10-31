@@ -97,6 +97,36 @@ test("the delivered résumé becomes plain text in the PDF's order", () => {
   assert.equal(resumeText(null), null);
 });
 
+test("Version 2 résumé text extraction keeps skills, experience bullets, and education", () => {
+  const text = resumeText({
+    targetCompany: "Example",
+    applyJobTitle: "Platform Engineer",
+    name: "Test Candidate",
+    title: "Cloud Engineer",
+    contact: { location: "Cluj", email: "test@example.com", linkedin: "linkedin.com/in/test", phone: "+40 123" },
+    summary: "Builds **reliable** systems.",
+    skills: [{ category: "Cloud", items: "AWS, Kubernetes, Terraform" }],
+    experience: [{
+      company: "Example Ltd",
+      location: "Cluj",
+      role: "Platform Engineer",
+      dates: "2022 – Present",
+      bullets: ["Built **reliable** infrastructure.", "Automated deployments."],
+    }],
+    education: [{
+      institution: "Example University",
+      location: "Cluj",
+      degree: "BSc",
+      field: "Computer Science",
+      dates: "2018 – 2022",
+    }],
+  });
+  assert.ok(text?.includes("Test Candidate\nCloud Engineer"));
+  assert.ok(text?.includes("Cloud\nAWS, Kubernetes, Terraform"));
+  assert.ok(text?.includes("- Built reliable infrastructure.\n- Automated deployments."));
+  assert.ok(text?.includes("BSc · Computer Science · Example University · Cluj · 2018 – 2022"));
+});
+
 test("the cover letter becomes plain text for text boxes", () => {
   assert.equal(
     coverLetterText({

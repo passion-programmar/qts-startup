@@ -101,6 +101,18 @@ test('worker permits loading the signed-in manager candidate accounts', async ()
   assert.ok(requests[0].options.headers.Authorization);
 });
 
+test('worker permits authenticated account/job listing with query parameters', async () => {
+  const requests = [];
+  const worker = loadApiWorker(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, status: 200, json: async () => ({ success: true, accounts: [] }) };
+  });
+  const endpoint = '/api/extension/work-items?mode=generation&candidateId=11111111-1111-4111-8111-111111111111';
+  assert.equal((await worker.workerApiRequest('GET', endpoint)).success, true);
+  assert.equal(requests[0].url, 'https://qts.example.test' + endpoint);
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer worker-token');
+});
+
 test('worker permits manager extension feature and shared highlight requests', async () => {
   const requests = [];
   const worker = loadApiWorker(async (url, options) => {

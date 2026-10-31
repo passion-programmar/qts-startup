@@ -99,7 +99,7 @@
     return tag === 'FORM' && element.querySelectorAll('input:not([type="hidden"]), select, textarea').length >= 2;
   }
 
-  function collectText(root, lenient = false) {
+  function collectText(root, lenient = false, preserve = false) {
     const parts = [];
     const newline = () => parts.push('\n');
     const visit = (node) => {
@@ -135,23 +135,23 @@
     const lines = [];
     for (const raw of parts.join('').split('\n')) {
       const line = raw.replace(/\s+/g, ' ').trim();
-      if (!line || line === '•' || FINE_PRINT_LINE.test(line) || CODE_LINE.test(line)) {
+      if (!line || line === '•' || (!preserve && (FINE_PRINT_LINE.test(line) || CODE_LINE.test(line)))) {
         if (lines.length && lines[lines.length - 1] !== '') lines.push('');
         continue;
       }
       const key = line.toLowerCase();
-      if (line.length >= 30 && seen.has(key)) continue;
+      if (!preserve && line.length >= 30 && seen.has(key)) continue;
       seen.add(key);
       lines.push(line);
     }
     return lines.join('\n').trim();
   }
 
-  function htmlToText(html) {
+  function htmlToText(html, preserve = false) {
     // Inert parsing: page-supplied markup cannot load resources or run handlers.
     const parser = new DOMParser();
     const decoded = parser.parseFromString(`<textarea>${String(html)}</textarea>`, 'text/html').querySelector('textarea')?.value || String(html);
-    return collectText(parser.parseFromString(decoded, 'text/html').body);
+    return collectText(parser.parseFromString(decoded, 'text/html').body, false, preserve);
   }
 
   function jobPostings(doc) {
@@ -217,13 +217,38 @@
   // Reads another page of the same site (an apply form's description page) without opening it.
   // The fetched markup is parsed inertly, so its scripts do not run; pages that build the job with
   // scripts come back short, and the caller keeps the current page's text then.
-  async function readJobPageTextFrom(url) {
+  function readOriginalJobDescription(doc = document) {
+    const root = ['.jobs-description__content', '.jobsearch-jobDescriptionText', '#jobDescriptionText', '[data-testid="job-description"]', '[itemprop="description"]', 'main', '[role="main"]', 'article']
+      .map((selector) => doc.querySelector(selector)).find(Boolean) || doc.body;
+    let text = root ? collectText(root, false, true) : '';
+    const title = String(doc.querySelector('h1')?.textContent || '').trim().toLowerCase();
+    const postings = jobPostings(doc);
+    const posting = postings.find((item) => String(item.title || '').trim().toLowerCase() === title)
+      || (postings.length === 1 ? postings[0] : null);
+    if (posting?.description) {
+      const structured = htmlToText(posting.description, true);
+      if (structured.length > text.length) text = structured;
+    }
+    const descriptionContainer = root?.matches?.('.jobs-description__content, .jobsearch-jobDescriptionText, #jobDescriptionText, [data-testid="job-description"], [itemprop="description"]');
+    const prose = text.split('\n').filter((line) => line.trim() && line.trim().toLowerCase() !== title
+      && !/^(apply( now)?|remote|full.time|part.time|loading[.…]*)$/i.test(line.trim()));
+    if (!descriptionContainer && !posting?.description && !root?.querySelector('p, li') && prose.length === 0) {
+      throw new Error('The job description has not loaded. Refresh the job description page and retry; nothing was saved.');
+    }
+    if (!text.trim()) throw new Error('The original job description could not be extracted. Refresh the job page and retry.');
+    if (text.length > MAX_LENGTH) throw new Error('The original job description exceeds the 100,000-character limit. Nothing was truncated or saved.');
+    return text;
+  }
+
+  async function readJobPageTextFrom(url, original = false) {
     const response = await fetch(url, { credentials: 'same-origin', redirect: 'follow' });
     if (!response.ok) return '';
     const html = await response.text();
-    return readJobPageText(new DOMParser().parseFromString(html, 'text/html'));
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return original ? readOriginalJobDescription(doc) : readJobPageText(doc);
   }
 
   global.__qtsReadJobPageText = () => readJobPageText();
+  global.__qtsReadOriginalJobDescription = () => readOriginalJobDescription();
   global.__qtsReadJobPageTextFrom = readJobPageTextFrom;
 })(typeof globalThis !== 'undefined' ? globalThis : self);

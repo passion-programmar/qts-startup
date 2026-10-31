@@ -18,14 +18,55 @@ async function startPageTextHighlighter() {
   const observer = new MutationObserver(queueChangedNodes);
   const pendingNodes = new Set();
   let batchTimer = null;
+  let disposed = false;
+  let bodyObserver = null;
+  let finishBodyWait = null;
   const excluded = 'script,style,noscript,textarea,option,[contenteditable="true"],[data-qts-text-highlight]';
+
+  function contextAvailable() {
+    try { return !disposed && Boolean(chrome.runtime?.id); }
+    catch { return false; }
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    stopWatching();
+    bodyObserver?.disconnect();
+    finishBodyWait?.();
+    window.removeEventListener('popstate', onNavigation);
+    window.removeEventListener('hashchange', onNavigation);
+    document.removeEventListener('visibilitychange', onVisibility);
+    try { chrome.storage.onChanged.removeListener(onStorage); } catch { /* The extension was reloaded. */ }
+    try { chrome.runtime.onMessage.removeListener(onMessage); } catch { /* The extension was reloaded. */ }
+    unwrapHighlights();
+    currentRules = [];
+    ruleMatcher = null;
+    jobPageCheck = null;
+  }
+
+  function handleError(error, message) {
+    if (!contextAvailable() || /extension context invalidated/i.test(String(error?.message || error))) {
+      dispose();
+      return;
+    }
+    console.error(`[QTS text highlights] ${message}:`, error);
+  }
+
+  function refresh() {
+    return loadAndApply().catch(error => handleError(error, 'Could not apply saved rules'));
+  }
 
   function waitForDocumentBody() {
     if (document.body) return Promise.resolve();
     return new Promise((resolve) => {
-      const bodyObserver = new MutationObserver(() => {
+      finishBodyWait = resolve;
+      bodyObserver = new MutationObserver(() => {
+        if (!contextAvailable()) { dispose(); return; }
         if (!document.body) return;
         bodyObserver.disconnect();
+        bodyObserver = null;
+        finishBodyWait = null;
         resolve();
       });
       bodyObserver.observe(document, { childList: true, subtree: true });
@@ -104,7 +145,7 @@ async function startPageTextHighlighter() {
   }
 
   function observePage() {
-    if (ruleMatcher && document.body) {
+    if (contextAvailable() && !document.hidden && ruleMatcher && document.body) {
       observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     }
   }
@@ -129,6 +170,7 @@ async function startPageTextHighlighter() {
   }
 
   function queueChangedNodes(records) {
+    if (!contextAvailable()) { dispose(); return; }
     for (const record of records) {
       if (record.type === 'characterData') pendingNodes.add(record.target);
       else for (const node of record.addedNodes) pendingNodes.add(node);
@@ -139,6 +181,7 @@ async function startPageTextHighlighter() {
   }
 
   function highlightChangedNodes() {
+    if (!contextAvailable()) { dispose(); return; }
     batchTimer = null;
     const nodes = [...pendingNodes];
     pendingNodes.clear();
@@ -164,13 +207,15 @@ async function startPageTextHighlighter() {
       jobPageUrl = location.href;
       jobPageCheck = chrome.runtime.sendMessage({ type: 'QTS_IS_JOB_PAGE' })
         .then((reply) => reply?.jobPage === true)
-        .catch(() => false);
+        .catch(error => { if (!contextAvailable() || /extension context invalidated/i.test(String(error?.message || error))) dispose(); return false; });
     }
     return jobPageCheck;
   }
 
   async function loadAndApply() {
+    if (!contextAvailable()) { dispose(); return; }
     await waitForDocumentBody();
+    if (!contextAvailable()) { dispose(); return; }
     if (document.hidden) {
       stopWatching();
       return;
@@ -180,6 +225,7 @@ async function startPageTextHighlighter() {
       currentStorageKey,
       'authExpiresAt',
     ]);
+    if (!contextAvailable()) { dispose(); return; }
     currentRules = highlighting.normalizeRules(stored[currentStorageKey] || []);
     if ((Number(stored.authExpiresAt) || 0) <= Date.now() || !currentRules.length) {
       applyRules([]);
@@ -187,6 +233,7 @@ async function startPageTextHighlighter() {
     }
     const url = location.href;
     const jobPage = await isJobPage();
+    if (!contextAvailable()) { dispose(); return; }
     if (document.hidden || url !== location.href) return;
     if (!jobPage) {
       applyRules([]);
@@ -201,12 +248,13 @@ async function startPageTextHighlighter() {
         console.warn('[QTS text highlights] Shared rules are unavailable:', response?.message || 'Unknown error.');
       }
     } catch (error) {
+      if (!contextAvailable() || /extension context invalidated/i.test(String(error?.message || error))) { dispose(); return; }
       console.warn('[QTS text highlights] Could not request shared rules:', error);
     }
   }
 
-  globalThis.__qtsPageTextHighlighter = { refresh: loadAndApply };
-  chrome.storage.onChanged.addListener((changes, area) => {
+  globalThis.__qtsPageTextHighlighter = { refresh };
+  function onStorage(changes, area) {
     if (
       area === 'local' &&
       currentStorageKey &&
@@ -215,31 +263,31 @@ async function startPageTextHighlighter() {
         || changes.authExpiresAt
       )
     ) {
-      loadAndApply().catch((error) => console.error('[QTS text highlights] Could not apply saved rules:', error));
+      refresh();
     }
-  });
-  chrome.runtime.onMessage.addListener((message) => {
+  }
+  function onMessage(message) {
     if (message?.type !== 'QTS_PAGE_URL_CHANGED') return;
-    loadAndApply().catch((error) => {
-      console.error('[QTS text highlights] Could not follow page navigation:', error);
-    });
-  });
-  window.addEventListener('popstate', () => {
-    loadAndApply().catch((error) => console.error('[QTS text highlights] Could not follow page navigation:', error));
-  });
-  window.addEventListener('hashchange', () => {
-    loadAndApply().catch((error) => console.error('[QTS text highlights] Could not follow page navigation:', error));
-  });
-  document.addEventListener('visibilitychange', () => {
+    refresh();
+  }
+  function onNavigation() { refresh(); }
+  function onVisibility() {
     if (document.hidden) stopWatching();
-    else loadAndApply().catch((error) => console.error('[QTS text highlights] Could not apply saved rules:', error));
-  });
+    else refresh();
+  }
+  if (!contextAvailable()) { dispose(); return; }
+  chrome.storage.onChanged.addListener(onStorage);
+  chrome.runtime.onMessage.addListener(onMessage);
+  window.addEventListener('popstate', onNavigation);
+  window.addEventListener('hashchange', onNavigation);
+  document.addEventListener('visibilitychange', onVisibility);
 
-  loadAndApply().catch((error) => console.error('[QTS text highlights] Could not load saved rules:', error));
+  await refresh();
 }
 
 function startPageTextHighlighterAfterLoad() {
   startPageTextHighlighter().catch((error) => {
+    if (/extension context invalidated/i.test(String(error?.message || error))) return;
     console.error('[QTS text highlights] Could not verify page access:', error);
   });
 }

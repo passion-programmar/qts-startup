@@ -28,13 +28,9 @@ import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-inde
 import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
 import {
-  findExpiredApplication,
-  findGetJdDuplicateDetails,
-  findManagerJobPresence,
   getJdAccountState,
   insertGetJdJob,
   summarizeAccountStates,
-  updateExistingGetJdJobDetails,
 } from "@/server/jobs/get-jd-jobs";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 import { getGetJdFailureMessage } from "@/server/gemini/get-jd-failure-message";
@@ -45,11 +41,13 @@ import {
   withAvailableGeminiKey,
 } from "@/server/gemini/gemini-keys";
 import { normalizeCompanyName } from "@/server/jobs/job-key";
+import { getPrecheckTickets } from "@/server/get-jd/precheck-ticket";
+import type { GetJdIdentity } from "@/server/get-jd/global-precheck";
+import type { GetJdDuplicate } from "@/server/jobs/get-jd-account-states";
 import { sourceSiteUrl } from "@/server/jobs/source-site";
 
 const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
-const maxJobTextLength = 30000;
 const maxPageTextLength = 100_000;
 const maxManagerAccounts = 100;
 const maxGeminiResponseBytes = 1_000_000;
@@ -108,22 +106,22 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  // The first Chrome to open a job link asks Gemini; others opening it meanwhile get that verdict.
-  // Try again and Send anyway (bypassPageCheck) ask Gemini again.
   const requestedUrl = readString(body, "pageUrl", maxPageUrlLength);
-  const bypassPageCheck = typeof body === "object" && body !== null
-    && (body as { bypassPageCheck?: unknown }).bypassPageCheck === true;
-  if (!requestedUrl || !isHttpUrl(requestedUrl)) return evaluateGetJdPage(manager, body);
-  return withPageCheck(manager.id, requestedUrl, bypassPageCheck, () => evaluateGetJdPage(manager, body));
+  if (!requestedUrl || !isHttpUrl(requestedUrl)) return jsonResponse({ success: false, message: "A valid job URL is required." }, 400);
+  const token = readString(body, "precheckToken", 10000);
+  const identity = await getPrecheckTickets().verify(token, manager.id, requestedUrl);
+  if (!identity) return jsonResponse({ success: false, message: "The Jobs/Bids precheck is missing or expired. Refresh the job page to retry." }, 409);
+  // The existing in-progress claim/replay avoids repeated Gemini calls. It does not query Jobs/Bids.
+  return withPageCheck(manager.id, requestedUrl, false, () => evaluateGetJdPage(manager, body, identity));
 }
 
-async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Promise<NextResponse> {
+async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, identity: GetJdIdentity): Promise<NextResponse> {
   const pageUrl = readString(body, "pageUrl", maxPageUrlLength);
   const pageTitle = readString(body, "pageTitle", maxPageTitleLength);
-  const pageText = readString(body, "pageText", maxPageTextLength);
+  const pageText = readString(body, "originalDescription", maxPageTextLength);
   if (!pageUrl || !isHttpUrl(pageUrl) || !pageTitle || !pageText) {
     return jsonResponse(
-      { success: false, message: "A valid page URL, title, and visible page text are required." },
+      { success: false, message: "A valid job URL, title, and complete original job description (at most 100,000 characters) are required. Nothing was truncated or saved." },
       400,
     );
   }
@@ -149,53 +147,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
       );
     }
     const candidateProfiles = profileResult.profiles;
-    // 7 days after its first application (any account), a job is rejected for everyone: no Gemini.
-    const expiredByUrl = await findExpiredApplication(manager.id, { jobUrl: pageUrl, jobTitle: "", company: "" });
-    if (expiredByUrl) return expiredApplicationResponse(expiredByUrl);
-    // Accounts that already have this job (by URL) are not sent to Gemini; only
-    // available accounts are evaluated, and Gemini is skipped when none remain.
-    const urlDuplicates = await findGetJdDuplicateDetails(
-      manager.id,
-      { jobUrl: pageUrl, jobTitle: "", company: "" },
-      candidateProfiles.map((profile) => profile.id),
-    );
-    const availableProfiles = candidateProfiles.filter((profile) => !urlDuplicates.has(profile.id));
-    if (availableProfiles.length === 0) {
-      const presence = await findManagerJobPresence(manager.id, { jobUrl: pageUrl, jobTitle: "", company: "" });
-      return jsonResponse({
-        success: true,
-        skippedEvaluation: true,
-        classification: { isJobPage: true, isRemote: true, matchingProfileIds: [] },
-        profiles: candidateProfiles.map((candidate) => {
-          const duplicate = urlDuplicates.get(candidate.id) ?? null;
-          return {
-            id: candidate.id,
-            name: candidate.name,
-            category: candidate.category,
-            recommended: false,
-            autoSaved: false,
-            autoSaveJobId: null,
-            autoSaveFailed: false,
-            available: false,
-            state: getJdAccountState(duplicate),
-            rowId: duplicate?.rowId ?? null,
-            duplicateKind: duplicate?.kind ?? null,
-            jobStatus: duplicate?.jobStatus ?? null,
-          };
-        }),
-        autoSavedProfileIds: [],
-        autoSavedJobs: [],
-        autoSaveFailureCount: 0,
-        allCandidatesAssigned: true,
-        exists: true,
-        ...presence,
-        summary: summarizeAccountStates(candidateProfiles.map((candidate) => getJdAccountState(urlDuplicates.get(candidate.id)))),
-        toastKind: presence.inBids ? "applied" : "added",
-        toastMessage: "All candidates already have this job.",
-        message: "All candidates already have this job.",
-      });
-    }
-    const candidatesForEvaluation = candidatesWithJdNotes(availableProfiles);
+    const candidatesForEvaluation = candidatesWithJdNotes(candidateProfiles);
 
     const [prompt] = await db
       .select({ promptTemplate: prompts.promptTemplate })
@@ -266,6 +218,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
       pageUrl,
       candidatesForEvaluation,
     );
+    classification.job.description = pageText;
     if (!classification.isJobPage) {
       return jsonResponse({
         success: true,
@@ -284,18 +237,11 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
     }
     // Where the Manager found the job: the page it was opened from, its link's source tag, or its own site.
     const sourceSite = sourceSiteUrl({ openerUrl: readString(body, "openerUrl", maxPageUrlLength) || null, jobUrl: pageUrl });
-    const jobIdentity = {
-      jobUrl: pageUrl,
-      jobTitle: classification.job.title,
-      company: classification.job.company,
-    };
-    // The same job under another address (LinkedIn and the company's page) is known only now.
-    const expiredByTitle = await findExpiredApplication(manager.id, jobIdentity);
-    if (expiredByTitle) return expiredApplicationResponse(expiredByTitle);
-    let [duplicateDetails, presence] = await Promise.all([
-      findGetJdDuplicateDetails(manager.id, jobIdentity, candidateProfiles.map((profile) => profile.id)),
-      findManagerJobPresence(manager.id, jobIdentity),
-    ]);
+    // No post-Gemini duplicate precheck. Save-time locks/indexes remain in insertGetJdJob.
+    const duplicateDetails = new Map<string, GetJdDuplicate>();
+    classification.job.description = pageText;
+    classification.job.title = identity.jobTitle || classification.job.title;
+    classification.job.company = identity.company || classification.job.company;
     const matchingProfileIds = new Set(classification.matchingProfileIds);
     const autoSavedProfileIds = new Set<string>();
     const autoSavedJobs = new Map<string, string>();
@@ -319,15 +265,6 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
         autoSavedByGetJd: true,
         sourceSiteUrl: sourceSite,
       };
-      if (duplicateDetails.has(candidate.id)) {
-        try {
-          await updateExistingGetJdJobDetails(jobToSave);
-        } catch (error) {
-          autoSaveFailedProfileIds.add(candidate.id);
-          logGetJdFailure(`get_jd_auto_save_${getGetJdFailureCode(error)}`);
-        }
-        continue;
-      }
       try {
         const result = await insertGetJdJob(jobToSave);
         if (result.status === "saved") {
@@ -346,12 +283,8 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown): Prom
         logGetJdFailure(`get_jd_auto_save_${getGetJdFailureCode(error)}`);
       }
     }
-    if (autoSavedProfileIds.size > 0 || duplicateDetails.size > 0) {
-      [duplicateDetails, presence] = await Promise.all([
-        findGetJdDuplicateDetails(manager.id, jobIdentity, candidateProfiles.map((profile) => profile.id)),
-        findManagerJobPresence(manager.id, jobIdentity),
-      ]);
-    }
+    const presence = { inJobs: autoSavedProfileIds.size > 0 || duplicateDetails.size > 0,
+      inBids: [...duplicateDetails.values()].some((entry) => entry.kind === "applied") };
     const profilesWithStatus = candidateProfiles.map((candidate) => {
       const duplicate = duplicateDetails.get(candidate.id) ?? null;
       const autoSaved = autoSavedProfileIds.has(candidate.id);
@@ -588,7 +521,7 @@ function validateClassification(
     job: {
       title: String(job.title).slice(0, 500),
       company: String(job.company).slice(0, 500),
-      description: String(job.description).slice(0, maxJobTextLength),
+      description: "", // The caller supplies the unchanged locally extracted original JD.
       location: String(job.location).slice(0, 500),
       employmentType: String(job.employmentType).slice(0, 300),
       workplaceType: String(job.workplaceType).slice(0, 100),
@@ -622,29 +555,6 @@ function isHttpUrl(value: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Get JD's answer for a job first applied to more than 7 days ago: nothing is evaluated or saved. */
-function expiredApplicationResponse(first: { candidateName: string; appliedAt: Date }): NextResponse {
-  const days = Math.floor((Date.now() - first.appliedAt.getTime()) / 86_400_000);
-  const message = `First applied ${days} days ago (${first.candidateName}) — skipped.`;
-  return jsonResponse({
-    success: true,
-    skippedEvaluation: true,
-    expiredApplication: { candidateName: first.candidateName, appliedAt: first.appliedAt.toISOString() },
-    classification: { isJobPage: true, isRemote: true, matchingProfileIds: [] },
-    profiles: [],
-    autoSavedProfileIds: [],
-    autoSavedJobs: [],
-    autoSaveFailureCount: 0,
-    allCandidatesAssigned: true,
-    exists: true,
-    inJobs: false,
-    inBids: true,
-    toastKind: "applied",
-    toastMessage: message,
-    message,
-  });
 }
 
 function jsonResponse(body: object, status = 200): NextResponse {

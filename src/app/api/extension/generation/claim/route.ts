@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -7,6 +7,7 @@ import { MIN_WORK_EXTENSION_VERSION } from "@/server/apply/apply-values";
 import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { generationFree, generationHeld, holdUntil } from "@/server/generation/generation-hold";
 import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
+import { readWorkSelection } from "@/server/work/work-selection";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -33,6 +34,9 @@ export async function POST(request: Request): Promise<NextResponse> {
         { status: 400 },
       );
     }
+    let selection;
+    try { selection = readWorkSelection((body as Record<string, unknown>).selection); }
+    catch (error) { return NextResponse.json({ success: false, message: (error as Error).message }, { status: 400 }); }
     const excludedJobIdsValue = (body as Record<string, unknown>).excludedJobIds;
     const excludedJobIds = Array.isArray(excludedJobIdsValue)
       ? excludedJobIdsValue.filter((id): id is string =>
@@ -106,6 +110,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             eq(users.parentUserId, manager.id),
             eq(users.role, "account"),
             isNull(users.blockedAt),
+            ...(selection ? [eq(jobs.candidateId, selection.candidateId), inArray(jobs.id, selection.jobIds)] : []),
             ...(excludedJobIds.length ? [notInArray(jobs.id, excludedJobIds)] : []),
           ))
           .orderBy(asc(jobs.createdAt), asc(jobs.id))

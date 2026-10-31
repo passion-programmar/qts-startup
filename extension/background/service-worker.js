@@ -3,6 +3,7 @@
 importScripts(
   '../shared/page-exclusions.js',
   '../shared/job-page-detection.js',
+  '../shared/page-activity.js',
   '../shared/tab-ownership.js',
   '../shared/runtime-config.js',
   '../shared/application-flow.js',
@@ -28,6 +29,7 @@ importScripts(
   '../shared/apply-recipes.js',
   '../shared/apply-pdf.js',
   '../shared/idle-pacing.js',
+  '../vendor/pdf-lib/pdf-lib.min.js',
   '../shared/chrome-pdf.js',
   '../shared/resume-print-requests.js',
   'apply-runner.js',
@@ -80,7 +82,19 @@ const GENERATION_BROWSER_STATE_KEY = 'qtsGenerationBrowserState';
 const GENERATION_NOTICE_KEY = 'qtsGenerationNotice';
 const GENERATION_QUEUE_RUN_KEY = 'qtsGenerationQueueRun';
 const getJdInFlightTabs = new Set();
+const getJdInFlightJobKeys = new Set();
 const getJdLastPageByTab = new Map();
+const launcherFocus = self.__qtsPageActivity.createLauncherFocus({
+  chrome,
+  eligible: async (tab) => isExtractablePageUrl(tab.url)
+    && !getJdHelperTabs.has(tab.id)
+    && !self.__qtsChromePdf.isPrintTab(tab.id)
+    && !(await isWorkflowTab(tab.id, tab))
+    && !(await isPageBlockedForManager(tab.url, true)),
+});
+const getJdNavigation = self.__qtsPageActivity.createNavigationMonitor({
+  chrome, evaluate: (tabId, url, documentId) => processGetJdPage(tabId, url, documentId),
+});
 const generationInFlightTabs = new Set();
 const generationCancellationByTab = new Map();
 let generationQueueInFlight = false;
@@ -121,7 +135,7 @@ const MANAGER_FEATURES_MANAGER_ID_KEY = 'qtsManagerExtensionFeaturesManagerId';
 const MANAGER_FEATURES_REFRESH_TTL_MS = 5 * 60_000;
 let managerFeaturesRefreshPromise = null;
 
-async function getManagerExtensionFeatures(forceRefresh = false) {
+async function getManagerExtensionFeatures(forceRefresh = false, localOnly = false) {
   const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
   if (!manager?.id || manager.role !== 'manager') {
     return { success: false, message: 'Sign in as a Manager to check extension permissions.' };
@@ -136,6 +150,7 @@ async function getManagerExtensionFeatures(forceRefresh = false) {
     : null;
   const updatedAt = Number(stored[MANAGER_FEATURES_UPDATED_AT_KEY] || 0);
   const fresh = cached && updatedAt > 0 && Date.now() - updatedAt < MANAGER_FEATURES_REFRESH_TTL_MS;
+  if (localOnly) return { success: Boolean(cached), features: cached || {}, cached: true };
   if (!forceRefresh && fresh) return { success: true, features: cached, cached: true };
   if (!forceRefresh && cached) {
     fetchManagerExtensionFeatures().catch((error) => {
@@ -304,7 +319,7 @@ async function refreshManagerJobDetectionUrlRules() {
   }
 }
 
-async function getCachedManagerJobDetectionUrlRules() {
+async function getCachedManagerJobDetectionUrlRules(localOnly = false) {
   const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
   if (!manager?.id || manager.role !== 'manager') return [];
   const stored = await chrome.storage.local.get([
@@ -317,6 +332,7 @@ async function getCachedManagerJobDetectionUrlRules() {
     ? stored[JOB_DETECTION_URL_RULES_STORAGE_KEY]
     : [];
   const cacheUpdatedAt = Number(stored[JOB_DETECTION_URL_RULES_UPDATED_AT_KEY]) || 0;
+  if (localOnly) return cachedRules;
   if (managerMatches && cacheUpdatedAt > 0
     && Date.now() - cacheUpdatedAt < JOB_DETECTION_URL_RULES_REFRESH_TTL_MS) {
     return cachedRules;
@@ -344,8 +360,8 @@ function isManagerBlockedUrl(url, rules) {
   );
 }
 
-async function isPageBlockedForManager(url) {
-  return isManagerBlockedUrl(url, await getCachedManagerJobDetectionUrlRules());
+async function isPageBlockedForManager(url, localOnly = false) {
+  return isManagerBlockedUrl(url, await getCachedManagerJobDetectionUrlRules(localOnly));
 }
 
 const JOB_PAGE_TEXT_FILE = 'shared/job-page-text.js';
@@ -356,18 +372,26 @@ const JOB_BOARD_FRAME_MIN_TEXT = 300;
 // A description page read in place of an apply form must hold more than a form would.
 const APPLY_DESCRIPTION_MIN_TEXT = 500;
 
-async function readJobTextInFrames(tabId, frameIds) {
+async function readJobTextInFrames(tabId, frameIds, original = false) {
   const target = { tabId, frameIds };
   await chrome.scripting.executeScript({ target, files: [JOB_PAGE_TEXT_FILE] });
   const results = await chrome.scripting.executeScript({
     target,
-    func: () => String(globalThis.__qtsReadJobPageText?.() || document.body?.innerText || ''),
+    func: (strict) => {
+      if (!strict) return String(globalThis.__qtsReadJobPageText?.() || document.body?.innerText || '');
+      try { return { text: globalThis.__qtsReadOriginalJobDescription(), error: '' }; }
+      catch (error) { return { text: '', error: String(error?.message || error) }; }
+    },
+    args: [original],
   });
-  return (results || []).map((entry) => String(entry?.result || ''));
+  return (results || []).map((entry) => {
+    if (original && entry?.result?.error) throw new Error(entry.result.error);
+    return String((original ? entry?.result?.text : entry?.result) || '');
+  });
 }
 
 // The text of embedded job-board frames that the page itself does not already repeat.
-async function readJobBoardFrameText(tabId, pageText) {
+async function readJobBoardFrameText(tabId, pageText, original = false) {
   const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
   const frameIds = (frames || [])
     .filter((frame) => {
@@ -382,7 +406,7 @@ async function readJobBoardFrameText(tabId, pageText) {
   if (!frameIds.length) return '';
   const compact = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
   const pageCompact = compact(pageText);
-  const texts = await readJobTextInFrames(tabId, frameIds).catch(() => []);
+  const texts = original ? await readJobTextInFrames(tabId, frameIds, true) : await readJobTextInFrames(tabId, frameIds).catch(() => []);
   return texts
     .filter((text) => text.length >= JOB_BOARD_FRAME_MIN_TEXT && !pageCompact.includes(compact(text).slice(0, 200)))
     .join('\n\n');
@@ -390,10 +414,16 @@ async function readJobBoardFrameText(tabId, pageText) {
 
 // The job's text, shown or collapsed, without the site's header, footer, menus, or cookie banners,
 // with any embedded job board's text after it.
-async function readVisiblePageText(tabId) {
+async function readVisiblePageText(tabId, original = false) {
   await waitForJobText(tabId);
-  const [pageText = ''] = await readJobTextInFrames(tabId, [0]);
-  const frameText = await readJobBoardFrameText(tabId, pageText);
+  let pageText = '', pageError;
+  try { [pageText = ''] = await readJobTextInFrames(tabId, [0], original); }
+  catch (error) {
+    if (!original || /100,000-character limit/.test(String(error?.message || error))) throw error;
+    pageError = error;
+  }
+  const frameText = await readJobBoardFrameText(tabId, pageText, original);
+  if (!frameText && pageError) throw pageError;
   return frameText ? `${pageText}\n\nJob from the embedded job board:\n${frameText}` : pageText;
 }
 
@@ -455,9 +485,10 @@ async function readJobTextInBackgroundTab(openerTab, url) {
     const target = { tabId: helperTabId, frameIds: [0] };
     await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [700, 6000] });
     await waitForJobText(helperTabId);
-    const [text = ''] = await readJobTextInFrames(helperTabId, [0]);
+    const [text = ''] = await readJobTextInFrames(helperTabId, [0], true);
     return text;
-  } catch {
+  } catch (error) {
+    if (/100,000-character limit/.test(String(error?.message || error))) throw error;
     return '';
   } finally {
     if (helperTabId != null) {
@@ -477,10 +508,14 @@ async function readGetJdJobText(tabId, url) {
     await chrome.scripting.executeScript({ target, files: [JOB_PAGE_TEXT_FILE] });
     const [result] = await chrome.scripting.executeScript({
       target,
-      func: (address) => globalThis.__qtsReadJobPageTextFrom?.(address).catch(() => '') ?? '',
+      func: async (address) => {
+        try { return { text: await globalThis.__qtsReadJobPageTextFrom(address, true), error: '' }; }
+        catch (error) { return { text: '', error: String(error?.message || error) }; }
+      },
       args: [descriptionUrl],
     }).catch(() => []);
-    let descriptionText = String(result?.result || '');
+    if (/100,000-character limit/.test(result?.result?.error || '')) throw new Error(result.result.error);
+    let descriptionText = String(result?.result?.text || '');
     if (descriptionText.length < APPLY_DESCRIPTION_MIN_TEXT) {
       const tab = await getTab(tabId);
       if (tab) descriptionText = await readJobTextInBackgroundTab(tab, descriptionUrl);
@@ -490,7 +525,7 @@ async function readGetJdJobText(tabId, url) {
     }
     return { text: '', descriptionUrl, applyFormOnly: true };
   }
-  return { text: await readVisiblePageText(tabId), descriptionUrl: '', applyFormOnly: false };
+  return { text: await readVisiblePageText(tabId, true), descriptionUrl: '', applyFormOnly: false };
 }
 
 // Runs in the page. Resolves once the DOM has been quiet for quietMs (or after maxMs),
@@ -520,77 +555,21 @@ function waitForPageToSettleInPage(quietMs, maxMs) {
 // Runs in the page, after JOB_PAGE_TEXT_FILE. Collects the job text, the visible text (closed-posting
 // notices count only when shown), and the structural job signals.
 function collectJobPageSnapshotInPage() {
-  const visibleText = String(document.body?.innerText || document.documentElement?.innerText || '').slice(0, 2_000_000);
-  const text = String(globalThis.__qtsReadJobPageText?.() || visibleText);
-  // A browser check (Cloudflare and similar) or a sign-in page shown in place of the job.
-  const shortPage = visibleText.trim().length < 1500;
-  const browserCheck = /^just a moment/i.test(document.title)
-    || Boolean(document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running, .cf-turnstile, [name="cf-turnstile-response"]'))
-    || (shortPage && /\b(?:verify(?:ing)? you are (?:a )?human|checking your browser|checking if the site connection is secure)\b/i.test(visibleText));
-  const signInPage = shortPage && (
-    Boolean(document.querySelector('input[type="password"]'))
-    || /\/(?:log-?in|sign-?in)(?:[/?#]|$)/i.test(location.pathname)
-  );
-  const readText = (element) => String(element?.innerText || element?.textContent || '').trim();
-  const hasJobPostingData = [...document.querySelectorAll('script[type="application/ld+json"]')]
-    .some((script) => /"@type"\s*:\s*(?:\[[^\]]*)?"(?:https?:\/\/schema\.org\/)?JobPosting"/i.test(script.textContent || ''))
-    || Boolean(document.querySelector('[itemtype*="schema.org/JobPosting" i]'));
-  const headingPattern = /^(?:key |main |your |the |job |role )?(responsibilities|requirements|qualifications|preferred qualifications|minimum qualifications|basic qualifications|about the (?:role|job|position|opportunity)|what you['’]ll do|what you will do|what we['’]re looking for|what you['’]ll bring|who you are|benefits|perks|job description|role description|skills and experience)\b/i;
-  const headingMatches = new Set(
-    [...document.querySelectorAll('h1, h2, h3, h4, h5, strong, b, dt, [role="heading"]')]
-      .slice(0, 600)
-      .map(readText)
-      .filter((value) => value && value.length <= 80)
-      .map((value) => value.match(headingPattern)?.[1]?.toLowerCase().replace(/’/g, "'"))
-      .filter(Boolean),
-  ).size;
-  const applyPattern = /^(?:apply|apply now|apply here|apply online|easy apply|quick apply|apply for (?:this )?(?:job|role|position)|submit (?:your )?application|start (?:your )?application|i['’]m interested)$/i;
-  const hasApplyControl = [...document.querySelectorAll('a, button, [role="button"], input[type="submit"], input[type="button"]')]
-    .slice(0, 3000)
-    .some((element) => applyPattern.test(
-      (readText(element) || element.value || element.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim(),
-    ));
-  const hasCvUpload = [...document.querySelectorAll('input[type="file"]')]
-    .some((input) => /resume|r[eé]sum[eé]|\bcv\b|curriculum|pdf/i.test(
-      [input.name, input.id, input.accept, input.getAttribute('aria-label')].join(' '),
-    ));
-  const jobLinkPattern = /\/(?:jobs?|careers?|positions?|vacanc(?:y|ies)|openings?|postings?)\/[^/?#]+|[?&](?:gh_jid|jk|currentJobId|jobId)=/i;
-  const jobLinkCount = new Set(
-    [...document.querySelectorAll('a[href]')]
-      .slice(0, 4000)
-      .map((anchor) => String(anchor.href || '').split('#')[0])
-      .filter((href) => jobLinkPattern.test(href)),
-  ).size;
-  const hasJobDetailPane = Boolean(document.querySelector(
-    '.jobs-search__job-details, .jobs-details, .job-view-layout, #jobsearch-ViewjobPaneWrapper, .jobsearch-JobComponent, [data-testid="jobsearch-ViewjobPaneWrapper"]',
-  ));
-  // An embedded job board's text is not part of this page's innerText, so the frame itself counts as a signal.
-  const hasJobBoardFrame = [...document.querySelectorAll('iframe[src]')].some((frame) => (
-    /^https:\/\/(?:[^/]+\.)?(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com|icims\.com|jobvite\.com|smartrecruiters\.com|workable\.com|recruitee\.com|teamtailor\.com|bamboohr\.com|breezy\.hr|applytojob\.com|personio\.(?:de|com)|rippling\.com)\//i
-      .test(frame.src)
-  ));
-  return { url: location.href, text, visibleText, blocked: browserCheck || signInPage, hasJobPostingData, headingMatches, hasApplyControl, hasCvUpload, jobLinkCount, hasJobDetailPane, hasJobBoardFrame };
+  return globalThis.__qtsJobPageDetection.inspectJobPage();
 }
 
 async function readJobPageSnapshot(tabId, settle = null) {
   const target = { tabId, frameIds: [0] };
-  if (settle) {
-    await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [settle.quietMs, settle.maxMs] });
-  }
-  await chrome.scripting.executeScript({ target, files: [JOB_PAGE_TEXT_FILE] });
+  if (settle?.quietMs) await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [settle.quietMs, settle.maxMs] });
+  await chrome.scripting.executeScript({ target, files: ['shared/job-page-detection.js'] });
   const [result] = await chrome.scripting.executeScript({ target, func: collectJobPageSnapshotInPage });
   return result?.result || null;
 }
 
 async function evaluateJobPageForManager(tabId, settle = null) {
-  const keywords = await getManagerPageExclusions();
   const snapshot = await readJobPageSnapshot(tabId, settle);
   if (!snapshot) return null;
-  return self.__qtsJobPageDetection.evaluateJobPage(
-    snapshot,
-    keywords.success === true ? keywords.exclusions || [] : [],
-    self.__qtsPageExclusions.countPageDetectionKeywordMatches,
-  );
+  return { ...self.__qtsJobPageDetection.evaluateJobPage(snapshot), identity: snapshot.identity };
 }
 
 // Text highlights show only on job pages: Get JD's check (no Gemini), once per tab and address,
@@ -626,12 +605,13 @@ async function isPageDetectedAsJobForManager(tabId) {
   }
 }
 
-// Late-loading content is the main cause of missed jobs, so a page is checked after it
-// settles and again at +2 s and +5 s before it is treated as not a job page.
+// First inspect immediately. Only an incomplete eligible load gets short-lived settling/retries
+// near 1, 3 and 6 seconds; no observer remains after the bounded cycle.
 const GET_JD_DETECTION_ATTEMPTS = [
-  { delayMs: 0, quietMs: 700, maxMs: 6000 },
-  { delayMs: 2000, quietMs: 500, maxMs: 2500 },
-  { delayMs: 5000, quietMs: 500, maxMs: 2500 },
+  { delayMs: 0 },
+  { delayMs: 1000, quietMs: 300, maxMs: 1200 },
+  { delayMs: 2000, quietMs: 300, maxMs: 1200 },
+  { delayMs: 3000, quietMs: 300, maxMs: 1200 },
 ];
 
 // Returns { status: 'pass' | 'rejected' | 'cancelled', reason, listPage }. A rejection keeps the last
@@ -651,7 +631,7 @@ async function detectGetJdJobPage(tabId, url, pageKey) {
       return { status: 'cancelled' };
     }
     if (!(await stillCurrent())) return { status: 'cancelled' };
-    if (evaluation?.isJobPage) return { status: 'pass', reason: evaluation.reason, listPage: evaluation.listPage === true };
+    if (evaluation?.isJobPage) return { status: 'pass', reason: evaluation.reason, identity: evaluation.identity, listPage: evaluation.listPage === true };
     if (evaluation?.reason === 'closed') break;
   }
   return { status: 'rejected', reason: evaluation?.reason || 'not-job', listPage: evaluation?.listPage === true };
@@ -688,16 +668,9 @@ async function notifyPageUrlAccess(tabId, url) {
   }).catch(() => {});
 }
 
-async function recheckLoadedPagesForManagerJobRules() {
-  if (!(await isGetJdActive())) return;
-  const tabs = await chrome.tabs.query({ status: 'complete' });
-  for (const tab of tabs) {
-    if (!tab.id || !/^https?:/i.test(tab.url || '')) continue;
-    getJdLastPageByTab.delete(tab.id);
-    processGetJdPage(tab.id, tab.url, `rules:${Date.now()}`).catch((error) => {
-      console.warn('[QTS job-page matches] Could not check an open page:', error);
-    });
-  }
+async function refreshLauncherForManagerJobRules() {
+  // Rules affect future navigations. Editing rules must not evaluate already loaded pages.
+  await launcherFocus.sync();
 }
 
 async function refreshGlobalTextHighlights() {
@@ -1213,21 +1186,30 @@ async function ensureGetJdPanel(tabId) {
   return getJdPanelInjections.get(tabId);
 }
 
-async function saveGetJdResult(tabId, result, notifyPage = true) {
+// Chrome storage has no atomic read/modify/write; serialize results from concurrent tabs.
+let getJdResultWrites = Promise.resolve();
+function saveGetJdResult(tabId, result, notifyPage = true) {
+  const work = getJdResultWrites.catch(() => {}).then(() => writeGetJdResult(tabId, result, notifyPage));
+  getJdResultWrites = work;
+  return work;
+}
+async function writeGetJdResult(tabId, result, notifyPage = true) {
   const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
   const results = stored[GET_JD_RESULTS_KEY] || {};
   const tabKey = String(tabId);
   delete results[tabKey];
   results[tabKey] = result;
   const keys = Object.keys(results);
-  for (const oldKey of keys.slice(0, Math.max(0, keys.length - 5))) {
+  for (const oldKey of keys.slice(0, Math.max(0, keys.length - 100))) {
     delete results[oldKey];
   }
   await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
   if (notifyPage) {
-    if (result?.status !== 'cancelled') {
+    if ((result?.status === 'complete' && result.evaluationMode !== 'gemini')
+      || result?.status === 'saved' || result?.autoSaveFailureCount > 0) {
       // A freshly injected panel loads the stored result itself, so a missed message below is harmless.
-      await ensureGetJdPanel(tabId).catch((error) => {
+      // UI injection can wait on a background renderer; matching must not wait for that UI.
+      ensureGetJdPanel(tabId).catch((error) => {
         console.warn('[QTS Get JD] Could not load the review panel on this page:', error);
       });
     }
@@ -1447,6 +1429,32 @@ async function saveGetJdSelection(tabId, profileIds) {
 
 const GET_JD_AUTO_CLOSE_KEY = 'qtsGetJdAutoClose';
 const GET_JD_CLOSE_SECONDS = 5;
+const GET_JD_CLOSE_ALARM = 'qtsGetJdClose:';
+const getJdCloseTimers = new Map();
+async function cancelGetJdClose(tabId) {
+  clearTimeout(getJdCloseTimers.get(tabId));
+  getJdCloseTimers.delete(tabId);
+  await chrome.alarms.clear(`${GET_JD_CLOSE_ALARM}${tabId}`);
+  await chrome.storage.session.remove(`${GET_JD_CLOSE_ALARM}${tabId}`);
+}
+async function closeFinishedGetJdTab(tabId) {
+  const key = `${GET_JD_CLOSE_ALARM}${tabId}`;
+  const pending = (await chrome.storage.session.get(key))[key];
+  if (!pending) return;
+  if (Date.now() < pending.deadline) return;
+  // Recheck every exclusion at delivery time, including after a worker restart.
+  const tab = await getTab(tabId);
+  const tabs = tab ? await chrome.tabs.query({ windowId: tab.windowId }) : [];
+  const allowed = tab?.url === pending.url && !tab.pinned && tabs.length > 1
+    && !pending.listPage && !(await isWorkflowTab(tabId, tab)) && await isGetJdAutoCloseOn();
+  await cancelGetJdClose(tabId);
+  if (allowed) await chrome.tabs.remove(tabId).catch(() => {});
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name.startsWith(GET_JD_CLOSE_ALARM)) {
+    closeFinishedGetJdTab(Number(alarm.name.slice(GET_JD_CLOSE_ALARM.length))).catch(() => {});
+  }
+});
 // The page Get JD last finished in each tab, and whether it is a search page showing one job.
 const getJdFinishedPageByTab = new Map();
 
@@ -1473,6 +1481,15 @@ async function canAutoCloseGetJdTab(tabId, url) {
 async function showGetJdOutcome(tabId, url, outcome) {
   const autoClose = await isGetJdAutoCloseOn();
   const closable = outcome.kind === 'done' && autoClose && await canAutoCloseGetJdTab(tabId, url);
+  await cancelGetJdClose(tabId);
+  const closeDeadline = closable ? Date.now() + GET_JD_CLOSE_SECONDS * 1000 : 0;
+  if (closable) {
+    const key = `${GET_JD_CLOSE_ALARM}${tabId}`;
+    await chrome.storage.session.set({ [key]: { url, deadline: closeDeadline, listPage: false } });
+    // The timeout preserves the five-second UX; the alarm survives worker suspension.
+    await chrome.alarms.create(key, { when: closeDeadline });
+    getJdCloseTimers.set(tabId, setTimeout(() => closeFinishedGetJdTab(tabId).catch(() => {}), GET_JD_CLOSE_SECONDS * 1000));
+  }
   chrome.tabs.sendMessage(tabId, {
     type: 'QTS_GET_JD_OUTCOME',
     outcome: {
@@ -1480,6 +1497,7 @@ async function showGetJdOutcome(tabId, url, outcome) {
       pageUrl: url,
       autoClose,
       closeInSeconds: closable ? GET_JD_CLOSE_SECONDS : 0,
+      closeDeadline,
     },
   }, { frameId: 0 }).catch(() => {});
 }
@@ -1543,8 +1561,11 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
   chrome.tabs.sendMessage(tabId, { type: 'QTS_GET_JD_OUTCOME', outcome: { kind: 'clear' } }, { frameId: 0 })
     .catch(() => {});
   let listPage = false;
+  let identity = { jobUrl: url, jobTitle: '', company: '' };
   if (options.force) {
-    listPage = (await evaluateJobPageForManager(tabId).catch(() => null))?.listPage === true;
+    const snapshot = await evaluateJobPageForManager(tabId).catch(() => null);
+    listPage = snapshot?.listPage === true;
+    identity = snapshot?.identity || identity;
   } else {
     const detection = await detectGetJdJobPage(tabId, url, pageKey);
     if (detection.status === 'rejected') {
@@ -1553,6 +1574,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     }
     if (detection.status !== 'pass') return;
     listPage = detection.listPage === true;
+    identity = detection.identity || identity;
   }
   if (getJdInFlightTabs.has(tabId)) return;
   getJdFinishedPageByTab.set(tabId, { url, listPage });
@@ -1568,6 +1590,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     updatedAt: Date.now(),
     classification: null,
   };
+  let claimedJobKey = null;
   try {
     await saveGetJdResult(tabId, {
       ...initialResult,
@@ -1584,13 +1607,31 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       return;
     }
 
+    claimedJobKey = self.__qtsJobPageDetection.normalizeIdentityUrl(url);
+    if (getJdInFlightJobKeys.has(claimedJobKey)) {
+      claimedJobKey = null;
+      await showGetJdDone(tabId, url, 'Another tab is already checking this job.', 'info');
+      return;
+    }
+    getJdInFlightJobKeys.add(claimedJobKey);
+    if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
+    const precheck = await workerApiRequest('POST', '/api/extension/get-jd/check', { scope: 'global', job: identity }, { timeoutMs: 20000 });
+    if (precheck.success !== true || typeof precheck.skip !== 'boolean') {
+      throw new Error(precheck.message || 'Could not check Jobs and Bids. Refresh to retry; Gemini was not called.');
+    }
+    if (precheck.skip) {
+      await saveGetJdResult(tabId, { ...initialResult, status: 'duplicate', message: 'This job already exists in QTS Jobs or Bids. Skipped.', updatedAt: Date.now() });
+      await showGetJdDone(tabId, url, 'Already in QTS Jobs or Bids. Skipped.', 'info');
+      return;
+    }
+    if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
     const modeResult = await workerApiRequest('GET', '/api/extension/get-jd/mode');
     if (modeResult.success !== true) {
       throw new Error(modeResult.message || 'Could not load the Get JD matching mode.');
     }
     if (modeResult.mode === 'gemini') {
       const jobText = options.force
-        ? { text: await readVisiblePageText(tabId), descriptionUrl: '', applyFormOnly: false }
+        ? { text: await readVisiblePageText(tabId, true), descriptionUrl: '', applyFormOnly: false }
         : await readGetJdJobText(tabId, url);
       if (jobText.applyFormOnly) {
         const message = 'This page has only the application form. Open the job description, and Get JD runs there.';
@@ -1600,13 +1641,17 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
         });
         return;
       }
-      const pageText = jobText.text.slice(0, 100_000);
+      const pageText = jobText.text;
       if (!pageText.trim()) throw new Error('Could not read the job text from the loaded page.');
+      if (pageText.length > 100_000) throw new Error('The original JD exceeds the 100,000-character limit. Nothing was truncated or saved.');
+      if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
       await self.__qtsIdlePacing.noteActivity();
       const geminiResult = await workerApiRequest('POST', '/api/extension/get-jd', {
         pageUrl: url,
         pageTitle: tab.title || documentId || url,
         pageText,
+        originalDescription: pageText,
+        precheckToken: precheck.precheckToken,
         openerUrl: await tabOpenedFrom(tabId),
       });
       if (geminiResult.success !== true) {
@@ -1718,6 +1763,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           },
         },
         evaluationMode: 'gemini',
+        autoSaveFailureCount: geminiResult.autoSaveFailureCount || 0,
         jobDescription: geminiResult.jobDescription || geminiResult.classification.job?.description || '',
         profiles,
         autoSavedProfileIds,
@@ -1763,6 +1809,10 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     if (!(await isGetJdActive())) return;
     const pageUrl = extraction.url || url;
     const extractedJobDetails = normalizeDetectedJobData(extraction.data, pageUrl);
+    const originalJob = await readGetJdJobText(tabId, url);
+    if (originalJob.applyFormOnly || !originalJob.text.trim()) throw new Error('The original job description is unavailable. Refresh the job description page to retry.');
+    if (originalJob.text.length > 100_000) throw new Error('The original JD exceeds the 100,000-character limit. Nothing was truncated or saved.');
+    extractedJobDetails.description = originalJob.text;
     if (!isValidGetJdCheckJob(extractedJobDetails, pageUrl)) {
       const hasCompletePosting = isValidDetectedJob(extractedJobDetails, pageUrl);
       const message = !extractedJobDetails.company
@@ -1787,13 +1837,9 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     }
     // A job page checked by Get JD: the Manager is browsing, so this Chrome is not idle.
     await self.__qtsIdlePacing.noteActivity();
-    const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
-      job: {
-        jobUrl: extractedJobDetails.url,
-        jobTitle: extractedJobDetails.title,
-        company: extractedJobDetails.company,
-      },
-    });
+    // The one global precheck already passed. Manual mode retains explicit candidate selection.
+    const candidateList = await workerApiRequest('GET', '/api/extension/get-jd/profiles');
+    const result = { ...candidateList, profiles: (candidateList.profiles || []).map((profile) => ({ ...profile, available: true, state: 'available' })) };
     if (result.success !== true) {
       throw new Error(result.message || 'Get JD duplicate check failed.');
     }
@@ -1886,40 +1932,14 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     await showGetJdNotice(tabId, url, `Get JD couldn't finish: ${message}`, ['try_again'], { tone: 'error' });
   } finally {
     getJdInFlightTabs.delete(tabId);
-    const currentTab = await getTab(tabId).catch(() => null);
-    if (
-      currentTab?.url &&
-      currentTab.url !== url &&
-      await isGetJdActive()
-    ) {
-      processGetJdPage(tabId, currentTab.url).catch((error) => {
-        console.error('[QTS Get JD] Could not process the next page:', error);
-      });
-    }
+    if (claimedJobKey) getJdInFlightJobKeys.delete(claimedJobKey);
+    // Only the navigation monitor admits subsequent pages; never scan a tab as a side effect.
   }
 }
 
-async function enableGetJdForTab(tabId) {
+async function enableGetJdMonitoring() {
   getJdLastPageByTab.clear();
-  const tab = tabId ? await getTab(tabId) : (await chrome.tabs.query({
-    active: true,
-    lastFocusedWindow: true,
-  }))[0];
-  if (tab?.id && tab.url) {
-    if (!isExtractablePageUrl(tab.url)) {
-      await saveGetJdResult(tab.id, {
-        tabId: tab.id,
-        pageUrl: tab.url,
-        pageTitle: tab.title || '',
-        status: 'error',
-        message: 'Get JD can read web pages only. Open an http:// or https:// page.',
-        updatedAt: Date.now(),
-        classification: null,
-      });
-      return;
-    }
-    await processGetJdPage(tab.id, tab.url, `manual:${Date.now()}`);
-  }
+  await getJdNavigation.enable();
 }
 
 async function isGetJdActive() {
@@ -3781,6 +3801,12 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         throw error;
       }
       generationId = started.generationId;
+      const contractIssue = self.__qtsGenerationChatGpt.generationContractIssue(started);
+      if (contractIssue) {
+        const error = new Error(contractIssue);
+        error.name = 'GenerationSetupError';
+        throw error;
+      }
       const generationPrompt = self.__qtsGenerationChatGpt?.buildTaskPrompt?.(
         started.prompt,
         generationId,
@@ -4158,10 +4184,13 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       for (;;) {
         const storedStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (storedStatus[EXTENSION_STATUS_KEY] !== 'generation') return;
+        const scope = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
         const claim = await workerApiRequest(
           'POST',
           '/api/extension/generation/claim',
-          { excludedJobIds: [...excludedJobIds] },
+          { excludedJobIds: [...excludedJobIds],
+            ...(scope?.mode === 'generation' ? { selection: scope } : {}),
+          },
         );
         if (claim.success !== true) {
           const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
@@ -5174,6 +5203,15 @@ async function isQtsSite(pageUrl) {
   }
 }
 
+function checkedWorkSelection(selection) {
+  if (selection === undefined) return null;
+  const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  if (!selection || !validId(selection.candidateId) || !Array.isArray(selection.jobIds)
+    || !selection.jobIds.length || selection.jobIds.length > 200 || !selection.jobIds.every(validId)
+    || new Set(selection.jobIds).size !== selection.jobIds.length) throw new Error('Select an account and between 1 and 200 jobs.');
+  return { candidateId: selection.candidateId, jobIds: selection.jobIds };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const disabledFeature = disabledFeatureForMessage(msg?.type);
   if (disabledFeature) {
@@ -5272,6 +5310,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'QTS_GET_JD_KEEP_OPEN') {
+    if (sender.tab?.id == null || sender.frameId !== 0) return false;
+    cancelGetJdClose(sender.tab.id).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
   // Try again re-runs the job-page check; Send anyway (force) skips it and reads the page as it is.
   if (msg.type === 'QTS_GET_JD_RETRY') {
     const tabId = sender.tab?.id;
@@ -5349,6 +5393,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  if (msg.type === 'QTS_WORK_ITEMS') {
+    (async () => {
+      if (!['generation', 'auto_apply'].includes(msg.mode)) throw new Error('Invalid work mode.');
+      const params = new URLSearchParams({ mode: msg.mode });
+      if (msg.candidateId !== undefined) params.set('candidateId', String(msg.candidateId));
+      const result = await workerApiRequest('GET', '/api/extension/work-items?' + params);
+      sendResponse(result.success === true ? { ...result, ok: true } : { ok: false, error: result.message || 'Could not load accounts or jobs.' });
+    })().catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (msg.type === 'QTS_PAGE_ACTION') {
     (async () => {
       const action = String(msg.action || '');
@@ -5403,7 +5457,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await self.__qtsAccountAuth.storeAuth(result.token, sessionUser, result.expiresAt);
         await Promise.allSettled([
           refreshManagerJobDetectionUrlRules(),
-          fetchManagerPageExclusions(),
           getManagerExtensionFeatures(true),
         ]);
         sendResponse({ ok: true, signedIn: true });
@@ -5539,6 +5592,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
           return;
         }
+        const selection = checkedWorkSelection(msg.selection);
+        await chrome.storage.local.set({ qtsWorkSelection: selection ? { mode: 'auto_apply', ...selection } : null });
         await chrome.storage.local.set({ [self.__qtsAutoApply.KIND_KEY]: 'auto', [EXTENSION_STATUS_KEY]: 'apply' });
         sendResponse({
           ok: true,
@@ -5565,6 +5620,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: 'Apply is running in this Chrome. Stop it first, or run Generation in another Chrome.' });
           return;
         }
+        const selection = checkedWorkSelection(msg.selection);
+        await chrome.storage.local.set({ qtsWorkSelection: selection ? { mode: 'generation', ...selection } : null });
         await chrome.storage.local.remove([GENERATION_NOTICE_KEY, GENERATION_IDLE_NOTICE_KEY]);
         await chrome.storage.local.set({
           [GENERATION_QUEUE_RUN_KEY]: {
@@ -5603,11 +5660,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Get JD.' });
         return;
       }
-      await chrome.storage.local.set({ [GET_JD_ON_KEY]: true });
-      getJdLastPageByTab.clear();
-      enableGetJdForTab(tabId).catch((error) => {
-        console.error('[QTS Get JD] Could not start page monitoring:', error);
-      });
+      await enableGetJdMonitoring();
       // After 4:00 PM Romania time the first Get JD start of the day (in any Chrome) asks to clear
       // applied job rows; the server answers whether to ask, once a day.
       const cleanup = await workerApiRequest('POST', '/api/extension/get-jd/applied-cleanup', { action: 'check' }).catch(() => null);
@@ -5765,11 +5818,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           });
           return;
         }
-        await chrome.storage.local.set({ [GET_JD_ON_KEY]: true });
-        enableGetJdForTab(Number.isInteger(msg.tabId) ? msg.tabId : null)
-          .catch((error) => {
-            console.error('[QTS Get JD] Could not start current-page classification:', error);
-          });
+        await enableGetJdMonitoring();
         if (Number.isInteger(msg.tabId)) {
           chrome.tabs.sendMessage(msg.tabId, { type: 'QTS_CLOSE_CAPTURE_PANEL' }).catch(() => {});
         }
@@ -5893,14 +5942,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(() => sendResponse({ ok: false, jobPage: false }));
     return true;
   }
+  if (msg.type === 'QTS_GET_LAUNCHER_STATE') {
+    if (sender.tab?.id == null || sender.frameId !== 0) {
+      sendResponse({ ok: true, active: false });
+      return false;
+    }
+    launcherFocus.isActive(sender.tab.id)
+      .then((active) => sendResponse({ ok: true, active }))
+      .catch(() => sendResponse({ ok: true, active: false }));
+    return true;
+  }
   if (msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED') {
     if (sender.tab?.id == null || !sender.tab?.url) {
       sendResponse({ ok: false, error: 'The current page is unavailable.' });
       return false;
     }
-    getCachedManagerJobDetectionUrlRules()
+    getCachedManagerJobDetectionUrlRules(msg.localOnly === true)
       .then(async (rules) => {
-        const features = await getManagerExtensionFeatures();
+        const features = await getManagerExtensionFeatures(false, msg.localOnly === true);
         sendResponse({
           ok: true,
           // A tab printing PDFs gets no QTS button: it would be printed into the PDF.
@@ -5944,7 +6003,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       const result = await workerApiRequest('POST', '/api/extension/page-exclusions', { url });
       const saved = await savePageExclusionsResponse(result);
-      if (saved.success === true) recheckLoadedPagesForManagerJobRules().catch(() => {});
+      if (saved.success === true) refreshLauncherForManagerJobRules().catch(() => {});
       sendResponse({
         ok: saved.success === true,
         exclusions: saved.exclusions || [],
@@ -5968,7 +6027,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         `/api/extension/page-exclusions/${exclusionId}`,
       );
       const saved = await savePageExclusionsResponse(result);
-      if (saved.success === true) recheckLoadedPagesForManagerJobRules().catch(() => {});
+      if (saved.success === true) refreshLauncherForManagerJobRules().catch(() => {});
       sendResponse({
         ok: saved.success === true,
         exclusions: saved.exclusions || [],
@@ -5998,7 +6057,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         { url },
       );
       const saved = await savePageExclusionsResponse(result);
-      if (saved.success === true) recheckLoadedPagesForManagerJobRules().catch(() => {});
+      if (saved.success === true) refreshLauncherForManagerJobRules().catch(() => {});
       sendResponse({
         ok: saved.success === true,
         exclusions: saved.exclusions || [],
@@ -6101,7 +6160,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === 'GET_MANAGER_EXTENSION_FEATURES') {
-    getManagerExtensionFeatures(msg.refresh === true)
+    getManagerExtensionFeatures(msg.refresh === true, msg.localOnly === true)
       .then((result) => sendResponse({
         ok: result.success === true,
         canManageTextHighlights: result.features?.canManageTextHighlights === true,
@@ -6931,6 +6990,7 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  launcherFocus.sync().catch(() => {});
   const tab = await getTab(activeInfo.tabId);
   const onPinnedGpt = await isPinnedGptTab(activeInfo.tabId);
   if (tab?.url && !onPinnedGpt && (await isAutoApplyArmed())) {
@@ -6964,13 +7024,21 @@ chrome.webNavigation.onDOMContentLoaded.addListener((details) => {
   if (details.frameId !== 0) return;
   if (details.documentLifecycle && details.documentLifecycle !== 'active') return;
   if (!isExtractablePageUrl(details.url)) return;
-  processGetJdPage(details.tabId, details.url, details.documentId || `dom:${Date.now()}`).catch((error) => {
+  getJdNavigation.handle('ready', details).catch((error) => {
     console.error('[QTS Get JD] Could not process the loaded page:', error);
   });
 });
 
+// Back/forward-cache restores can omit DOMContentLoaded. The same persisted admission deduplicates
+// this completion fallback against the normal ready event.
+chrome.webNavigation.onCompleted.addListener((details) => {
+  if (details.frameId !== 0 || !isExtractablePageUrl(details.url)) return;
+  getJdNavigation.handle('ready', details).catch(() => {});
+});
+
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
+  getJdNavigation.handle('committed', details).catch(() => {});
   if (!isExtractablePageUrl(details.url)) return;
   if (isChatGptHostUrl(details.url)) return;
   injectedExtractorTabs.delete(details.tabId);
@@ -6992,14 +7060,24 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
     console.warn('[QTS extension] Could not apply URL exclusions after navigation:', error);
   });
   if (!isExtractablePageUrl(details.url)) return;
-  processGetJdPage(details.tabId, details.url, details.documentId).catch((error) => {
-    console.error('[QTS Get JD] Could not process the updated page:', error);
-  });
+  // Standalone SPA navigation is not a Get JD trigger.
   (async () => {
     if (await isAutoApplyArmed()) maybeDetectApplyMethodOnOpen(details.tabId, details.url);
     maybeTrackAutoOpen(details.tabId, details.url);
   })().catch(() => {});
 });
+
+chrome.windows.onFocusChanged.addListener((windowId) => launcherFocus.sync(windowId).catch(() => {}));
+chrome.windows.onRemoved.addListener((windowId) => launcherFocus.removeWindow(windowId).catch(() => {}));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  getJdNavigation.remove(tabId).catch(() => {});
+  cancelGetJdClose(tabId).catch(() => {});
+  getJdLastPageByTab.delete(tabId);
+  launcherFocus.removeTab(tabId).catch(() => {});
+});
+// On worker restart only restore UI ownership. No Get JD scan is scheduled.
+launcherFocus.sync().catch(() => {});
+getJdNavigation.restore().catch(() => {});
 
 // Where each tab's page was opened from, for the job's source site (Bids): the tab whose link
 // opened it, or the page before it in the same tab. Redirect pages are skipped; typed, pasted and
@@ -7070,6 +7148,7 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
 });
 chrome.tabs.onCreated.addListener((tab) => {
   if (tab.id == null) return;
+  getJdNavigation.created(tab).catch(() => {});
   tabOwnership.inherit(tab.id, { sourceTabId: tab.openerTabId ?? null, windowId: tab.windowId }).catch(() => {});
 });
 chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {

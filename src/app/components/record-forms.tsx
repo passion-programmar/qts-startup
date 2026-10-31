@@ -17,6 +17,7 @@ import { OpenFolderButton } from "@/app/components/open-folder";
 import type { SubmittedAnswer } from "@/app/components/submitted-answers";
 
 export type CandidateOption = { id: string; name: string };
+export type GenerationPromptOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };
 export type EditableJob = CommonRecord & { description: string | null; employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationAttemptCount: number; generationError: string | null };
 // What happened to a job so far, shown read-only in its edit window: Generation, Apply, and each
@@ -53,8 +54,8 @@ export function JobEditAction({ record, candidates, track }: { record: EditableJ
 export function JobDeleteAction({ record }: { record: EditableJob }) {
   return <RecordActions kind="job" record={record} candidates={[]} showEdit={false} />;
 }
-export function JobGenerationQueueAction({ record }: { record: EditableJob }) {
-  return <GenerationQueueAction record={record} />;
+export function JobGenerationQueueAction({ record, prompts }: { record: EditableJob; prompts: GenerationPromptOption[] }) {
+  return <GenerationQueueAction prompts={prompts} record={record} />;
 }
 export function BidActions({ record, candidates }: { record: EditableBid; candidates: CandidateOption[] }) {
   // Bids are permanent: they can be edited, never deleted.
@@ -63,7 +64,7 @@ export function BidActions({ record, candidates }: { record: EditableBid; candid
 
 const jobStatusOptions = [["todo", "To do"], ["pending", "Pending"], ["applied", "Applied"], ["failed", "Failed"]] as const;
 
-function GenerationQueueAction({ record }: { record: EditableJob }) {
+function GenerationQueueAction({ record, prompts }: { record: EditableJob; prompts: GenerationPromptOption[] }) {
   const [state, action, pending] = useActionState(
     setJobGenerationQueueAction,
     initialRecordState,
@@ -87,6 +88,22 @@ function GenerationQueueAction({ record }: { record: EditableJob }) {
     <form action={action}>
       <input name="id" type="hidden" value={record.id} />
       <input name="intent" type="hidden" value={intent} />
+      {intent === "queue" && prompts.length > 0 && (
+        <label className="sr-only" htmlFor={`generation-prompt-${record.id}`}>Generation prompt</label>
+      )}
+      {intent === "queue" && prompts.length > 0 && (
+        <select
+          className="mb-1 max-w-36 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[10px] text-slate-600"
+          defaultValue=""
+          disabled={pending}
+          id={`generation-prompt-${record.id}`}
+          name="generationPromptId"
+          title="Choose a prompt for this generation, or use automatic rotation"
+        >
+          <option value="">Automatic rotation</option>
+          {prompts.map((prompt) => <option key={prompt.id} value={prompt.id}>{prompt.name}</option>)}
+        </select>
+      )}
       <button
         aria-label={accessibleLabel}
         className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-60"

@@ -13,7 +13,12 @@ async function initializeQtsPageLauncher() {
     return;
   }
   if (globalThis.__qtsPageLauncher) return;
-  const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' });
+  const revision = globalThis.__qtsLauncherActivityRevision || 0;
+  const ownership = await chrome.runtime.sendMessage({ type: 'QTS_GET_LAUNCHER_STATE' });
+  if (revision !== (globalThis.__qtsLauncherActivityRevision || 0) && globalThis.__qtsLauncherActive === false) return;
+  if (!ownership?.active || document.visibilityState === 'hidden') return;
+  globalThis.__qtsLauncherActive = true;
+  const pageAccess = await chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED', localOnly: true });
   if (!pageAccess?.ok || pageAccess.excluded) {
     globalThis.__qtsPageLauncher = { excluded: true };
     return;
@@ -22,6 +27,8 @@ async function initializeQtsPageLauncher() {
   // A launcher left by this extension before it was reloaded can no longer reach it.
   document.querySelectorAll('[data-qts-page-launcher]').forEach((node) => node.remove());
   const host = document.createElement('div');
+  let active = true;
+  let activationTimer = null;
   host.setAttribute('data-qts-page-launcher', '');
   host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483646;pointer-events:none;';
   const root = host.attachShadow({ mode: 'closed' });
@@ -129,6 +136,28 @@ async function initializeQtsPageLauncher() {
     .action.generation { --tint: rgb(168 85 247 / .16); --ink: #d8b4fe; }
     .action.apply { --tint: rgb(16 185 129 / .16); --ink: #6ee7b7; }
     .action.auto-apply { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
+    .work-heading { display: flex; align-items: stretch; gap: 7px; }
+    .work-heading > .action { flex: 1; min-width: 0; }
+    .work-account { width: 122px; min-width: 0; padding: 8px; border: 1px solid #29364b; border-radius: 10px; background: #101a2c; color: #cbd5e1; font: 500 12px/1.4 system-ui, sans-serif; color-scheme: dark; }
+    .work-account:focus-visible, .work-start:focus-visible, .work-refresh:focus-visible, .work-link:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+    .work-picker { margin-top: 8px; padding: 10px; border: 1px solid #263247; border-radius: 12px; background: #0c1423; }
+    .work-picker[hidden] { display: none; }
+    .work-toolbar, .work-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .work-toolbar { padding-bottom: 8px; color: #94a3b8; font: 500 11px/1.4 system-ui, sans-serif; }
+    .work-toolbar label { display: flex; align-items: center; gap: 6px; }
+    .work-refresh { padding: 3px 6px; border: 0; border-radius: 5px; background: transparent; color: #a5b4fc; font: inherit; cursor: pointer; }
+    .work-jobs { max-height: 230px; overflow-y: auto; overscroll-behavior: contain; }
+    .work-job { display: flex; align-items: flex-start; gap: 9px; padding: 9px 1px; border-top: 1px solid #1d293b; }
+    .work-job input { flex-shrink: 0; margin-top: 3px; accent-color: #a78bfa; }
+    .work-link { display: flex; flex-direction: column; gap: 3px; min-width: 0; color: #e2e8f0; text-decoration: none; }
+    .work-link:hover .work-title { color: #c4b5fd; }
+    .work-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px/1.45 system-ui, sans-serif; }
+    .work-domain { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #94a3b8; font: 400 11px/1.4 system-ui, sans-serif; }
+    .work-note { padding: 9px 0; color: #94a3b8; font: 400 12px/1.5 system-ui, sans-serif; }
+    .work-note.error { color: #fca5a5; }
+    .work-footer { padding-top: 10px; border-top: 1px solid #263247; color: #94a3b8; font: 500 11px/1.4 system-ui, sans-serif; }
+    .work-start { padding: 8px 10px; border: 1px solid #7160b0; border-radius: 8px; background: #29213f; color: #ede9fe; font: 600 12px/1.4 system-ui, sans-serif; cursor: pointer; }
+    .work-start:disabled, .work-account:disabled { opacity: .5; cursor: not-allowed; }
     .action.custom { --tint: rgb(100 116 139 / .2); --ink: #cbd5e1; }
     .action.custom:disabled { cursor: not-allowed; }
     .action.text-highlights { --tint: rgb(245 158 11 / .16); --ink: #fcd34d; }
@@ -269,6 +298,9 @@ async function initializeQtsPageLauncher() {
   }
   menuList.append(Object.assign(document.createElement('div'), { className: 'label-top', textContent: 'Today' }), stats);
 
+  const workPickers = new Map();
+  let accountsRequest = null;
+  let accountsVersion = 0;
   for (const [action, label, icon, className] of actions) {
     if (!label) {
       const heading = document.createElement('div');
@@ -305,6 +337,20 @@ async function initializeQtsPageLauncher() {
       sub.dataset.subFor = action;
       sub.hidden = true;
       row.append(button, sub);
+      if (['generation', 'auto_apply'].includes(action)) {
+        const heading = Object.assign(document.createElement('div'), { className: 'work-heading' });
+        const select = Object.assign(document.createElement('select'), { className: 'work-account' });
+        select.dataset.workAccount = action;
+        select.setAttribute('aria-label', `${label} account`);
+        select.add(new Option('Select account', ''));
+        select.addEventListener('focus', () => loadWorkAccounts().catch(() => {}));
+        select.addEventListener('change', () => loadWorkJobs(action));
+        const panel = Object.assign(document.createElement('div'), { className: 'work-picker', hidden: true });
+        panel.dataset.workPicker = action;
+        workPickers.set(action, { select, panel, jobs: [], selected: new Set(), version: 0, loading: false });
+        heading.append(button, select);
+        row.replaceChildren(heading, panel, sub);
+      }
       menuList.appendChild(row);
       continue;
     }
@@ -312,6 +358,96 @@ async function initializeQtsPageLauncher() {
   }
   // The Tools heading shows only when one of its tools does.
   const toolsHeading = [...menuList.querySelectorAll('.label-top')].find((heading) => heading.textContent === 'Tools');
+
+  async function loadWorkAccounts() {
+    if (accountsRequest) return accountsRequest;
+    const version = accountsVersion;
+    accountsRequest = (async () => {
+      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: 'generation' });
+      if (version !== accountsVersion) return;
+      if (!reply?.ok) throw new Error(reply?.error || 'Could not load accounts.');
+      for (const picker of workPickers.values()) {
+        const previous = picker.select.value;
+        picker.select.replaceChildren(new Option(reply.accounts.length ? 'Select account' : 'No matching notes', ''));
+        for (const account of reply.accounts) picker.select.add(new Option(account.name, account.id));
+        picker.select.value = previous;
+      }
+    })().catch(error => {
+      if (version !== accountsVersion) return;
+      accountsRequest = null;
+      showToast(error.message, 'error');
+      throw error;
+    });
+    return accountsRequest;
+  }
+
+  async function loadWorkJobs(action) {
+    const picker = workPickers.get(action), version = ++picker.version;
+    picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.hasMore = false;
+    picker.loading = Boolean(picker.select.value);
+    renderWorkPicker(action);
+    if (!picker.select.value) return;
+    try {
+      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: action, candidateId: picker.select.value });
+      if (picker.version !== version) return;
+      if (!reply?.ok) throw new Error(reply?.error || 'Could not load jobs.');
+      picker.jobs = reply.jobs;
+      picker.hasMore = reply.hasMore;
+      picker.selected = new Set(reply.jobs.map(job => job.id));
+    } catch (error) {
+      if (picker.version === version) picker.error = error.message;
+    } finally {
+      if (picker.version === version) { picker.loading = false; renderWorkPicker(action); }
+    }
+  }
+
+  function renderWorkPicker(action) {
+    const picker = workPickers.get(action), panel = picker.panel;
+    panel.replaceChildren(); panel.hidden = !picker.select.value;
+    if (panel.hidden) return;
+    const toolbar = Object.assign(document.createElement('div'), { className: 'work-toolbar' });
+    const allLabel = document.createElement('label');
+    const all = Object.assign(document.createElement('input'), { type: 'checkbox', checked: picker.jobs.length > 0 && picker.selected.size === picker.jobs.length });
+    all.indeterminate = picker.selected.size > 0 && picker.selected.size < picker.jobs.length;
+    all.disabled = !picker.jobs.length;
+    all.addEventListener('change', () => { picker.selected = new Set(all.checked ? picker.jobs.map(job => job.id) : []); renderWorkPicker(action); });
+    allLabel.append(all, 'Select all');
+    const refresh = Object.assign(document.createElement('button'), { type: 'button', className: 'work-refresh', textContent: 'Refresh', disabled: picker.loading });
+    refresh.addEventListener('click', () => loadWorkJobs(action));
+    toolbar.append(allLabel, refresh); panel.append(toolbar);
+    const list = Object.assign(document.createElement('div'), { className: 'work-jobs' });
+    for (const job of picker.jobs) {
+      const row = Object.assign(document.createElement('div'), { className: 'work-job', title: job.url });
+      const check = Object.assign(document.createElement('input'), { type: 'checkbox', checked: picker.selected.has(job.id) });
+      check.setAttribute('aria-label', `Select ${job.title}`);
+      check.dataset.jobId = job.id;
+      check.addEventListener('change', () => {
+        if (check.checked) picker.selected.add(job.id);
+        else picker.selected.delete(job.id);
+        const scroll = list.scrollTop;
+        renderWorkPicker(action);
+        picker.panel.querySelector('.work-jobs').scrollTop = scroll;
+        picker.panel.querySelector(`[data-job-id="${job.id}"]`)?.focus({ preventScroll: true });
+      });
+      let url;
+      try { const parsed = new URL(job.url); if (['https:', 'http:'].includes(parsed.protocol)) url = parsed; } catch { /* Invalid saved addresses are never executable links. */ }
+      const link = Object.assign(document.createElement(url ? 'a' : 'span'), { className: 'work-link', title: job.url });
+      if (url) { link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+      const title = Object.assign(document.createElement('span'), { className: 'work-title', textContent: job.title, title: job.url });
+      const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company].filter(Boolean).join(' · '), title: job.url });
+      link.append(title, domain); row.append(check, link); list.append(row);
+    }
+    panel.append(list);
+    if (picker.loading || picker.error || !picker.jobs.length || picker.hasMore) {
+      panel.append(Object.assign(document.createElement('div'), { className: `work-note${picker.error ? ' error' : ''}`, textContent: picker.loading ? 'Loading jobs…' : picker.error || (picker.hasMore ? 'Showing the first 200 eligible jobs. Refresh after this batch.' : 'No eligible jobs for this account.') }));
+    }
+    const footer = Object.assign(document.createElement('div'), { className: 'work-footer' });
+    const start = Object.assign(document.createElement('button'), { type: 'button', className: 'work-start', textContent: action === 'generation' ? 'Generate selected' : 'Apply to selected' });
+    const button = menu.querySelector(`[data-action="${action}"]`);
+    start.disabled = picker.loading || !picker.selected.size || button.disabled || button.classList.contains('running');
+    start.addEventListener('click', () => runAction(action, button));
+    footer.append(`${picker.selected.size} selected`, start); panel.append(footer);
+  }
 
   // Credentials are typed in an extension-origin frame, never in this page's DOM,
   // so page scripts and session-replay tools cannot observe the key presses.
@@ -581,6 +717,7 @@ async function initializeQtsPageLauncher() {
   async function toggleFromToolbar() {
     if (await syncSessionAction()) {
       setOpen(!launcher.classList.contains('open'));
+      if (launcher.classList.contains('open')) loadWorkAccounts().catch(() => {});
       main.focus();
       return;
     }
@@ -589,10 +726,12 @@ async function initializeQtsPageLauncher() {
   }
 
   function playActivation() {
+    if (!active) return;
     launcher.classList.remove('activated');
     void launcher.offsetWidth; // Restart the ripple if it is still running.
     launcher.classList.add('activated');
-    setTimeout(() => launcher.classList.remove('activated'), 1800);
+    clearTimeout(activationTimer);
+    activationTimer = setTimeout(() => launcher.classList.remove('activated'), 1800);
   }
 
   // The sign-in frame reports its content height so the card fits an error message without a scrollbar.
@@ -602,7 +741,7 @@ async function initializeQtsPageLauncher() {
     if (Number.isFinite(height) && height > 0) signInFrame.style.height = `${Math.min(Math.ceil(height), 400)}px`;
   };
 
-  async function syncTextHighlightAction() {
+  async function syncTextHighlightAction(refresh = false) {
     const highlightButton = menu.querySelector('[data-action="text_highlights"]');
     const exclusionsButton = menu.querySelector('[data-action="page_exclusions"]');
     if (!highlightButton && !exclusionsButton) return;
@@ -613,7 +752,7 @@ async function initializeQtsPageLauncher() {
       toolsHeading.hidden = true;
       return;
     }
-    const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_EXTENSION_FEATURES' });
+    const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_EXTENSION_FEATURES', localOnly: !refresh });
     if (highlightButton) {
       highlightButton.hidden = response?.ok !== true || response.canManageTextHighlights !== true;
       highlightButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
@@ -746,6 +885,7 @@ async function initializeQtsPageLauncher() {
   }
 
   async function showOutcome(outcome) {
+    if (!active) return;
     if (outcome?.kind === 'clear') {
       clearOutcome();
       return;
@@ -760,7 +900,7 @@ async function initializeQtsPageLauncher() {
     outcomeActions.replaceChildren();
     const actions = Array.isArray(outcome.actions) ? outcome.actions : [];
     const allowBlocking = actions.includes('never_on_site') && await canBlockUrls();
-    if (currentOutcome !== outcome) return;
+    if (!active || currentOutcome !== outcome) return;
     actions
       .filter((action) => OUTCOME_ACTIONS[action] && (action !== 'never_on_site' || allowBlocking))
       .forEach((action, index) => {
@@ -773,7 +913,9 @@ async function initializeQtsPageLauncher() {
       });
     outcomeCard.hidden = false;
     syncModeActions().catch(() => {});
-    const seconds = Number(outcome.closeInSeconds) || 0;
+    const seconds = outcome.closeDeadline
+      ? Math.max(0, Math.ceil((outcome.closeDeadline - Date.now()) / 1000))
+      : Number(outcome.closeInSeconds) || 0;
     if (outcome.kind !== 'done') {
       outcomeCountdown.hidden = true;
       return;
@@ -789,6 +931,7 @@ async function initializeQtsPageLauncher() {
     keepOpen.className = 'primary';
     keepOpen.textContent = 'Keep open';
     keepOpen.addEventListener('click', () => {
+      keepOutcomeTabOpen();
       clearOutcomeTimers();
       outcomeCountdown.textContent = 'This tab stays open.';
       keepOpen.remove();
@@ -821,6 +964,7 @@ async function initializeQtsPageLauncher() {
   }
 
   outcomeClose.addEventListener('click', () => {
+    if (currentOutcome?.kind === 'done') keepOutcomeTabOpen();
     // Hiding a notice keeps the orange dot (opening the panel shows it again); hiding a countdown also keeps the tab open.
     if (currentOutcome?.kind === 'notice') {
       clearOutcomeTimers();
@@ -833,12 +977,21 @@ async function initializeQtsPageLauncher() {
     const enabled = outcomeAutoInput.checked;
     chrome.runtime.sendMessage({ type: 'QTS_SET_GET_JD_AUTO_CLOSE', enabled }).catch(() => {});
     if (!enabled && outcomeTimer) {
+      keepOutcomeTabOpen();
       clearOutcomeTimers();
       outcomeCountdown.textContent = 'Auto-close is off. This tab stays open.';
       outcomeActions.querySelector('.primary')?.remove();
       outcomeHideTimer = setTimeout(clearOutcome, 4000);
     }
   });
+
+  function keepOutcomeTabOpen() {
+    chrome.runtime.sendMessage({ type: 'QTS_GET_JD_KEEP_OPEN' }).catch(() => {});
+    if (currentOutcome) {
+      currentOutcome = { ...currentOutcome, closeInSeconds: 0, closeDeadline: 0 };
+      globalThis.__qtsPendingLauncherOutcome = currentOutcome;
+    }
+  }
 
   function appendDetail(label, value, className = '') {
     const wrapper = document.createElement('div');
@@ -946,10 +1099,12 @@ async function initializeQtsPageLauncher() {
   let countsAskedAt = 0;
   let countsTimer = null;
   function refreshDailyCounts(now = false) {
+    if (!active) return;
     if (!launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
     clearTimeout(countsTimer);
     const wait = now ? 0 : Math.max(0, countsAskedAt + 5000 - Date.now());
     countsTimer = setTimeout(async () => {
+      if (!active) return;
       countsAskedAt = Date.now();
       const reply = await chrome.runtime.sendMessage({ type: 'QTS_DAILY_COUNTS' }).catch(() => null);
       if (!reply?.ok) return;
@@ -1113,6 +1268,13 @@ async function initializeQtsPageLauncher() {
     launcher.classList.toggle('needs', needs);
     launcher.classList.toggle('failed', !needs && failed);
     launcher.classList.toggle('running', !needs && !failed && Object.values(rows).some((row) => row.active));
+    for (const [action, picker] of workPickers) {
+      picker.select.disabled = Boolean(workStatus);
+      const scroll = picker.panel.querySelector('.work-jobs')?.scrollTop || 0;
+      renderWorkPicker(action);
+      const list = picker.panel.querySelector('.work-jobs');
+      if (list) list.scrollTop = scroll;
+    }
   }
 
   async function runAction(action, button) {
@@ -1141,9 +1303,16 @@ async function initializeQtsPageLauncher() {
         showSignInForm();
         return;
       }
+      const picker = workPickers.get(resolvedAction);
+      let selection;
+      if (picker?.select.value) {
+        if (picker.loading || picker.error || !picker.selected.size) throw new Error('Select at least one eligible job before starting.');
+        selection = { candidateId: picker.select.value, jobIds: [...picker.selected] };
+      }
       const response = await chrome.runtime.sendMessage({
         type: 'QTS_PAGE_ACTION',
         action: resolvedAction,
+        ...(selection ? { selection } : {}),
       });
       if (!response?.ok) throw new Error(response?.error || 'Could not run this QTS action.');
       if (resolvedAction === 'sign_out') {
@@ -1175,6 +1344,8 @@ async function initializeQtsPageLauncher() {
     // While Apply is on, a page with saved jobs offers its accounts ("Apply this page").
     if (opening) showApplyPick().catch(() => {});
     if (opening) refreshDailyCounts(true);
+    if (opening) loadWorkAccounts().catch(() => {});
+    if (opening) syncTextHighlightAction(true).catch(() => {});
     // A Get JD notice hidden earlier shows again beside the panel (the orange dot stands for it).
     if (opening && currentOutcome?.kind === 'notice') outcomeCard.hidden = false;
   });
@@ -1189,8 +1360,14 @@ async function initializeQtsPageLauncher() {
   close.addEventListener('click', () => { preview.hidden = true; });
   // Page-wide listeners belong to this launcher instance and are removed by disable().
   const onStorageChanged = (changes, area) => {
-    if (area !== 'local') return;
+    if (!active || area !== 'local') return;
     if (changes.authExpiresAt) {
+      accountsVersion += 1;
+      accountsRequest = null;
+      for (const [action, picker] of workPickers) {
+        picker.version += 1; picker.select.replaceChildren(new Option('Select account', ''));
+        picker.jobs = []; picker.selected.clear(); picker.loading = false; renderWorkPicker(action);
+      }
       syncSessionAction()
         .then(() => syncTextHighlightAction())
         .catch(() => {});
@@ -1207,6 +1384,7 @@ async function initializeQtsPageLauncher() {
     if (changes.qtsApplyState) refreshDailyCounts();
   };
   const onRuntimeMessage = (message) => {
+    if (!active) return;
     if (message?.type === 'QTS_HIDE_SIGN_IN_FRAME') {
       hideSignInForm();
       return;
@@ -1233,20 +1411,24 @@ async function initializeQtsPageLauncher() {
       hideSignInForm();
     }
   };
-  chrome.storage.onChanged.addListener(onStorageChanged);
-  chrome.runtime.onMessage.addListener(onRuntimeMessage);
-  document.addEventListener('keydown', onKeydown);
-  window.addEventListener('message', onWindowMessage);
+  function attachListeners() {
+    chrome.storage.onChanged.addListener(onStorageChanged);
+    chrome.runtime.onMessage.addListener(onRuntimeMessage);
+    document.addEventListener('keydown', onKeydown);
+    window.addEventListener('message', onWindowMessage);
+  }
+  function detachListeners() {
+    chrome.storage.onChanged.removeListener(onStorageChanged);
+    chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+    document.removeEventListener('keydown', onKeydown);
+    window.removeEventListener('message', onWindowMessage);
+  }
+  attachListeners();
 
   syncSessionAction().catch(() => {});
   syncModeActions().catch(() => {});
-  chrome.storage.local.get(['qtsGetJdOn', 'authExpiresAt'])
-    .then((stored) => {
-      // Restore a saved review after reloads while Get JD is active.
-      if (stored.qtsGetJdOn !== true || !((Number(stored.authExpiresAt) || 0) > Date.now())) return;
-      return ensureGetJdPanel();
-    })
-    .catch((error) => console.warn('[QTS Get JD] Could not restore the review panel:', error));
+  // Get JD injects its review only after an admitted navigation produces a result.
+  // Launcher activation alone must not initialize candidate loading on an old page.
   syncTextHighlightAction().catch((error) => {
     console.warn('[QTS text highlights] Could not verify Manager access:', error);
   });
@@ -1259,21 +1441,57 @@ async function initializeQtsPageLauncher() {
     syncTextHighlightAction,
     openPageExclusionPanel,
     toggleFromToolbar,
+    setActive(value) {
+      if (active === value) return;
+      active = value;
+      if (!active) {
+        setOpen(false);
+        hideSignInForm();
+        getJdDockObserver.disconnect();
+        detachListeners();
+        clearTimeout(countsTimer);
+        clearTimeout(activationTimer);
+        clearOutcomeTimers();
+        launcher.classList.remove('activated');
+        dock.remove();
+        host.remove();
+      } else {
+        (document.head || document.documentElement).appendChild(dock);
+        document.documentElement.appendChild(host);
+        attachListeners();
+        getJdDockObserver.observe(document.documentElement, {
+          attributes: true, attributeFilter: ['data-qts-get-jd-docked'],
+        });
+        syncGetJdDocking();
+        syncSessionAction().catch(() => {});
+        syncModeActions().catch(() => {});
+        syncTextHighlightAction().catch(() => {});
+        const outcome = globalThis.__qtsPendingLauncherOutcome;
+        if (outcome) showOutcome(outcome).catch(() => {});
+      }
+    },
     disable() {
       setOpen(false);
       preview.hidden = true;
       hideSignInForm();
       getJdDockObserver.disconnect();
-      chrome.storage.onChanged.removeListener(onStorageChanged);
-      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
-      document.removeEventListener('keydown', onKeydown);
-      window.removeEventListener('message', onWindowMessage);
+      active = false;
+      detachListeners();
+      clearTimeout(countsTimer);
+      clearTimeout(activationTimer);
+      clearOutcomeTimers();
       document.documentElement?.removeAttribute('data-qts-menu-docked');
       dock.remove();
       host.remove();
       globalThis.__qtsPageLauncher = { excluded: true };
     },
   };
+  // A focus switch can arrive while asynchronous access/session checks were running.
+  if (globalThis.__qtsLauncherActive === false || document.visibilityState === 'hidden') {
+    globalThis.__qtsPageLauncher.setActive(false);
+  } else if (globalThis.__qtsPendingLauncherOutcome) {
+    showOutcome(globalThis.__qtsPendingLauncherOutcome).catch(() => {});
+  }
 }
 
 let pageLauncherInitialization = null;
@@ -1284,12 +1502,18 @@ function initializeQtsPageLauncherOnce() {
   if (!pageLauncherInitialization) {
     pageLauncherInitialization = initializeQtsPageLauncher().finally(() => {
       pageLauncherInitialization = null;
+      // Focus can return while the first ownership query is still resolving. Reconcile that
+      // one missed activation after it settles, rather than starting another concurrent mount.
+      if (globalThis.__qtsLauncherActive === true && !globalThis.__qtsPageLauncher) {
+        refreshPageLauncherActivity().catch(() => {});
+      }
     });
   }
   return pageLauncherInitialization;
 }
 
 function restorePageLauncher() {
+  if (globalThis.__qtsLauncherActive !== true) return;
   if (!globalThis.__qtsPageLauncher?.excluded) return;
   globalThis.__qtsPageLauncher = null;
   initializeQtsPageLauncherOnce().catch((error) => {
@@ -1302,9 +1526,18 @@ globalThis.__qtsInitializePageLauncher = initializeQtsPageLauncherOnce;
 if (!globalThis.__qtsPageLauncherNavigationListener) {
   globalThis.__qtsPageLauncherNavigationListener = true;
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'QTS_GET_JD_OUTCOME') {
+      globalThis.__qtsPendingLauncherOutcome = message.outcome;
+      return;
+    }
+    if (message?.type === 'QTS_LAUNCHER_ACTIVE') {
+      updatePageLauncherActivity(message.active === true);
+      return;
+    }
     if (message?.type === 'QTS_TOOLBAR_ICON_CLICKED') {
       // A click before the page finishes loading starts the launcher early instead of being dropped.
-      initializeQtsPageLauncherOnce()
+      refreshPageLauncherActivity()
+        .then(() => initializeQtsPageLauncherOnce())
         .then(async () => {
           const pageLauncher = globalThis.__qtsPageLauncher;
           if (!pageLauncher || pageLauncher.excluded) {
@@ -1329,7 +1562,8 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
   });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !(changes.qtsManagerJobDetectionUrlRules || changes.authExpiresAt)) return;
-    chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED' })
+    if (globalThis.__qtsLauncherActive !== true) return;
+    chrome.runtime.sendMessage({ type: 'CHECK_EXTENSION_PAGE_ALLOWED', localOnly: true })
       .then((response) => {
         if (!response?.ok) return;
         if (response.excluded) globalThis.__qtsPageLauncher?.disable?.();
@@ -1337,10 +1571,35 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
       })
       .catch((error) => console.error('[QTS extension] Could not apply URL exclusions:', error));
   });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') updatePageLauncherActivity(false);
+    else refreshPageLauncherActivity().catch(() => {});
+  });
+  window.addEventListener('pagehide', () => updatePageLauncherActivity(false));
+  window.addEventListener('pageshow', () => refreshPageLauncherActivity().catch(() => {}));
+}
+
+function updatePageLauncherActivity(value) {
+  globalThis.__qtsLauncherActivityRevision = (globalThis.__qtsLauncherActivityRevision || 0) + 1;
+  const active = value && document.visibilityState !== 'hidden';
+  globalThis.__qtsLauncherActive = active;
+  const instance = globalThis.__qtsPageLauncher;
+  if (instance?.setActive) instance.setActive(active);
+  else if (active) {
+    if (instance?.excluded) globalThis.__qtsPageLauncher = null;
+    initializeQtsPageLauncherOnce().catch(() => {});
+  }
+}
+
+async function refreshPageLauncherActivity() {
+  const revision = globalThis.__qtsLauncherActivityRevision || 0;
+  const result = await chrome.runtime.sendMessage({ type: 'QTS_GET_LAUNCHER_STATE' });
+  if (revision !== (globalThis.__qtsLauncherActivityRevision || 0)) return;
+  updatePageLauncherActivity(result?.active === true);
 }
 
 function initializePageLauncherAfterLoad() {
-  initializeQtsPageLauncherOnce().catch((error) => {
+  refreshPageLauncherActivity().catch((error) => {
     console.error('[QTS extension] Could not verify page access:', error);
   });
 }

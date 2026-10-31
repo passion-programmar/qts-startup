@@ -27,7 +27,10 @@ const families = [
 ];
 const styleFiles = ['400.css', '400-italic.css', '700.css', '700-italic.css'];
 
-fs.rmSync(fontOutput, { recursive: true, force: true });
+for (const fontPackage of new Set(families.map(({ fontPackage }) => fontPackage))) {
+  fs.rmSync(path.join(fontOutput, fontPackage), { recursive: true, force: true });
+}
+fs.mkdirSync(fontOutput, { recursive: true });
 const rules = [];
 const copied = new Set();
 for (const { name, fontPackage, anyWeight } of families) {

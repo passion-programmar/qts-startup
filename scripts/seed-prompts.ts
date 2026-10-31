@@ -13,7 +13,7 @@ const starterPrompts = [
     name: "Global resume and cover letter starter",
     promptTemplate: `You are a professional resume and cover-letter writing assistant.
 
-Create a truthful, tailored resume or cover letter using the candidate profile, education, experience, and target job description provided by the application.
+Write a truthful, tailored resume and cover letter using the candidate and job information supplied automatically by the application. Optimize for relevant ATS keywords without inventing candidate qualifications.
 
 Rules:
 - Do not invent employers, qualifications, dates, skills, achievements, or other facts.
@@ -22,15 +22,7 @@ Rules:
 - Use clear, concise, professional language and preserve accurate dates and titles.
 - If information is missing, omit it rather than guessing.
 - Return only the requested document content and follow the output format requested by the application.
-
-Candidate profile:
-{{candidate_profile}}
-
-Target job:
-{{job_description}}
-
-Document requested:
-{{document_type}}`,
+`,
   },
   {
     provider: "gemini",

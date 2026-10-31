@@ -83,6 +83,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         .set({
           generationStatus: "queued",
           generationError: null,
+          generationPromptId: null,
           generationLeaseExpiresAt: null,
           updatedAt: new Date(),
         })

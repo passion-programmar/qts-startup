@@ -2,7 +2,8 @@
 // does it (the same template page from the QTS site, the same data, window size and print
 // settings), so the files come out the same and Vercel spends no time printing. A hidden background
 // tab is used and closed after, with Chrome's debugger attached for those seconds (Chrome shows its
-// "being debugged" bar meanwhile). Any failure gives null, and the caller asks the server to print.
+// "being debugged" bar meanwhile). Technical failures give null for server printing; oversized
+// PDFs throw and stop delivery without truncation.
 (function (global) {
   // What the server's page.pdf({ preferCSSPageSize: true, printBackground: true }) sends Chrome
   // (puppeteer's defaults for the rest); chrome-pdf.test.js checks it against puppeteer itself.
@@ -25,10 +26,27 @@
   // The page is laid out at the sheet's full paper width, like the server and the Resume page preview.
   const VIEWPORT = Object.freeze({ width: 1240, height: 1754, deviceScaleFactor: 1, mobile: false });
   const DOCUMENTS = ['resume', 'cover-letter'];
+  const PAGE_LIMITS = Object.freeze({ resume: 3, 'cover-letter': 1 });
   const RENDER_TIMEOUT_MS = 25_000;
   const PRINT_TIMEOUT_MS = 60_000;
   // Tabs printing right now: QTS's own page scripts stay out of them.
   const printTabs = new Set();
+
+  // Count the actual PDF page tree, never the template's estimated layout or warnings.
+  async function validatePdf(base64, document) {
+    const library = global.PDFLib;
+    if (!library) throw new Error('The PDF validator is unavailable.');
+    const pdf = await library.PDFDocument.load(base64);
+    const count = pdf.getPageCount();
+    if (count < 1) throw new Error('Chrome produced an empty PDF.');
+    if (count > PAGE_LIMITS[document]) {
+      const error = new Error(document === 'resume'
+        ? 'The résumé exceeds three A4 pages. Its content was not truncated.'
+        : 'The cover letter exceeds one A4 page. Shorten its paragraphs.');
+      error.name = 'DocumentPageLimitError';
+      throw error;
+    }
+  }
 
   function templatePageUrl(serverUrl, document, template) {
     return `${String(serverUrl).replace(/\/+$/, '')}/resume-templates/${document}.html?template=${encodeURIComponent(template)}`;
@@ -64,6 +82,7 @@
       await waitForRender(send, document);
       await send('Runtime.evaluate', { expression: 'document.fonts.ready.then(() => true)', awaitPromise: true });
       printed[document] = (await send('Page.printToPDF', PRINT_TO_PDF)).data;
+      await validatePdf(printed[document], document);
     }
     return printed;
   }
@@ -86,6 +105,8 @@
       const printed = await Promise.race([printInTab(tabId, job, serverUrl), timeout]);
       return DOCUMENTS.every((document) => typeof printed[document] === 'string' && printed[document]) ? printed : null;
     } catch (error) {
+      // A content failure must stop delivery, rather than retrying a different renderer.
+      if (error?.name === 'DocumentPageLimitError') throw error;
       console.warn('[QTS] Printing in this Chrome failed; QTS prints instead:', error instanceof Error ? error.message : error);
       return null;
     } finally {
@@ -100,7 +121,7 @@
 
   const isPrintTab = (tabId) => printTabs.has(tabId);
 
-  const api = { PRINT_TO_PDF, VIEWPORT, templatePageUrl, printDocuments, isPrintTab };
+  const api = { PRINT_TO_PDF, VIEWPORT, PAGE_LIMITS, validatePdf, templatePageUrl, printDocuments, isPrintTab };
   global.__qtsChromePdf = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

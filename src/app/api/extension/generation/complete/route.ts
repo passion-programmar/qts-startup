@@ -4,8 +4,9 @@ import { generationRuns, jobs, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
-import { parsePdfPackage } from "@/app/pdf/document-data";
+import { parsePdfPackage, resumeJsonVersion } from "@/app/pdf/document-data";
 import { cleanGeneratedDocuments } from "@/server/generation/clean-documents";
+import { generationOutputIssue, type GenerationOutputFacts } from "@/server/generation/generation-output-validation";
 import { describeResumeShape } from "@/server/generation/response-shape";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -40,6 +41,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   let parsedPackage: ReturnType<typeof parsePdfPackage> | null = null;
   if (responseJson) {
     try {
+      if (resumeJsonVersion(responseJson.resume) !== 2) {
+        throw new Error("New Generation runs must use the V2 résumé JSON structure.");
+      }
       parsedPackage = parsePdfPackage(JSON.stringify(responseJson), { requireCoreSections: true });
       validPackage = true;
     } catch (error) {
@@ -69,13 +73,13 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    let outputFacts: GenerationOutputFacts | null = null;
     const [run] = await db
       .select({
         jobId: generationRuns.jobId,
-        jobDescription: generationRuns.jobDescription,
         jobTitle: generationRuns.jobTitle,
         company: generationRuns.company,
-        composedPrompt: generationRuns.composedPrompt,
+        jobDescription: generationRuns.jobDescription,
       })
       .from(generationRuns)
       .where(and(
@@ -98,6 +102,13 @@ export async function POST(request: Request): Promise<NextResponse> {
             firstName: profiles.firstName,
             lastName: profiles.lastName,
             email: profiles.candidateEmail,
+            phone: profiles.phone,
+            linkedinUrl: profiles.linkedinUrl,
+            addressLine1: profiles.addressLine1,
+            city: profiles.city,
+            province: profiles.province,
+            country: profiles.country,
+            postalCode: profiles.postalCode,
           })
           .from(jobs)
           .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -106,18 +117,31 @@ export async function POST(request: Request): Promise<NextResponse> {
             eq(jobs.managerId, manager.id),
           ))
           .limit(1);
-        const expectedName = [candidate?.firstName, candidate?.lastName]
-          .filter(Boolean)
-          .join(" ");
-        if (
-          !candidate
-          || normalizeIdentity(expectedName) !== normalizeIdentity(parsedPackage.resume.candidate.fullName)
-          || normalizeIdentity(candidate.email ?? "") !== normalizeIdentity(parsedPackage.resume.candidate.email)
-        ) {
+        if (!candidate) {
           return NextResponse.json(
-            { success: false, message: "The generated documents must use the candidate's saved name and email." },
+            { success: false, message: "The saved candidate profile for this Generation run could not be found." },
             { status: 422 },
           );
+        }
+        outputFacts = {
+          candidate: {
+            fullName: [candidate.firstName, candidate.lastName].filter(Boolean).join(" "),
+            email: candidate.email ?? "",
+            phone: candidate.phone ?? "",
+            linkedinUrl: candidate.linkedinUrl ?? "",
+            location: [
+              candidate.addressLine1,
+              candidate.city,
+              candidate.province,
+              candidate.country,
+              candidate.postalCode,
+            ].filter(Boolean).join(", "),
+          },
+          job: { title: run.jobTitle ?? "", company: run.company ?? "" },
+        };
+        const outputIssue = generationOutputIssue(parsedPackage, outputFacts);
+        if (outputIssue) {
+          return NextResponse.json({ success: false, message: outputIssue }, { status: 422 });
         }
       }
     }
@@ -126,18 +150,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     let savedJson = responseJson;
     if (completed && responseJson && parsedPackage) {
       try {
-        const profileStart = run.composedPrompt.lastIndexOf("Candidate profile:");
-        const profileEnd = run.composedPrompt.lastIndexOf("Job data:");
         const cleaned = cleanGeneratedDocuments(responseJson, {
           company: run.company ?? "",
           jobTitle: run.jobTitle ?? "",
           candidateName: parsedPackage.resume.candidate.fullName,
-          jobDescription: jobDescription ?? "",
-          profileText: profileStart >= 0 && profileEnd > profileStart
-            ? run.composedPrompt.slice(profileStart, profileEnd)
-            : "",
         });
-        parsePdfPackage(JSON.stringify(cleaned), { requireCoreSections: true });
+        const cleanedPackage = parsePdfPackage(JSON.stringify(cleaned), { requireCoreSections: true });
+        const cleanedIssue = outputFacts ? generationOutputIssue(cleanedPackage, outputFacts) : null;
+        if (resumeJsonVersion(isRecord(cleaned) ? cleaned.resume : null) !== 2 || cleanedIssue) {
+          throw new Error(cleanedIssue ?? "Clean-up changed the résumé away from V2 JSON.");
+        }
         savedJson = cleaned;
       } catch (error) {
         console.warn("The generated documents were saved without the clean-up.", error instanceof Error ? error.message : error);
@@ -182,10 +204,4 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 500 },
     );
   }
-}
-
-function normalizeIdentity(value: unknown): string {
-  return typeof value === "string"
-    ? value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en")
-    : "";
 }

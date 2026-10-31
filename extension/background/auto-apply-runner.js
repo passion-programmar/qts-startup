@@ -135,12 +135,13 @@ async function runAutoApplication(application, recipe, resume = null) {
  * asked again for a question already answered). A record whose tab or claim is gone is dropped (its
  * job is given back, nothing recorded against it). Returns the runs started.
  */
-async function resumeAutoApplyRuns() {
+async function resumeAutoApplyRuns(selection) {
   // A ChatGPT tab the worker selected before it restarted: the application's tab is shown again.
   await giveBackChatTab().catch(() => {});
   const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
   const runs = [];
   for (const record of Object.values(stored)) {
+    if (selection && !selection.jobIds.includes(record.jobId)) continue;
     if (autoRuns.has(record.attemptId)) continue;
     const tab = record.tabId != null ? await chrome.tabs.get(record.tabId).catch(() => null) : null;
     if (record.submitted) {

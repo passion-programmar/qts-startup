@@ -21,6 +21,7 @@ function workerSupportedApiPath(path) {
     || path === '/api/extension/get-jd'
     || path === '/api/extension/get-jd/mode'
     || path === '/api/extension/get-jd/profiles'
+    || /^\/api\/extension\/work-items(?:\?|$)/.test(path)
     || path === '/api/extension/get-jd/save'
     || /^\/api\/extension\/get-jd\/auto-saved-jobs\/[0-9a-f-]+$/i.test(path)
     || /^\/api\/extension\/get-jd\/job-accounts\/[0-9a-f-]+$/i.test(path)

@@ -36,10 +36,10 @@
   const FONT_SCALE_MIN = 0.95;
   const FONT_SCALE_MAX = 1.15;
   // The size a resume's bullets step down to from 11.5pt (base.css) when it runs past its pages.
-  const BULLET_SIZES = ["11pt"];
+  const BULLET_SIZES = ["10.5pt"];
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
-  let MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
+  let MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
 
   const FALLBACK_SETTINGS = {
     headerAlign: "start",
@@ -823,7 +823,7 @@
     }
     if (pages > MAX_PAGES) {
       const what = DOCUMENT === "resume" ? "resume" : "cover letter";
-      warnings.push(`The ${what} needs about ${pages} pages; shorten it to fit ${MAX_PAGES}.`);
+      warnings.push(`The ${what} needs about ${pages} pages and exceeds the ${MAX_PAGES}-page limit.`);
     }
     return pages;
   }
@@ -944,7 +944,7 @@
     if (context?.mount && context?.root && context?.styleRoot) {
       directRenderMode = true;
       DOCUMENT = context.documentType === "cover-letter" ? "cover-letter" : "resume";
-      MAX_PAGES = DOCUMENT === "resume" ? 2 : 1;
+      MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
       root = context.root;
       mount = context.mount;
       styleRoot = context.styleRoot;
@@ -975,6 +975,7 @@
 
     let article =
       DOCUMENT === "resume" ? renderResumeDocument(data, settings, labels) : renderLetterDocument(data, settings, labels);
+    article.dataset.template = template.id;
     if (theme.contentConsistency === "uniform") article.classList.add("doc--uniform-content");
     if (directRenderMode) {
       const currentArticle = mount.querySelector(".doc");

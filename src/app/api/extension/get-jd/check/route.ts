@@ -10,6 +10,8 @@ import {
   findManagerJobPresence,
 } from "@/server/jobs/get-jd-jobs";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
+import { globalJobPrecheckQuery, readGetJdIdentity } from "@/server/get-jd/global-precheck";
+import { getPrecheckTickets } from "@/server/get-jd/precheck-ticket";
 
 const maxManagerAccounts = 100;
 
@@ -32,6 +34,20 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  if (isRecord(body) && body.scope === "global") {
+    const identity = readGetJdIdentity(body);
+    if (!identity) return jsonResponse({ success: false, message: "A valid job identity is required." }, 400);
+    try {
+      const result = await db.execute<{ skip: boolean }>(globalJobPrecheckQuery(identity));
+      if (typeof result.rows[0]?.skip !== "boolean") throw new Error("Invalid duplicate precheck result");
+      const skip = result.rows[0].skip;
+      return jsonResponse({ success: true, skip,
+        ...(skip ? {} : { precheckToken: await getPrecheckTickets().issue(manager.id, identity) }),
+      });
+    } catch {
+      return jsonResponse({ success: false, message: "QTS could not check Jobs and Bids. Refresh to retry; Gemini was not called." }, 503);
+    }
+  }
   const job = readJob(body);
   if (!job) {
     return jsonResponse(

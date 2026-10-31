@@ -34,6 +34,7 @@ import { type RememberedChoice, recordLearnedAnswers, rememberedChoices } from "
 import { type LearnedAnswer } from "./question-memory-values";
 import { loadApprovedReusableAnswers } from "./reusable-answers";
 import { decryptSiteAccountPassword } from "./site-account-password";
+import type { WorkSelection } from "@/server/work/work-selection";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
 // it ("claimed"), the Manager reviews each step ("waiting_review"), clicks the site's Submit
@@ -156,12 +157,35 @@ export async function claimNextApplication(
   managerId: string,
   browser: ExtensionBrowser,
   skipJobIds: string[] = [],
+  selection?: WorkSelection,
 ): Promise<ClaimedApplication | null> {
+  // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
+  // Exclude all rows outside the explicit selection; an empty/stale selection never falls back.
+  const skips = selection ? sql`ARRAY(
+    select j.id from jobs j where j.manager_id = ${managerId}
+      and (j.candidate_id <> ${selection.candidateId}::uuid
+        or not (j.id = any(${`{${selection.jobIds.join(",")}}`}::uuid[]))
+        or not exists (select 1 from profiles p where p.user_id = j.candidate_id and length(btrim(p.jd_matching)) > 0))
+    union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
+  )` : sql`${`{${skipJobIds.join(",")}}`}::uuid[]`;
   const claim = await db.execute<{ attemptId: string | null }>(sql`
     select claim_apply_attempt(${managerId}, ${browser.id}, ${APPLY_PARALLEL_LIMIT}, ${APPLY_LEASE_SECONDS},
-      ${`{${skipJobIds.join(",")}}`}::uuid[])::text as "attemptId"
+      ${skips})::text as "attemptId"
   `);
   const attemptId = claim.rows[0]?.attemptId;
+  if (attemptId && selection) {
+    // A concurrent insert after the exclusion snapshot must never escape the selected batch.
+    const [scoped] = await db.select({ id: applyAttempts.id }).from(applyAttempts)
+      .innerJoin(profiles, eq(profiles.userId, applyAttempts.candidateId))
+      .where(and(eq(applyAttempts.id, attemptId), eq(applyAttempts.managerId, managerId),
+        eq(applyAttempts.browserId, browser.id), eq(applyAttempts.candidateId, selection.candidateId),
+        inArray(applyAttempts.jobId, selection.jobIds), sql`length(btrim(${profiles.jdMatching})) > 0`)).limit(1);
+    if (!scoped) {
+      await db.delete(applyAttempts).where(and(eq(applyAttempts.id, attemptId),
+        eq(applyAttempts.managerId, managerId), eq(applyAttempts.browserId, browser.id), eq(applyAttempts.status, "claimed")));
+      return null;
+    }
+  }
   return attemptId ? loadApplication(attemptId) : null;
 }
 
