@@ -2205,12 +2205,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     templateName: application.job.templateName,
     answers: Object.entries(answersUsed).map(([question, answer]) => ({
       question,
-      answer: answerText(answer.value).slice(0, 400),
+      answer: auto ? answerText(answer.value) : answerText(answer.value).slice(0, 400),
       source: answer.source || 'ai',
       step: answer.step || 1,
       fieldId: answer.fieldId || null,
       // A profile fact given in the field's own words ("Rumunia"): the profile's value, for the Manager to see.
-      profileValue: answer.fact && answer.intended && simpleText(answer.intended) !== simpleText(answerText(answer.value)) ? String(answer.intended).slice(0, 200) : null,
+      profileValue: answer.fact && answer.intended && simpleText(answer.intended) !== simpleText(answerText(answer.value)) ? (auto ? String(answer.intended) : String(answer.intended).slice(0, 200)) : null,
       valueFrom: answer.fact === 'answer' ? 'reusable answer' : 'profile',
     })),
     // Auto Apply: the questions nothing QTS knows for sure answered, for the Manager.

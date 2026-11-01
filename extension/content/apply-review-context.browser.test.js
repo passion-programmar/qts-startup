@@ -50,6 +50,8 @@ for (const mode of ['sync', 'async', 'missing', 'getter']) {
     }, mode);
     await page.waitForFunction(() => !window.__qtsApplyReview);
     assert.equal(await page.evaluate(() => document.querySelectorAll('[data-qts-apply-review]').length), 0);
+    assert.equal(await page.evaluate(() => Boolean(document.querySelector('[data-qts-auto-apply-dock]'))), false);
+    assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-qts-apply-docked')), false, 'context invalidation releases the sidebar spacing');
     assert.equal(await page.evaluate(() => window.intervals.size), 0, 'heartbeat stops after invalidation');
     assert.equal(await page.evaluate(() => ['click', 'submit', 'input', 'change'].reduce((n, type) => n + (window.listeners.get(type)?.size || 0), 0)), 0, 'stale page listeners removed');
     assert.equal(await page.evaluate(() => window.messages.length), 0, 'no submission or confirmation was sent');

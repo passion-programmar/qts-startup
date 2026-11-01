@@ -7,7 +7,15 @@
 (function initApplyReview(global) {
   if (global.__qtsApplyReview) return;
   // A prior extension context may have left its host in this page after an update.
-  for (const stale of document.querySelectorAll('[data-qts-apply-review]')) stale.remove();
+  for (const stale of document.querySelectorAll('[data-qts-apply-review], [data-qts-auto-apply-dock]')) stale.remove();
+
+  const PANEL_WIDTH = 'min(480px, 48vw)';
+  const dock = document.createElement('style');
+  dock.setAttribute('data-qts-auto-apply-dock', '');
+  dock.textContent = `
+    html[data-qts-apply-docked="true"] body { box-sizing: border-box !important; padding-right: ${PANEL_WIDTH} !important; }
+    html:has(> [data-qts-auto-apply-review]) [data-qts-page-launcher] { display: none !important; }
+  `;
 
   const host = document.createElement('div');
   host.setAttribute('data-qts-apply-review', '');
@@ -20,6 +28,33 @@
     /* The look of the QTS panel (page-launcher.js): dark navy cards, pill tags, the same tints. */
     .panel { width: 380px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; border: 1px solid #243047; border-radius: 14px; background: #0a0f1c; color: #e2e8f0; color-scheme: dark; box-shadow: -12px 0 32px rgb(0 0 0 / 35%); font: 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
     .panel.collapsed .body, .panel.collapsed .foot { display: none; }
+    .panel.auto { position: fixed; inset: 0 0 0 auto; width: ${PANEL_WIDTH}; height: 100vh; height: 100dvh; max-height: none; border: 0; border-left: 1px solid #243047; border-radius: 0; font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .panel[hidden], .review-tab[hidden] { display: none; }
+    /* Same branding, dimensions and typography as the QTS actions header. */
+    .brand { display: grid; flex: 0 0 64px; grid-template-columns: 42px 1fr auto; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid #243047; background: #0d1526; }
+    .brand-logo { width: 42px; height: 42px; border: 1px solid #243047; border-radius: 9px; object-fit: contain; background: #070b13; }
+    .brand-center { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 4px; }
+    .pills { display: flex; align-items: center; gap: 3px; }
+    .pill { padding: 4px 7px; border: 1px solid #34425a; border-radius: 999px; background: #111a2e; font-size: 10px; font-weight: 700; line-height: 1; white-space: nowrap; }
+    .pill.q { color: #fcd34d; } .pill.t { color: #e2e8f0; } .pill.s { color: #60a5fa; }
+    .plus { color: #66758c; font-size: 9px; }
+    .subline { color: #66758c; font-size: 7px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; white-space: nowrap; }
+    .hide { width: 30px; height: 30px; border: 1px solid #34425a; border-radius: 9px; background: #111a2e; color: #cbd5e1; font-size: 15px; cursor: pointer; }
+    .hide:hover { background: #1a2438; }
+    .review-tab { position: fixed; top: 50%; right: 0; transform: translateY(-50%); display: flex; flex-direction: column; gap: 3px; padding: 10px 6px; border: 1px solid #243047; border-right: 0; border-radius: 14px 0 0 14px; background: #0d1526; color: #e2e8f0; font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .review-tab span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; }
+    .review-tab .q { color: #fcd34d; background: rgb(252 211 77 / .12); }
+    .review-tab .t { background: rgb(226 232 240 / .08); }
+    .review-tab .s { color: #60a5fa; background: rgb(96 165 250 / .14); }
+    .panel.auto .body { flex: 1 1 auto; min-height: 0; padding: 16px; scrollbar-width: thin; }
+    .panel.auto .head { padding: 0 0 12px; border: 0; background: none; }
+    .panel.auto .head::before { display: none; }
+    .panel.auto .head-sub { white-space: normal; overflow-wrap: anywhere; }
+    .panel.auto .row { overflow-wrap: anywhere; }
+    .panel.auto .answer { grid-template-columns: minmax(0, 1fr) auto; }
+    .panel.auto .answer .q { grid-column: 1 / -1; }
+    .panel.auto .answer .a { max-height: none; overflow: visible; }
+    .panel.auto .foot { flex: 0 0 auto; max-height: 45dvh; overflow-y: auto; padding: 12px 16px 14px; }
     .head { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-bottom: 1px solid #243047; background: linear-gradient(180deg, #131c31, #0a0f1c); color: #f1f5f9; }
     .head::before { content: ""; position: absolute; top: 10px; bottom: 10px; left: 0; width: 2px; border-radius: 2px; background: linear-gradient(180deg, #fcd34d, #e2e8f0 50%, #60a5fa); }
     .head-text { flex: 1; min-width: 0; }
@@ -81,7 +116,14 @@
   `;
   const panel = document.createElement('div');
   panel.className = 'panel';
-  root.append(style, panel);
+  const tab = document.createElement('button');
+  tab.className = 'review-tab'; tab.type = 'button'; tab.hidden = true;
+  tab.setAttribute('aria-label', 'Show Auto Apply review');
+  for (const letter of ['q', 't', 's']) {
+    const span = document.createElement('span'); span.className = letter; span.textContent = letter.toUpperCase(); tab.append(span);
+  }
+  tab.addEventListener('click', () => { collapsed = false; render(); });
+  root.append(style, panel, tab);
   (document.documentElement || document.body).appendChild(host);
 
   let state = null;
@@ -127,8 +169,31 @@
     document.removeEventListener('input', onEdit, true);
     document.removeEventListener('change', onEdit, true);
     try { global.__qtsApplyForm?.markProblemFields?.([]); } catch { /* Old context already disposed. */ }
+    clearDock();
     host.remove();
     if (global.__qtsApplyReview?.remove === dispose) delete global.__qtsApplyReview;
+  }
+
+  function clearDock() {
+    if (!dock.isConnected) return;
+    dock.remove();
+    document.documentElement.removeAttribute('data-qts-apply-docked');
+  }
+
+  function brandHeader() {
+    const brand = element('header', 'brand');
+    const logo = element('img', 'brand-logo');
+    logo.alt = 'WYS';
+    const logoUrl = global.chrome?.runtime?.getURL?.('assets/account-logo.png');
+    if (logoUrl) logo.src = logoUrl;
+    const center = element('div', 'brand-center'), pills = element('div', 'pills');
+    for (const [className, text] of [['pill q', 'Quality'], ['plus', '+'], ['pill t', 'Time'], ['plus', '+'], ['pill s', 'Speed']]) pills.append(element('span', className, text));
+    center.append(pills, element('span', 'subline', 'Built for precision bidding'));
+    const hide = element('button', 'hide', '›'); hide.type = 'button'; hide.title = 'Hide the panel';
+    hide.setAttribute('aria-label', 'Hide Auto Apply review');
+    hide.addEventListener('click', () => { collapsed = true; render(); });
+    brand.append(logo, center, hide);
+    return brand;
   }
 
   function button(label, className, action, extra) {
@@ -219,9 +284,20 @@
   }
 
   function render() {
+    const scrollTop = panel.querySelector('.body')?.scrollTop || 0;
     panel.replaceChildren();
     if (!state) return;
-    panel.classList.toggle('collapsed', collapsed);
+    const auto = state.auto === true;
+    panel.classList.toggle('auto', auto);
+    panel.classList.toggle('collapsed', collapsed && !auto);
+    panel.hidden = auto && collapsed;
+    tab.hidden = !(auto && collapsed);
+    host.toggleAttribute('data-qts-auto-apply-review', auto);
+    if (auto && !collapsed) {
+      global.__qtsPageLauncher?.setOpen?.(false);
+      if (!dock.isConnected) (document.head || document.documentElement).append(dock);
+      document.documentElement.setAttribute('data-qts-apply-docked', 'true');
+    } else clearDock();
 
     const head = element('div', 'head');
     const headText = element('div', 'head-text');
@@ -233,10 +309,12 @@
     toggle.type = 'button';
     toggle.title = collapsed ? 'Show the panel' : 'Make the panel small';
     toggle.addEventListener('click', () => { collapsed = !collapsed; render(); });
-    head.append(headText, toggle);
-    panel.append(head);
+    head.append(headText);
+    if (!auto) head.append(toggle);
+    panel.append(auto ? brandHeader() : head);
 
     const body = element('div', 'body');
+    if (auto) body.append(head);
     const job = element('div', 'job');
     job.append(element('div', 'job-title', `${state.job.title} — ${state.job.company}`));
     const facts = [state.job.location, state.job.workType, state.job.salary ? `Salary: ${state.job.salary}` : ''].filter(Boolean).join(' · ');
@@ -377,6 +455,7 @@
       foot.append(buttons);
     }
     panel.append(foot);
+    if (auto) body.scrollTop = scrollTop;
   }
 
   function currentAnswers() {
