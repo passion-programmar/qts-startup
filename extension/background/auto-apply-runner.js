@@ -30,6 +30,20 @@ const AUTO_APPLY_AI_RETRY_WAITS = [3000, 10000];
 const autoRuns = new Map();
 let lastAutoRun = null;
 let runWrites = Promise.resolve();
+let browserSessionRequest = null;
+
+// Tab IDs can be reused after Chrome closes. Session storage survives worker restarts only.
+function autoApplyBrowserSession() {
+  if (!browserSessionRequest) browserSessionRequest = (async () => {
+    const key = 'qtsWorkBrowserSession';
+    const saved = (await chrome.storage.session.get(key))[key];
+    if (saved) return saved;
+    const id = crypto.randomUUID();
+    await chrome.storage.session.set({ [key]: id });
+    return id;
+  })().catch(error => { browserSessionRequest = null; throw error; });
+  return browserSessionRequest;
+}
 
 async function isAutoApplyOn() {
   const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, AUTO_APPLY_KIND_KEY]);
@@ -86,6 +100,7 @@ async function runAutoApplication(application, recipe, resume = null) {
   if (resume) application.aiCalls = resume.aiCalls || 0;
   const run = {
     attemptId: application.attemptId,
+    browserSession: await autoApplyBrowserSession(),
     jobId: application.job.id,
     url: application.job.url || '',
     candidate: [application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate',
@@ -125,7 +140,7 @@ async function runAutoApplication(application, recipe, resume = null) {
     autoRuns.delete(run.attemptId);
     lastAutoRun = { ...run, endedAt: Date.now(), totalMs: Date.now() - run.startedAt };
     publishAutoApplyState();
-    await changeStoredRuns((stored) => { delete stored[run.attemptId]; });
+    await changeStoredRuns((stored) => { if (!stored[run.attemptId]?.pendingRelease) delete stored[run.attemptId]; });
   }
 }
 
@@ -139,12 +154,22 @@ async function resumeAutoApplyRuns(selection) {
   // A ChatGPT tab the worker selected before it restarted: the application's tab is shown again.
   await giveBackChatTab().catch(() => {});
   const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
+  const browserSession = await autoApplyBrowserSession();
   const runs = [];
   for (const record of Object.values(stored)) {
+    if (record.pendingRelease) {
+      if (!(await releaseInterruptedAutoRun(record))) throw new Error('QTS is retrying cleanup of an interrupted application.');
+      continue;
+    }
     if (selection && !selection.jobIds.includes(record.jobId)) continue;
     if (autoRuns.has(record.attemptId)) continue;
-    const tab = record.tabId != null ? await chrome.tabs.get(record.tabId).catch(() => null) : null;
+    const tab = record.browserSession === browserSession && record.tabId != null ? await chrome.tabs.get(record.tabId).catch(() => null) : null;
     if (record.submitted) {
+      if (!tab) {
+        await notifyApply(`${record.company || 'An application'}: check "Submitted successfully?" on the Jobs page. QTS will not submit it again.`);
+        await changeStoredRuns((all) => { delete all[record.attemptId]; });
+        continue;
+      }
       runs.push(resumeSubmittedApplication(record).finally(() => changeStoredRuns((all) => { delete all[record.attemptId]; })));
       continue;
     }
@@ -152,7 +177,11 @@ async function resumeAutoApplyRuns(selection) {
     const reply = tab ? await workerApiRequest('POST', '/api/extension/apply/resume', { attemptId: record.attemptId, jobId: record.jobId }) : null;
     const application = reply?.success === true ? reply.application : null;
     if (!application) {
-      if (!tab) await workerApiRequest('POST', '/api/extension/apply/release', { attemptId: record.attemptId, mode: 'later', reason: 'Its tab was closed while QTS restarted.' }).catch(() => {});
+      if (!tab) {
+        if (!(await releaseInterruptedAutoRun(record, 'Its tab was closed while QTS restarted.'))) throw new Error('QTS is retrying cleanup of a closed application tab.');
+        continue;
+      }
+      if (![404, 409].includes(reply?._httpStatus)) throw new Error('QTS could not resume the application yet. It will retry automatically.');
       await changeStoredRuns((all) => { delete all[record.attemptId]; });
       continue;
     }
@@ -164,8 +193,45 @@ async function resumeAutoApplyRuns(selection) {
   return runs;
 }
 
+// Persist before releasing: Chrome may close, or the server may be offline during cleanup.
+// This queue only gives unfinished jobs back; it never submits or confirms an application.
+async function releaseInterruptedAutoRun(record, reason = record.releaseReason, answers = record.releaseAnswers || []) {
+  if (record.submitted) return true;
+  const pending = { attemptId: record.attemptId, jobId: record.jobId, pendingRelease: true,
+    releaseReason: reason || 'Interrupted Auto Apply application.', releaseAnswers: answers };
+  await changeStoredRuns((all) => { all[record.attemptId] = pending; });
+  const reply = await workerApiRequest('POST', '/api/extension/apply/release', {
+    attemptId: pending.attemptId, mode: 'later', reason: pending.releaseReason, appliedAnswers: answers,
+  }).catch(() => null);
+  // A lost response may mean release already succeeded. 409 cannot release or resubmit a live
+  // confirmation; the server retains its existing ownership and post-Submit protections.
+  if (reply?.success === true || reply?._httpStatus === 409 || reply?._httpStatus === 404) {
+    await changeStoredRuns((all) => { delete all[record.attemptId]; });
+    return true;
+  }
+  return false;
+}
+
+async function recoverStoppedAutoRuns() {
+  const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
+  let complete = true;
+  for (const record of Object.values(stored)) {
+    if (record.submitted || autoRuns.has(record.attemptId)) continue;
+    if (!(await releaseInterruptedAutoRun(record, record.releaseReason || 'Auto Apply was cancelled before Chrome restarted.'))) complete = false;
+  }
+  return complete;
+}
+
+async function retryPendingAutoReleases() {
+  const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
+  for (const record of Object.values(stored)) {
+    if (record.pendingRelease && !(await releaseInterruptedAutoRun(record))) return false;
+  }
+  return true;
+}
+
 // The work slot left Apply (Cancel, Stop all, signed out, idle): the kind goes with it, so the next
-// Apply starts as the assistant unless Auto Apply is chosen again; nothing is left to resume.
+// Apply starts as the assistant unless Auto Apply is chosen again. Failed cleanup stays queued.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes[EXTENSION_STATUS_KEY] || changes[EXTENSION_STATUS_KEY].newValue === 'apply') return;
   chrome.storage.local.remove(AUTO_APPLY_KIND_KEY).catch(() => {});
@@ -175,6 +241,10 @@ self.__qtsAutoApply = {
   isOn: isAutoApplyOn,
   run: (application, recipe) => runAutoApplication(application, recipe),
   resumeRuns: resumeAutoApplyRuns,
+  releaseRun: releaseInterruptedAutoRun,
+  recoverStoppedRuns: recoverStoppedAutoRuns,
+  retryPendingReleases: retryPendingAutoReleases,
+  browserSession: autoApplyBrowserSession,
   isRunning: () => autoRuns.size > 0,
   KIND_KEY: AUTO_APPLY_KIND_KEY,
   STATE_KEY: AUTO_APPLY_STATE_KEY,

@@ -81,6 +81,7 @@ const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
 const GENERATION_BROWSER_STATE_KEY = 'qtsGenerationBrowserState';
 const GENERATION_NOTICE_KEY = 'qtsGenerationNotice';
 const GENERATION_QUEUE_RUN_KEY = 'qtsGenerationQueueRun';
+const GENERATION_PENDING_CANCEL_KEY = 'qtsPendingGenerationCancel';
 const getJdInFlightTabs = new Set();
 const getJdInFlightJobKeys = new Set();
 const getJdLastPageByTab = new Map();
@@ -98,6 +99,7 @@ const getJdNavigation = self.__qtsPageActivity.createNavigationMonitor({
 const generationInFlightTabs = new Set();
 const generationCancellationByTab = new Map();
 let generationQueueInFlight = false;
+let generationCancellationRequest = null;
 const generationHeartbeatOkAt = new Map();
 // The server lease lasts 20 minutes, so brief heartbeat outages are safe to ride out.
 const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
@@ -3248,6 +3250,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       [GENERATION_BROWSER_STATE_KEY]: {
         ...(current && typeof current === 'object' ? current : {}),
         ...values,
+        browserSession: await self.__qtsAutoApply.browserSession(),
         updatedAt: new Date().toISOString(),
       },
     });
@@ -3730,7 +3733,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         await updateGenerationBrowserState({ phase: 'waiting_for_response' });
         return await waitForGenerationAnswer(chatTab.id, generationId, active, sentBefore + 1);
       } catch (error) {
-        if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;
+        active.local();
+        const closed = !(await getTab(chatTab.id));
+        if ((!closed && error?.name !== 'ChatGptPageError') || attempt > 0) throw error;
         await showGenerationChatGptStep(chatTab.id, '4/6 · ChatGPT showed an error', `${error.message} Opening a new ChatGPT tab and sending again...`, 'warn');
         await sleep(1500);
         active.local();
@@ -4099,6 +4104,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   }
 
   async function closeInterruptedGenerationTabs(browserState) {
+    if (browserState?.browserSession !== await self.__qtsAutoApply.browserSession()) return;
     const sameOrigin = (url, expectedUrl) => {
       try {
         return new URL(url).origin === new URL(expectedUrl).origin;
@@ -4137,21 +4143,31 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       cancelRequested ? '/api/extension/generation/cancel' : '/api/extension/generation/release',
       { jobId },
     );
-    if (!recovered.success && !recovered._httpStatus && recovered.message !== 'Not logged in.') {
-      return;
+    if (!recovered.success && ![404, 409].includes(recovered._httpStatus)) {
+      throw new Error(recovered.message || 'Interrupted Generation cleanup will retry automatically.');
     }
     await closeInterruptedGenerationTabs(stored[GENERATION_BROWSER_STATE_KEY]);
     await chrome.storage.local.remove([ACTIVE_GENERATION_JOB_KEY, GENERATION_BROWSER_STATE_KEY]);
-    if (cancelRequested) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
   }
 
   async function processQueuedGenerationJobs() {
     if (generationQueueInFlight) return;
     generationQueueInFlight = true;
     try {
+      if ((await chrome.storage.local.get(GENERATION_PENDING_CANCEL_KEY))[GENERATION_PENDING_CANCEL_KEY]) {
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
+        await chrome.storage.local.remove('qtsWorkSelection');
+        const cancellation = await flushGenerationCancellation();
+        if (!cancellation.success) throw new Error(cancellation.message || 'Generation cancellation will retry automatically.');
+      }
+      if ((await chrome.storage.local.get(EXTENSION_STATUS_KEY))[EXTENSION_STATUS_KEY] === 'cancel') {
+        await self.__qtsAutoApply?.recoverStoppedRuns?.();
+      }
       await recoverInterruptedGeneration();
     } catch (error) {
       console.error('[QTS Generation] Could not recover an interrupted job:', error);
+      generationQueueInFlight = false;
+      return; // Keep its recovery record and retry on the alarm before claiming another job.
     }
     let runId = '';
     const excludedJobIds = new Set();
@@ -4390,11 +4406,6 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             ]);
             if (activeGeneration[ACTIVE_GENERATION_JOB_KEY] === queuedJob.id) {
               await chrome.storage.local.remove(ACTIVE_GENERATION_JOB_KEY);
-              if (
-                activeGeneration[EXTENSION_STATUS_KEY] === 'cancel'
-              ) {
-                await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
-              }
             }
           } catch (storageError) {
             console.error('[QTS Generation] Could not clear the active queue status:', storageError);
@@ -4419,12 +4430,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           EXTENSION_STATUS_KEY,
           ACTIVE_GENERATION_JOB_KEY,
         ]);
-        if (
-          current[EXTENSION_STATUS_KEY] === 'cancel' &&
-          !current[ACTIVE_GENERATION_JOB_KEY]
-        ) {
-          await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
-        }
+        await finishWorkCancellation();
         if (current[EXTENSION_STATUS_KEY] !== 'generation') {
           await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
         }
@@ -5509,17 +5515,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         let serverCancelError = '';
         if (cancelledStatus === 'generation') {
-          // Stop locally even if the server is unreachable; the run's cancel path retries server-side.
-          const cancellation = await workerApiRequest(
-            'POST',
-            '/api/extension/generation/cancel-all',
-            {},
-          );
+          // Save intent before any request: closing Chrome mid-Cancel must not restart Generation.
+          await chrome.storage.local.set({ [GENERATION_PENDING_CANCEL_KEY]: true, [EXTENSION_STATUS_KEY]: 'cancel' });
+        }
+        await stopWorkSlotLocally(true);
+        if (cancelledStatus === 'generation') {
+          const cancellation = await flushGenerationCancellation();
           if (!cancellation.success) {
             serverCancelError = cancellation.message || 'Could not reach QTS.';
           }
         }
-        await stopWorkSlotLocally(true);
         const cancelledLabel = cancelledStatus === 'generation'
             ? 'Generation'
             : cancelledStatus === 'apply'
@@ -6802,10 +6807,24 @@ async function finishWorkCancellation() {
     || self.__qtsAutoApply?.isRunning?.()) return;
   const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
   if (stored[EXTENSION_STATUS_KEY] === 'cancel' && !stored[ACTIVE_GENERATION_JOB_KEY]) {
+    if (!(await flushGenerationCancellation()).success) return;
+    if (await self.__qtsAutoApply?.recoverStoppedRuns?.() === false) return;
     await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
   }
 }
 self.__qtsFinishWorkCancellation = finishWorkCancellation;
+
+async function flushGenerationCancellation() {
+  if (generationCancellationRequest) return generationCancellationRequest;
+  if (!(await chrome.storage.local.get(GENERATION_PENDING_CANCEL_KEY))[GENERATION_PENDING_CANCEL_KEY]) return { success: true };
+  if (generationCancellationRequest) return generationCancellationRequest;
+  generationCancellationRequest = (async () => {
+    const reply = await workerApiRequest('POST', '/api/extension/generation/cancel-all', {}).catch(() => ({ success: false, message: 'Could not reach QTS.' }));
+    if (reply.success) await chrome.storage.local.remove(GENERATION_PENDING_CANCEL_KEY);
+    return reply;
+  })();
+  try { return await generationCancellationRequest; } finally { generationCancellationRequest = null; }
+}
 
 async function sendBrowserHeartbeat() {
   const modes = await browserModes();
@@ -6942,15 +6961,26 @@ chrome.runtime.onInstalled.addListener((details) => {
   self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
 });
 
+let startupRecoveryInFlight = false;
+async function recoverWorkOnStartup() {
+  if (startupRecoveryInFlight) return;
+  startupRecoveryInFlight = true;
+  try {
+    // Startup runs both queues immediately, without a launcher click. Saved Cancel remains stopped.
+    await syncBrowserHeartbeatAlarm();
+    await self.__qtsApplyRunner?.syncApplyQueueAlarm();
+    await syncGenerationQueueAlarm();
+    await processQueuedGenerationJobs();
+    if ((await chrome.storage.local.get(EXTENSION_STATUS_KEY))[EXTENSION_STATUS_KEY] === 'apply') {
+      await self.__qtsApplyRunner.processApplyQueue();
+    }
+  } finally {
+    startupRecoveryInFlight = false;
+  }
+}
+
 self.chrome?.runtime?.onStartup?.addListener(() => {
-  syncBrowserHeartbeatAlarm().catch(() => {});
-  self.__qtsApplyRunner?.syncApplyQueueAlarm().catch(() => {});
-  syncGenerationQueueAlarm().catch((error) => {
-    console.error('[QTS Generation] Could not update the queue alarm:', error);
-  });
-  processQueuedGenerationJobs().catch((error) => {
-    console.error('[QTS Generation] Queue worker failed:', error);
-  });
+  recoverWorkOnStartup().catch((error) => console.error('[QTS] Startup recovery will retry on the queue alarm:', error));
 });
 
 self.chrome?.alarms?.onAlarm?.addListener((alarm) => {
@@ -7245,3 +7275,7 @@ async function openCapturePanel(tabId, { toggle = false } = {}) {
     }
   }
 }
+
+// MV3 may wake a restored worker without delivering onStartup (including unpacked extensions).
+// Recover from durable state on every new worker instance; queue guards prevent duplicate work.
+recoverWorkOnStartup().catch((error) => console.error('[QTS] Worker recovery will retry on the queue alarm:', error));

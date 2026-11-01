@@ -1993,7 +1993,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const review of activeReviews.values()) {
     if (!review.tabIds) {
-      if (review.tabId === tabId) answerManager(review.attemptId, { action: 'closed' });
+      if (review.tabId === tabId) {
+        review.onClosed?.();
+        answerManager(review.attemptId, { action: 'closed' });
+      }
       continue;
     }
     if (!review.tabIds.delete(tabId)) continue;
@@ -2040,6 +2043,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
  */
 async function runApplication(application, recipe, { auto = false, onProgress = () => {}, resume = null } = {}) {
   let lostClaim = false;
+  let tabClosed = false;
   // Auto Apply: Cancel, Stop all, or a lost claim interrupts the work at once (the step being filled,
   // a wait), not only between steps; the form's tab closes, which ends whatever was still running there.
   let signalStop = () => {};
@@ -2169,7 +2173,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     resumeFolder: application.job.resumeFolder,
     panel: null,
     // Auto Apply: Cancel or Stop all before its review waits (panel and notice still being shown) is kept.
-    ...(auto ? { auto: true } : {}),
+    ...(auto ? { auto: true, onClosed: () => { tabClosed = true; signalStop('The application tab was closed. QTS will retry it automatically.'); } } : {}),
   };
   activeReviews.set(application.attemptId, review);
   publishApplyState();
@@ -2217,7 +2221,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     ...extra,
   });
   const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId: application.attemptId, ...body });
-  const release = (mode, reason) => report('release', { mode, reason: reason.slice(0, 480), appliedAnswers: appliedAnswers(answersUsed) });
+  const release = (mode, reason) => auto
+    ? self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id }, reason.slice(0, 480), appliedAnswers(answersUsed))
+    : report('release', { mode, reason: reason.slice(0, 480), appliedAnswers: appliedAnswers(answersUsed) });
   let tab = null;
   let submitted = false;
   // An email-first step (only an email and a Continue): QTS types the profile's email; the Manager
@@ -2503,9 +2509,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     // Stopped while ChatGPT answered with its tab selected: the application's tab first (its own
     // closing below then shows the Manager's tab it was opened from).
     if (auto) await giveBackChatTab(application.attemptId).catch(() => {});
-    // Auto Apply only gives the job back (not opened again in this Chrome until Apply restarts).
+    // Auto Apply gives the job back. A closed tab retries automatically; other stops remain excluded.
     await release(stop.dryRun ? 'test' : auto ? 'later' : stop.skip ? 'skip' : 'error', stop.message).catch(() => {});
-    if (auto) await noteCancelledJob(application.job.id).catch(() => {});
+    if (auto && !tabClosed) await noteCancelledJob(application.job.id).catch(() => {});
     onProgress({ phase: 'ended', reason: stop.message });
     // Test mode gives the job back, so the same job would be claimed again at once: one test per click.
     if (stop.dryRun) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
@@ -2532,7 +2538,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   // Skip, Later, a closed tab, or Apply turned off during review: the job is given back.
   async function finishBeforeSubmit(action) {
     const mode = action === 'skip' && !auto ? 'skip' : 'later';
-    if (auto) await noteCancelledJob(application.job.id).catch(() => {});
+    if (auto && action !== 'closed') await noteCancelledJob(application.job.id).catch(() => {});
     onProgress({ phase: 'ended', reason: action });
     const reason = action === 'skip' ? 'Skipped by the Manager.'
       : action === 'closed' ? 'The review tab was closed; the job went back to the list.'
@@ -3105,6 +3111,7 @@ async function processApplyQueue() {
         await Promise.race(running);
         continue;
       }
+      if (autoApply && !(await self.__qtsAutoApply.retryPendingReleases())) break;
       const scope = autoApply ? (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection : null;
       const claim = await workerApiRequest('POST', '/api/extension/apply/claim', {
         skipJobIds: await cancelledJobIds(),
@@ -3124,6 +3131,11 @@ async function processApplyQueue() {
         // Nothing ready now: looked for again in a minute, or when one of the open jobs ends.
         await Promise.race([...running, sleep(60 * 1000)]);
         continue;
+      }
+      if (!(await isApplyOn())) {
+        if (autoApply) await self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id }, 'Auto Apply stopped while claiming this job.');
+        else await workerApiRequest('POST', '/api/extension/apply/release', { attemptId: application.attemptId, mode: 'later', reason: 'Apply stopped while claiming this job.' });
+        break;
       }
       // Work found: this Chrome is not idle (shared/idle-pacing.js), until the queue is empty for a while.
       await self.__qtsIdlePacing.noteActivity();

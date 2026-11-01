@@ -452,6 +452,29 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
   }
 });
 
+test('closing an unfinished Auto Apply tab releases and automatically retries the same selected job', { skip, timeout: 180000 }, async () => {
+  const first = application(80);
+  resetMock({ queue: [first] });
+  const ctx = await launch({ ai: 'off' });
+  try {
+    assert.equal((await ctx.action('auto_apply')).ok, true);
+    const form = await until(() => formPage(ctx.browser), 30000, 'the original application tab');
+    await waitForAutoStep(ctx.storage, 1);
+    mock.queue.push({ ...first, attemptId: attempt(81) });
+    await form.close();
+    await until(() => mock.released.some(row => row.attemptId === attempt(80)), 20000, 'automatic release of the closed tab');
+    await until(async () => {
+      const run = (await ctx.storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs?.[0];
+      return run?.attemptId === attempt(81) && ['needs_you', 'final'].includes(run.phase);
+    }, 60000, 'automatic retry without a launcher click');
+    assert.equal(mock.released.find(row => row.attemptId === attempt(80)).mode, 'later');
+    assert.equal(mock.submitted.length, 0);
+    assert.equal(mock.pageSubmitted, 0);
+    await ctx.action('cancel_status');
+    await until(async () => (await ctx.storage(['qtsExtensionStatus'])).qtsExtensionStatus == null, 20000, 'Cancel cleanup');
+  } finally { await ctx.browser.close(); }
+});
+
 test('Stage C: approved answers first, then one Gemini batch for the step (retried after a 429), every answer filled, one the documents do not show provisional until accepted or edited (Submit held till then); corrections proposed as drafts', { skip, timeout: 300000 }, async () => {
   resetMock({ queue: [application(10, 'form-ai')], fail429: 1 });
   const { browser, action, storage, phase } = await launch({ ai: 'gemini' });
