@@ -1,20 +1,11 @@
 import { NextResponse } from "next/server";
 import {
-  acquireGeminiKey,
-  getGeminiApiKeyHash,
-  getGeminiApiKeys,
-  getGeminiApiLimits,
-  recordGeminiApiCall,
-  requestGeminiApi,
-  releaseGeminiKey,
-} from "@/lib/gemini-usage";
-import { getCurrentUser } from "@/lib/session";
-import {
   estimateGeminiInputTokens,
   geminiModel,
 } from "@/server/gemini/gemini-request";
 import { estimateGeminiImageTokens } from "@/server/gemini/image-token-estimate";
 import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
+import type { GeminiApiLimits } from "@/lib/gemini-usage";
 
 const maxPromptCharacters = 750_000;
 // Vercel caps request bodies near 4.5 MB and base64 adds about a third, so images stay under 3 MB.
@@ -38,6 +29,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
+  const { getCurrentUser } = await import("@/lib/session");
   const currentUser = await getCurrentUser();
   if (!currentUser || currentUser.role !== "super_admin") {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
@@ -72,6 +64,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  const {
+    acquireGeminiKey,
+    getGeminiApiKeyHash,
+    getGeminiApiKeys,
+    getGeminiApiLimits,
+    releaseGeminiKey,
+  } = await import("@/lib/gemini-usage");
   const apiKeys = getGeminiApiKeys();
   if (apiKeys.length === 0) {
     return NextResponse.json(
@@ -86,7 +85,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     prompt,
     geminiJobEvaluationGenerationConfig,
   ) + (imageEstimate ?? 0);
-  const selectedKey = await selectTrackedGeminiKey(apiKeys, await getGeminiApiLimits());
+  const limits = await getGeminiApiLimits();
+  const selectedKey = await selectTrackedGeminiKey(apiKeys, limits, acquireGeminiKey);
   if (!selectedKey) {
     return NextResponse.json(
       { error: "All Gemini keys are busy or at their QTS usage limits." },
@@ -128,7 +128,8 @@ export async function POST(request: Request): Promise<NextResponse> {
 
 async function selectTrackedGeminiKey(
   apiKeys: string[],
-  limits: Awaited<ReturnType<typeof getGeminiApiLimits>>,
+  limits: GeminiApiLimits,
+  acquireKey: (apiKey: string, limits: GeminiApiLimits) => Promise<string | null>,
 ): Promise<{
   apiKey: string;
   keyIndex: number;
@@ -136,7 +137,7 @@ async function selectTrackedGeminiKey(
 } | null> {
   for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex += 1) {
     const apiKey = apiKeys[keyIndex];
-    const leaseId = await acquireGeminiKey(apiKey, limits);
+    const leaseId = await acquireKey(apiKey, limits);
     if (!leaseId) continue;
     return { apiKey, keyIndex, leaseId };
   }
@@ -161,6 +162,7 @@ async function requestGoogleTokenCount(
   prompt: string,
   image: ComparisonImage | null,
 ): Promise<number> {
+  const { recordGeminiApiCall, requestGeminiApi } = await import("@/lib/gemini-usage");
   const parts = [
     ...(prompt.trim() ? [{ text: prompt }] : []),
     ...(image ? [{ inlineData: { mimeType: image.mimeType, data: image.data } }] : []),
