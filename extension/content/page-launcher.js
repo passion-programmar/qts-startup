@@ -619,7 +619,7 @@ async function initializeQtsPageLauncher() {
 
   // All toasts on the page share one stack (content/page-toast.js).
   function showToast(message, type = 'info') {
-    globalThis.__qtsPageToast?.show(message, { type });
+    globalThis.__qtsPageToast?.show(message, { type, key: `qts-launcher:${type}:${message}` });
   }
 
   /**

@@ -254,3 +254,14 @@ test('worker explains when the deployed Get JD endpoint is missing', async () =>
   assert.equal(result._httpStatus, 404);
   assert.match(result.message, /does not have the Get JD check endpoint/i);
 });
+
+test('missing account/job listing and other endpoints do not report a Get JD error', async () => {
+  const worker = loadApiWorker(async () => ({ ok: false, status: 404, json: async () => { throw new SyntaxError('HTML'); } }));
+  const listing = await worker.workerApiRequest('GET', '/api/extension/work-items?mode=generation');
+  assert.equal(listing._httpStatus, 404);
+  assert.match(listing.message, /Account and job selection/);
+  assert.doesNotMatch(listing.message, /Get JD/);
+  const generation = await worker.workerApiRequest('POST', '/api/extension/generation/claim', {});
+  assert.match(generation.message, /generation\/claim/);
+  assert.doesNotMatch(generation.message, /Get JD/);
+});

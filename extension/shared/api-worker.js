@@ -119,10 +119,16 @@ async function workerApiRequest(method, path, body, options = {}) {
     try {
       data = await response.json();
     } catch {
+      const endpoint = path.split('?')[0];
+      const missingMessage = endpoint === '/api/extension/get-jd/check'
+        ? 'This QTS server does not have the Get JD check endpoint yet. Deploy the latest server version.'
+        : endpoint === '/api/extension/work-items'
+          ? 'Account and job selection is unavailable on this QTS server. Update the hosted server to the latest version.'
+          : `This QTS server does not have the requested endpoint (${endpoint}). Update the hosted server to the latest version.`;
       return {
         success: false,
         message: response.status === 404
-          ? 'This QTS server does not have the Get JD check endpoint yet. Deploy the latest server version.'
+          ? missingMessage
           : `QTS server returned a non-JSON response (HTTP ${response.status}).`,
         _httpStatus: response.status,
       };
