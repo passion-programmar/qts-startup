@@ -31,6 +31,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         firstName: profiles.firstName,
         lastName: profiles.lastName,
         category: profiles.managerCategory,
+        categoryColor: profiles.managerCategoryColor,
         eligibleJobCount: sql<number>`count(${jobs.id})::int`,
       })
         .from(users)
@@ -41,13 +42,14 @@ export async function GET(request: Request): Promise<NextResponse> {
           mode === "generation" ? readyGeneration(new Date(), requireMatchingNote) : readyAutoApply(),
         ))
         .where(ownership)
-        .groupBy(users.id, profiles.userId, profiles.firstName, profiles.lastName, profiles.managerCategory)
+        .groupBy(users.id, profiles.userId, profiles.firstName, profiles.lastName, profiles.managerCategory, profiles.managerCategoryColor)
         .orderBy(asc(profiles.firstName), asc(profiles.lastName)).limit(101);
       if (accounts.length > 100) return reply({ success: false, message: "Too many accounts to list. Contact your administrator." }, 413);
-      return reply({ success: true, accounts: accounts.map(({ id, firstName, lastName, category, eligibleJobCount }) => ({
+      return reply({ success: true, accounts: accounts.map(({ id, firstName, lastName, category, categoryColor, eligibleJobCount }) => ({
         id,
         name: [firstName, lastName].filter(Boolean).join(" ") || "Candidate",
         category: category || "",
+        categoryColor: categoryColor || null,
         eligibleJobCount: Number(eligibleJobCount) || 0,
       })) });
     }

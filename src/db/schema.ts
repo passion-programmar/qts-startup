@@ -125,6 +125,7 @@ export const users = pgTable(
     blockedBy: uuid("blocked_by").references((): AnyPgColumn => users.id, {
       onDelete: "restrict",
     }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "date" }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -141,6 +142,7 @@ export const users = pgTable(
       .where(sql`${table.role} = 'super_admin'`),
     check("users_apply_review_mode_check", sql`${table.applyReviewMode} in ('every_step', 'before_submit')`),
     check("users_auto_apply_parallel_limit_check", sql`${table.autoApplyParallelLimit} between 1 and 10`),
+    check("users_deleted_candidate_inactive_check", sql`${table.deletedAt} is null or (${table.role} = 'account' and ${table.blockedAt} is not null)`),
     check(
       "users_parent_matches_role_check",
       sql`(${table.role} = 'super_admin' and ${table.parentUserId} is null) or (${table.role} <> 'super_admin' and ${table.parentUserId} is not null)`,
@@ -188,6 +190,7 @@ export const profiles = pgTable(
     jdMatching: text("jd_matching"),
     // Manager's optional free-text label, independent of the global category catalog.
     managerCategory: text("manager_category").default("").notNull(),
+    managerCategoryColor: text("manager_category_color"),
     // Facts application forms ask for. Apply fills what fits from here; ChatGPT answers the rest.
     workAuthorization: text("work_authorization"),
     needsSponsorship: boolean("needs_sponsorship"),
@@ -243,6 +246,10 @@ export const profiles = pgTable(
     check(
       "profiles_work_preferences_check",
       sql`(${table.contractType} is null or ${table.contractType} in ('employment', 'b2b', 'either')) and (${table.workHours} is null or ${table.workHours} in ('full_time', 'part_time', 'either')) and (${table.workMode} is null or ${table.workMode} in ('remote', 'hybrid', 'onsite', 'any'))`,
+    ),
+    check(
+      "profiles_manager_category_color_check",
+      sql`${table.managerCategoryColor} is null or ${table.managerCategoryColor} ~ '^#[0-9a-fA-F]{6}$'`,
     ),
     uniqueIndex("profiles_candidate_email_normalized_unique")
       .on(sql`lower(btrim(${table.candidateEmail}))`)

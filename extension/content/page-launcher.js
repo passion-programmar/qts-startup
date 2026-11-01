@@ -360,10 +360,13 @@ async function initializeQtsPageLauncher() {
         select.setAttribute('aria-label', `${label} account`);
         select.add(new Option('Select account', ''));
         select.addEventListener('focus', () => loadWorkAccounts(action).catch(() => {}));
-        select.addEventListener('change', () => loadWorkJobs(action));
+        select.addEventListener('change', () => {
+          setWorkAccountColor(select, workPickers.get(action).accounts, select.value);
+          loadWorkJobs(action);
+        });
         const panel = Object.assign(document.createElement('div'), { className: 'work-picker', hidden: true });
         panel.dataset.workPicker = action;
-        workPickers.set(action, { select, panel, jobs: [], selected: new Set(), version: 0, loading: false });
+        workPickers.set(action, { select, panel, accounts: [], jobs: [], selected: new Set(), version: 0, loading: false });
         heading.append(button, select);
         row.replaceChildren(heading, panel, sub);
       }
@@ -386,6 +389,7 @@ async function initializeQtsPageLauncher() {
       const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: action });
       if (version !== accountsVersion) return;
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load accounts.');
+      picker.accounts = reply.accounts;
       picker.select.replaceChildren(new Option(reply.accounts.length ? 'Select account' : 'No eligible accounts', ''));
       for (const account of reply.accounts) {
         const eligibleJobCount = Number(account.eligibleJobCount) || 0;
@@ -394,12 +398,18 @@ async function initializeQtsPageLauncher() {
           `${account.name}${account.category ? ` (${account.category})` : ''} (${countLabel})`,
           account.id,
         );
+        if (/^#[0-9a-f]{6}$/i.test(account.categoryColor || '')) {
+          option.style.backgroundColor = account.categoryColor;
+          option.style.color = categoryForeground(account.categoryColor);
+        }
         option.disabled = eligibleJobCount === 0;
         picker.select.add(option);
       }
       picker.select.value = previous;
+      setWorkAccountColor(picker.select, picker.accounts, picker.select.value);
       if (picker.select.selectedOptions[0]?.disabled) {
         picker.select.value = '';
+        setWorkAccountColor(picker.select, picker.accounts, '');
         picker.version += 1;
         picker.jobs = [];
         picker.selected.clear();
@@ -417,6 +427,23 @@ async function initializeQtsPageLauncher() {
     });
     accountsRequests.set(action, request);
     return request;
+  }
+
+  function categoryForeground(color) {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return '#cbd5e1';
+    const channels = [1, 3, 5].map(offset => {
+      const channel = parseInt(color.slice(offset, offset + 2), 16) / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    return luminance > 0.179 ? '#0f172a' : '#ffffff';
+  }
+
+  function setWorkAccountColor(select, accounts, accountId) {
+    const account = accounts.find(item => item.id === accountId);
+    const color = /^#[0-9a-f]{6}$/i.test(account?.categoryColor || '') ? account.categoryColor : '';
+    select.style.backgroundColor = color;
+    select.style.color = color ? categoryForeground(color) : '';
   }
 
   function loadAllWorkAccounts() {

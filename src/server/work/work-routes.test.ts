@@ -51,9 +51,9 @@ const request = (query = "") => new Request("http://localhost/api/extension/work
 const claim = (selection?: unknown, mode?: string) => new Request("http://localhost/api/extension/claim", { method: "POST", body: JSON.stringify({ selection, mode }) });
 
 test("Gemini-matching account choices require nonblank matching notes; notes are not disclosed", async () => {
-  fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", category: "DevOps", eligibleJobCount: 8 }]];
+  fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", category: "DevOps", categoryColor: "#2563eb", eligibleJobCount: 8 }]];
   const response = await GET(request()); assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", eligibleJobCount: 8 }] });
+  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", categoryColor: "#2563eb", eligibleJobCount: 8 }] });
   assert.match(fixture.queries[1].sql, /length\(regexp_replace\(coalesce\("profiles"\."jd_matching"/);
   assert.ok(fixture.queries[1].params.includes("\\s"), 'blank lines and tabs must not count as matching notes');
   assert.match(fixture.queries[1].sql, /parent_user_id/); assert.match(fixture.queries[1].sql, /blocked_at/);
@@ -62,17 +62,17 @@ test("Gemini-matching account choices require nonblank matching notes; notes are
   assert.ok(fixture.queries[1].params.includes(managerId)); assert.ok(fixture.queries[1].params.includes("account"));
 });
 test("non-Gemini Generation does not require a matching note", async () => {
-  fixture.rows = [[{ useGeminiMatching: false }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", eligibleJobCount: 0 }]];
+  fixture.rows = [[{ useGeminiMatching: false }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", categoryColor: null, eligibleJobCount: 0 }]];
   const response = await GET(request());
-  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "", eligibleJobCount: 0 }] });
+  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "", categoryColor: null, eligibleJobCount: 0 }] });
   assert.doesNotMatch(fixture.queries[1].sql, /jd_matching/);
 });
 test("Gemini-assigned Auto Apply accounts require matching notes and Auto Apply job eligibility", async () => {
-  fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", category: "DevOps", eligibleJobCount: 6 }]];
+  fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", category: "DevOps", categoryColor: "#2563eb", eligibleJobCount: 6 }]];
   const response = await GET(new Request("http://localhost/api/extension/work-items?mode=auto_apply"));
   assert.deepEqual(await response.json(), {
     success: true,
-    accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", eligibleJobCount: 6 }],
+    accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", categoryColor: "#2563eb", eligibleJobCount: 6 }],
   });
   assert.match(fixture.queries[1].sql, /jd_matching/);
   assert.ok(fixture.queries[1].params.includes("\\s"));

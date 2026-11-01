@@ -33,6 +33,7 @@ import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
 import { formatProfileMonth } from "@/server/users/profile-values";
+import { managerCategoryColors } from "@/server/users/manager-category-color";
 import {
   createUserAction,
   deleteCandidateAccountAction,
@@ -53,6 +54,7 @@ type CreateUserFormProps = {
 export function CreateUserForm({ role, showJdMatchingNote = false }: CreateUserFormProps & { showJdMatchingNote?: boolean }) {
   const [educationRows, setEducationRows] = useState([0]);
   const [experienceRows, setExperienceRows] = useState([0]);
+  const [managerCategoryColor, setManagerCategoryColor] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const closeModal = useCallback(() => setIsOpen(false), []);
   const [state, formAction, isPending] = useActionState(
@@ -63,6 +65,7 @@ export function CreateUserForm({ role, showJdMatchingNote = false }: CreateUserF
         setIsOpen(false);
         setEducationRows([0]);
         setExperienceRows([0]);
+        setManagerCategoryColor("");
       }
       return result;
     },
@@ -204,6 +207,7 @@ export function CreateUserForm({ role, showJdMatchingNote = false }: CreateUserF
               name="postalCode"
             />
             <TextField autoComplete="off" id="managerCategory" label="Category (optional)" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
+            <ManagerCategoryColorField onChange={setManagerCategoryColor} value={managerCategoryColor} />
           </div>
           </FormCard>
           <HistorySection
@@ -441,6 +445,7 @@ export type CandidateProfileValues = {
   postalCode: string | null;
   jdMatching: string | null;
   managerCategory: string;
+  managerCategoryColor: string | null;
   workAuthorization: string | null;
   needsSponsorship: boolean | null;
   noticePeriod: string | null;
@@ -493,11 +498,12 @@ export function EditCandidateProfileForm({
   showJdMatchingNote = false,
 }: {
   candidate: CandidateProfileValues;
-  // A blocked ("deleted") candidate: everything can be read, nothing changed.
+  // A deleted candidate: everything can be read, nothing changed.
   readOnly?: boolean;
   showJdMatchingNote?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [managerCategoryColor, setManagerCategoryColor] = useState(candidate.managerCategoryColor ?? "");
   const [educationRows, setEducationRows] = useState(() =>
     candidate.education.length ? candidate.education.map((_, index) => index) : [0],
   );
@@ -523,6 +529,7 @@ export function EditCandidateProfileForm({
   // Each opening starts from the saved history, newest first as the page loads it, so rows never
   // keep an earlier order or point at another entry after a save.
   const openEditor = () => {
+    setManagerCategoryColor(candidate.managerCategoryColor ?? "");
     setEducationRows(candidate.education.length ? candidate.education.map((_, index) => index) : [0]);
     setExperienceRows(candidate.experience.length ? candidate.experience.map((_, index) => index) : [0]);
     nextEducationRowId.current = Math.max(1, candidate.education.length);
@@ -534,7 +541,7 @@ export function EditCandidateProfileForm({
   return (
     <>
       <button
-        aria-label={readOnly ? "View blocked candidate profile" : "Edit candidate profile"}
+        aria-label={readOnly ? "View deleted candidate profile" : "Edit candidate profile"}
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100"
         onClick={openEditor}
         type="button"
@@ -548,9 +555,9 @@ export function EditCandidateProfileForm({
         onClose={closeModal}
         open={isOpen}
         subtitle={readOnly
-          ? "This candidate is blocked: the profile can be read but not changed, and it is not used for jobs."
+          ? "This candidate is deleted: the profile can be read but not changed, and it is not used for jobs."
           : "Update the candidate's contact information and profile details."}
-        title={readOnly ? "Blocked candidate (read-only)" : "Edit candidate profile"}
+        title={readOnly ? "Deleted candidate (read-only)" : "Edit candidate profile"}
       >
         <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField}>
           <input name="userId" type="hidden" value={candidate.userId} />
@@ -680,6 +687,11 @@ export function EditCandidateProfileForm({
             name="postalCode"
           />
           <TextField autoComplete="off" defaultValue={candidate.managerCategory || ""} id={fieldId("managerCategory")} label="Category (optional)" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
+          <ManagerCategoryColorField
+            id={fieldId("managerCategoryColor")}
+            onChange={setManagerCategoryColor}
+            value={managerCategoryColor}
+          />
           </div>
           </FormCard>
           <ApplicationFactsSection candidate={candidate} fieldId={fieldId} />
@@ -776,6 +788,7 @@ export function ToggleCandidateAccountStatusForm({
     <form action={formAction}>
       <input name="userId" type="hidden" value={userId} />
       <button
+        aria-label={active ? `Set ${candidateName} inactive` : `Set ${candidateName} active`}
         className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition ${active ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100" : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100"}`}
         disabled={isPending}
         type="submit"
@@ -788,6 +801,47 @@ export function ToggleCandidateAccountStatusForm({
         </span>
       )}
     </form>
+  );
+}
+
+function ManagerCategoryColorField({
+  id = "managerCategoryColor",
+  value,
+  onChange,
+}: {
+  id?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const labelId = `${id}-label`;
+  const choices = [{ name: "No color", value: "" }, ...managerCategoryColors];
+
+  return (
+    <div className="space-y-2">
+      <p className="block text-xs font-semibold text-slate-700" id={labelId}>
+        Category color (optional)
+      </p>
+      <input name="managerCategoryColor" type="hidden" value={value} />
+      <div aria-labelledby={labelId} className="flex flex-wrap gap-1.5" role="group">
+        {choices.map((choice) => {
+          const selected = choice.value === value;
+          return (
+            <button
+              aria-pressed={selected}
+              aria-label={choice.name}
+              className={`flex size-6 items-center justify-center rounded-full border bg-white p-0.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 ${selected ? "border-indigo-700 ring-2 ring-indigo-200" : "border-slate-300 hover:ring-2 hover:ring-slate-200"}`}
+              key={choice.value || "none"}
+              onClick={() => onChange(choice.value)}
+              style={choice.value ? { backgroundColor: choice.value } : undefined}
+              title={choice.name}
+              type="button"
+            >
+              {!choice.value && <X aria-hidden="true" className="size-3 text-slate-400" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -810,7 +864,7 @@ export function DeleteCandidateAccountForm({
         ariaLabel={`Delete ${candidateName}`}
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
         confirmLabel="Delete candidate"
-        description={<>Delete {candidateName}? The account is blocked, not erased: their profile, Jobs, Bids, and history stay read-only on this page, and they are no longer used for Get JD, Generation, or Apply. This cannot be undone.</>}
+        description={<>Delete {candidateName}? Their profile, Jobs, Bids, and history stay viewable but read-only on this page, and they are no longer used for Get JD, Generation, or Apply. This cannot be undone.</>}
         disabled={isPending}
         title="Delete this candidate?"
       >

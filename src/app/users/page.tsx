@@ -45,6 +45,7 @@ type UserRow = {
   display_name: string | null;
   login_name: string | null;
   blocked_at: Date | string | null;
+  deleted_at: Date | string | null;
   created_at: Date | string;
   first_name: string | null;
   last_name: string | null;
@@ -62,6 +63,7 @@ type UserRow = {
   jd_matching: string | null;
   category_id: string | null;
   manager_category: string;
+  manager_category_color: string | null;
   category_name: string | null;
   work_authorization: string | null;
   needs_sponsorship: boolean | null;
@@ -98,6 +100,16 @@ function userName(user: UserRow): string {
   );
 }
 
+function categoryForeground(color: string): string {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return "#0f172a";
+  const channels = [1, 3, 5].map((offset) => {
+    const channel = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return luminance > 0.179 ? "#0f172a" : "#ffffff";
+}
+
 export default async function UsersPage() {
   const actor = await getCurrentUser();
   if (!actor) redirect("/login");
@@ -109,7 +121,7 @@ export default async function UsersPage() {
   const result = await db.execute<UserRow>(sql`
     with recursive visible_users as (
       select
-        id, role, parent_user_id, display_name, login_name, blocked_at, created_at
+        id, role, parent_user_id, display_name, login_name, blocked_at, deleted_at, created_at
       from users
       where id = ${actor.id}
 
@@ -117,10 +129,10 @@ export default async function UsersPage() {
 
       select
         child.id, child.role, child.parent_user_id, child.display_name,
-        child.login_name, child.blocked_at, child.created_at
+        child.login_name, child.blocked_at, child.deleted_at, child.created_at
       from users as child
       inner join visible_users as parent on child.parent_user_id = parent.id
-      -- Blocked candidate accounts stay visible (read-only) to their Manager.
+      -- Inactive and deleted candidate accounts stay visible to their Manager.
       where ${includeBlocked} or child.blocked_at is null or child.role = 'account'
     )
     select
@@ -130,6 +142,7 @@ export default async function UsersPage() {
       visible_users.display_name,
       visible_users.login_name,
       visible_users.blocked_at,
+      visible_users.deleted_at,
       visible_users.created_at,
       profiles.first_name,
       profiles.last_name,
@@ -147,6 +160,7 @@ export default async function UsersPage() {
       profiles.jd_matching,
       profiles.category_id,
       profiles.manager_category,
+      profiles.manager_category_color,
       profiles.work_authorization,
       profiles.needs_sponsorship,
       profiles.notice_period,
@@ -258,9 +272,9 @@ export default async function UsersPage() {
       <div>
         <PageHeader
           description={actor.role === "manager"
-            ? "Create and maintain the candidate accounts you manage."
+            ? ""
             : "Everyone in your part of the organization, with their roles and reporting lines."}
-          title={actor.role === "manager" ? "Candidate accounts" : "People"}
+          title={actor.role === "manager" ? "" : "People"}
         />
         <section aria-label="Visible user totals" className="mb-5 grid gap-3 sm:grid-cols-3">
           {[
@@ -302,14 +316,15 @@ export default async function UsersPage() {
               <PaginatedTable
                 columns={[
                   { label: "No", className: "w-[4%] text-center" },
-                  { label: "Full name", className: "w-[14%]" },
-                  { label: "Category", className: "w-[12%]" },
-                  { label: "Contact", className: "w-[18%]" },
-                  { label: "Street address", className: "w-[16%]" },
-                  { label: "Postal code", className: "w-[10%]" },
-                  { label: "LinkedIn", className: "w-[8%]" },
-                  { label: "Edit", className: "w-[9%] text-center" },
-                  { label: "Delete", className: "w-[9%] text-center" },
+                  { label: "Full name", className: "w-[13%]" },
+                  { label: "Category", className: "w-[11%]" },
+                  { label: "Contact", className: "w-[17%]" },
+                  { label: "Street address", className: "w-[15%]" },
+                  { label: "Postal code", className: "w-[9%]" },
+                  { label: "LinkedIn", className: "w-[7%]" },
+                  { label: "Edit", className: "w-[7%] text-center" },
+                  { label: "Status", className: "w-[9%] text-center" },
+                  { label: "Delete", className: "w-[8%] text-center" },
                 ]}
                 emptyMessage="No candidate accounts"
                 rows={result.rows
@@ -332,18 +347,23 @@ export default async function UsersPage() {
                         value={userName(candidate)}
                       >
                         {userName(candidate)}
-                        {candidate.blocked_at && (
-                          <span className="ml-2 inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-rose-100">
-                            Blocked
-                          </span>
-                        )}
                       </CopyableAccountField>,
                       <CopyableAccountField
                         ariaLabel={`Copy category for ${userName(candidate)}`}
                         key="category"
                         value={candidate.manager_category || "Uncategorized"}
                       >
-                        {candidate.manager_category || "Uncategorized"}
+                        <span
+                          className={candidate.manager_category_color
+                            ? "inline-flex max-w-full items-center rounded-full px-2.5 py-1 text-xs font-medium"
+                            : "inline-flex items-center"}
+                          style={candidate.manager_category_color ? {
+                            backgroundColor: candidate.manager_category_color,
+                            color: categoryForeground(candidate.manager_category_color),
+                          } : undefined}
+                        >
+                          {candidate.manager_category || "Uncategorized"}
+                        </span>
                       </CopyableAccountField>,
                       <CopyableAccountField
                         ariaLabel={`Copy contact for ${userName(candidate)}`}
@@ -401,6 +421,7 @@ export default async function UsersPage() {
                           postalCode: candidate.postal_code,
                           jdMatching: candidate.jd_matching,
                           managerCategory: candidate.manager_category || "",
+                          managerCategoryColor: candidate.manager_category_color,
                           workAuthorization: candidate.work_authorization,
                           needsSponsorship: candidate.needs_sponsorship,
                           noticePeriod: candidate.notice_period,
@@ -451,28 +472,27 @@ export default async function UsersPage() {
                           ),
                         }}
                         key="edit"
-                        readOnly={Boolean(candidate.blocked_at)}
+                        readOnly={Boolean(candidate.deleted_at)}
                       />,
-                      <div className="flex items-center justify-center gap-2" key="status-actions">
+                      candidate.deleted_at ? (
+                        <span className="block text-center text-xs font-medium text-slate-500" key="status">Deleted</span>
+                      ) : (
                         <ToggleCandidateAccountStatusForm
                           active={!Boolean(candidate.blocked_at)}
                           candidateName={userName(candidate)}
+                          key="status"
                           userId={candidate.id}
                         />
-                        {candidate.blocked_at ? (
-                          <span className="text-[10px] text-slate-500">Inactive</span>
-                        ) : (
-                          <span className="text-[10px] text-slate-500">Active</span>
-                        )}
-                        {candidate.blocked_at ? (
-                          <span className="text-xs text-slate-500">Blocked</span>
-                        ) : (
-                          <DeleteCandidateAccountForm
-                            candidateName={userName(candidate)}
-                            userId={candidate.id}
-                          />
-                        )}
-                      </div>,
+                      ),
+                      candidate.deleted_at ? (
+                        <span className="block text-center text-xs text-slate-400" key="delete">—</span>
+                      ) : (
+                        <DeleteCandidateAccountForm
+                          candidateName={userName(candidate)}
+                          key="delete"
+                          userId={candidate.id}
+                        />
+                      ),
                     ],
                   }))}
               />

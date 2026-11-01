@@ -1,0 +1,2 @@
+ALTER TABLE "profiles" ADD CONSTRAINT "profiles_manager_category_color_check" CHECK ("profiles"."manager_category_color" is null or "profiles"."manager_category_color" ~ '^#[0-9a-fA-F]{6}$');--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_deleted_candidate_inactive_check" CHECK ("users"."deleted_at" is null or ("users"."role" = 'account' and "users"."blocked_at" is not null));

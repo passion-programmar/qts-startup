@@ -21,6 +21,7 @@ import {
 } from "@/server/users/profile-values";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 import { readApplicationFacts } from "@/server/users/application-facts";
+import { isManagerCategoryColor } from "@/server/users/manager-category-color";
 
 export type UserActionState = {
   error: string | null;
@@ -56,6 +57,7 @@ export async function createUserAction(
   const addressLine1 = readText(formData, "addressLine1", 256);
   const postalCode = readText(formData, "postalCode", 32);
   const managerCategory = readText(formData, "managerCategory", 80);
+  const managerCategoryColor = readText(formData, "managerCategoryColor", 7);
   const educationRows = normalizeEducationRows(readHistoryRows(formData, "education", {
     institution: 120,
     degree: 120,
@@ -82,6 +84,7 @@ export async function createUserAction(
       ["candidateEmail", 320],
       ["phone", 64],
       ["linkedinUrl", 2048],
+      ["managerCategoryColor", 7],
     ].some(([name, maxLength]) => {
       const value = formData.get(String(name));
       return value !== null &&
@@ -107,6 +110,9 @@ export async function createUserAction(
   const normalizedLinkedInUrl =
     expectedRole === "account" ? normalizeLinkedInProfile(linkedinUrl) : "";
   if (expectedRole === "account") {
+    if (!isManagerCategoryColor(managerCategoryColor)) {
+      return { ...emptyState, error: "Select a valid category color." };
+    }
     if (!firstName || !lastName) {
       return {
         ...emptyState,
@@ -169,18 +175,20 @@ export async function createUserAction(
 
       await db.execute(sql`
         with new_user as (
-          insert into users (role, parent_user_id, display_name, login_name, password_hash)
-          values ('account', ${actor.id}, null, null, null)
+          insert into users (
+            role, parent_user_id, display_name, login_name, password_hash, blocked_at, blocked_by
+          )
+          values ('account', ${actor.id}, null, null, null, now(), ${actor.id}::uuid)
           returning id
         ),
         new_profile as (
           insert into profiles (
-            user_id, category_id, manager_category, first_name, last_name, birthday, pdf_template, candidate_email, phone,
+            user_id, category_id, manager_category, manager_category_color, first_name, last_name, birthday, pdf_template, candidate_email, phone,
             headline, linkedin_url, country, city, province, address_line_1,
             postal_code
           )
           select id,
-            (select id from categories where is_default), ${managerCategory},
+            (select id from categories where is_default), ${managerCategory}, ${managerCategoryColor || null},
             ${firstName}, ${lastName},
             ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
@@ -257,7 +265,7 @@ export async function createUserAction(
     error: null,
     success:
       expectedRole === "account"
-        ? "Candidate profile created."
+        ? "Candidate profile created as inactive."
         : `${expectedRole === "admin" ? "Admin" : "Manager"} account created.`,
   };
 }
@@ -295,6 +303,7 @@ export async function updateCandidateProfileAction(
     postalCode: 32,
     jdMatching: 5000,
     managerCategory: 80,
+    managerCategoryColor: 7,
   } as const;
   const values = {
     firstName: readText(formData, "firstName", limits.firstName),
@@ -312,6 +321,7 @@ export async function updateCandidateProfileAction(
     postalCode: readText(formData, "postalCode", limits.postalCode),
     jdMatching: readText(formData, "jdMatching", limits.jdMatching),
     managerCategory: readText(formData, "managerCategory", limits.managerCategory),
+    managerCategoryColor: readText(formData, "managerCategoryColor", limits.managerCategoryColor),
   };
   const educationRows = normalizeEducationRows(readHistoryRows(formData, "education", {
     institution: 120,
@@ -339,6 +349,9 @@ export async function updateCandidateProfileAction(
     })
   ) {
     return { ...emptyState, error: "One or more profile fields are missing or too long." };
+  }
+  if (!isManagerCategoryColor(values.managerCategoryColor)) {
+    return { ...emptyState, error: "Select a valid category color." };
   }
   if (!educationRows || !experienceRows) {
     return {
@@ -406,6 +419,7 @@ export async function updateCandidateProfileAction(
       tx`
         update profiles
         set manager_category = ${values.managerCategory},
+          manager_category_color = ${values.managerCategoryColor || null},
           first_name = ${values.firstName}, last_name = ${values.lastName},
           birthday = ${values.birthday || null}::date,
           pdf_template = ${values.pdfTemplate},
@@ -420,7 +434,7 @@ export async function updateCandidateProfileAction(
           and exists (
             select 1 from users
             where users.id = profiles.user_id and users.role = 'account'
-              and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+              and users.parent_user_id = ${actor.id}::uuid and users.deleted_at is null
           )
         returning profiles.user_id
       `,
@@ -428,7 +442,7 @@ export async function updateCandidateProfileAction(
         delete from educations using users
         where educations.profile_user_id = users.id and users.id = ${userId}::uuid
           and users.role = 'account' and users.parent_user_id = ${actor.id}::uuid
-          and users.blocked_at is null
+          and users.deleted_at is null
       `,
       tx`
         insert into educations (
@@ -442,13 +456,13 @@ export async function updateCandidateProfileAction(
           as entry(institution text, degree text, field_of_study text, start_date date,
             end_date date, is_current boolean, description text, sort_order integer)
         where users.id = ${userId}::uuid and users.role = 'account'
-          and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+          and users.parent_user_id = ${actor.id}::uuid and users.deleted_at is null
       `,
       tx`
         delete from experiences using users
         where experiences.profile_user_id = users.id and users.id = ${userId}::uuid
           and users.role = 'account' and users.parent_user_id = ${actor.id}::uuid
-          and users.blocked_at is null
+          and users.deleted_at is null
       `,
       tx`
         insert into experiences (
@@ -462,7 +476,7 @@ export async function updateCandidateProfileAction(
           as entry(company_name text, job_title text, location text, work_mode text, start_date date,
             end_date date, is_current boolean, description text, sort_order integer)
         where users.id = ${userId}::uuid and users.role = 'account'
-          and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+          and users.parent_user_id = ${actor.id}::uuid and users.deleted_at is null
       `,
       // Facts that application forms ask for; a form opened before this section existed leaves them as they are.
       ...(applicationFacts ? [tx`
@@ -481,7 +495,7 @@ export async function updateCandidateProfileAction(
           and exists (
             select 1 from users
             where users.id = profiles.user_id and users.role = 'account'
-              and users.parent_user_id = ${actor.id}::uuid and users.blocked_at is null
+              and users.parent_user_id = ${actor.id}::uuid and users.deleted_at is null
           )
       `] : []),
     ]);
@@ -489,7 +503,7 @@ export async function updateCandidateProfileAction(
     if (results[0].length === 0) {
       return {
         ...emptyState,
-        error: "That active candidate account was not found in your team.",
+        error: "That candidate account was not found in your team or has been deleted.",
       };
     }
   } catch (error) {
@@ -607,12 +621,18 @@ export async function toggleCandidateAccountStatusAction(
 
   try {
     const [target] = await db
-      .select({ blockedAt: users.blockedAt, id: users.id })
+      .select({ blockedAt: users.blockedAt, deletedAt: users.deletedAt })
       .from(users)
-      .where(and(eq(users.id, userId), eq(users.role, "account"), eq(users.parentUserId, actor.id), isNull(users.blockedAt)))
+      .where(and(eq(users.id, userId), eq(users.role, "account"), eq(users.parentUserId, actor.id)))
       .limit(1);
 
-    const setActive = target === undefined;
+    if (!target) {
+      return { ...emptyState, error: "That candidate account was not found in your team." };
+    }
+    if (target.deletedAt) {
+      return { ...emptyState, error: "Deleted candidate accounts cannot be reactivated." };
+    }
+    const setActive = target.blockedAt !== null;
     const [updated] = await db
       .update(users)
       .set({
@@ -620,7 +640,7 @@ export async function toggleCandidateAccountStatusAction(
         blockedBy: setActive ? null : actor.id,
         updatedAt: new Date(),
       })
-      .where(and(eq(users.id, userId), eq(users.role, "account"), eq(users.parentUserId, actor.id)))
+      .where(and(eq(users.id, userId), eq(users.role, "account"), eq(users.parentUserId, actor.id), isNull(users.deletedAt)))
       .returning({ id: users.id });
 
     if (!updated) {
@@ -656,35 +676,36 @@ export async function deleteCandidateAccountAction(
     return { ...emptyState, error: "Select a valid candidate account." };
   }
 
-  // A candidate is never erased: Delete blocks the account. It stays on the accounts page, read-only,
+  // A candidate is never erased: Delete marks the account read-only and inactive,
   // with its jobs, bids, and history, and is left out of Get JD, Generation, and Apply.
   try {
     const blocked = await neonSql`
       update users
-      set blocked_at = now(), blocked_by = ${actor.id}::uuid, auth_version = auth_version + 1, updated_at = now()
+      set blocked_at = coalesce(blocked_at, now()), blocked_by = ${actor.id}::uuid,
+        deleted_at = now(), auth_version = auth_version + 1, updated_at = now()
       where users.id = ${userId}::uuid
         and users.role = 'account'
         and users.parent_user_id = ${actor.id}::uuid
-        and users.blocked_at is null
+        and users.deleted_at is null
       returning users.id
     `;
     if (blocked.length === 0) {
       return {
         ...emptyState,
-        error: "That candidate account was not found in your team, or it is already blocked.",
+        error: "That candidate account was not found in your team, or it is already deleted.",
       };
     }
   } catch (error) {
-    logUserActionFailure("blocking a candidate account", error);
+    logUserActionFailure("deleting a candidate account", error);
     return {
       ...emptyState,
-      error: "The candidate account could not be blocked. Please try again.",
+      error: "The candidate account could not be deleted. Please try again.",
     };
   }
 
   revalidatePath("/");
   revalidatePath("/users");
-  return { error: null, success: "Candidate blocked. Their profile and history stay read-only; they are no longer used for jobs." };
+  return { error: null, success: "Candidate deleted. Their profile and history stay read-only; they are no longer used for jobs." };
 }
 
 export async function deleteStaffUserAction(

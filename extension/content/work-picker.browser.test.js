@@ -23,7 +23,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         if(message.type === 'QTS_WORK_ITEMS') {
           if(!message.candidateId) return new Promise(resolve => {
             window.accountResolvers[message.mode] = () => resolve({ ok: true, accounts: [
-              { id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform', eligibleJobCount: 8 },
+              { id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform', categoryColor: '#2563eb', eligibleJobCount: 8 },
               { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '', eligibleJobCount: 3 },
               { id: '33333333-3333-4333-8333-333333333333', name: 'Morgan Lee', category: 'Design', eligibleJobCount: 0 },
             ] });
@@ -52,9 +52,12 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => window.accountResolvers.generation());
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options.length === 4);
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].textContent), 'Jordan Taylor (Platform) (8+)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.backgroundColor), 'rgb(37, 99, 235)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.color), 'rgb(255, 255, 255)');
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[2].textContent), 'Casey Smith (3)');
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[3].disabled), true);
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="generation"]'); s.value=s.options[1].value; s.dispatchEvent(new Event('change')); });
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').style.backgroundColor), 'rgb(37, 99, 235)');
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length===2);
     const link = await page.evaluate(() => { const a=window.testRoot.querySelector('.work-link'); return {text:a.textContent,title:a.title,href:a.href,target:a.target,rel:a.rel,heading:a.querySelector('.work-title').title,domain:a.querySelector('.work-domain').title}; });
     assert.match(link.text,/remoterocketship\.com/); assert.doesNotMatch(link.text,/publicjobs|tracking=/);
@@ -81,6 +84,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => window.accountResolvers.auto_apply());
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').options.length === 4);
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="auto_apply"]');s.value=s.options[1].value;s.dispatchEvent(new Event('change')); });
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').style.backgroundColor), 'rgb(37, 99, 235)');
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length===2);
     assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job input')].map(input => ({ checked: input.checked, disabled: input.disabled }))), [
       { checked: false, disabled: true }, { checked: true, disabled: false },
