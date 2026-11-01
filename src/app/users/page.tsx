@@ -3,9 +3,9 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { asc, desc, inArray, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { educations, experiences } from "@/db/schema";
+import { educations, experiences, users } from "@/db/schema";
 import {
   CopyableAccountField,
   CopyLinkedInUrl,

@@ -37,6 +37,7 @@ import {
   createUserAction,
   deleteCandidateAccountAction,
   deleteStaffUserAction,
+  toggleCandidateAccountStatusAction,
   type UserActionState,
   updateCandidateProfileAction,
   updateUserCredentialsAction,
