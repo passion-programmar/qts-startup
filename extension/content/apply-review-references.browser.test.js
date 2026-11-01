@@ -14,7 +14,7 @@ test('Auto Apply reference cards copy complete saved values without filling, pro
       const attach = Element.prototype.attachShadow;
       Element.prototype.attachShadow = function(options) { return attach.call(this, { ...options, mode: 'open' }); };
       window.sent = []; window.copied = [];
-      window.chrome = { runtime: { sendMessage: async m => { window.sent.push(m); return { ok: true }; } } };
+      window.chrome = { runtime: { id: 'synthetic-extension', sendMessage: async m => { window.sent.push(m); return { ok: true }; } } };
       Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => { if (window.failCopy) throw Error('Clipboard unavailable'); window.copied.push(text); } } });
       document.execCommand = () => false;
     });

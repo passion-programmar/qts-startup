@@ -6,6 +6,8 @@
 // holds that Submit back while a provisional AI answer is neither accepted nor edited.
 (function initApplyReview(global) {
   if (global.__qtsApplyReview) return;
+  // A prior extension context may have left its host in this page after an update.
+  for (const stale of document.querySelectorAll('[data-qts-apply-review]')) stale.remove();
 
   const host = document.createElement('div');
   host.setAttribute('data-qts-apply-review', '');
@@ -85,6 +87,9 @@
   let state = null;
   let busy = false;
   let collapsed = false;
+  let disposed = false;
+  let heartbeatTimer = null;
+  let editRender = null;
   // The site's Submit was held back because provisional answers were still waiting.
   let submitHeld = false;
 
@@ -95,9 +100,35 @@
     return node;
   };
 
-  function send(action, extra = {}) {
-    if (!state) return Promise.resolve(null);
-    return chrome.runtime.sendMessage({ type: 'QTS_APPLY_PANEL', attemptId: state.attemptId, action, ...extra }).catch(() => null);
+  function contextAvailable() {
+    try { return !disposed && Boolean(global.chrome?.runtime?.id); } catch { return false; }
+  }
+
+  async function send(action, extra = {}) {
+    if (!state || disposed) return null;
+    if (!contextAvailable()) { dispose(); return null; }
+    try {
+      return await chrome.runtime.sendMessage({ type: 'QTS_APPLY_PANEL', attemptId: state.attemptId, action, ...extra });
+    } catch (error) {
+      // sendMessage can throw synchronously before returning a Promise after an extension reload.
+      if (!contextAvailable() || /extension context invalidated/i.test(String(error?.message || error))) dispose();
+      return null;
+    }
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    state = null;
+    clearInterval(heartbeatTimer);
+    clearTimeout(editRender);
+    document.removeEventListener('click', onDocumentClick, true);
+    document.removeEventListener('submit', onDocumentSubmit, true);
+    document.removeEventListener('input', onEdit, true);
+    document.removeEventListener('change', onEdit, true);
+    try { global.__qtsApplyForm?.markProblemFields?.([]); } catch { /* Old context already disposed. */ }
+    host.remove();
+    if (global.__qtsApplyReview?.remove === dispose) delete global.__qtsApplyReview;
   }
 
   function button(label, className, action, extra) {
@@ -492,19 +523,23 @@
     try { look = global.__qtsApplyForm?.auditForm?.() || null; } catch { look = null; }
     send('step_leaving', { look });
   }
-  document.addEventListener('click', (event) => {
+  const onDocumentClick = (event) => {
+    if (!contextAvailable()) { dispose(); return; }
     const submitLike = global.__qtsApplyForm?.isSubmitControl?.(event.target);
     // Before the last step a submit-type button is the site's Next.
     if (!submitLike || !state?.final) noticeStepButton(event.target);
     if (!submitLike) return;
     if (!holdSubmit(event)) noticeSubmit();
-  }, true);
-  document.addEventListener('submit', (event) => {
+  };
+  const onDocumentSubmit = (event) => {
+    if (!contextAvailable()) { dispose(); return; }
     if (!holdSubmit(event)) noticeSubmit();
-  }, true);
+  };
+  document.addEventListener('click', onDocumentClick, true);
+  document.addEventListener('submit', onDocumentSubmit, true);
   // An edit on the form may settle a provisional answer: the panel shows it shortly after.
-  let editRender = null;
   const onEdit = () => {
+    if (!contextAvailable()) { dispose(); return; }
     if (!state?.provisional?.length && !state?.checklist) return;
     clearTimeout(editRender);
     editRender = setTimeout(render, 300);
@@ -513,21 +548,17 @@
   document.addEventListener('change', onEdit, true);
 
   // The worker sleeps when idle; the panel keeps it awake while the Manager reviews.
-  setInterval(() => { if (state) send('ping'); }, 20000);
+  heartbeatTimer = setInterval(() => { if (state) send('ping'); }, 20000);
 
   global.__qtsApplyReview = {
     render(nextState) {
+      if (!contextAvailable()) { dispose(); return false; }
       state = nextState;
       busy = false;
       render();
       if (nextState?.problemFieldIds) global.__qtsApplyForm?.markProblemFields?.(nextState.problemFieldIds);
       return true;
     },
-    remove() {
-      state = null;
-      global.__qtsApplyForm?.markProblemFields?.([]);
-      host.remove();
-      delete global.__qtsApplyReview;
-    },
+    remove: dispose,
   };
 })(globalThis);
