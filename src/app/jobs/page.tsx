@@ -95,7 +95,7 @@ export default async function JobsPage() {
       generationStatus: sql<string>`case
         when ${generationHeldSql()} then 'processing'
         when ${jobs.generationStatus} = 'processing' then 'ready'
-        else ${jobs.generationStatus}
+        else ${jobs.generationStatus}::text
       end`,
       generationError: jobs.generationError,
       candidateId: jobs.candidateId,
