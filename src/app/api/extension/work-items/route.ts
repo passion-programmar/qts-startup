@@ -18,11 +18,11 @@ export async function GET(request: Request): Promise<NextResponse> {
   try {
     const ownership = and(eq(users.parentUserId, manager.id), eq(users.role, "account"), isNull(users.blockedAt), hasMatchingNote());
     if (candidateId === null) {
-      const accounts = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName })
+      const accounts = await db.select({ id: profiles.userId, firstName: profiles.firstName, lastName: profiles.lastName, category: profiles.managerCategory })
         .from(users).innerJoin(profiles, eq(profiles.userId, users.id)).where(ownership)
         .orderBy(asc(profiles.firstName), asc(profiles.lastName)).limit(101);
       if (accounts.length > 100) return reply({ success: false, message: "Too many accounts to list. Contact your administrator." }, 413);
-      return reply({ success: true, accounts: accounts.map(({ id, firstName, lastName }) => ({ id, name: [firstName, lastName].filter(Boolean).join(" ") || "Candidate" })) });
+      return reply({ success: true, accounts: accounts.map(({ id, firstName, lastName, category }) => ({ id, name: [firstName, lastName].filter(Boolean).join(" ") || "Candidate", category: category || "" })) });
     }
     const [account] = await db.select({ id: users.id }).from(users).innerJoin(profiles, eq(profiles.userId, users.id))
       .where(and(ownership, eq(users.id, candidateId))).limit(1);

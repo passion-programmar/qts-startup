@@ -51,7 +51,7 @@ const claim = (selection?: unknown) => new Request("http://localhost/api/extensi
 test("account choices require owned, unblocked accounts with nonblank matching notes; notes are not disclosed", async () => {
   fixture.rows = [[{ id: candidateId, firstName: "Jordan", lastName: "Taylor" }]];
   const response = await GET(request()); assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor" }] });
+  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "" }] });
   assert.match(fixture.queries[0].sql, /length\(regexp_replace\(coalesce\("profiles"\."jd_matching"/);
   assert.ok(fixture.queries[0].params.includes("\\s"), 'blank lines and tabs must not count as matching notes');
   assert.match(fixture.queries[0].sql, /parent_user_id/); assert.match(fixture.queries[0].sql, /blocked_at/);

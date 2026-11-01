@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { asc, desc, inArray, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { categories, educations, experiences } from "@/db/schema";
+import { educations, experiences } from "@/db/schema";
 import {
   CopyableAccountField,
   CopyLinkedInUrl,
@@ -14,7 +14,6 @@ import {
   DeleteCandidateAccountForm,
   DeleteStaffUserForm,
   EditCandidateProfileForm,
-  type CandidateCategoryOption,
 } from "@/app/users/user-forms";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
@@ -61,6 +60,7 @@ type UserRow = {
   postal_code: string | null;
   jd_matching: string | null;
   category_id: string | null;
+  manager_category: string;
   category_name: string | null;
   work_authorization: string | null;
   needs_sponsorship: boolean | null;
@@ -142,6 +142,7 @@ export default async function UsersPage() {
       profiles.postal_code,
       profiles.jd_matching,
       profiles.category_id,
+      profiles.manager_category,
       profiles.work_authorization,
       profiles.needs_sponsorship,
       profiles.notice_period,
@@ -200,11 +201,6 @@ export default async function UsersPage() {
       : actor.role === "admin"
         ? "manager"
         : "account";
-
-  const categoryOptions: CandidateCategoryOption[] = await db
-    .select({ id: categories.id, name: categories.name, isDefault: categories.isDefault })
-    .from(categories)
-    .orderBy(categories.name);
 
   const candidateIds = result.rows
     .filter((user) => user.role === "account")
@@ -290,7 +286,7 @@ export default async function UsersPage() {
 
         <div className="mt-5 space-y-5">
           <section>
-            <CreateUserForm categories={categoryOptions} role={createRole} />
+            <CreateUserForm role={createRole} />
           </section>
           <section className="min-w-0">
             <div className="mb-3 flex items-center justify-between">
@@ -341,9 +337,9 @@ export default async function UsersPage() {
                       <CopyableAccountField
                         ariaLabel={`Copy category for ${userName(candidate)}`}
                         key="category"
-                        value={candidate.category_name ?? "Uncategorized"}
+                        value={candidate.manager_category || "Uncategorized"}
                       >
-                        {candidate.category_name ?? "Uncategorized"}
+                        {candidate.manager_category || "Uncategorized"}
                       </CopyableAccountField>,
                       <CopyableAccountField
                         ariaLabel={`Copy contact for ${userName(candidate)}`}
@@ -399,7 +395,7 @@ export default async function UsersPage() {
                           addressLine1: candidate.address_line_1,
                           postalCode: candidate.postal_code,
                           jdMatching: candidate.jd_matching,
-                          categoryId: candidate.category_id,
+                          managerCategory: candidate.manager_category || "",
                           workAuthorization: candidate.work_authorization,
                           needsSponsorship: candidate.needs_sponsorship,
                           noticePeriod: candidate.notice_period,
@@ -449,7 +445,6 @@ export default async function UsersPage() {
                             }),
                           ),
                         }}
-                        categories={categoryOptions}
                         key="edit"
                         readOnly={Boolean(candidate.blocked_at)}
                       />,

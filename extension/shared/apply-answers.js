@@ -521,6 +521,8 @@
     if (['text', 'url'].includes(field.kind) && IMAGE_WORDS.test(label) && /\b(url|link)\b/.test(label)) {
       return { skip: 'A link to a photo or image.' };
     }
+    const controlled = controlledAnswer(field, savedAnswers);
+    if (controlled) return controlled;
     // Required consent and certification boxes are ticked; optional ones (marketing, future jobs) are left.
     // Agreeing to the terms or privacy policy is needed to apply even when the box is not marked required.
     if (field.kind === 'checkbox' && !hasOptions(field) && CONSENT.test(label)) {
@@ -870,6 +872,7 @@
     if (!words.size) return null;
     let best = null;
     for (const row of rows) {
+      if (['manager', 'candidate', 'application'].includes(row.scope)) continue;
       const other = questionWords(row.questionText, sameMeaning);
       if (!other.size) continue;
       const shared = [...words].filter((word) => other.has(word)).length;
@@ -907,6 +910,64 @@
   // An upload that reads the résumé to fill the form ("Autofill from resume", "Easy Apply: choose an
   // option to autocomplete your application", "Import from CV").
   const AUTOFILL_UPLOAD = /auto-?fill|auto-?complete|auto-?populate|pre-?fill|easy apply|\b(parse|import)\b[^.]{0,30}\b(resume|résumé|cv)\b|\b(resume|résumé|cv)\b[^.]{0,40}\b(to |and )?(fill|complete) (in )?(the |your )?(form|application|profile|fields)/;
+
+  function correctionKey(question) {
+    return /how did you (hear|find|learn)|where did you (hear|find)|referral source/i.test(question)
+      ? 'application source' : normalizeQuestionKey(question);
+  }
+
+  function controlledAnswer(field, rows = []) {
+    const key = correctionKey(field.label);
+    const matches = rows.filter((row) => correctionKey(row.questionText) === key);
+    const local = matches.find((row) => row.scope === 'application' || row.scope === 'candidate');
+    const shared = matches.find((row) => row.scope === 'everyone' || !row.scope);
+    const row = local || shared || matches.find((entry) => entry.scope === 'manager');
+    if (!row || (!local && shared && !matches.some((entry) => entry.scope === 'manager'))) return null;
+    if (row.scope === 'everyone' || !row.scope) return reusableAnswer(field, row);
+    const variants = row.variants || [];
+    const keyOf = (options) => [...(options || [])].map(String).sort().join('|');
+    const exact = variants.find((entry) => entry.kind === field.kind && keyOf(entry.options) === keyOf(field.options));
+    const candidates = [exact?.answer, row.answer, ...variants.map((entry) => entry.answer)].filter((value) => value !== undefined);
+    if (hasOptions(field)) {
+      const wanted = exact?.answer ?? row.answer;
+      const options = field.options.filter((option) => String(option).trim().toLowerCase() === String(wanted).trim().toLowerCase());
+      if (options.length === 1) return { value: options[0], source: 'reusable' };
+      if (field.kind === 'checkbox-group') {
+        const chosen = String(wanted).split(' | ');
+        if (chosen.length && chosen.every((value) => field.options.includes(value))) return { value: chosen, source: 'reusable' };
+      }
+      const matching = field.options.filter((option) => candidates.some((value) => String(value).trim().toLowerCase() === String(option).trim().toLowerCase()));
+      if (matching.length === 1) return { value: matching[0], source: 'reusable' };
+      if (key === 'application source' && String(wanted).toLowerCase() === 'linkedin' && !field.options.some((option) => /linkedin.*recruiter|recruiter.*linkedin/i.test(option))) {
+        const posts = field.options.filter((option) => /^linkedin job post(?:ing)?$/i.test(String(option).trim()));
+        if (posts.length === 1) return { value: posts[0], source: 'reusable' };
+      }
+      return { skip: 'Saved answer does not uniquely match the offered choices.', byHand: 'Choose an answer, then click Check to save this variant.' };
+    }
+    const value = exact?.answer ?? row.answer;
+    if (field.kind === 'checkbox') {
+      const checked = checkboxAnswerValue(value);
+      if (checked !== null) return { value: checked, source: 'reusable' };
+    }
+    const fits = checkAnswer(field, value);
+    return fits.ok ? { value: fits.value, source: 'reusable' }
+      : { skip: 'Saved answer does not fit this field.', byHand: 'Edit the answer and click Check.' };
+  }
+
+  function changedCorrections(baseline, current) {
+    const before = new Map((baseline || []).map((entry) => [entry.id, entry]));
+    const normalize = (value) => {
+      const checked = checkboxAnswerValue(value);
+      return checked === null ? String(value ?? '').replace(/\s+/g, ' ').trim() : String(checked);
+    };
+    return (current || []).filter((entry) => {
+      if (['file', 'password'].includes(entry.kind) || !entry.label) return false;
+      const value = normalize(entry.value), old = before.get(entry.id);
+      if (!value || /password|captcha|verification code|one.time code|\bOTP\b/i.test(entry.label)) return false;
+      if (!old && value === 'false') return false;
+      return value !== normalize(old?.value);
+    }).map((entry) => ({ question: entry.label, answer: normalize(entry.value), kind: entry.kind || 'text', options: entry.options || [], fieldId: entry.id }));
+  }
 
   function isAutofillUpload(field) {
     // A photo upload near an "Easy Apply" heading is still a photo upload.
@@ -1459,7 +1520,7 @@
     return { ok: true };
   }
 
-  const api = { checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
+  const api = { changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

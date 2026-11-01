@@ -354,7 +354,20 @@
         ? '✓ Nothing marked for you. Every answer came from the profile, the documents, or an approved reusable answer.'
         : `✓ Nothing marked for you. Check the ${state.aiName || 'ChatGPT'} ⚑ answers first.`));
     }
-    if (state.notice) body.append(element('div', 'ok', state.notice));
+    if (state.notice) body.append(element('div', /Not saved/i.test(state.notice) ? 'problems' : 'ok', state.notice));
+    if (state.savedChanges?.length) {
+      const saved = element('section', 'ok');
+      saved.append(element('strong', '', 'Saved changes'));
+      for (const entry of state.savedChanges) {
+        const row = element('div', 'answer');
+        const scope = entry.scope === 'candidate' ? 'This candidate' : entry.scope === 'manager' ? 'My reusable answers' : 'Context uncertain · this application';
+        row.append(element('span', 'q', entry.question), element('span', 'a', entry.answer), element('span', 'src', scope));
+        if (entry.globalOverride) row.append(element('small', '', 'Global answer takes priority in future applications.'));
+        if (entry.canReuse) row.append(button('Move to my reusable answers', '', 'reuse_answer', () => ({ answerId: entry.id })));
+        saved.append(row);
+      }
+      body.append(saved);
+    }
     // Auto Apply: questions nothing QTS knows for sure answered (AI answers come later); the required
     // ones are also listed above as still empty.
     if (!listed && state.auto && state.unresolved?.length) {
@@ -423,7 +436,7 @@
         ? 'This candidate is blocked: skip this job.'
         : listed && state.final
           ? blocking
-            ? `${blocking} thing${blocking === 1 ? '' : 's'} on the checklist still need${blocking === 1 ? 's' : ''} you. Fix ${blocking === 1 ? 'it' : 'them'} on the form, click Check again, then the site's Submit.`
+            ? `${blocking} thing${blocking === 1 ? '' : 's'} on the checklist still need${blocking === 1 ? 's' : ''} you. Fix ${blocking === 1 ? 'it' : 'them'} on the form, click Check, then the site's Submit.`
             : 'Everything QTS could check is in order. Look over the answers, then click the site\'s Submit.'
           : state.final
             ? state.reviewAll
@@ -438,19 +451,18 @@
         const submittedButton = button('I submitted it', '', 'submitted', () => ({ answers: currentAnswers() }));
         if (blocking) {
           submittedButton.disabled = true;
-          submittedButton.title = listed ? 'Deal with every item the checklist marks first, then Check again.' : 'Accept or edit each provisional answer first.';
+          submittedButton.title = listed ? 'Deal with every item the checklist marks first, then Check.' : 'Accept or edit each provisional answer first.';
         }
         buttons.append(submittedButton);
       }
       // Auto Apply: the page read again after the Manager's changes (nothing is filled).
-      if (listed) buttons.append(button('Check again', 'primary', 'recheck'));
+      if (listed) buttons.append(button('Check', 'primary', 'recheck', () => ({ manualCheck: true, answers: currentAnswers() })));
       buttons.append(button('Skip', '', 'skip'));
       if (!state.blocked) {
         buttons.append(button('Later', '', 'later'));
         buttons.append(button('Fill again', '', 'fill_again'));
         if (state.canAskAgain && (!state.auto || state.aiOn)) buttons.append(button(`Ask ${state.aiName || 'ChatGPT'} again`, '', 'ask_again'));
         // Auto Apply: the answers the Manager changed go to Super Admin as drafts (never approved by this).
-        if (state.auto) buttons.append(button('Propose my changes', '', 'propose', () => ({ answers: currentAnswers() })));
       }
       foot.append(buttons);
     }
@@ -481,7 +493,7 @@
   // take (required), or are blocked. Not-verified items are shown, never blocking.
   const BLOCKING = new Set(['needs_input', 'failed', 'blocked']);
   // A question of this step the Manager has answered on the form since the last check (read live):
-  // no longer blocking. Page-wide items (a human check, an error) wait for "Check again".
+  // no longer blocking. Page-wide items (a human check, an error) wait for "Check".
   function settledLive(item) {
     const form = global.__qtsApplyForm;
     if (!item.fieldId || !item.kind || item.kind === 'page' || !form?.isUnanswered) return false;
@@ -538,7 +550,7 @@
       }
       box.append(list);
     }
-    if (submitHeld && blocking) box.append(element('div', 'held', 'Submit was held: deal with what is marked (then Check again), or use "Submit anyway".'));
+    if (submitHeld && blocking) box.append(element('div', 'held', 'Submit was held: deal with what is marked (then Check), or use "Submit anyway".'));
     if (submitHeld && blocking) {
       // The Manager's own decision: the next click on the site's Submit goes through.
       const anyway = element('button', '', 'Submit anyway');

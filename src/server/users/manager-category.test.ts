@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { build } from "esbuild";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import { PgDialect } from "drizzle-orm/pg-core";
+const fixture = { role: "manager", queries: [] as { sql: string; params: unknown[] }[],
+  record(query: Parameters<PgDialect["sqlToQuery"]>[0]) { this.queries.push(new PgDialect().sqlToQuery(query)); } };
+(globalThis as Record<string, unknown>).__qtsCategory = fixture;
+let actions: typeof import("@/app/users/actions");
+test.before(async () => {
+  const mocks: Record<string, string> = {
+    "server-only": "", "next/cache": "export const revalidatePath=()=>{};",
+    "@/lib/session": "export const requireUser=async()=>({id:'manager-id',role:globalThis.__qtsCategory.role});",
+    "@/lib/db": `const f=globalThis.__qtsCategory;export const db={execute:async query=>{f.record(query);return {rows:[]}}};export const neonSql={transaction:async work=>{const list=work((strings,...params)=>{f.queries.push({sql:strings.join('?'),params});return []});return list.map((_,i)=>i===0?[{user_id:'candidate'}]:[])}};`,
+  };
+  const built = await build({ entryPoints: [resolve("src/app/users/actions.ts")], tsconfig: resolve("tsconfig.json"), bundle: true, write: false, platform: "node", format: "cjs", packages: "external",
+    plugins: [{ name: "category-fixtures", setup(builder) {
+      builder.onResolve({ filter: /.*/ }, ({ path }) => path in mocks ? { path, namespace: "fixture" } : undefined);
+      builder.onLoad({ filter: /.*/, namespace: "fixture" }, ({ path }) => ({ contents: mocks[path], resolveDir: process.cwd() }));
+    } }],
+  });
+  const loaded = { exports: {} };
+  new Function("require", "module", "exports", built.outputFiles[0].text)(createRequire(resolve("package.json")), loaded, loaded.exports);
+  actions = loaded.exports as typeof actions;
+});
+test.beforeEach(() => { fixture.role = "manager"; fixture.queries = []; });
+const form = (category?: string) => {
+  const data = new FormData();
+  for (const field of ["birthday", "phone", "headline", "linkedinUrl", "country", "city", "province", "addressLine1", "postalCode", "jdMatching"]) data.set(field, "");
+  for (const [name, value] of Object.entries({ userId: "11111111-1111-4111-8111-111111111111", firstName: "Sample", lastName: "Candidate", candidateEmail: "sample@example.test", pdfTemplate: "qts-standard", categoryId: "forged-global-category" })) data.set(name, value);
+  if (category !== undefined) data.set("managerCategory", category);
+  return data;
+};
+test("Manager creates an empty category by default and arbitrary labels need no global category selection", async () => {
+  for (const label of [undefined, "Platform / SRE"]) {
+    const result = await actions.createUserAction({ error: null, success: null }, form(label));
+    assert.equal(result.error, null);
+    const query = fixture.queries.at(-1)!;
+    assert.match(query.sql, /manager_category/); assert.ok(query.params.includes(label || ""));
+    assert.ok(!query.params.includes("forged-global-category"));
+  }
+});
+test("Manager edits only their candidate label, leaving the global category untouched", async () => {
+  const result = await actions.updateCandidateProfileAction({ error: null, success: null }, form("Python / Backend"));
+  assert.equal(result.error, null);
+  const query = fixture.queries[0]; assert.match(query.sql, /set manager_category/); assert.doesNotMatch(query.sql, /set category_id/);
+  assert.match(query.sql, /parent_user_id/); assert.ok(query.params.includes("manager-id"));
+  fixture.role = "admin";
+  assert.match((await actions.updateCandidateProfileAction({ error: null, success: null }, form("Other"))).error!, /Only Managers/);
+});

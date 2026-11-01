@@ -39,21 +39,18 @@ test("legacy and canonical states do not create false conflict warnings", () => 
   assert.equal(answerWarnings(target, [old])[0].conflict, false);
   assert.equal(answerWarnings({ ...target, answer: "true" }, [old])[0].conflict, true);
 });
-test("Manager unchecking a previously checked answer is detected and proposed as boolean false", async () => {
+test("Manager unchecking a previously checked answer is detected for immediate saving as boolean false", async () => {
   const source = readFileSync("extension/background/apply-runner.js", "utf8");
   const functionBody = (name: string) => {
     const start = source.indexOf(`function ${name}(`);
     const end = source.indexOf("\n/**", start);
     return source.slice(start, end);
   };
-  const requests: unknown[] = [];
-  const context = vm.createContext({ self: { __qtsApplyAnswers: extension }, workerApiRequest: async (_method: string, _path: string, body: {items: unknown[]}) => {
-    requests.push(body); return { success: true, results: body.items.map(() => ({ ok: true })) };
-  } });
+  const context = vm.createContext({ self: { __qtsApplyAnswers: extension } });
   const answerText = source.slice(source.indexOf("function answerText("), source.indexOf("// Two values compared"));
-  vm.runInContext(answerText + functionBody("submittedAnswers") + "\nasync " + functionBody("proposeCorrections"), context);
+  vm.runInContext(answerText + functionBody("submittedAnswers"), context);
   const changed = context.submittedAnswers({ "Include supplementary material": { value: true, source: "reusable" } }, [{ label: "Include supplementary material", value: "Not ticked" }]);
   assert.equal(changed[0].source, "manager"); assert.equal(changed[0].answer, "Not ticked");
-  await context.proposeCorrections({ attemptId: "local-fixture" }, changed);
-  assert.equal((requests[0] as {items: {answer: unknown}[]}).items[0].answer, false);
+  const corrections = extension.changedCorrections([{ id: "box", label: "Include supplementary material", kind: "checkbox", value: "Ticked" }], [{ id: "box", label: "Include supplementary material", kind: "checkbox", value: "Not ticked" }]);
+  assert.equal(corrections[0].answer, "false");
 });

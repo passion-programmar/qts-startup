@@ -139,7 +139,7 @@ function aiReply(prompt) {
 const mock = {};
 function resetMock(options = {}) {
   Object.assign(mock, {
-    log: [], answers: 0, prompts: [], heartbeats: 0, heartbeatLog: [], released: [], reviews: [], submitted: [], results: [], proposals: [], resumes: 0,
+    log: [], answers: 0, prompts: [], heartbeats: 0, heartbeatLog: [], released: [], reviews: [], submitted: [], results: [], checks: [], resumes: 0,
     pageSubmitted: 0, claims: 0, byAttempt: {}, queue: options.queue || [], claimStatus: options.claimStatus || 200,
     canUseApply: options.canUseApply ?? true, stopVersion: 0, fail429: options.fail429 || 0, heartbeat409: false,
     // 'rules' (fixed answers), 'invalid' (no JSON), 'quota' (429 every time), 'hang' (never answers).
@@ -170,6 +170,7 @@ const server = http.createServer((req, res) => {
       mock.claims += 1;
       if (mock.claimStatus !== 200) return json({ success: false, message: 'Apply is not turned on for your account.' }, mock.claimStatus);
       const next = mock.queue.shift() || null;
+      if (next) next.aiMode = mock.assignedProvider || 'chatgpt';
       if (next) mock.byAttempt[next.attemptId] = next;
       return json({ success: true, application: next });
     }
@@ -196,9 +197,9 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/extension/apply/documents') {
       return json({ success: true, documents: { folder: 'C:\\test-folder', resume: { filename: 'Ana_Test_CV.pdf', base64: pdf }, coverLetter: { filename: 'Ana_Test_Cover.pdf', base64: pdf } } });
     }
-    if (url.pathname === '/api/extension/apply/propose-answers') {
-      mock.proposals.push(data);
-      return json({ success: true, results: (data.items || []).map((item) => ({ question: item.question, ok: true })) });
+    if (url.pathname === '/api/extension/apply/check-answers') {
+      mock.checks.push(data);
+      return json({ success: true, results: (data.items || []).map((item) => ({ question: item.question, answer: item.answer, id: item.question, scope: /years|Django/i.test(item.question) ? 'candidate' : 'manager', ok: true })) });
     }
     if (url.pathname === '/api/extension/apply/review') { mock.reviews.push({ at, ...data }); return json({ success: true }); }
     if (url.pathname === '/api/extension/apply/submitted') { mock.submitted.push({ at, ...data }); return json({ success: true }); }
@@ -245,6 +246,7 @@ async function connectWorker(target) {
 }
 
 async function launch({ ai = 'off' } = {}) {
+  mock.assignedProvider = ai === 'gemini' ? 'gemini' : 'chatgpt';
   const puppeteer = require('puppeteer-core');
   const browser = await puppeteer.launch({
     executablePath: CHROME, headless: !HEADFUL, pipe: true, protocolTimeout: 600000, defaultViewport: HEADFUL ? null : { width: 1280, height: 900 },
@@ -365,6 +367,27 @@ test.before(() => new Promise((resolve) => server.listen(PORT, '127.0.0.1', reso
 // Chrome keeps connections open: they are closed so the server (and the test run) can end.
 test.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
 
+test('two Auto Apply jobs run concurrently in one Chrome; a third waits and Cancel releases both', { skip, timeout: 180000 }, async () => {
+  resetMock({ queue: [application(501, 'form-ai'), application(502, 'form-ai'), application(503, 'form-ai')] });
+  const { browser, action, storage } = await launch({ ai: 'off' });
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(async () => {
+      const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
+      return state?.runs?.length === 2 && state.runs.every(run => ['needs_you', 'final'].includes(run.phase));
+    }, 120000, 'both applications to reach review concurrently');
+    const pages = (await browser.pages()).filter(page => page.url().startsWith(`${BASE}/form-ai`));
+    const diagnostic = { urls: pages.map(page => page.url()), queue: mock.queue.length, claims: mock.claims, released: mock.released, state: (await storage(['qtsAutoApplyState'])).qtsAutoApplyState };
+    assert.equal(pages.length, 2, JSON.stringify(diagnostic));
+    assert.equal(mock.queue.length, 1, 'the third application waits for a free slot');
+    assert.equal(mock.submitted.length, 0);
+    await action('cancel_status');
+    await until(() => mock.released.length === 2, 30000, 'both held applications released');
+    assert.deepEqual(new Set(mock.released.map(entry => entry.attemptId)), new Set([attempt(501), attempt(502)]));
+    assert.equal(mock.queue.length, 1); assert.equal(mock.submitted.length, 0);
+  } finally { await browser.close(); }
+});
+
 test('Stage B: Auto Apply fills a three-step form from the profile, documents and approved answers, without AI, and waits for the Manager\'s Submit', { skip, timeout: 300000 }, async () => {
   resetMock({ queue: [application(1)] });
   const { browser, action, storage, phase } = await launch({ ai: 'off' });
@@ -475,7 +498,7 @@ test('closing an unfinished Auto Apply tab releases and automatically retries th
   } finally { await ctx.browser.close(); }
 });
 
-test('Stage C: approved answers first, then one Gemini batch for the step (retried after a 429), every answer filled, one the documents do not show provisional until accepted or edited (Submit held till then); corrections proposed as drafts', { skip, timeout: 300000 }, async () => {
+test('Stage C: approved answers first, then one Gemini batch for the step (retried after a 429), every answer filled, one the documents do not show provisional until accepted or edited (Submit held till then); corrections saved immediately at Manager or candidate scope', { skip, timeout: 300000 }, async () => {
   resetMock({ queue: [application(10, 'form-ai')], fail429: 1 });
   const { browser, action, storage, phase } = await launch({ ai: 'gemini' });
   try {
@@ -515,15 +538,19 @@ test('Stage C: approved answers first, then one Gemini batch for the step (retri
     assert.match(panel, /Verified \(\d+\)/);
     await shot(form, 'c-1-final-review');
 
-    // The Manager corrects the Django years and proposes the corrections as drafts (never approved here).
+    // The Manager corrects Django years and Check saves only the changed field, without approval.
     await form.$eval('#dj', (box) => { box.value = ''; });
     await form.type('#dj', '6');
-    assert.equal(await clickPanelButton(form, 'Propose my changes'), true);
-    await until(() => mock.proposals.length === 1, 20000, 'the proposal');
-    const proposed = mock.proposals[0].items.map((item) => `${item.question} = ${item.answer}`);
+    assert.equal(await clickPanelButton(form, 'Check'), true);
+    await until(() => mock.checks.length === 1, 20000, 'the automatic save');
+    const proposed = mock.checks[0].items.map((item) => `${item.question} = ${item.answer}`);
     assert.ok(proposed.some((entry) => /Django.*= 6$/.test(entry)), proposed.join('; '));
-    await until(async () => /sent to Super Admin as draft reusable answers/.test(await panelText(form)), 20000, 'the notice');
-    await shot(form, 'c-2-proposed');
+    await until(async () => /Available for future matching autofill/.test(await panelText(form)), 20000, 'the notice');
+    assert.equal(mock.checks[0].items.length, 1, 'only the edited field is saved');
+    assert.equal(await clickPanelButton(form, 'Check'), true);
+    await until(async () => /No changed or newly answered fields/.test(await panelText(form)), 20000, 'unchanged Check');
+    assert.equal(mock.checks.length, 1, 'unchanged values are not saved again');
+    await shot(form, 'c-2-saved');
 
     // The site's Submit is held while one provisional answer (the certification) is neither accepted
     // nor edited; accepting it lets the Manager's Submit through.
@@ -760,7 +787,7 @@ const FORM_DYN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><ti
   });
 </script></body></html>`;
 
-test('the checklist: a revealed question, a section drawn on scroll, a refused answer, personal facts and terms left, Check again, Submit held then let through', { skip, timeout: 420000 }, async () => {
+test('the checklist: a revealed question, a section drawn on scroll, a refused answer, personal facts and terms left, Check, Submit held then let through', { skip, timeout: 420000 }, async () => {
   resetMock();
   const { browser, action, phase, ...ctx } = await launch({ ai: 'off' });
   try {
@@ -781,15 +808,15 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
     assert.doesNotMatch(first, /Nothing blocks Submit/);
     await shot(form, 'k-1-step1-checklist');
 
-    // The Manager fixes both on the form; Check again reads the page again (nothing filled).
+    // The Manager fixes both on the form; Check reads the page again (nothing filled).
     await form.type('#url', 'https://ana.example.com');
     await form.$eval('#yrs', (box) => { box.value = ''; });
     await form.type('#yrs', '3');
     const answersBefore = mock.answers;
-    assert.equal(await clickPanelButton(form, 'Check again'), true);
-    const second = await until(async () => { const text = await panelText(form); return /Nothing blocks Submit/.test(text) ? text : null; }, 20000, 'step 1 settled after Check again');
+    assert.equal(await clickPanelButton(form, 'Check'), true);
+    const second = await until(async () => { const text = await panelText(form); return /Nothing blocks Submit/.test(text) ? text : null; }, 20000, 'step 1 settled after Check');
     assert.doesNotMatch(second, /Did not take/);
-    assert.equal(mock.answers, answersBefore, 'Check again asks no AI');
+    assert.equal(mock.answers, answersBefore, 'Check asks no AI');
     assert.equal(await form.evaluate(() => document.getElementById('yrs').value), '3', 'nothing the Manager wrote was refilled');
 
     // Step 2: the right to work and the terms are the Manager's; the cover letter is attached.
@@ -988,6 +1015,7 @@ test('Cancel and Stop all at every point: no live claim, no tab left open, nothi
 
       // 2. While the AI is asked (it never answers here).
       await ctx.worker.evaluate(() => chrome.storage.local.set({ qtsAutoApplyAi: 'gemini', qtsAutoApplyAiLimits: { timeoutMs: 120000 } }));
+      mock.assignedProvider = 'gemini';
       mock.aiMode = 'hang';
       n += 1;
       const asked = mock.answers;

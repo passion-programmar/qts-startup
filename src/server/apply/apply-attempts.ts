@@ -32,7 +32,7 @@ import {
 import { type ExchangeRates, loadExchangeRates } from "./exchange-rates";
 import { type RememberedChoice, recordLearnedAnswers, rememberedChoices } from "./question-memory";
 import { type LearnedAnswer } from "./question-memory-values";
-import { loadApprovedReusableAnswers } from "./reusable-answers";
+import { loadApplicationAnswers } from "./manager-answers";
 import { decryptSiteAccountPassword } from "./site-account-password";
 import type { WorkSelection } from "@/server/work/work-selection";
 
@@ -71,7 +71,7 @@ export type ClaimedApplication = {
   // The candidate's experience and education, for the panel on the job page (copied by the Manager).
   profileDetails: { experiences: ProfileExperience[]; educations: ProfileEducation[] };
   // Super Admin's reusable answers, the same for every candidate.
-  savedAnswers: { questionKey: string; questionText: string; answer: string; note: string | null; scope: "everyone" }[];
+  savedAnswers: Awaited<ReturnType<typeof loadApplicationAnswers>>;
   // For salary questions in another currency; null when the ECB is unreachable.
   exchangeRates: ExchangeRates | null;
   // Which option a value that did not fit became on a known choice list: filled without AI.
@@ -193,6 +193,7 @@ export async function claimNextApplication(
 async function loadApplication(attemptId: string): Promise<ClaimedApplication | null> {
   const [row] = await db
     .select({
+      managerId: applyAttempts.managerId,
       jobId: jobs.id,
       url: jobs.jobUrl,
       title: jobs.jobTitle,
@@ -212,6 +213,7 @@ async function loadApplication(attemptId: string): Promise<ClaimedApplication | 
       deliveredCoverLetter: deliveredDocument("coverLetter"),
       candidateId: profiles.userId,
       firstName: profiles.firstName,
+      managerCategory: profiles.managerCategory,
       lastName: profiles.lastName,
       email: profiles.candidateEmail,
       phone: profiles.phone,
@@ -254,16 +256,12 @@ async function loadApplication(attemptId: string): Promise<ClaimedApplication | 
     .limit(1);
   if (!row) return null;
 
-  // Only Super Admin's approved reusable answers, the same for every candidate; drafts never reach
-  // Apply. Answers from earlier applications are never reused: each job's questions are answered for that job.
-  const savedAnswers = (await loadApprovedReusableAnswers())
-    .map((entry) => ({ ...entry, scope: "everyone" as const }));
-
   const {
-    jobId, url, title, company, location, employmentType, workplaceType, salary, description,
+    managerId, jobId, url, title, company, location, employmentType, workplaceType, salary, description,
     resumeLocalPath, resumeSavedOn, promptName, pdfTemplate, savedResumeText, savedCoverLetterText,
     deliveredResume, deliveredCoverLetter, aiMode, autoSubmit, reviewMode, siteAccountPassword, ...candidate
   } = row;
+  const savedAnswers = await loadApplicationAnswers(managerId, candidate.candidateId, jobId);
   return {
     attemptId,
     aiMode: aiMode === "gemini" ? "gemini" : "chatgpt",

@@ -2450,7 +2450,8 @@
       .filter((field) => !field.hidden && field.kind !== 'file')
       .map((field) => {
         const element = findField(field.id);
-        return element ? { id: field.id, label: field.label, value: valueOf(field, element) } : null;
+        return element && field.kind !== 'password' && element.type !== 'password'
+          ? { id: field.id, label: field.label, value: valueOf(field, element), kind: field.kind, options: field.options || [] } : null;
       })
       .filter(Boolean);
   }

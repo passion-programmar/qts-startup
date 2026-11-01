@@ -54,8 +54,7 @@ test('Auto Apply reference cards copy complete saved values without filling, pro
     await page.evaluate(() => { window.failCopy = true; });
     await click('[data-reference="reusable"] .reference-item', 'Notice period?');
     await page.waitForFunction(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.copy-status').textContent.includes('Could not copy'));
-    await click('.buttons button', 'Propose my changes');
-    assert.equal(await page.evaluate(() => window.sent.at(-1).action), 'propose', 'existing proposal workflow retained');
+    assert.equal(await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('button')].some(button => button.textContent === 'Propose my changes')), false, 'Check replaces the approval proposal flow');
     await render({ ...state, references: {} });
     assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.reference-item').length), 0, 'new empty data cannot retain old candidate values');
     await render({ ...state, auto: false });

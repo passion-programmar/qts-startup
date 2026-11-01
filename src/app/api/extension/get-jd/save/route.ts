@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { categories, profiles, users } from "@/db/schema";
+import { profiles, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import {
@@ -81,7 +81,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         id: profiles.userId,
         firstName: profiles.firstName,
         lastName: profiles.lastName,
-        category: categories.name,
+        category: profiles.managerCategory,
         // The company of the candidate's most recent experience: a job there is never saved for them.
         currentEmployer: sql<string | null>`(
           select e.company_name from experiences e
@@ -92,7 +92,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       })
       .from(users)
       .innerJoin(profiles, eq(profiles.userId, users.id))
-      .leftJoin(categories, eq(categories.id, profiles.categoryId))
       .where(
         and(
           eq(users.parentUserId, manager.id),

@@ -2,7 +2,7 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { categories, users } from "@/db/schema";
+import { users } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
 import { hashPassword } from "@/lib/password";
 import {
@@ -55,7 +55,7 @@ export async function createUserAction(
   const province = readText(formData, "province", 120);
   const addressLine1 = readText(formData, "addressLine1", 256);
   const postalCode = readText(formData, "postalCode", 32);
-  const categoryId = readText(formData, "categoryId", 36);
+  const managerCategory = readText(formData, "managerCategory", 80);
   const educationRows = normalizeEducationRows(readHistoryRows(formData, "education", {
     institution: 120,
     degree: 120,
@@ -128,18 +128,6 @@ export async function createUserAction(
     if (normalizedLinkedInUrl === null) {
       return { ...emptyState, error: "Enter a LinkedIn profile as linkedin.com/in/username." };
     }
-    if (categoryId && !isUuid(categoryId)) {
-      return { ...emptyState, error: "Select a valid candidate category." };
-    }
-    if (categoryId) {
-      const [category] = await db.select({ id: categories.id })
-        .from(categories)
-        .where(eq(categories.id, categoryId))
-        .limit(1);
-      if (!category) {
-        return { ...emptyState, error: "That candidate category no longer exists. Refresh and try again." };
-      }
-    }
     const educationError = validateEducationRows(educationRows);
     if (educationError) return { ...emptyState, error: educationError };
     const experienceError = validateExperienceRows(experienceRows);
@@ -187,12 +175,12 @@ export async function createUserAction(
         ),
         new_profile as (
           insert into profiles (
-            user_id, category_id, first_name, last_name, birthday, pdf_template, candidate_email, phone,
+            user_id, category_id, manager_category, first_name, last_name, birthday, pdf_template, candidate_email, phone,
             headline, linkedin_url, country, city, province, address_line_1,
             postal_code
           )
           select id,
-            coalesce(${categoryId || null}::uuid, (select id from categories where is_default)),
+            (select id from categories where is_default), ${managerCategory},
             ${firstName}, ${lastName},
             ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
@@ -306,7 +294,7 @@ export async function updateCandidateProfileAction(
     addressLine1: 256,
     postalCode: 32,
     jdMatching: 5000,
-    categoryId: 36,
+    managerCategory: 80,
   } as const;
   const values = {
     firstName: readText(formData, "firstName", limits.firstName),
@@ -323,7 +311,7 @@ export async function updateCandidateProfileAction(
     addressLine1: readText(formData, "addressLine1", limits.addressLine1),
     postalCode: readText(formData, "postalCode", limits.postalCode),
     jdMatching: readText(formData, "jdMatching", limits.jdMatching),
-    categoryId: readText(formData, "categoryId", limits.categoryId),
+    managerCategory: readText(formData, "managerCategory", limits.managerCategory),
   };
   const educationRows = normalizeEducationRows(readHistoryRows(formData, "education", {
     institution: 120,
@@ -381,9 +369,6 @@ export async function updateCandidateProfileAction(
   if (normalizedLinkedInUrl === null) {
     return { ...emptyState, error: "Enter a LinkedIn profile as linkedin.com/in/username." };
   }
-  if (values.categoryId && !isUuid(values.categoryId)) {
-    return { ...emptyState, error: "Select a valid candidate category." };
-  }
   const educationError = validateEducationRows(educationRows);
   if (educationError) return { ...emptyState, error: educationError };
   const experienceError = validateExperienceRows(experienceRows);
@@ -392,20 +377,6 @@ export async function updateCandidateProfileAction(
   if (typeof applicationFacts === "string") return { ...emptyState, error: applicationFacts };
 
   try {
-    if (values.categoryId) {
-      const [category] = await db
-        .select({ id: categories.id })
-        .from(categories)
-        .where(eq(categories.id, values.categoryId))
-        .limit(1);
-      if (!category) {
-        return {
-          ...emptyState,
-          error: "That candidate category no longer exists. Refresh and try again.",
-        };
-      }
-    }
-
     const educationEntries = sortProfileHistoryNewestFirst(educationRows)
       .filter((row) => row.institution)
       .map((row, sortOrder) => ({
@@ -434,7 +405,7 @@ export async function updateCandidateProfileAction(
     const results = await neonSql.transaction((tx) => [
       tx`
         update profiles
-        set category_id = coalesce(${values.categoryId || null}::uuid, (select id from categories where is_default)),
+        set manager_category = ${values.managerCategory},
           first_name = ${values.firstName}, last_name = ${values.lastName},
           birthday = ${values.birthday || null}::date,
           pdf_template = ${values.pdfTemplate},

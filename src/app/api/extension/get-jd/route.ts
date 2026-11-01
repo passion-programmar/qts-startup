@@ -7,7 +7,6 @@ import {
 } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import {
-  categories,
   profiles,
   prompts,
   users,
@@ -360,7 +359,7 @@ async function loadManagerCandidateProfiles(
       id: profiles.userId,
       firstName: profiles.firstName,
       lastName: profiles.lastName,
-      category: categories.name,
+      category: profiles.managerCategory,
       jdMatching: profiles.jdMatching,
       // The current job first, else the one that ended last.
       currentEmployer: sql<string | null>`(
@@ -372,7 +371,6 @@ async function loadManagerCandidateProfiles(
     })
     .from(users)
     .innerJoin(profiles, eq(profiles.userId, users.id))
-    .leftJoin(categories, eq(categories.id, profiles.categoryId))
     .where(
       and(
         eq(users.parentUserId, managerId),

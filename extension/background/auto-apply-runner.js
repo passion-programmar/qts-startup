@@ -2,11 +2,11 @@
 // assisted Apply (runAssistedApplication), which stays as it is. It takes Apply's claims (the same
 // server routes, sign-in, and ownership checks) and fills with the automatic engine (runApplication
 // with auto: true): the résumé and cover letter, the candidate's profile facts, and Super Admin's
-// approved reusable answers first; then AI (Gemini by default) for the questions left, one batch per
+// approved reusable answers first; then AI (the Manager-assigned provider (ChatGPT by default)) for the questions left, one batch per
 // form step, written from the job description, résumé, and profile and filled; one the documents and
 // approved facts do not show is pointed out on the review.
 // Steps go on by themselves while nothing needs the Manager; the last step always waits for the
-// Manager, who clicks the site's Submit. One application at a time per Chrome, and one mode per
+// Manager, who clicks the site's Submit. Two applications at a time per Chrome, and one mode per
 // Chrome: Apply and Auto Apply share the work slot ('apply' in qtsExtensionStatus), and this key says
 // which of the two holds it.
 const AUTO_APPLY_KIND_KEY = 'qtsApplyKind';
@@ -15,7 +15,7 @@ const AUTO_APPLY_STATE_KEY = 'qtsAutoApplyState';
 // What a restarted worker needs to go on with an application: its tab, step, answers so far, and
 // whether the Manager already submitted it. Removed when the application ends.
 const AUTO_APPLY_RUNS_KEY = 'qtsAutoApplyRuns';
-// The AI for open questions: 'gemini' (default, through the QTS server), 'chatgpt' (this Chrome's
+// The AI for open questions: 'gemini' (through the QTS server), 'chatgpt' (this Chrome's
 // ChatGPT tab), or 'off' (Stage B: nothing but documents, profile, and approved answers).
 const AUTO_APPLY_AI_KEY = 'qtsAutoApplyAi';
 // { budget, timeoutMs }: local, bounded overrides of the AI request limit and wait (tests only).
@@ -65,15 +65,16 @@ function changeStoredRuns(change) {
   return runWrites;
 }
 
-/** Gemini (default), ChatGPT, or no AI, and Auto Apply's limits, on one claimed application. */
+/** Manager-assigned ChatGPT (default) or Gemini, with no-AI debug mode, and Auto Apply's limits, on one claimed application. */
 async function prepareAutoApplication(application) {
-  const stored = await chrome.storage.local.get([AUTO_APPLY_AI_KEY, AUTO_APPLY_AI_LIMITS_KEY, AUTO_APPLY_CHAT_FOCUS_KEY]);
+  const stored = await chrome.storage.local.get([AUTO_APPLY_AI_KEY, AUTO_APPLY_AI_LIMITS_KEY, AUTO_APPLY_CHAT_FOCUS_KEY, 'qtsApplyDebug']);
   const choice = stored[AUTO_APPLY_AI_KEY];
   // Local overrides of the request limit and wait (bounded), used by the tests; normally unset.
   const limits = stored[AUTO_APPLY_AI_LIMITS_KEY] || {};
   const bounded = (value, low, high, otherwise) => (Number.isFinite(Number(value)) ? Math.min(Math.max(Number(value), low), high) : otherwise);
-  application.autoAi = choice !== 'off';
-  application.aiMode = choice === 'chatgpt' ? 'chatgpt' : 'gemini';
+  application.autoAi = !(stored.qtsApplyDebug === true && choice === 'off');
+  // Provider is assigned to the Manager on the server, not overridden by stale Chrome storage.
+  application.aiMode = application.aiMode === 'gemini' ? 'gemini' : 'chatgpt';
   application.chatFocus = stored[AUTO_APPLY_CHAT_FOCUS_KEY] !== false;
   application.minimalPrompt = true;
   application.aiBudget = bounded(limits.budget, 1, 20, AUTO_APPLY_AI_BUDGET);
@@ -103,7 +104,7 @@ async function runAutoApplication(application, recipe, resume = null) {
     browserSession: await autoApplyBrowserSession(),
     jobId: application.job.id,
     url: application.job.url || '',
-    candidate: [application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate',
+    candidate: ([application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate') + (application.candidate.managerCategory ? ` (${application.candidate.managerCategory})` : ''),
     title: application.job.title || '',
     company: application.job.company || '',
     ai: application.autoAi ? application.aiMode : 'off',
@@ -150,7 +151,7 @@ async function runAutoApplication(application, recipe, resume = null) {
  * asked again for a question already answered). A record whose tab or claim is gone is dropped (its
  * job is given back, nothing recorded against it). Returns the runs started.
  */
-async function resumeAutoApplyRuns(selection) {
+async function resumeAutoApplyRuns(selection, limit = 2) {
   // A ChatGPT tab the worker selected before it restarted: the application's tab is shown again.
   await giveBackChatTab().catch(() => {});
   const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
@@ -163,6 +164,7 @@ async function resumeAutoApplyRuns(selection) {
     }
     if (selection && !selection.jobIds.includes(record.jobId)) continue;
     if (autoRuns.has(record.attemptId)) continue;
+    if (runs.length >= limit) continue;
     const tab = record.browserSession === browserSession && record.tabId != null ? await chrome.tabs.get(record.tabId).catch(() => null) : null;
     if (record.submitted) {
       if (!tab) {

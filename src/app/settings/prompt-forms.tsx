@@ -254,7 +254,7 @@ export function ManagerApplyForm({
           <input name="managerId" type="hidden" value={managerId} />
           <input name="aiMode" type="hidden" value={usesGemini ? "chatgpt" : "gemini"} />
           <span className="text-xs font-medium text-slate-700">
-            Answers: {usesGemini ? "Gemini" : "ChatGPT"}
+            Apply + Auto Apply answers: {usesGemini ? "Gemini" : "ChatGPT"}
           </span>
           <button
             className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"

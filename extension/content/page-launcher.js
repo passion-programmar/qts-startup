@@ -153,6 +153,10 @@ async function initializeQtsPageLauncher() {
     .work-toolbar, .work-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .work-toolbar { padding-bottom: 8px; color: #94a3b8; font: 500 11px/1.4 system-ui, sans-serif; }
     .work-toolbar label { display: flex; align-items: center; gap: 6px; }
+    .work-search { flex: 1; min-width: 0; width: 100%; padding: 6px 8px; border: 1px solid #304158; border-radius: 7px; background: #081323; color: #e2e8f0; font: inherit; outline: none; }
+    .work-search:focus { border-color: #a78bfa; box-shadow: 0 0 0 2px #a78bfa22; }
+    .work-search::placeholder { color: #8395ad; }
+    .work-toolbar label, .work-refresh { flex-shrink: 0; }
     .work-refresh { padding: 3px 6px; border: 0; border-radius: 5px; background: transparent; color: #a5b4fc; font: inherit; cursor: pointer; }
     .work-jobs { max-height: 230px; overflow-y: auto; overscroll-behavior: contain; }
     .work-job { display: flex; align-items: flex-start; gap: 9px; padding: 9px 1px; border-top: 1px solid #1d293b; }
@@ -381,7 +385,7 @@ async function initializeQtsPageLauncher() {
       for (const picker of workPickers.values()) {
         const previous = picker.select.value;
         picker.select.replaceChildren(new Option(reply.accounts.length ? 'Select account' : 'No matching notes', ''));
-        for (const account of reply.accounts) picker.select.add(new Option(account.name, account.id));
+        for (const account of reply.accounts) picker.select.add(new Option(`${account.name}${account.category ? ` (${account.category})` : ''}`, account.id));
         picker.select.value = previous;
       }
     })().catch(error => {
@@ -395,7 +399,7 @@ async function initializeQtsPageLauncher() {
 
   async function loadWorkJobs(action) {
     const picker = workPickers.get(action), version = ++picker.version;
-    picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.hasMore = false;
+    picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.hasMore = false; picker.search = '';
     picker.loading = Boolean(picker.select.value);
     renderWorkPicker(action);
     if (!picker.select.value) return;
@@ -450,17 +454,23 @@ async function initializeQtsPageLauncher() {
     panel.replaceChildren(); panel.hidden = !picker.select.value;
     if (panel.hidden) return;
     const toolbar = Object.assign(document.createElement('div'), { className: 'work-toolbar' });
+    const query = String(picker.search || '').trim().toLowerCase();
+    const visible = picker.jobs.filter(job => !query || [job.title, job.company, job.url].some(value => String(value || '').toLowerCase().includes(query)));
     const allLabel = document.createElement('label');
-    const all = Object.assign(document.createElement('input'), { type: 'checkbox', checked: picker.jobs.length > 0 && picker.selected.size === picker.jobs.length });
-    all.indeterminate = picker.selected.size > 0 && picker.selected.size < picker.jobs.length;
-    all.disabled = !picker.jobs.length || Boolean(picker.cancelling);
-    all.addEventListener('change', () => { picker.selected = new Set(all.checked ? picker.jobs.map(job => job.id) : []); renderWorkPicker(action); });
+    const selectedVisible = visible.filter(job => picker.selected.has(job.id)).length;
+    const all = Object.assign(document.createElement('input'), { type: 'checkbox', checked: visible.length > 0 && selectedVisible === visible.length });
+    all.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
+    all.disabled = !visible.length || Boolean(picker.cancelling);
+    all.addEventListener('change', () => { for (const job of visible) { if (all.checked) picker.selected.add(job.id); else picker.selected.delete(job.id); } renderWorkPicker(action); });
     allLabel.append(all, 'Select all');
     const refresh = Object.assign(document.createElement('button'), { type: 'button', className: 'work-refresh', textContent: 'Refresh', disabled: picker.loading || Boolean(picker.cancelling) });
     refresh.addEventListener('click', () => loadWorkJobs(action));
-    toolbar.append(allLabel, refresh); panel.append(toolbar);
+    const search = Object.assign(document.createElement('input'), { type: 'search', className: 'work-search', placeholder: 'Title, URL, company', value: picker.search || '' });
+    search.setAttribute('aria-label', 'Filter jobs by title, URL or company');
+    search.addEventListener('input', () => { const position = search.selectionStart; picker.search = search.value; renderWorkPicker(action); const next = panel.querySelector('.work-search'); next.focus({ preventScroll: true }); if (position !== null) next.setSelectionRange(position, position); });
+    toolbar.append(allLabel, search, refresh); panel.append(toolbar);
     const list = Object.assign(document.createElement('div'), { className: 'work-jobs' });
-    for (const job of picker.jobs) {
+    for (const job of visible) {
       const row = Object.assign(document.createElement('div'), { className: 'work-job', title: job.url });
       const check = Object.assign(document.createElement('input'), { type: 'checkbox', checked: picker.selected.has(job.id) });
       check.disabled = Boolean(picker.cancelling);
@@ -483,6 +493,9 @@ async function initializeQtsPageLauncher() {
       link.append(title, domain); row.append(check, link); list.append(row);
     }
     panel.append(list);
+    if (query && !visible.length && !picker.loading) panel.append(Object.assign(document.createElement('div'), { className: 'work-note', textContent: 'No jobs match your search.' }));
+    const hiddenSelected = picker.selected.size - selectedVisible;
+    if (query && hiddenSelected > 0) panel.append(Object.assign(document.createElement('div'), { className: 'work-note', textContent: `${hiddenSelected} selected job${hiddenSelected === 1 ? ' is' : 's are'} hidden by this filter.` }));
     if (picker.loading || picker.error || !picker.jobs.length || picker.hasMore) {
       panel.append(Object.assign(document.createElement('div'), { className: `work-note${picker.error ? ' error' : ''}`, textContent: picker.loading ? 'Loading jobs…' : picker.error || (picker.hasMore ? 'Showing the first 200 eligible jobs. Refresh after this batch.' : 'No eligible jobs for this account.') }));
     }
@@ -496,7 +509,7 @@ async function initializeQtsPageLauncher() {
     cancel.addEventListener('click', () => cancelWorkPicker(action));
     const buttons = Object.assign(document.createElement('div'), { className: 'work-buttons' });
     buttons.append(cancel, start);
-    footer.append(`${picker.selected.size} selected`, buttons); panel.append(footer);
+    footer.append(`${picker.selected.size} selected${query ? ` · ${visible.length} shown` : ''}`, buttons); panel.append(footer);
   }
 
   // Credentials are typed in an extension-origin frame, never in this page's DOM,

@@ -183,6 +183,8 @@ export const profiles = pgTable(
     addressLine1: text("address_line_1"),
     postalCode: text("postal_code"),
     jdMatching: text("jd_matching"),
+    // Manager's optional free-text label, independent of the global category catalog.
+    managerCategory: text("manager_category").default("").notNull(),
     // Facts application forms ask for. Apply fills what fits from here; ChatGPT answers the rest.
     workAuthorization: text("work_authorization"),
     needsSponsorship: boolean("needs_sponsorship"),
@@ -715,6 +717,25 @@ export const candidateSavedAnswers = pgTable(
 // Every row here is approved: Apply reads the whole table. Drafts wait in reusable_answer_drafts and
 // earlier versions are kept in reusable_answer_versions, so code that reads only this table (Apply,
 // or an older release) never sees an unreviewed answer.
+// Manager corrections are immediately usable, isolated from the Super Admin global library.
+export const managerApplyAnswers = pgTable("manager_apply_answers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  managerId: uuid("manager_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  candidateId: uuid("candidate_id").references(() => profiles.userId, { onDelete: "cascade" }),
+  jobId: uuid("job_id").references(() => jobs.id, { onDelete: "cascade" }),
+  scope: text("scope").notNull(),
+  contextKey: text("context_key").notNull(),
+  questionKey: text("question_key").notNull(),
+  questionText: text("question_text").notNull(),
+  answer: text("answer").notNull(),
+  variants: jsonb("variants").$type<{ kind: string; options: string[]; answer: string }[]>().default([]).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("manager_apply_answers_context_unique").on(table.managerId, table.contextKey, table.questionKey),
+  check("manager_apply_answers_scope_check", sql`${table.scope} in ('manager', 'candidate', 'application')`),
+  check("manager_apply_answers_owner_scope_check", sql`(${table.scope} = 'manager' and ${table.candidateId} is null and ${table.jobId} is null) or (${table.scope} = 'candidate' and ${table.candidateId} is not null and ${table.jobId} is null) or (${table.scope} = 'application' and ${table.candidateId} is not null and ${table.jobId} is not null)`),
+]);
+
 export const reusableAnswers = pgTable(
   "reusable_answers",
   {

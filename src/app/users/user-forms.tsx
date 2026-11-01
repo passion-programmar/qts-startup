@@ -46,12 +46,10 @@ const initialState: UserActionState = { error: null, success: null };
 
 type CreateUserFormProps = {
   role: "admin" | "manager" | "account";
-  categories: CandidateCategoryOption[];
 };
 
-export type CandidateCategoryOption = { id: string; name: string; isDefault: boolean };
 
-export function CreateUserForm({ role, categories }: CreateUserFormProps) {
+export function CreateUserForm({ role }: CreateUserFormProps) {
   const [educationRows, setEducationRows] = useState([0]);
   const [experienceRows, setExperienceRows] = useState([0]);
   const [isOpen, setIsOpen] = useState(false);
@@ -204,12 +202,7 @@ export function CreateUserForm({ role, categories }: CreateUserFormProps) {
               maxLength={32}
               name="postalCode"
             />
-            <SelectField
-              id="categoryId"
-              label="Category"
-              name="categoryId"
-              options={categories}
-            />
+            <TextField autoComplete="off" id="managerCategory" label="Category (optional)" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
           </div>
           </FormCard>
           <HistorySection
@@ -446,7 +439,7 @@ export type CandidateProfileValues = {
   addressLine1: string | null;
   postalCode: string | null;
   jdMatching: string | null;
-  categoryId: string | null;
+  managerCategory: string;
   workAuthorization: string | null;
   needsSponsorship: boolean | null;
   noticePeriod: string | null;
@@ -495,11 +488,9 @@ export type CandidateProfileValues = {
 
 export function EditCandidateProfileForm({
   candidate,
-  categories,
   readOnly = false,
 }: {
   candidate: CandidateProfileValues;
-  categories: CandidateCategoryOption[];
   // A blocked ("deleted") candidate: everything can be read, nothing changed.
   readOnly?: boolean;
 }) {
@@ -683,13 +674,7 @@ export function EditCandidateProfileForm({
             maxLength={32}
             name="postalCode"
           />
-          <SelectField
-            defaultValue={candidate.categoryId ?? ""}
-            id={fieldId("categoryId")}
-            label="Category"
-            name="categoryId"
-            options={categories}
-          />
+          <TextField autoComplete="off" defaultValue={candidate.managerCategory || ""} id={fieldId("managerCategory")} label="Category (optional)" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
           </div>
           </FormCard>
           <ApplicationFactsSection candidate={candidate} fieldId={fieldId} />
@@ -1253,7 +1238,7 @@ function HistorySection({
 function filledFieldLines(root: ParentNode): string[] {
   const lines: string[] = [];
   root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input[id], select[id], textarea[id]").forEach((field) => {
-    if (field.name === "pdfTemplate" || field.name === "categoryId") return;
+    if (field.name === "pdfTemplate" || field.name === "managerCategory") return;
     const label = field.labels?.[0]?.textContent?.replace(/\s*\(optional\)\s*$/i, "").replace(/\?$/, "").trim();
     if (!label) return;
     let value = "";
@@ -1362,7 +1347,7 @@ function ApplicationFactsSection({
     >
       <input name="applicationFacts" type="hidden" value="1" />
       <p className="text-xs text-slate-500">
-        Static facts about this candidate, including their own answers to diversity questions. Salary, notice, sponsorship, right to work, relocation, and job preferences are the same for every candidate: Super Admin keeps them as reusable answers in Settings.
+        Facts about this candidate, including their own answers to diversity questions. Check saves personal corrections for this candidate and shared answers for your Manager library. Super Admin manages global answers separately.
       </p>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <TextField
@@ -1442,43 +1427,6 @@ function ApplicationFactsSection({
   );
 }
 
-
-function SelectField({
-  id,
-  label,
-  name,
-  options,
-  defaultValue = "",
-}: {
-  id: string;
-  label: string;
-  name: string;
-  options: CandidateCategoryOption[];
-  defaultValue?: string;
-}) {
-  return (
-    <div>
-      <label
-        className="mb-2 block text-xs font-semibold text-slate-700"
-        htmlFor={id}
-      >
-        {label}
-      </label>
-      <select
-        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
-        id={id}
-        name={name}
-        // Every candidate has a category; new ones start in the default.
-        defaultValue={defaultValue || options.find((option) => option.isDefault)?.id || ""}
-        required
-      >
-        {options.map((option) => (
-          <option key={option.id} value={option.id}>{option.name}</option>
-        ))}
-      </select>
-    </div>
-  );
-}
 
 function CurrentStatusCheckbox({
   id,

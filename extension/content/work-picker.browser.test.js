@@ -21,7 +21,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         if(message.action === 'cancel_status' && window.failCancellation) return { ok: false, error: 'Local cancellation failure. Retry.' };
         if(message.action === 'cancel_status') { window.store.qtsExtensionStatus = 'cancel'; return { ok: true }; }
         if(message.type === 'QTS_WORK_ITEMS') {
-          if(!message.candidateId) return { ok: true, accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor' }, { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith' }] };
+          if(!message.candidateId) return { ok: true, accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform' }, { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '' }] };
           if(message.candidateId.startsWith('2222') && !window.allowSecondAccount) return { ok: false, error: 'Local loading failure. Retry.' };
           return { ok: true, jobs: [{id:'33333333-3333-4333-8333-333333333333',title:'Machine Learning Engineer III',company:'Mapbox',url:'https://www.remoterocketship.com/publicjobs/company/mapbox/jobs/machine-learning-engineer-iii-routing-cost-poland-remote/?tracking=complete'},
             {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://djinni.co/jobs/838846-senior-devops-engineer-contractor/'}] };
@@ -39,12 +39,23 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     assert.equal(await page.evaluate(() => window.calls.filter(m=>m.type==='QTS_WORK_ITEMS').length), 0, 'passive initialization does not fetch accounts');
     await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').focus());
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options.length === 3);
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].textContent), 'Jordan Taylor (Platform)');
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="generation"]'); s.value=s.options[1].value; s.dispatchEvent(new Event('change')); });
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length===2);
     const link = await page.evaluate(() => { const a=window.testRoot.querySelector('.work-link'); return {text:a.textContent,title:a.title,href:a.href,target:a.target,rel:a.rel,heading:a.querySelector('.work-title').title,domain:a.querySelector('.work-domain').title}; });
     assert.match(link.text,/remoterocketship\.com/); assert.doesNotMatch(link.text,/publicjobs|tracking=/);
     assert.equal(link.title,link.href); assert.equal(link.heading,link.href); assert.equal(link.domain,link.href);
     assert.equal(link.target,'_blank'); assert.match(link.rel,/noopener/);
+    const requestsBeforeSearch = await page.evaluate(() => window.calls.length);
+    for (const [query, title] of [['machine learning', 'Machine Learning Engineer III'], ['DJINNI.CO/jobs', 'Senior DevOps Engineer'], ['MAPBOX', 'Machine Learning Engineer III']]) {
+      await page.evaluate(query => { const input = window.testRoot.querySelector('[data-work-picker="generation"] .work-search'); input.value = query; input.dispatchEvent(new Event('input')); }, query);
+      assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-title')].map(node => node.textContent)), [title]);
+      assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"]').textContent), /2 selected/);
+    }
+    await page.evaluate(() => { const input = window.testRoot.querySelector('[data-work-picker="generation"] .work-search'); input.value = 'no matches'; input.dispatchEvent(new Event('input')); });
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"]').textContent), /No jobs match/);
+    await page.evaluate(() => { const input = window.testRoot.querySelector('[data-work-picker="generation"] .work-search'); input.value = ''; input.dispatchEvent(new Event('input')); });
+    assert.equal(await page.evaluate(() => window.calls.length), requestsBeforeSearch, 'filtering makes no server requests');
     await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"] .work-job input').click());
     await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"] .work-start').click());
     await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='generation'));

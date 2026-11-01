@@ -11,7 +11,8 @@ import {
   ManagerJobDetectionUrlAccessForm,
 } from "@/app/settings/prompt-forms";
 import { groupVersions } from "@/app/prompts/prompt-groups";
-import { prompts, users } from "@/db/schema";
+import { managerApplyAnswers, prompts, users } from "@/db/schema";
+import { PublishManagerAnswers } from "./publish-manager-answers";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { displayReusableAnswer } from "@/lib/checkbox-answer";
@@ -72,6 +73,7 @@ export default async function SettingsPage() {
     libraryRows,
     questionSuggestions,
     answerVersions,
+    managerAnswerRows,
   ] = await Promise.all([
     // Super Admin's library: the active version of each prompt.
     db
@@ -139,6 +141,8 @@ export default async function SettingsPage() {
     listLibrary(),
     listQuestionSuggestions(),
     listVersions(),
+    db.select({ id: managerApplyAnswers.id, questionText: managerApplyAnswers.questionText, answer: managerApplyAnswers.answer, manager: users.displayName })
+      .from(managerApplyAnswers).innerJoin(users, eq(users.id, managerApplyAnswers.managerId)).where(eq(managerApplyAnswers.scope, "manager")),
   ]);
   // Approved answers are what Apply uses; drafts wait for review; rejected ones are kept so learning
   // does not propose them again. Each answer lists what it repeats or contradicts, and its earlier
@@ -305,6 +309,7 @@ export default async function SettingsPage() {
             </SettingsCard>
           </div>
 
+          <PublishManagerAnswers rows={managerAnswerRows} />
           <h3 className="mb-1 mt-6 text-xs font-semibold text-slate-700">
             Drafts waiting for review ({draftRows.length})
           </h3>

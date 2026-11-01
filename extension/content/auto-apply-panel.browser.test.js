@@ -61,8 +61,24 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     assert.equal(actual.answer, longAnswer); assert.equal(actual.answerMaxHeight, 'none');
     assert.equal(actual.scrollable, true); assert.equal(actual.footerFits, true);
     for (const text of ['Review, then Submit', 'Sample Candidate', 'Staff Platform Engineer', 'Nothing blocks Submit', 'Profile, documents & reusable answers']) assert.ok(actual.text.includes(text), text);
-    assert.deepEqual(actual.buttons, ['I submitted it', 'Check again', 'Skip', 'Later', 'Fill again', 'Propose my changes']);
+    assert.deepEqual(actual.buttons, ['I submitted it', 'Check', 'Skip', 'Later', 'Fill again']);
     assert.equal(actual.text.includes('Select account'), false, 'launcher menus do not populate the Auto Apply panel');
+    await page.evaluate(() => {
+      window.__qtsApplyForm = { currentAnswers: () => [{ id: 'city', label: 'City', value: 'Example City', kind: 'text', options: [] }] };
+      [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.foot button')].find(button => button.textContent === 'Check').click();
+    });
+    const check = await page.evaluate(() => window.sent.find(message => message.action === 'recheck'));
+    assert.equal(check.manualCheck, true);
+    assert.equal(check.answers[0].value, 'Example City');
+    await page.evaluate(state => window.__qtsApplyReview.render({ ...state, savedChanges: [
+      { id: 'saved', question: 'Additional details', answer: 'Contact me for details', scope: 'application', canReuse: true },
+      { id: 'candidate', question: 'City', answer: 'Example City', scope: 'candidate' },
+    ] }), state);
+    const savedText = await page.evaluate(() => document.querySelector('[data-qts-apply-review]').shadowRoot.textContent);
+    assert.match(savedText, /Saved changes/); assert.match(savedText, /Context uncertain/); assert.match(savedText, /This candidate/);
+    await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('button')].find(button => button.textContent === 'Move to my reusable answers').click());
+    assert.equal(await page.evaluate(() => window.sent.find(message => message.action === 'reuse_answer').answerId), 'saved');
+    await page.evaluate(state => window.__qtsApplyReview.render(state), state);
     await page.evaluate(() => {
       const body = document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.body'); body.scrollTop = 100;
     });
