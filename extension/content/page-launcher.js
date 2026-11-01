@@ -35,7 +35,7 @@ async function initializeQtsPageLauncher() {
 
   // While the actions panel is open the page moves left, so the panel never covers it (the Apply
   // and Get JD panels, which dock in the same place, take precedence).
-  const MENU_WIDTH = 'min(320px, 48vw)';
+  const MENU_WIDTH = 'min(480px, 48vw)';
   document.querySelectorAll('[data-qts-menu-dock]').forEach((node) => node.remove());
   const dock = document.createElement('style');
   dock.setAttribute('data-qts-menu-dock', '');
@@ -138,7 +138,11 @@ async function initializeQtsPageLauncher() {
     .action.auto-apply { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
     .work-heading { display: flex; align-items: stretch; gap: 7px; }
     .work-heading > .action { flex: 1; min-width: 0; }
-    .work-account { width: 122px; min-width: 0; padding: 8px; border: 1px solid #29364b; border-radius: 10px; background: #101a2c; color: #cbd5e1; font: 500 12px/1.4 system-ui, sans-serif; color-scheme: dark; }
+    .work-account { flex-shrink: 0; width: 140px; min-width: 0; padding: 8px; border: 1px solid #29364b; border-radius: 10px; background: #101a2c; color: #cbd5e1; font: 500 12px/1.4 system-ui, sans-serif; color-scheme: dark; }
+    @media (max-width: 900px) {
+      .work-heading { flex-wrap: wrap; }
+      .work-account { width: 100%; }
+    }
     .work-account:focus-visible, .work-start:focus-visible, .work-refresh:focus-visible, .work-link:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
     .work-picker { margin-top: 8px; padding: 10px; border: 1px solid #263247; border-radius: 12px; background: #0c1423; }
     .work-picker[hidden] { display: none; }
