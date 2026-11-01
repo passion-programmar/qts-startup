@@ -142,10 +142,12 @@ async function initializeQtsPageLauncher() {
     .action.auto-apply { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
     .work-heading { display: flex; align-items: stretch; gap: 7px; }
     .work-heading > .action { flex: 1; min-width: 0; }
-    .work-account { flex-shrink: 0; width: 140px; min-width: 0; padding: 8px; border: 1px solid #29364b; border-radius: 10px; background: #101a2c; color: #cbd5e1; font: 500 12px/1.4 system-ui, sans-serif; color-scheme: dark; }
+    .work-account-selection { display: flex; width: 140px; flex-shrink: 0; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
+    .work-account { flex-shrink: 0; width: 100%; min-width: 0; padding: 8px; border: 1px solid #29364b; border-radius: 10px; background: #101a2c; color: #cbd5e1; font: 500 12px/1.4 system-ui, sans-serif; color-scheme: dark; }
+    .work-account-category { max-width: 100%; overflow: hidden; color: #94a3b8; font: 600 11px/1.4 system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
     @media (max-width: 900px) {
       .work-heading { flex-wrap: wrap; }
-      .work-account { width: 100%; }
+      .work-account-selection { width: 100%; }
     }
     .work-account:focus-visible, .work-start:focus-visible, .work-refresh:focus-visible, .work-link:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
     .work-picker { margin-top: 8px; padding: 10px; border: 1px solid #263247; border-radius: 12px; background: #0c1423; }
@@ -355,8 +357,11 @@ async function initializeQtsPageLauncher() {
       row.append(button, sub);
       if (['generation', 'auto_apply'].includes(action)) {
         const heading = Object.assign(document.createElement('div'), { className: 'work-heading' });
+        const accountSelection = Object.assign(document.createElement('div'), { className: 'work-account-selection' });
         const select = Object.assign(document.createElement('select'), { className: 'work-account' });
+        const categoryLabel = Object.assign(document.createElement('span'), { className: 'work-account-category' });
         select.dataset.workAccount = action;
+        categoryLabel.dataset.workAccountCategory = action;
         select.setAttribute('aria-label', `${label} account`);
         select.add(new Option('Select account', ''));
         select.addEventListener('focus', () => loadWorkAccounts(action).catch(() => {}));
@@ -366,8 +371,9 @@ async function initializeQtsPageLauncher() {
         });
         const panel = Object.assign(document.createElement('div'), { className: 'work-picker', hidden: true });
         panel.dataset.workPicker = action;
-        workPickers.set(action, { select, panel, accounts: [], jobs: [], selected: new Set(), version: 0, loading: false });
-        heading.append(button, select);
+        workPickers.set(action, { select, categoryLabel, panel, accounts: [], jobs: [], selected: new Set(), version: 0, loading: false });
+        accountSelection.append(select, categoryLabel);
+        heading.append(button, accountSelection);
         row.replaceChildren(heading, panel, sub);
       }
       menuList.appendChild(row);
@@ -395,13 +401,9 @@ async function initializeQtsPageLauncher() {
         const eligibleJobCount = Number(account.eligibleJobCount) || 0;
         const countLabel = eligibleJobCount >= 8 ? '8+' : String(eligibleJobCount);
         const option = new Option(
-          `${account.name}${account.category ? ` (${account.category})` : ''} (${countLabel})`,
+          `${account.name} (${countLabel})`,
           account.id,
         );
-        if (/^#[0-9a-f]{6}$/i.test(account.categoryColor || '')) {
-          option.style.backgroundColor = account.categoryColor;
-          option.style.color = categoryForeground(account.categoryColor);
-        }
         option.disabled = eligibleJobCount === 0;
         picker.select.add(option);
       }
@@ -429,21 +431,12 @@ async function initializeQtsPageLauncher() {
     return request;
   }
 
-  function categoryForeground(color) {
-    if (!/^#[0-9a-f]{6}$/i.test(color)) return '#cbd5e1';
-    const channels = [1, 3, 5].map(offset => {
-      const channel = parseInt(color.slice(offset, offset + 2), 16) / 255;
-      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-    });
-    const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-    return luminance > 0.179 ? '#0f172a' : '#ffffff';
-  }
-
   function setWorkAccountColor(select, accounts, accountId) {
     const account = accounts.find(item => item.id === accountId);
     const color = /^#[0-9a-f]{6}$/i.test(account?.categoryColor || '') ? account.categoryColor : '';
-    select.style.backgroundColor = color;
-    select.style.color = color ? categoryForeground(color) : '';
+    const categoryLabel = workPickers.get(select.dataset.workAccount)?.categoryLabel;
+    categoryLabel.textContent = account?.category || '';
+    categoryLabel.style.color = color;
   }
 
   function loadAllWorkAccounts() {

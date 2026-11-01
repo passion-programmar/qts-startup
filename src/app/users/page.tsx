@@ -100,16 +100,6 @@ function userName(user: UserRow): string {
   );
 }
 
-function categoryForeground(color: string): string {
-  if (!/^#[0-9a-f]{6}$/i.test(color)) return "#0f172a";
-  const channels = [1, 3, 5].map((offset) => {
-    const channel = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
-    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-  });
-  const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-  return luminance > 0.179 ? "#0f172a" : "#ffffff";
-}
-
 export default async function UsersPage() {
   const actor = await getCurrentUser();
   if (!actor) redirect("/login");
@@ -354,13 +344,10 @@ export default async function UsersPage() {
                         value={candidate.manager_category || "Uncategorized"}
                       >
                         <span
-                          className={candidate.manager_category_color
-                            ? "inline-flex max-w-full items-center rounded-full px-2.5 py-1 text-xs font-medium"
-                            : "inline-flex items-center"}
-                          style={candidate.manager_category_color ? {
-                            backgroundColor: candidate.manager_category_color,
-                            color: categoryForeground(candidate.manager_category_color),
-                          } : undefined}
+                          className="inline-flex max-w-full items-center"
+                          style={candidate.manager_category_color
+                            ? { color: candidate.manager_category_color }
+                            : undefined}
                         >
                           {candidate.manager_category || "Uncategorized"}
                         </span>

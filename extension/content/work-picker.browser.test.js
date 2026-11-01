@@ -51,13 +51,17 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[0].textContent), 'Loading accounts…');
     await page.evaluate(() => window.accountResolvers.generation());
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options.length === 4);
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].textContent), 'Jordan Taylor (Platform) (8+)');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.backgroundColor), 'rgb(37, 99, 235)');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.color), 'rgb(255, 255, 255)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].textContent), 'Jordan Taylor (8+)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.backgroundColor), '');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.color), '');
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[2].textContent), 'Casey Smith (3)');
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[3].disabled), true);
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="generation"]'); s.value=s.options[1].value; s.dispatchEvent(new Event('change')); });
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').style.backgroundColor), 'rgb(37, 99, 235)');
+    assert.deepEqual(await page.evaluate(() => {
+      const select = window.testRoot.querySelector('[data-work-account="generation"]');
+      const category = window.testRoot.querySelector('[data-work-account-category="generation"]');
+      return { selectBackground: select.style.backgroundColor, selectColor: select.style.color, categoryText: category.textContent, categoryColor: category.style.color };
+    }), { selectBackground: '', selectColor: '', categoryText: 'Platform', categoryColor: 'rgb(37, 99, 235)' });
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length===2);
     const link = await page.evaluate(() => { const a=window.testRoot.querySelector('.work-link'); return {text:a.textContent,title:a.title,href:a.href,target:a.target,rel:a.rel,heading:a.querySelector('.work-title').title,domain:a.querySelector('.work-domain').title}; });
     assert.match(link.text,/remoterocketship\.com/); assert.doesNotMatch(link.text,/publicjobs|tracking=/);
@@ -84,7 +88,11 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => window.accountResolvers.auto_apply());
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').options.length === 4);
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="auto_apply"]');s.value=s.options[1].value;s.dispatchEvent(new Event('change')); });
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').style.backgroundColor), 'rgb(37, 99, 235)');
+    assert.deepEqual(await page.evaluate(() => {
+      const select = window.testRoot.querySelector('[data-work-account="auto_apply"]');
+      const category = window.testRoot.querySelector('[data-work-account-category="auto_apply"]');
+      return { selectBackground: select.style.backgroundColor, selectColor: select.style.color, categoryText: category.textContent, categoryColor: category.style.color };
+    }), { selectBackground: '', selectColor: '', categoryText: 'Platform', categoryColor: 'rgb(37, 99, 235)' });
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length===2);
     assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job input')].map(input => ({ checked: input.checked, disabled: input.disabled }))), [
       { checked: false, disabled: true }, { checked: true, disabled: false },
