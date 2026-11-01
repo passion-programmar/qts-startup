@@ -50,6 +50,26 @@ test('a text answer never clicks another field\'s open list; its own suggestion 
   assert.deepEqual(own, { ok: true, value: 'Warsaw, Warszawa, Mazowieckie, POL' });
 });
 
+test('Location(City) is scanned and filled from the candidate profile without geolocation or AI', { skip }, async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<form><label for="city">Location(City)<span>*</span></label><input id="city" required><a href="#" id="locate">Locate me</a></form><script>document.getElementById("locate").onclick=()=>{window.located=true;};</script>');
+    await page.addScriptTag({ path: FORM_FILE });
+    await page.addScriptTag({ path: path.join(__dirname, '../shared/apply-answers.js') });
+    const result = await page.evaluate(async () => {
+      const api = globalThis.__qtsApplyForm, fields = api.scanForm();
+      const resolved = globalThis.__qtsApplyAnswers.resolveFields(fields, { city: 'Sample City', country: 'Romania' }, [], { autoApply: true });
+      const field = fields.find(entry => entry.label.includes('City'));
+      const answer = resolved.answers[field.id];
+      const filled = await api.fillField(field.id, answer.value);
+      return { label: field.label, value: document.getElementById('city').value, source: answer.source, fact: answer.fact, open: resolved.open.length, filled: filled.ok, located: Boolean(window.located) };
+    });
+    assert.match(result.label, /Location\(City\)/);
+    assert.equal(result.value, 'Sample City'); assert.equal(result.source, 'profile'); assert.equal(result.fact, 'city');
+    assert.equal(result.open, 0); assert.equal(result.filled, true); assert.equal(result.located, false);
+  } finally { await page.close(); }
+});
+
 test('a box without its own label never takes another question\'s; an unsure one is marked unresolved', { skip }, async () => {
   const fields = await onPage(`<form>
       <div><label for="cv">Resume/CV *</label><input id="cv" type="file"></div>

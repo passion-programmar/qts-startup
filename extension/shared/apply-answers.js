@@ -311,8 +311,8 @@
     { test: /linkedin/, fact: (c) => c.linkedinUrl, name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
-    // autoTest (Auto Apply only): "Location (City)" (Greenhouse), "City / Town".
-    { test: /^(current )?(city|town)(\s*(\/|or)\s*(city|town|locality))?$|city of residence|^(stadt|ort|wohnort|ville|ciudad|miasto|localidad|localit[ée]|citt[àa])$/, autoTest: /^location \(city\)$|^(your )?city\s*\/\s*town$/, fact: (c) => c.city, name: 'city', personal: true },
+    // City-labelled location fields are profile facts in both modes; sites vary parenthesis spacing.
+    { test: /^(current )?(city|town)(\s*(\/|or)\s*(city|town|locality))?$|^(current )?location\s*\(\s*(city|town)\s*\)$|city of residence|^(stadt|ort|wohnort|ville|ciudad|miasto|localidad|localit[ée]|citt[àa])$/, autoTest: /^(your )?city\s*\/\s*town$/, fact: (c) => c.city, name: 'city', personal: true },
     // autoTest (Auto Apply only): also as a whole question, "What is your location?" (Lever, a list of countries).
     { test: /^(current )?location$|where are you (currently )?(located|based|living)|where do you (currently )?(live|reside)\b(?! in)|current location|^location of residence|^(city|place) of residence$/, autoTest: /^(what is|what's) your (current )?location\??(\s|$)/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location', personal: true },
     // "Country", "Country/Region" (SmartRecruiters), "Country / Territory", "Region/Country"; autoTest

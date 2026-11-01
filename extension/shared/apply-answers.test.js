@@ -776,6 +776,28 @@ test('the candidate\'s own country and city fill "Country/Region" and "City/Town
   assert.match(prompt, /never from the job's location/);
 });
 
+test('Location(City) spacing variants use the saved city in both modes, ahead of reusable answers', () => {
+  const labels = ['Location(City)*', 'Location (City)*', 'Location( City )', 'LOCATION ( CITY ) *', 'Current location(city)', 'Location(Town)'];
+  const profile = { ...candidate, city: 'Sample City', country: 'Romania' };
+  for (const autoApply of [false, true]) {
+    const fields = labels.map(label => field(label));
+    const wrongAnswers = labels.map(question => ({ questionKey: answers.normalizeQuestionKey(question), questionText: question, answer: 'Wrong City' }));
+    const result = answers.resolveFields(fields, profile, wrongAnswers, { autoApply });
+    assert.equal(result.open.length, 0);
+    for (const label of labels) {
+      assert.equal(result.answers[label].value, profile.city, label);
+      assert.equal(result.answers[label].source, 'profile');
+      assert.equal(result.answers[label].fact, 'city');
+    }
+    const absent = answers.resolveFields([field('Location(City)*')], { ...profile, city: null }, [], { autoApply });
+    assert.equal(absent.answers['Location(City)*'], undefined);
+    assert.equal(absent.open.length, 0);
+    assert.match(absent.byHand[0].message, /profile has no city/i);
+    const different = answers.resolveFields([field('Preferred job location(city)'), field('Office location(city)')], profile, [], { autoApply });
+    assert.equal(Object.values(different.answers).some(answer => answer.value === profile.city), false);
+  }
+});
+
 test('other people\'s details and yes/no questions never get the candidate\'s own facts', () => {
   const fields = ['Emergency contact phone number', 'Reference email', 'Referee\'s phone number', 'Are you available for a phone screen?', 'Do you have a mobile phone?']
     .map((label) => field(label));
