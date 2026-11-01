@@ -588,6 +588,57 @@ export async function updateUserCredentialsAction(
   return { error: null, success: "Staff credentials updated." };
 }
 
+export async function toggleCandidateAccountStatusAction(
+  _previousState: UserActionState,
+  formData: FormData,
+): Promise<UserActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") {
+    return {
+      ...emptyState,
+      error: "Only Managers can update candidate account status.",
+    };
+  }
+
+  const userId = readText(formData, "userId", 64);
+  if (!isUuid(userId)) {
+    return { ...emptyState, error: "Select a valid candidate account." };
+  }
+
+  try {
+    const [target] = await db
+      .select({ blockedAt: users.blockedAt, id: users.id })
+      .from(users)
+      .where(and(eq(users.id, userId), eq(users.role, "account"), eq(users.parentUserId, actor.id), isNull(users.blockedAt)))
+      .limit(1);
+
+    const setActive = target === undefined;
+    const [updated] = await db
+      .update(users)
+      .set({
+        blockedAt: setActive ? null : new Date(),
+        blockedBy: setActive ? null : actor.id,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(users.id, userId), eq(users.role, "account"), eq(users.parentUserId, actor.id)))
+      .returning({ id: users.id });
+
+    if (!updated) {
+      return { ...emptyState, error: "That candidate account was not found in your team." };
+    }
+  } catch (error) {
+    logUserActionFailure("toggling a candidate account status", error);
+    return {
+      ...emptyState,
+      error: "The candidate account status could not be updated. Please try again.",
+    };
+  }
+
+  revalidatePath("/");
+  revalidatePath("/users");
+  return { error: null, success: "Candidate account status updated." };
+}
+
 export async function deleteCandidateAccountAction(
   _previousState: UserActionState,
   formData: FormData,

@@ -6,14 +6,14 @@
 // form step, written from the job description, résumé, and profile and filled; one the documents and
 // approved facts do not show is pointed out on the review.
 // Steps go on by themselves while nothing needs the Manager; the last step always waits for the
-// Manager, who clicks the site's Submit. Two applications at a time per Chrome, and one mode per
+// Manager, who clicks the site's Submit. The Manager sets the open-job concurrency, and one mode per
 // Chrome: Apply and Auto Apply share the work slot ('apply' in qtsExtensionStatus), and this key says
 // which of the two holds it.
 const AUTO_APPLY_KIND_KEY = 'qtsApplyKind';
 // For the panel: the application being worked on (its step, what it waits for) and the last one's end.
 const AUTO_APPLY_STATE_KEY = 'qtsAutoApplyState';
-// What a restarted worker needs to go on with an application: its tab, step, answers so far, and
-// whether the Manager already submitted it. Removed when the application ends.
+// What a restarted worker or a retried job needs: its tab, step, answers so far, and whether the
+// Manager already submitted it. Unsubmitted checkpoints are retained while paused.
 const AUTO_APPLY_RUNS_KEY = 'qtsAutoApplyRuns';
 // The AI for open questions: 'gemini' (through the QTS server), 'chatgpt' (this Chrome's
 // ChatGPT tab), or 'off' (Stage B: nothing but documents, profile, and approved answers).
@@ -52,17 +52,19 @@ async function isAutoApplyOn() {
 
 function publishAutoApplyState() {
   const runs = [...autoRuns.values()].map(({ memory, ...run }) => ({ ...run }));
-  Promise.resolve(chrome.storage.local.set({ [AUTO_APPLY_STATE_KEY]: { runs, last: lastAutoRun, updatedAt: new Date().toISOString() } })).catch(() => {});
+  Promise.resolve(chrome.storage.local.set({ [AUTO_APPLY_STATE_KEY]: { runs, last: lastAutoRun, updatedAt: new Date().toISOString() } }))
+    .catch(error => console.error('Could not save Auto Apply status.', error));
 }
 
 // Kept one change at a time, so two quick steps never overwrite each other.
 function changeStoredRuns(change) {
-  runWrites = runWrites.then(async () => {
+  const write = runWrites.then(async () => {
     const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
     change(stored);
     await chrome.storage.local.set({ [AUTO_APPLY_RUNS_KEY]: stored });
-  }).catch(() => {});
-  return runWrites;
+  });
+  runWrites = write.catch(error => console.error('Could not save Auto Apply recovery state.', error));
+  return write;
 }
 
 /** Manager-assigned ChatGPT (default) or Gemini, with no-AI debug mode, and Auto Apply's limits, on one claimed application. */
@@ -93,7 +95,7 @@ async function prepareAutoApplication(application) {
 /**
  * One application with Auto Apply. Its state (step, phase, how many problems and unresolved
  * questions, AI requests, each step's time) is kept while it runs, published for the panel, and
- * stored for a restarted worker. resume: that stored record, when the worker restarted.
+ * stored for a restarted worker or a later retry of the same job. resume: that stored record.
  */
 async function runAutoApplication(application, recipe, resume = null) {
   await prepareAutoApplication(application);
@@ -124,7 +126,7 @@ async function runAutoApplication(application, recipe, resume = null) {
     await runApplication(application, recipe, {
       auto: true,
       resume,
-      onProgress: ({ memory, quiet, ...event }) => {
+      onProgress: async ({ memory, quiet, ...event }) => {
         // A step starts with its own 'filling' (not the one after an AI round).
         // (quiet: the same review again, after the Manager accepted an answer; not a step's end.)
         if (event.phase === 'filling' && !event.ai) stepStarted = Date.now();
@@ -132,24 +134,62 @@ async function runAutoApplication(application, recipe, resume = null) {
         Object.assign(run, event, { updatedAt: Date.now() });
         diag('auto-apply', { attempt: String(run.attemptId).slice(0, 8), ...event });
         publishAutoApplyState();
-        if (event.phase === 'ended') return;
+        if (event.phase === 'submitted') run.submitted = true;
+        if (event.phase === 'ended') run.resumePending = event.resumePending === true && !run.submitted;
         // At each step's end (and at Submit): what a restarted worker needs.
-        if (memory) changeStoredRuns((stored) => { stored[run.attemptId] = { ...run, ...memory, submitted: event.phase === 'submitted' }; });
+        if (memory) await changeStoredRuns((stored) => {
+          stored[run.attemptId] = {
+            ...run,
+            ...memory,
+            attemptId: run.attemptId,
+            jobId: run.jobId,
+            submitted: event.phase === 'submitted' || run.submitted === true,
+          };
+        });
       },
     });
   } finally {
     autoRuns.delete(run.attemptId);
     lastAutoRun = { ...run, endedAt: Date.now(), totalMs: Date.now() - run.startedAt };
     publishAutoApplyState();
-    await changeStoredRuns((stored) => { if (!stored[run.attemptId]?.pendingRelease) delete stored[run.attemptId]; });
+    await changeStoredRuns((stored) => {
+      const record = stored[run.attemptId];
+      if (run.resumePending && record && !record.submitted && !record.pendingRelease) {
+        stored[run.attemptId] = { ...record, paused: true, tabId: null };
+      } else if (!record?.pendingRelease) {
+        delete stored[run.attemptId];
+      }
+    });
   }
+}
+
+async function resumeForClaimedJob(application) {
+  const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
+  const entry = Object.entries(stored).find(([, record]) =>
+    record.jobId === application.job.id && !record.submitted && !record.pendingRelease);
+  if (!entry) return null;
+  const [previousId, record] = entry;
+  const attemptId = application.attemptId;
+  const resumed = {
+    ...record,
+    attemptId,
+    browserSession: await autoApplyBrowserSession(),
+    tabId: null,
+    paused: false,
+    resumePending: false,
+  };
+  await changeStoredRuns((all) => {
+    delete all[previousId];
+    all[attemptId] = resumed;
+  });
+  return resumed;
 }
 
 /**
  * The applications a restarted worker left open, taken up again: one already submitted only waits
- * for the Manager's Yes/No; any other goes on at its step in its own tab, its answers kept (no AI is
- * asked again for a question already answered). A record whose tab or claim is gone is dropped (its
- * job is given back, nothing recorded against it). Returns the runs started.
+ * for the Manager's Yes/No; any other goes on at its step in its own tab. If its tab is gone, its
+ * checkpoint is retained and the claim is released so a later claim can replay saved answers.
+ * Returns the runs started.
  */
 async function resumeAutoApplyRuns(selection, limit = 2) {
   // A ChatGPT tab the worker selected before it restarted: the application's tab is shown again.
@@ -162,6 +202,7 @@ async function resumeAutoApplyRuns(selection, limit = 2) {
       if (!(await releaseInterruptedAutoRun(record))) throw new Error('QTS is retrying cleanup of an interrupted application.');
       continue;
     }
+    if (record.paused) continue;
     if (selection && !selection.jobIds.includes(record.jobId)) continue;
     if (autoRuns.has(record.attemptId)) continue;
     if (runs.length >= limit) continue;
@@ -199,16 +240,28 @@ async function resumeAutoApplyRuns(selection, limit = 2) {
 // This queue only gives unfinished jobs back; it never submits or confirms an application.
 async function releaseInterruptedAutoRun(record, reason = record.releaseReason, answers = record.releaseAnswers || []) {
   if (record.submitted) return true;
-  const pending = { attemptId: record.attemptId, jobId: record.jobId, pendingRelease: true,
-    releaseReason: reason || 'Interrupted Auto Apply application.', releaseAnswers: answers };
-  await changeStoredRuns((all) => { all[record.attemptId] = pending; });
+  const pending = {
+    ...record,
+    attemptId: record.attemptId,
+    jobId: record.jobId,
+    pendingRelease: true,
+    paused: false,
+    releaseReason: reason || 'Interrupted Auto Apply application.',
+    releaseAnswers: answers,
+  };
+  await changeStoredRuns((all) => { all[record.attemptId] = { ...(all[record.attemptId] || {}), ...pending }; });
   const reply = await workerApiRequest('POST', '/api/extension/apply/release', {
     attemptId: pending.attemptId, mode: 'later', reason: pending.releaseReason, appliedAnswers: answers,
   }).catch(() => null);
   // A lost response may mean release already succeeded. 409 cannot release or resubmit a live
   // confirmation; the server retains its existing ownership and post-Submit protections.
   if (reply?.success === true || reply?._httpStatus === 409 || reply?._httpStatus === 404) {
-    await changeStoredRuns((all) => { delete all[record.attemptId]; });
+    await changeStoredRuns((all) => {
+      const saved = all[record.attemptId];
+      if (saved && !saved.submitted) {
+        all[record.attemptId] = { ...saved, pendingRelease: false, paused: true, tabId: null };
+      }
+    });
     return true;
   }
   return false;
@@ -218,7 +271,7 @@ async function recoverStoppedAutoRuns() {
   const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
   let complete = true;
   for (const record of Object.values(stored)) {
-    if (record.submitted || autoRuns.has(record.attemptId)) continue;
+    if (record.submitted || record.paused || autoRuns.has(record.attemptId)) continue;
     if (!(await releaseInterruptedAutoRun(record, record.releaseReason || 'Auto Apply was cancelled before Chrome restarted.'))) complete = false;
   }
   return complete;
@@ -241,7 +294,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 self.__qtsAutoApply = {
   isOn: isAutoApplyOn,
-  run: (application, recipe) => runAutoApplication(application, recipe),
+  run: (application, recipe, resume = null) => runAutoApplication(application, recipe, resume),
+  resumeForClaimedJob: resumeForClaimedJob,
   resumeRuns: resumeAutoApplyRuns,
   releaseRun: releaseInterruptedAutoRun,
   recoverStoppedRuns: recoverStoppedAutoRuns,

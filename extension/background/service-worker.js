@@ -12,6 +12,7 @@ importScripts(
   '../shared/get-jd-save-payload.js',
   '../shared/api-prefetch.js',
   '../shared/custom-gpt.js',
+  '../shared/chatgpt-url.js',
   '../shared/scanner-chatgpt.js',
   '../shared/generation-chatgpt.js',
   '../shared/auth-token-store.js',
@@ -185,6 +186,18 @@ async function fetchManagerExtensionFeatures() {
   } finally {
     managerFeaturesRefreshPromise = null;
   }
+}
+
+async function getManagerChatGptUrl() {
+  const result = await getManagerExtensionFeatures(true);
+  if (result.success !== true || !result.features) {
+    throw new Error(result.message || 'Could not load the Manager ChatGPT URL setting.');
+  }
+  const configured = result.features.chatGptUrl;
+  if (configured == null || configured === '') return self.__qtsChatGptUrl.DEFAULT_URL;
+  const normalized = self.__qtsChatGptUrl.normalize(configured);
+  if (!normalized) throw new Error('The saved ChatGPT URL is invalid. Ask your QTS administrator to correct it.');
+  return normalized;
 }
 
 async function fetchManagerPageExclusions() {
@@ -3257,11 +3270,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
-  async function persistGenerationQueueRun(runId, excludedJobIds) {
+  async function persistGenerationQueueRun(runId) {
     await chrome.storage.local.set({
       [GENERATION_QUEUE_RUN_KEY]: {
         runId,
-        excludedJobIds: [...excludedJobIds],
       },
     });
   }
@@ -3330,21 +3342,28 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   // Generation runs, and the job pages it opens next to it in the background. shownBefore: the tab
   // the Manager was on.
   async function acquireGenerationChatGptTab() {
+    const chatGptUrl = await getManagerChatGptUrl();
     const created = await chrome.tabs.create({
       windowId: await currentWorkWindowId(),
-      url: 'https://chatgpt.com/',
+      url: chatGptUrl,
       active: false,
       pinned: true,
     });
     if (created?.id == null) throw new Error('Could not open a new pinned ChatGPT tab.');
     await tabOwnership.markTab(created.id, 'generation');
-    created.shownBefore = await showGenerationChatGptTab(created.id);
+    const shownBefore = await showGenerationChatGptTab(created.id);
     const existingTabs = await chrome.tabs.query({});
-    const otherChatTabs = existingTabs.filter((tab) =>
-      tab.id != null &&
-      tab.id !== created.id &&
-      isChatGptHostUrl(tab.url || tab.pendingUrl || ''),
-    );
+    const otherChatTabs = [];
+    for (const tab of existingTabs) {
+      if (
+        tab.id != null &&
+        tab.id !== created.id &&
+        isChatGptHostUrl(tab.url || tab.pendingUrl || '') &&
+        await tabOwnership.ownerOf(tab.id, tab.windowId) === 'generation'
+      ) {
+        otherChatTabs.push(tab);
+      }
+    }
     for (const tab of otherChatTabs) {
       try {
         await chrome.tabs.remove(tab.id);
@@ -3353,7 +3372,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         throw new Error('Could not close all existing ChatGPT tabs before Generation.');
       }
     }
-    return created;
+    return { ...created, qtsChatGptUrl: chatGptUrl, shownBefore };
   }
 
   // A step card in the corner of the ChatGPT tab, so the Manager can follow Generation there. It also
@@ -3447,8 +3466,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   }
 
   // A new chat in the pinned ChatGPT tab for the next job.
-  async function startNewChatGptChat(chatTabId) {
-    await chrome.tabs.update(chatTabId, { url: 'https://chatgpt.com/' });
+  async function startNewChatGptChat(chatTabId, chatGptUrl = self.__qtsChatGptUrl.DEFAULT_URL) {
+    await chrome.tabs.update(chatTabId, { url: chatGptUrl });
     // Let the navigation begin, so the readiness check does not see the previous page.
     await sleep(1500);
     await ensureChatGptReady(chatTabId);
@@ -3741,7 +3760,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         await sleep(1500);
         active.local();
         await chrome.tabs.remove(chatTab.id).catch(() => {});
-        chatTab.id = (await acquireGenerationChatGptTab()).id;
+        const created = await acquireGenerationChatGptTab();
+        chatTab.id = created.id;
+        chatTab.url = created.qtsChatGptUrl;
         await updateGenerationBrowserState({ chatTabId: chatTab.id, phase: 'opening_chatgpt' });
         await ensureChatGptReady(chatTab.id);
       }
@@ -4171,13 +4192,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       return; // Keep its recovery record and retry on the alarm before claiming another job.
     }
     let runId = '';
-    const excludedJobIds = new Set();
-    const failuresThisRun = new Map();
     let chatTab = null;
     // The Manager's tab before ChatGPT was shown, shown again when this run ends.
     let tabBeforeChatGpt = null;
     let completedCount = 0;
-    let failedCount = 0;
     let shouldStop = false;
     try {
       const storedRun = await chrome.storage.local.get(GENERATION_QUEUE_RUN_KEY);
@@ -4185,10 +4203,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       runId = typeof savedRun?.runId === 'string' && savedRun.runId
         ? savedRun.runId
         : crypto.randomUUID();
-      for (const id of Array.isArray(savedRun?.excludedJobIds) ? savedRun.excludedJobIds : []) {
-        if (typeof id === 'string') excludedJobIds.add(id);
-      }
-      await persistGenerationQueueRun(runId, excludedJobIds);
+      await persistGenerationQueueRun(runId);
       const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
       if (!token) {
         const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
@@ -4205,9 +4220,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const claim = await workerApiRequest(
           'POST',
           '/api/extension/generation/claim',
-          { excludedJobIds: [...excludedJobIds],
-            ...(scope?.mode === 'generation' ? { selection: scope } : {}),
-          },
+          scope?.mode === 'generation' ? { selection: scope } : {},
         );
         if (claim.success !== true) {
           const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
@@ -4227,11 +4240,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           // Several Chromes share the queue, so Generation stays on and checks again on its
           // 30-second alarm (less often when idle) instead of turning itself off; Cancel or Stop
           // all turns it off.
-          if (completedCount || failedCount) {
+          if (completedCount) {
             // Work just ended: the idle back-off counts from now.
             await self.__qtsIdlePacing.noteActivity();
             await notifyGenerationManager(
-              `Generation finished ${completedCount} job(s) and ${failedCount} failed job(s). It stays on and takes new jobs as they are saved. A failed job was tried twice and stays ready: it is tried again the next time Generation is turned on.`,
+              `Generation finished ${completedCount} job(s). It stays on and takes new jobs as they are saved.`,
             );
           } else {
             const idle = await chrome.storage.local.get(GENERATION_IDLE_NOTICE_KEY);
@@ -4271,7 +4284,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (!tabStillOpen || chatTab.jobs >= GENERATION_JOBS_PER_CHATGPT_TAB) {
             if (tabStillOpen) await chrome.tabs.remove(chatTab.id).catch(() => {});
             const created = await acquireGenerationChatGptTab();
-            chatTab = { id: created.id, jobs: 0 };
+            chatTab = { id: created.id, jobs: 0, url: created.qtsChatGptUrl };
             // The first job remembers the tab to return to when Generation ends.
             tabBeforeChatGpt ??= created.shownBefore;
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
@@ -4280,7 +4293,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             // ChatGPT in front before its new chat loads (Chrome slows hidden tabs).
             tabBeforeChatGpt ??= await showGenerationChatGptTab(chatTab.id);
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
-            await startNewChatGptChat(chatTab.id);
+            await startNewChatGptChat(chatTab.id, chatTab.url);
           }
           chatTab.jobs += 1;
           // Still in front while ChatGPT writes, if the Manager looked at another tab meanwhile.
@@ -4343,9 +4356,6 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             await notifyGenerationManager(`Generation stopped because setup is incomplete: ${reason}`);
             shouldStop = true;
           } else if (!isGenerationCancelled(handledError)) {
-            // A failed job is tried once more in this run (the server allows two attempts), then left.
-            const failures = (failuresThisRun.get(queuedJob.id) || 0) + 1;
-            failuresThisRun.set(queuedJob.id, failures);
             const failed = await workerApiRequest(
               'POST',
               '/api/extension/generation/fail',
@@ -4354,16 +4364,12 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             if (!failed.success) {
               console.error('[QTS Generation] Could not mark the queued job failed:', failed.message);
             }
-            const retrying = failed.success === true && failed.canRetry === true && failures < 2;
-            if (!retrying) {
-              excludedJobIds.add(queuedJob.id);
-              await persistGenerationQueueRun(runId, excludedJobIds);
-              failedCount += 1;
-            }
             console.error('[QTS Generation] Queued job failed:', queuedJob.id, reason);
-            await notifyGenerationManager(retrying
-              ? `Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason} Trying it once more.`
-              : `Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason}`);
+            await updateGenerationBrowserState({
+              message: `Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason} Retrying while Generation is on.`,
+              messageType: 'warn',
+            });
+            await sleep(3000);
           } else {
             await workerApiRequest(
               'POST',
@@ -4375,9 +4381,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
                 cancelled: true,
               },
             );
-            excludedJobIds.add(queuedJob.id);
-            await persistGenerationQueueRun(runId, excludedJobIds);
-            await notifyGenerationManager('Generation was cancelled. The job stays ready: it is tried again the next time Generation is turned on.');
+            await notifyGenerationManager('Generation was cancelled. QTS cleaned up and will try the job again while Generation stays on.');
           }
           if (jobTabId != null) {
             await showGenerationPageStatus(
@@ -5519,7 +5523,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // Save intent before any request: closing Chrome mid-Cancel must not restart Generation.
           await chrome.storage.local.set({ [GENERATION_PENDING_CANCEL_KEY]: true, [EXTENSION_STATUS_KEY]: 'cancel' });
         }
-        await stopWorkSlotLocally(true);
+        await stopWorkSlotLocally(!cancelledAuto);
         if (cancelledStatus === 'generation') {
           const cancellation = await flushGenerationCancellation();
           if (!cancellation.success) {
@@ -5642,7 +5646,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await chrome.storage.local.set({
           [GENERATION_QUEUE_RUN_KEY]: {
             runId: crypto.randomUUID(),
-            excludedJobIds: [],
           },
         });
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'generation' });

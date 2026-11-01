@@ -9,6 +9,8 @@ import {
   ManagerTextHighlightAccessForm,
   ManagerPageExclusionAccessForm,
   ManagerJobDetectionUrlAccessForm,
+  ManagerChatGptUrlForm,
+  OwnAutoApplyParallelLimitForm,
 } from "@/app/settings/prompt-forms";
 import { groupVersions } from "@/app/prompts/prompt-groups";
 import { managerApplyAnswers, prompts, users } from "@/db/schema";
@@ -62,6 +64,27 @@ const promptGroups = [
 
 export default async function SettingsPage() {
   const currentUser = await requireUser();
+  if (currentUser.role === "manager") {
+    const [manager] = await db.select({ autoApplyParallelLimit: users.autoApplyParallelLimit })
+      .from(users).where(and(eq(users.id, currentUser.id), isNull(users.blockedAt))).limit(1);
+    if (!manager) redirect("/");
+    return (
+      <WorkspaceShell activeHref="/settings" user={currentUser}>
+        <main className="py-1">
+          <div className="mx-auto max-w-3xl">
+            <PageHeader
+              description="Choose how many Auto Apply forms each Chrome can work on together."
+              eyebrow="Manager settings"
+              title="Auto Apply settings"
+            />
+            <SettingsCard summary={`${manager.autoApplyParallelLimit} jobs at once`} title="Concurrent jobs">
+              <OwnAutoApplyParallelLimitForm parallelLimit={manager.autoApplyParallelLimit} />
+            </SettingsCard>
+          </div>
+        </main>
+      </WorkspaceShell>
+    );
+  }
   if (currentUser.role !== "super_admin") redirect("/");
 
   const [
@@ -114,6 +137,7 @@ export default async function SettingsPage() {
         useGeminiMatching: users.useGeminiMatching,
         canUseApply: users.canUseApply,
         applyAiMode: users.applyAiMode,
+        chatGptUrl: users.chatGptUrl,
         autoSubmit: users.autoSubmit,
         applyReviewMode: users.applyReviewMode,
       })
@@ -409,6 +433,7 @@ export default async function SettingsPage() {
               { label: "Own prompts (read-only)", className: "w-[24%]" },
               { label: "Get JD matching", className: "w-[13%]" },
               { label: "Apply", className: "w-[13%]" },
+              { label: "ChatGPT URL", className: "w-[20%]" },
               { label: "Text highlight access", className: "w-[13%]" },
               { label: "Excluded rules · job match", className: "w-[12%]" },
               { label: "Job-detection rules · block", className: "w-[13%]" },
@@ -452,6 +477,11 @@ export default async function SettingsPage() {
                     reviewMode={manager.applyReviewMode}
                     canUseApply={manager.canUseApply}
                     key="apply"
+                    managerId={manager.id}
+                  />,
+                  <ManagerChatGptUrlForm
+                    chatGptUrl={manager.chatGptUrl}
+                    key="chatgpt-url"
                     managerId={manager.id}
                   />,
                   <ManagerTextHighlightAccessForm

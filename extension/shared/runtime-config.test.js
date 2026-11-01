@@ -36,10 +36,10 @@ test('runtime config rejects unencrypted server URLs outside this machine', asyn
   assert.equal(await loadRuntimeConfig('https://qts.example.com/').getServerUrl(), 'https://qts.example.com');
 });
 
-test('Get JD and shared text highlights are enabled while unfinished automation stays disabled', () => {
+test('Get JD and assigned Gemini evaluation are enabled while scanner automation stays disabled', () => {
   const config = loadRuntimeConfig();
   assert.equal(config.isFeatureEnabled('getJd'), true);
-  assert.equal(config.isFeatureEnabled('geminiEvaluation'), false);
+  assert.equal(config.isFeatureEnabled('geminiEvaluation'), true);
   assert.equal(config.isFeatureEnabled('scanner'), false);
   assert.equal(config.isFeatureEnabled('applicationAutomation'), false);
   assert.equal(config.isFeatureEnabled('textHighlights'), true);

@@ -12,6 +12,8 @@ import { jobStatusChangeError, type JobStatus } from "@/server/jobs/job-status-c
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import type { RecordActionState } from "@/app/record-action-state";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
+import { generationFree, generationHeld } from "@/server/generation/generation-hold";
+import { hasEligibleExperienceCount } from "@/server/work/work-eligibility";
 
 export async function updateJobAction(
   _state: RecordActionState,
@@ -147,7 +149,7 @@ export async function setJobGenerationQueueAction(
   const selectedPromptId = text(formData, "generationPromptId", 36);
   if (
     !uuid(id)
-    || !["queue", "cancel", "reset"].includes(intent)
+    || !["queue", "cancel"].includes(intent)
     || (selectedPromptId && !uuid(selectedPromptId))
   ) {
     return { error: "Invalid Generation queue action.", success: null };
@@ -172,48 +174,43 @@ export async function setJobGenerationQueueAction(
   const [job] = await db
     .select({
       generationStatus: jobs.generationStatus,
-      generationAttemptCount: jobs.generationAttemptCount,
+      generationLeaseExpiresAt: jobs.generationLeaseExpiresAt,
       description: effectiveJobDescription(),
       resumeLocalPath: jobs.resumeLocalPath,
       jdMatching: profiles.jdMatching,
+      experienceEligible: hasEligibleExperienceCount(),
     })
     .from(jobs)
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
     .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id)))
     .limit(1);
   if (!job) return { error: "Job was not found.", success: null };
+  const [managerSettings] = await db
+    .select({ useGeminiMatching: users.useGeminiMatching })
+    .from(users)
+    .where(eq(users.id, manager.id))
+    .limit(1);
+  const requireMatchingNote = managerSettings?.useGeminiMatching === true;
+  const now = new Date();
+  const hasLiveLease = Boolean(job.generationLeaseExpiresAt && job.generationLeaseExpiresAt > now);
 
-  if (intent === "reset") {
-    if (job.generationStatus !== "failed" || job.generationAttemptCount < 2) {
-      return { error: "Reset is available only after both Generation attempts fail.", success: null };
-    }
-    const [reset] = await db.update(jobs).set({
-      generationStatus: "not_queued",
-      generationAttemptCount: 0,
-      generationError: null,
-      generationPromptId: null,
-      generationLeaseExpiresAt: null,
-      updatedAt: new Date(),
-    }).where(and(
-      eq(jobs.id, id),
-      eq(jobs.managerId, manager.id),
-      eq(jobs.generationStatus, "failed"),
-      sql`${jobs.generationAttemptCount} >= 2`,
-    )).returning({ id: jobs.id });
-    if (!reset) return { error: "Generation state changed; refresh and try again.", success: null };
-  } else if (intent === "queue") {
-    if (job.generationStatus === "processing") {
+  if (intent === "queue") {
+    if (hasLiveLease) {
       return { error: "This job is already being processed.", success: null };
     }
     if (job.generationStatus === "completed") {
       return { error: "This job has already completed Generation.", success: null };
     }
-    if (job.generationAttemptCount >= 2) {
-      return { error: "Both Generation attempts failed. Use Reset Generation before retrying.", success: null };
-    }
-    if (!job.description?.trim() || !job.jdMatching?.trim() || job.resumeLocalPath !== null) {
+    if (
+      !job.description?.trim()
+      || (requireMatchingNote && !job.jdMatching?.trim())
+      || !job.experienceEligible
+      || job.resumeLocalPath !== null
+    ) {
       return {
-        error: "Generation needs a saved job description and the candidate's JD-matching notes, and the job must not already have a resume.",
+        error: requireMatchingNote
+          ? "Generation needs a saved job description, at least three experience records, and the candidate's JD-matching notes, and the job must not already have a resume."
+          : "Generation needs a saved job description and at least three experience records, and the job must not already have a resume.",
         success: null,
       };
     }
@@ -226,38 +223,33 @@ export async function setJobGenerationQueueAction(
     }).where(and(
       eq(jobs.id, id),
       eq(jobs.managerId, manager.id),
-      ne(jobs.generationStatus, "processing"),
+      generationFree(now),
     )).returning({ id: jobs.id });
     if (!queued) {
       return { error: "This job is already being processed.", success: null };
     }
   } else {
-    if (!["queued", "processing"].includes(job.generationStatus)) {
-      return { error: "Only queued or processing Generation jobs can be cancelled.", success: null };
+    if (!hasLiveLease && job.generationStatus !== "queued") {
+      return { error: "This job is no longer queued or processing.", success: null };
     }
-    const processing = job.generationStatus === "processing";
     const [cancelled] = await db.update(jobs).set({
       generationStatus: "cancelled",
-      generationPromptId: null,
-      ...(processing
-        ? { generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)` }
-        : {}),
       generationError: null,
       generationLeaseExpiresAt: null,
       updatedAt: new Date(),
     }).where(and(
       eq(jobs.id, id),
       eq(jobs.managerId, manager.id),
-      eq(jobs.generationStatus, job.generationStatus),
+      hasLiveLease ? generationHeld(now) : eq(jobs.generationStatus, "queued"),
     )).returning({ id: jobs.id });
     if (!cancelled) {
       return { error: "Generation state changed; refresh and try again.", success: null };
     }
   }
   revalidatePath("/jobs");
-  return { error: null, success: intent === "reset"
-    ? "Generation failure state reset. The job can be queued again."
-    : intent === "queue" ? "Generation queued." : "Generation cancelled. Queue it again to retry." };
+  return { error: null, success: intent === "queue"
+    ? "Generation prompt saved; eligible jobs can start automatically."
+    : "Generation cancelled. It will be retried automatically while Generation is on." };
 }
 
 export async function deleteJobAction(
@@ -364,7 +356,6 @@ export async function stopAllAction(
       db.update(jobs)
         .set({
           generationStatus: "queued",
-          generationAttemptCount: sql`greatest(${jobs.generationAttemptCount} - 1, 0)`,
           generationLeaseExpiresAt: null,
           generationBrowserId: null,
           generationError: "Stopped from the Jobs page; queued again.",

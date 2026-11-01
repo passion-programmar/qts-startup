@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeQuestionKey } from "./apply-values";
-import { answerWarnings, describeWarning, similarQuestions, sourceOf, type AnswerRow } from "./reusable-answer-values";
+import { answerWarnings, describeWarning, globalReusableQuestionError, similarQuestions, sourceOf, type AnswerRow } from "./reusable-answer-values";
 
 const row = (id: string, questionText: string, answer: string, status = "approved"): AnswerRow => ({
   id, questionText, answer, status, questionKey: normalizeQuestionKey(questionText),
@@ -35,4 +35,16 @@ test("an answer is warned about the same question and similar ones, and whether 
 test("unknown sources read as Super Admin's own", () => {
   assert.equal(sourceOf("learned"), "learned");
   assert.equal(sourceOf("something else"), "manual");
+});
+
+test("global reusable answers reject facts and preferences that vary by candidate", () => {
+  for (const question of ["What are your salary expectations?", "How soon can you start?", "Do you require visa sponsorship?", "Are you legally authorized to work in Poland?", "Are you willing to relocate?", "Are you open to remote work?", "What employment type are you interested in?", "What contract type do you prefer?", "Can you commute to the office three days a week?", "What is your preferred interview format?", "What is your current employer?", "What did you like about this company?", "Why are you interested in this role?"]) {
+    assert.ok(globalReusableQuestionError(question), question);
+  }
+  for (const question of ["How did you hear about us?"]) {
+    assert.equal(globalReusableQuestionError(question), null, question);
+  }
+  for (const question of ["Do you agree to our privacy policy?", "I certify these answers are accurate", "Do you consent to a background check?"]) {
+    assert.ok(globalReusableQuestionError(question), question);
+  }
 });

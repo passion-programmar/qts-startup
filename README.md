@@ -17,24 +17,31 @@ Gemini.
   fragments and job-page detection keywords in the extension's URL Settings panel.
 - Shared text highlights are applied automatically. Only Managers explicitly
   granted access by a Super Admin can edit their shared rules in the extension.
-- Scanner, application-session, Gmail, and automatic-application workflows
-  remain disabled until their matching APIs and integration coverage exist.
+- Assisted Apply and Auto Apply are implemented and enabled per Manager by a
+  Super Admin. Assisted Apply supports step-by-step review, review before
+  Submit, and optional automatic Submit; the Manager still confirms success.
+  Auto Apply fills supported forms and always leaves the site's Submit action
+  to the Manager. Scanner, application-session, and Gmail workflows are deferred.
 
 The canonical ownership model, supported APIs, disabled feature boundary, and
 database invariants are documented in [docs/architecture.md](docs/architecture.md).
 
-Planned AI responsibilities:
+AI responsibilities:
 
-- OpenAI/ChatGPT: tailored resumes and cover letters only.
-- Gemini: candidate fit evaluation; application-answer generation is planned
-  for a later workflow. Current job-page detection is local and deterministic.
+- OpenAI/ChatGPT: tailored resume and cover-letter generation, and Auto Apply
+  answers when selected as the Manager's provider.
+- Gemini: candidate fit evaluation and Auto Apply answers when assigned.
+  Current job-page detection is local and deterministic.
 - API keys must remain server-side and must never use a `NEXT_PUBLIC_` prefix.
 
-Manual application mode will leave Next/Submit to the Manager after review.
-Auto mode is planned to generate documents, discover and fill supported form
-fields, advance through the application, submit only under the agreed safety
-checks, and save an application only after submission success is confirmed.
-Email verification links will be shown to the Manager to review and open.
+Super Admin enables Apply for each Manager and chooses ChatGPT or Gemini for
+application answers. The Manager selects an account and ready jobs in the
+extension's Auto Apply picker. Assisted Apply follows its configured review
+cadence; Auto Apply leaves the site's Submit action and success confirmation to
+the Manager. Check saves corrections using candidate, application, or Manager
+scope; global reusable answers remain Super Admin managed.
+
+Super Admin can set a ChatGPT Project URL per Manager. Generation and ChatGPT-backed Apply start a fresh chat from that URL for each job and replace their pinned ChatGPT tab after ten jobs. The default is `https://chatgpt.com/`.
 
 ## Local development
 
@@ -145,24 +152,22 @@ JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
 toolbar icon has no click behavior. Sign In opens the Manager login form in an
 extension-origin frame on the current page, so the page cannot observe the
 credentials, and the frame closes after a successful login.
-Get JD stores persistent `get_jd` status and starts when a page's HTML is
-ready. A matching Manager-owned blocked URL fragment blocks QTS on that page.
-There is no built-in URL blocklist. Otherwise, once the content settles, the
-page is a job page if two Manager keywords appear as whole words, if it has
-`JobPosting` structured data, or if other job signals score high enough (see
-`extension/shared/job-page-detection.js`). Only job pages are extracted or
-sent to the server; any other page makes the launcher flash red once. Managers can maintain job-page
-detection keywords and blocked URL fragments from URL Settings when a Super Admin
-grants the matching permissions. An assigned Manager can add, edit, and delete
-their own rules; every server mutation is scoped to that Manager. Both rule
-blocked URL rule matches when the current URL contains its saved fragment. Job-page
-detection uses case-insensitive visible-text matching. There
-is no separate local job-page classification step. Super Admin chooses Manual
-candidate selection or Gemini candidate matching. Gemini mode sends the loaded
-body HTML together with the default evaluation prompt and candidate ID/JD-note
-pairs, then prechecks returned matching IDs for Manager review. Super Admin can
-independently choose Local Count or Gemini Count; Gemini Usage records each
-request's local and Gemini token counts next to its Google response.
+The floating Get JD action enables persistent `get_jd` monitoring, which starts
+when a page's HTML is ready. A matching Manager-owned blocked URL fragment
+blocks QTS on that page.
+There is no built-in URL blocklist. Once content settles, local detection
+accepts a page with two Manager keywords, `JobPosting` structured data, or
+enough job signals (see `extension/shared/job-page-detection.js`). Managers
+with Super-Admin permission can maintain their own blocked URL fragments and
+detection keywords; a block fragment matches the current URL. General Get JD
+extracts locally, checks Jobs/Bids and candidate account states through the
+server, then lets the Manager select and save accounts. Gemini matching is
+assigned per Manager; it sends visible job text and candidate matching notes
+to the server and automatically saves matches. The extension enables this
+capability, but the server uses Gemini only when Super Admin has assigned it to
+that Manager; otherwise it stays in General mode. Super Admin can choose Local
+Count or Gemini Count; Gemini Usage records per-request counts next to Google
+responses.
 Exclusion updates also apply to already-open pages. Text Highlight and URL
 Settings render as native controls inside the same docked in-page panel as the
 candidate profile list, rather than opening a popup, iframe, or page-covering
@@ -173,25 +178,31 @@ automatically on all supported web pages, including pages excluded from the
 launcher and other extension workflows. The launcher editor is available only
 to Managers granted `canManageTextHighlights` by a Super Admin.
 Managers start document generation from the extension. The worker claims the
-oldest eligible saved Jobs row (`createdAt`), requiring a nonblank job
-description, nonblank candidate JD-matching notes, and a null resume path. The
-notes only gate eligibility; they are not sent in the Generation prompt. It
-does not use or change the job's application status. A temporary job page is
-opened only for that job's prompt-fetching step and is closed when the job
-finishes. The server builds each prompt from the saved job and structured
-candidate profile, using the Manager's active prompt assignment or the active
-global default. The extension opens a fresh pinned ChatGPT tab for each job and
-closes every other ChatGPT tab, waits up to three minutes for stable JSON, then
-downloads the résumé PDF, cover-letter PDF, and JD text file to local Downloads.
-PDF and JD download files are assembled for delivery rather than stored as
-server files; the Generation run retains the prompt and validated response.
-The Jobs row records the expected resume path after successful delivery.
-Generation failures are retried once on a later start; after the second failure,
-Managers must use **Reset Generation** on the Jobs row. Reset only clears
-Generation failure/retry state. Cancelling a run returns its in-progress job to
-the queue and leaves application status unchanged. Queue completion and failures
-are reported with Chrome notifications and retained in the extension popup.
-Apply remains a release placeholder.
+oldest eligible saved Jobs row (`createdAt`), even if it was not manually
+queued. Eligibility requires a saved job description, at least three candidate
+experience records, and no existing resume path. A JD-matching note is also
+required when the Manager is assigned Gemini matching for Get JD; notes are
+never sent in the Generation prompt. Generation does not use or change the
+job's application status. The server builds each prompt from the saved job and
+structured candidate profile, using the Manager's active prompt assignment or
+the active global default. A Jobs-row selection can save a prompt for that job,
+but a job does not need to be manually queued before the worker can claim it.
+The extension sends the prompt through a pinned ChatGPT tab, then downloads
+the résumé PDF, cover-letter PDF, and JD text file to local Downloads. PDF and JD files are assembled for
+delivery rather than stored as server files; the Generation run retains the
+prompt and validated response. The Jobs row records the expected resume path
+after successful delivery.
+
+Cancelling cleans up the current run and any partial downloads without saving a
+failure count. If Generation remains on, the job is eligible to be picked up
+again immediately. Other generation errors are also retried automatically while
+Generation is on, without a saved failure count; a brief pause separates retries.
+Shared setup problems and uncertain delivery stop the queue so they can be
+resolved safely. A job whose Chrome stops renewing its five-minute hold is
+ready to be claimed again, and the Jobs page no longer shows it as processing.
+Super Admin enables Apply per Manager. Assisted Apply reviews form steps with
+the Manager; Auto Apply fills supported steps and leaves the site's Submit
+action to the Manager.
 Sign Out clears the stored extension session and Get JD mode. The legacy popup
 Gemini mode is hard-disabled by the shared runtime feature configuration so an
 old stored mode cannot start background classification.

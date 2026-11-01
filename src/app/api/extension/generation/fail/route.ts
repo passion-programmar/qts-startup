@@ -74,8 +74,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         { status: 409 },
       );
     }
-    // The extension tries a failed job once more in the same run, then leaves it for the next run.
-    return NextResponse.json({ success: true, jobId, canRetry: true });
+    return NextResponse.json({ success: true, jobId, ready: true });
   } catch (error) {
     console.error("Could not record queued Generation failure.", error);
     return NextResponse.json(

@@ -1,11 +1,12 @@
-import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { jobs, profiles } from "@/db/schema";
+import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
+import { hasEligibleExperienceCount, hasMatchingNote } from "@/server/work/work-eligibility";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -36,14 +37,20 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const normalizedUrl = normalizeJobUrl(jobUrl);
   try {
+    const [managerSettings] = await db
+      .select({ useGeminiMatching: users.useGeminiMatching })
+      .from(users)
+      .where(eq(users.id, manager.id))
+      .limit(1);
+    const requireMatchingNote = managerSettings?.useGeminiMatching === true;
     const rows = await db
       .select({
         id: jobs.id,
         description: effectiveJobDescription(),
         jdMatching: profiles.jdMatching,
         resumeLocalPath: jobs.resumeLocalPath,
-        generationAttemptCount: jobs.generationAttemptCount,
         generationStatus: jobs.generationStatus,
+        experienceEligible: hasEligibleExperienceCount(),
       })
       .from(jobs)
       .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -66,7 +73,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Every job not generated yet can be generated (failures and cancels record nothing).
       row.generationStatus !== "completed"
       && Boolean(row.description?.trim())
-      && Boolean(row.jdMatching?.trim())
+      && (!requireMatchingNote || Boolean(row.jdMatching?.trim()))
+      && row.experienceEligible
       && row.resumeLocalPath === null,
     );
     const queueableIds = eligibleRows
@@ -91,10 +99,10 @@ export async function POST(request: Request): Promise<NextResponse> {
           eq(jobs.managerId, manager.id),
           inArray(jobs.id, queueableIds),
           inArray(jobs.generationStatus, ["not_queued", "failed", "cancelled"]),
-          lt(jobs.generationAttemptCount, 2),
           isNull(jobs.resumeLocalPath),
           hasEffectiveJobDescription(),
-          sql`length(btrim(${profiles.jdMatching})) > 0`,
+          hasEligibleExperienceCount(),
+          requireMatchingNote ? hasMatchingNote() : sql`true`,
         ));
     }
 

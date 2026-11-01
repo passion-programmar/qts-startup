@@ -575,6 +575,27 @@
       "when": 1793460000000,
       "tag": "0081_manager_apply_answers",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1793538238930,
+      "tag": "0082_manager_chatgpt_url",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1793540525685,
+      "tag": "0083_auto_apply_claim_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1793542690154,
+      "tag": "0084_manager_auto_apply_parallel_limit",
+      "breakpoints": true
     }
   ]
 }

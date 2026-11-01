@@ -11,6 +11,8 @@ import {
   updateManagerJobDetectionUrlAccessAction,
   updateManagerApplyAction,
   updateManagerGeminiMatchingAction,
+  updateManagerChatGptUrlAction,
+  updateOwnAutoApplyParallelLimitAction,
   type PromptActionState,
 } from "@/app/settings/actions";
 
@@ -305,6 +307,79 @@ export function ManagerApplyForm({
       )}
       <ActionFeedback state={state} />
     </div>
+  );
+}
+
+export function ManagerChatGptUrlForm({
+  managerId,
+  chatGptUrl,
+}: {
+  managerId: string;
+  chatGptUrl: string;
+}) {
+  const [state, formAction, isPending] = useActionState(updateManagerChatGptUrlAction, initialState);
+  return (
+    <form action={formAction} className="min-w-52 space-y-2">
+      <input name="managerId" type="hidden" value={managerId} />
+      <label className="block text-[11px] font-medium text-slate-600" htmlFor={`chatgpt-url-${managerId}`}>
+        ChatGPT Project URL
+      </label>
+      <input
+        className="h-9 w-full rounded-lg border border-slate-200 px-2 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+        defaultValue={chatGptUrl}
+        id={`chatgpt-url-${managerId}`}
+        maxLength={2048}
+        name="chatGptUrl"
+        placeholder="https://chatgpt.com/g/g-p-..."
+        type="url"
+      />
+      <p className="text-[10px] leading-4 text-slate-500">Generation and Apply open this URL for a fresh chat per job, then replace the tab after 10 jobs. Blank resets to chatgpt.com.</p>
+      <ActionFeedback state={state} />
+      <button
+        className="inline-flex h-8 items-center gap-1 rounded-lg bg-indigo-600 px-3 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+        disabled={isPending}
+        type="submit"
+      >
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
+        {isPending ? "Saving..." : "Save URL"}
+      </button>
+    </form>
+  );
+}
+
+export function OwnAutoApplyParallelLimitForm({ parallelLimit }: { parallelLimit: number }) {
+  const [state, formAction, isPending] = useActionState(updateOwnAutoApplyParallelLimitAction, initialState);
+  return (
+    <form action={formAction} className="space-y-3">
+      <label className="block text-xs font-semibold text-slate-700" htmlFor="auto-apply-parallel-limit">
+        Maximum open Auto Apply jobs
+      </label>
+      <p className="text-xs leading-5 text-slate-500">
+        Without a profile selection, Auto Apply fills this many jobs together. Choosing a profile always runs its jobs one at a time. AI answers are queued one job at a time for both ChatGPT and Gemini.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          className="h-10 w-24 rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+          defaultValue={parallelLimit}
+          id="auto-apply-parallel-limit"
+          max={10}
+          min={1}
+          name="autoApplyParallelLimit"
+          required
+          type="number"
+        />
+        <span className="text-xs text-slate-500">1–10 jobs · default 2</span>
+      </div>
+      <ActionFeedback state={state} />
+      <button
+        className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+        disabled={isPending}
+        type="submit"
+      >
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
+        {isPending ? "Saving..." : "Save concurrency"}
+      </button>
+    </form>
   );
 }
 

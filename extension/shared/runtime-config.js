@@ -5,7 +5,7 @@
   const SERVER_URL_STORAGE_KEY = 'qtsServerUrl';
   const features = Object.freeze({
     getJd: true,
-    geminiEvaluation: false,
+    geminiEvaluation: true,
     scanner: false,
     applicationAutomation: false,
     textHighlights: true,

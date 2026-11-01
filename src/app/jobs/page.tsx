@@ -21,6 +21,7 @@ import { romaniaClock } from "@/lib/romania-time";
 import { requireUser } from "@/lib/session";
 import { jobHasBid } from "@/server/jobs/job-bids";
 import { effectiveJobDescription } from "@/server/jobs/job-description";
+import { generationHeldSql } from "@/server/generation/generation-hold";
 import { resumeFolderOf, type ApplyRun } from "@/server/apply/apply-values";
 import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 
@@ -91,8 +92,11 @@ export default async function JobsPage() {
       googleDrivePath: jobs.googleDrivePath,
       createdAt: jobs.createdAt,
       applyRuns: sql<ApplyRun[] | null>`${jobs.applyAnswers}`,
-      generationStatus: jobs.generationStatus,
-      generationAttemptCount: jobs.generationAttemptCount,
+      generationStatus: sql<string>`case
+        when ${generationHeldSql()} then 'processing'
+        when ${jobs.generationStatus} = 'processing' then 'ready'
+        else ${jobs.generationStatus}
+      end`,
       generationError: jobs.generationError,
       candidateId: jobs.candidateId,
       firstName: profiles.firstName,
@@ -196,7 +200,6 @@ export default async function JobsPage() {
               status: row.status,
               failureReason: row.failureReason,
               generationStatus: row.generationStatus,
-              generationAttemptCount: row.generationAttemptCount,
               generationError: row.generationError,
             };
             const track: JobTrack = {

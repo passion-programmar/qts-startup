@@ -52,6 +52,19 @@ test("only approved answers reach Apply; learning and Managers add drafts; revie
   try {
     // An approved answer as Super Admin saves it today, plus a waiting draft and a rejected one.
     assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, null, input("Hear about us", "LinkedIn"))).ok);
+    assert.equal((await lib.saveApprovedReusableAnswer(superAdmin.id, null, input("What are your salary expectations?", "100000 EUR"))).ok, false);
+    assert.equal((await lib.saveApprovedReusableAnswer(superAdmin.id, null, input("Do you agree to our privacy policy?", "Yes"))).ok, false);
+    assert.equal((await lib.proposeReusableAnswer(manager.id, input("Do you require visa sponsorship?", "No"))).ok, false);
+    assert.equal((await lib.proposeReusableAnswer(manager.id, input("I certify these answers are accurate", "Yes"))).ok, false);
+    const personalDraft = input("Are you legally authorized to work in Poland?", "Yes");
+    const [legacyDraft] = await db.insert(reusableAnswerDrafts).values({ ...personalDraft, status: "draft", source: "manager", createdByUserId: manager.id }).returning();
+    assert.equal((await lib.approveReusableAnswer(superAdmin.id, legacyDraft.id, personalDraft)).ok, false);
+    const legacyGlobal = input("What are your salary expectations?", "100000 EUR");
+    await db.insert(reusableAnswers).values({ ...legacyGlobal, createdByUserId: superAdmin.id });
+    assert.equal((await approvedForApply()).has("What are your salary expectations?"), false, "legacy personal answers are not sent to Auto Apply");
+    const legacyConsent = input("Do you agree to our privacy policy?", "Yes");
+    await db.insert(reusableAnswers).values({ ...legacyConsent, createdByUserId: superAdmin.id });
+    assert.equal((await approvedForApply()).has("Do you agree to our privacy policy?"), false, "legacy consent answers are not sent to Auto Apply");
     await db.insert(reusableAnswerDrafts).values([
       { ...input("Hear about us", "Indeed"), status: "draft", source: "manager", createdByUserId: manager.id },
       { ...input("Background check", "Yes"), status: "rejected", source: "learned", createdByUserId: superAdmin.id },
@@ -90,15 +103,8 @@ test("only approved answers reach Apply; learning and Managers add drafts; revie
     assert.equal(await lib.rejectReusableAnswer(superAdmin.id, proposed.id), false);
 
     // Rejecting and withdrawing: only drafts, and a Manager withdraws only their own.
-    assert.ok((await lib.proposeReusableAnswer(manager.id, input("Relocate", "Yes"))).ok);
-    const [relocate] = await drafts("Relocate");
-    assert.equal(await lib.withdrawReusableAnswerProposal(randomUUID(), relocate.id), false);
-    assert.equal(await lib.rejectReusableAnswer(superAdmin.id, relocate.id), true);
-    assert.equal(await lib.withdrawReusableAnswerProposal(manager.id, relocate.id), false);
-    assert.equal((await approvedForApply()).has("Relocate"), false);
-    assert.ok((await lib.proposeReusableAnswer(manager.id, input("Sponsorship", "No"))).ok);
-    const [sponsorship] = await drafts("Sponsorship");
-    assert.equal(await lib.withdrawReusableAnswerProposal(manager.id, sponsorship.id), true);
+    assert.equal((await lib.proposeReusableAnswer(manager.id, input("Relocate", "Yes"))).ok, false);
+    assert.equal((await lib.proposeReusableAnswer(manager.id, input("Sponsorship", "No"))).ok, false);
 
     // Learning: five answers from people (three candidates) make a draft, never an approved answer;
     // AI answers make none; a rejected question is not proposed again.
@@ -106,11 +112,11 @@ test("only approved answers reach Apply; learning and Managers add drafts; revie
       question: `${question} ${lib.marker}`, kind: "choice", answer: "Yes", source, options: ["Yes", "No"], intended: null,
     });
     for (const candidate of ["c1", "c2", "c3", "c1", "c2"]) {
-      await lib.recordLearnedAnswers(candidate, [learned("Consent to terms", "manager"), learned("Agree to policy", "ai"), learned("Background check", "manager")]);
+      await lib.recordLearnedAnswers(candidate, [learned("How did you hear about us?", "manager"), learned("Agree to policy", "ai"), learned("Background check", "manager")]);
     }
-    const [consent] = await drafts("Consent to terms");
-    assert.deepEqual([consent?.status, consent?.source], ["draft", "learned"]);
-    assert.equal((await approvedForApply()).has("Consent to terms"), false, "a learned draft never reaches Apply");
+    const [source] = await drafts("How did you hear about us?");
+    assert.deepEqual([source?.status, source?.source], ["draft", "learned"]);
+    assert.equal((await approvedForApply()).has("How did you hear about us?"), false, "a learned draft never reaches Apply");
     assert.equal((await drafts("Agree to policy")).length, 0, "AI answers never make a draft");
     assert.deepEqual((await drafts("Background check")).map((row) => row.status), ["rejected"], "a rejected answer is not proposed again");
   } finally {
@@ -121,42 +127,43 @@ test("only approved answers reach Apply; learning and Managers add drafts; revie
 test("every approved version that changes is kept and can be restored", { skip }, async () => {
   const lib = await loadLibrary();
   const { db, superAdmin, input, keyOf, approvedForApply } = lib;
+  const question = "How did you hear about us?";
   const versions = (question: string) => db.select().from(reusableAnswerVersions)
     .where(eq(reusableAnswerVersions.questionKey, keyOf(question))).orderBy(asc(reusableAnswerVersions.replacedAt));
   try {
-    assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, null, input("Notice period", "Immediately", "Pick the closest"))).ok);
-    const [answer] = await db.select().from(reusableAnswers).where(eq(reusableAnswers.questionKey, keyOf("Notice period")));
+    assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, null, input(question, "LinkedIn job post", "Pick the closest"))).ok);
+    const [answer] = await db.select().from(reusableAnswers).where(eq(reusableAnswers.questionKey, keyOf(question)));
     // An unchanged save keeps nothing; an edit keeps the version before it.
-    assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, answer.id, input("Notice period", "Immediately", "Pick the closest"))).ok);
-    assert.equal((await versions("Notice period")).length, 0);
-    assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, answer.id, input("Notice period", "1 week"))).ok);
-    assert.deepEqual((await versions("Notice period")).map((v) => [v.reason, v.answer, v.note]), [["edited", "Immediately", "Pick the closest"]]);
+    assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, answer.id, input(question, "LinkedIn job post", "Pick the closest"))).ok);
+    assert.equal((await versions(question)).length, 0);
+    assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, answer.id, input(question, "Indeed"))).ok);
+    assert.deepEqual((await versions(question)).map((v) => [v.reason, v.answer, v.note]), [["edited", "LinkedIn job post", "Pick the closest"]]);
 
     // Restoring the old version over the current one keeps the current one first.
-    const [edited] = await versions("Notice period");
+    const [edited] = await versions(question);
     assert.ok((await lib.restoreReusableAnswerVersion(superAdmin.id, edited.id)).ok);
-    assert.equal((await approvedForApply()).get("Notice period"), "Immediately");
-    assert.deepEqual((await versions("Notice period")).map((v) => [v.reason, v.answer]), [["edited", "Immediately"], ["restored", "1 week"]]);
+    assert.equal((await approvedForApply()).get(question), "LinkedIn job post");
+    assert.deepEqual((await versions(question)).map((v) => [v.reason, v.answer]), [["edited", "LinkedIn job post"], ["restored", "Indeed"]]);
 
     // Deleting keeps the answer; restoring brings it back as an approved answer Apply uses.
     assert.equal(await lib.deleteReusableAnswer(superAdmin.id, answer.id), true);
-    assert.equal((await approvedForApply()).has("Notice period"), false);
-    const deleted = (await versions("Notice period")).at(-1)!;
-    assert.deepEqual([deleted.reason, deleted.answer, deleted.answerId], ["deleted", "Immediately", answer.id]);
+    assert.equal((await approvedForApply()).has(question), false);
+    const deleted = (await versions(question)).at(-1)!;
+    assert.deepEqual([deleted.reason, deleted.answer, deleted.answerId], ["deleted", "LinkedIn job post", answer.id]);
     assert.ok((await lib.restoreReusableAnswerVersion(superAdmin.id, deleted.id)).ok);
-    assert.equal((await approvedForApply()).get("Notice period"), "Immediately");
-    assert.equal((await versions("Notice period")).length, 3, "restoring keeps the restored version in the history");
+    assert.equal((await approvedForApply()).get(question), "LinkedIn job post");
+    assert.equal((await versions(question)).length, 3, "restoring keeps the restored version in the history");
 
     // At most 20 versions per question are kept, the newest.
-    const [current] = await db.select().from(reusableAnswers).where(eq(reusableAnswers.questionKey, keyOf("Notice period")));
+    const [current] = await db.select().from(reusableAnswers).where(eq(reusableAnswers.questionKey, keyOf(question)));
     for (let i = 0; i < MAX_VERSIONS_PER_QUESTION + 2; i += 1) {
-      assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, current.id, input("Notice period", `Edit ${i}`))).ok);
+      assert.ok((await lib.saveApprovedReusableAnswer(superAdmin.id, current.id, input(question, `Edit ${i}`))).ok);
     }
-    const all = await versions("Notice period");
+    const all = await versions(question);
     assert.equal(all.length, MAX_VERSIONS_PER_QUESTION);
     assert.equal(all.at(-1)!.answer, `Edit ${MAX_VERSIONS_PER_QUESTION}`);
   } finally {
     await lib.cleanUp();
-    await db.delete(reusableAnswerVersions).where(inArray(reusableAnswerVersions.questionKey, [keyOf("Notice period")]));
+    await db.delete(reusableAnswerVersions).where(inArray(reusableAnswerVersions.questionKey, [keyOf(question)]));
   }
 });

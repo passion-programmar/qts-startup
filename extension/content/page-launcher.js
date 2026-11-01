@@ -315,7 +315,7 @@ async function initializeQtsPageLauncher() {
   menuList.append(Object.assign(document.createElement('div'), { className: 'label-top', textContent: 'Today' }), stats);
 
   const workPickers = new Map();
-  let accountsRequest = null;
+  const accountsRequests = new Map();
   let accountsVersion = 0;
   for (const [action, label, icon, className] of actions) {
     if (!label) {
@@ -359,7 +359,7 @@ async function initializeQtsPageLauncher() {
         select.dataset.workAccount = action;
         select.setAttribute('aria-label', `${label} account`);
         select.add(new Option('Select account', ''));
-        select.addEventListener('focus', () => loadWorkAccounts().catch(() => {}));
+        select.addEventListener('focus', () => loadWorkAccounts(action).catch(() => {}));
         select.addEventListener('change', () => loadWorkJobs(action));
         const panel = Object.assign(document.createElement('div'), { className: 'work-picker', hidden: true });
         panel.dataset.workPicker = action;
@@ -375,26 +375,52 @@ async function initializeQtsPageLauncher() {
   // The Tools heading shows only when one of its tools does.
   const toolsHeading = [...menuList.querySelectorAll('.label-top')].find((heading) => heading.textContent === 'Tools');
 
-  async function loadWorkAccounts() {
-    if (accountsRequest) return accountsRequest;
+  async function loadWorkAccounts(action) {
+    if (accountsRequests.has(action)) return accountsRequests.get(action);
     const version = accountsVersion;
-    accountsRequest = (async () => {
-      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: 'generation' });
+    const picker = workPickers.get(action);
+    const previous = picker.select.value;
+    picker.select.replaceChildren(new Option('Loading accounts…', ''));
+    picker.select.options[0].disabled = true;
+    const request = (async () => {
+      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: action });
       if (version !== accountsVersion) return;
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load accounts.');
-      for (const picker of workPickers.values()) {
-        const previous = picker.select.value;
-        picker.select.replaceChildren(new Option(reply.accounts.length ? 'Select account' : 'No matching notes', ''));
-        for (const account of reply.accounts) picker.select.add(new Option(`${account.name}${account.category ? ` (${account.category})` : ''}`, account.id));
-        picker.select.value = previous;
+      picker.select.replaceChildren(new Option(reply.accounts.length ? 'Select account' : 'No eligible accounts', ''));
+      for (const account of reply.accounts) {
+        const eligibleJobCount = Number(account.eligibleJobCount) || 0;
+        const countLabel = eligibleJobCount >= 8 ? '8+' : String(eligibleJobCount);
+        const option = new Option(
+          `${account.name}${account.category ? ` (${account.category})` : ''} (${countLabel})`,
+          account.id,
+        );
+        option.disabled = eligibleJobCount === 0;
+        picker.select.add(option);
+      }
+      picker.select.value = previous;
+      if (picker.select.selectedOptions[0]?.disabled) {
+        picker.select.value = '';
+        picker.version += 1;
+        picker.jobs = [];
+        picker.selected.clear();
+        picker.loading = false;
+        picker.error = '';
+        renderWorkPicker(action);
       }
     })().catch(error => {
       if (version !== accountsVersion) return;
-      accountsRequest = null;
+      accountsRequests.delete(action);
+      picker.select.replaceChildren(new Option('Could not load accounts — focus to retry', ''));
+      picker.select.options[0].disabled = true;
       showToast(error.message, 'error');
       throw error;
     });
-    return accountsRequest;
+    accountsRequests.set(action, request);
+    return request;
+  }
+
+  function loadAllWorkAccounts() {
+    for (const action of workPickers.keys()) loadWorkAccounts(action).catch(() => {});
   }
 
   async function loadWorkJobs(action) {
@@ -409,7 +435,7 @@ async function initializeQtsPageLauncher() {
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load jobs.');
       picker.jobs = reply.jobs;
       picker.hasMore = reply.hasMore;
-      picker.selected = new Set(reply.jobs.map(job => job.id));
+      picker.selected = new Set(reply.jobs.filter(job => job.selectable !== false).map(job => job.id));
     } catch (error) {
       if (picker.version === version) picker.error = error.message;
     } finally {
@@ -471,9 +497,9 @@ async function initializeQtsPageLauncher() {
     toolbar.append(allLabel, search, refresh); panel.append(toolbar);
     const list = Object.assign(document.createElement('div'), { className: 'work-jobs' });
     for (const job of visible) {
-      const row = Object.assign(document.createElement('div'), { className: 'work-job', title: job.url });
-      const check = Object.assign(document.createElement('input'), { type: 'checkbox', checked: picker.selected.has(job.id) });
-      check.disabled = Boolean(picker.cancelling);
+      const row = Object.assign(document.createElement('div'), { className: `work-job${job.busy ? ' busy' : ''}`, title: job.busy ? 'Already in progress; cannot select.' : job.url });
+      const check = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !job.busy && picker.selected.has(job.id) });
+      check.disabled = Boolean(picker.cancelling || job.busy || job.selectable === false);
       check.setAttribute('aria-label', `Select ${job.title}`);
       check.dataset.jobId = job.id;
       check.addEventListener('change', () => {
@@ -489,7 +515,7 @@ async function initializeQtsPageLauncher() {
       const link = Object.assign(document.createElement(url ? 'a' : 'span'), { className: 'work-link', title: job.url });
       if (url) { link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
       const title = Object.assign(document.createElement('span'), { className: 'work-title', textContent: job.title, title: job.url });
-      const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company].filter(Boolean).join(' · '), title: job.url });
+      const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company, job.busy ? 'In progress · unavailable' : ''].filter(Boolean).join(' · '), title: job.url });
       link.append(title, domain); row.append(check, link); list.append(row);
     }
     panel.append(list);
@@ -780,7 +806,7 @@ async function initializeQtsPageLauncher() {
   async function toggleFromToolbar() {
     if (await syncSessionAction()) {
       setOpen(!launcher.classList.contains('open'));
-      if (launcher.classList.contains('open')) loadWorkAccounts().catch(() => {});
+      if (launcher.classList.contains('open')) loadAllWorkAccounts();
       main.focus();
       return;
     }
@@ -1410,7 +1436,7 @@ async function initializeQtsPageLauncher() {
     // While Apply is on, a page with saved jobs offers its accounts ("Apply this page").
     if (opening) showApplyPick().catch(() => {});
     if (opening) refreshDailyCounts(true);
-    if (opening) loadWorkAccounts().catch(() => {});
+    if (opening) loadAllWorkAccounts();
     if (opening) syncTextHighlightAction(true).catch(() => {});
     // A Get JD notice hidden earlier shows again beside the panel (the orange dot stands for it).
     if (opening && currentOutcome?.kind === 'notice') outcomeCard.hidden = false;
@@ -1429,7 +1455,7 @@ async function initializeQtsPageLauncher() {
     if (!active || area !== 'local') return;
     if (changes.authExpiresAt) {
       accountsVersion += 1;
-      accountsRequest = null;
+      accountsRequests.clear();
       for (const [action, picker] of workPickers) {
         picker.version += 1; picker.select.replaceChildren(new Option('Select account', ''));
         picker.jobs = []; picker.selected.clear(); picker.loading = false; renderWorkPicker(action);

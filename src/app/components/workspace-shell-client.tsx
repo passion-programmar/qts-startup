@@ -88,6 +88,7 @@ export function WorkspaceShellClient({
         ? [
             { label: "My AI prompts", href: "/prompts", icon: Sparkles },
             { label: "Useful prompts", href: "/useful-prompts", icon: NotebookPen },
+            { label: "Auto Apply settings", href: "/settings", icon: Settings2 },
           ]
         : [];
   const navigationGroups = [

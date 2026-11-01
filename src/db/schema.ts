@@ -104,6 +104,8 @@ export const users = pgTable(
     // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
     canUseApply: boolean("can_use_apply").default(false).notNull(),
     applyAiMode: text("apply_ai_mode").default("chatgpt").notNull(),
+    autoApplyParallelLimit: integer("auto_apply_parallel_limit").default(2).notNull(),
+    chatGptUrl: text("chatgpt_url").default("https://chatgpt.com/").notNull(),
     // Apply clicks Submit itself when on (Super Admin, per Manager); a bid still waits for the Manager's Yes.
     autoSubmit: boolean("auto_submit").default(false).notNull(),
     // When Apply stops for the Manager (Super Admin, per Manager): "every_step" (the default) or
@@ -138,6 +140,7 @@ export const users = pgTable(
       .on(table.role)
       .where(sql`${table.role} = 'super_admin'`),
     check("users_apply_review_mode_check", sql`${table.applyReviewMode} in ('every_step', 'before_submit')`),
+    check("users_auto_apply_parallel_limit_check", sql`${table.autoApplyParallelLimit} between 1 and 10`),
     check(
       "users_parent_matches_role_check",
       sql`(${table.role} = 'super_admin' and ${table.parentUserId} is null) or (${table.role} <> 'super_admin' and ${table.parentUserId} is not null)`,

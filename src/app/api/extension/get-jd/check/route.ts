@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { profiles, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
@@ -57,6 +57,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
+    const [managerRow] = await db.select({ useGeminiMatching: users.useGeminiMatching }).from(users).where(eq(users.id, manager.id)).limit(1);
+    const requireMatchingNote = managerRow?.useGeminiMatching === true;
     const candidateRows = await db
       .select({
         id: profiles.userId,
@@ -71,6 +73,8 @@ export async function POST(request: Request): Promise<NextResponse> {
           eq(users.parentUserId, manager.id),
           eq(users.role, "account"),
           isNull(users.blockedAt),
+          requireMatchingNote ? sql`length(regexp_replace(coalesce(${profiles.jdMatching}, ''), ${"\\s"}, '', 'g')) > 0` : sql`true`,
+          sql`exists (select 1 from experiences e where e.profile_user_id = ${profiles.userId} group by e.profile_user_id having count(*) >= 3)`,
         ),
       )
       .orderBy(asc(profiles.firstName), asc(profiles.lastName))
@@ -99,7 +103,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     ]);
     const candidateProfiles = candidateRows.map((candidate) => {
       const duplicate = duplicateDetails.get(candidate.id) ?? null;
-      // An account that already has this job is shown as saved, never offered again.
       const available = duplicate === null;
       return {
         id: candidate.id,

@@ -20,6 +20,7 @@ import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 import {
   APPLY_LEASE_SECONDS,
   APPLY_PARALLEL_LIMIT,
+  MAX_AUTO_APPLY_PARALLEL_LIMIT,
   APPLY_REVIEW_LEASE_SECONDS,
   type AppliedAnswer,
   comparableJobUrl,
@@ -35,6 +36,7 @@ import { type LearnedAnswer } from "./question-memory-values";
 import { loadApplicationAnswers } from "./manager-answers";
 import { decryptSiteAccountPassword } from "./site-account-password";
 import type { WorkSelection } from "@/server/work/work-selection";
+import { hasEligibleExperienceCount, hasMatchingNote } from "@/server/work/work-eligibility";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
 // it ("claimed"), the Manager reviews each step ("waiting_review"), clicks the site's Submit
@@ -152,25 +154,38 @@ const templateLabel = (template: string | null) =>
 /**
  * The next application for this Chrome, or null when none is ready or this Chrome has its limit
  * open. skipJobIds (UUIDs, checked by the route): jobs this Chrome cancelled, not handed back to it.
+ * Auto Apply retries unsubmitted jobs after prior terminal attempts; live claims remain exclusive.
  */
 export async function claimNextApplication(
   managerId: string,
   browser: ExtensionBrowser,
   skipJobIds: string[] = [],
   selection?: WorkSelection,
+  options: { autoApply?: boolean; requireMatchingNote?: boolean } = {},
 ): Promise<ClaimedApplication | null> {
+  let parallelLimit = APPLY_PARALLEL_LIMIT;
+  if (options.autoApply) {
+    const [managerSettings] = await db.select({ parallelLimit: users.autoApplyParallelLimit })
+      .from(users).where(and(eq(users.id, managerId), eq(users.role, "manager"))).limit(1);
+    if (!managerSettings) throw new Error("Manager Auto Apply settings are unavailable.");
+    parallelLimit = selection
+      ? 1
+      : Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
+  }
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
   // Exclude all rows outside the explicit selection; an empty/stale selection never falls back.
   const skips = selection ? sql`ARRAY(
     select j.id from jobs j where j.manager_id = ${managerId}
       and (j.candidate_id <> ${selection.candidateId}::uuid
         or not (j.id = any(${`{${selection.jobIds.join(",")}}`}::uuid[]))
-        or not exists (select 1 from profiles p where p.user_id = j.candidate_id and length(btrim(p.jd_matching)) > 0))
+        or (${options.requireMatchingNote === true}
+          and not exists (select 1 from profiles p where p.user_id = j.candidate_id
+            and length(regexp_replace(coalesce(p.jd_matching, ''), '\\s', '', 'g')) > 0)))
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
   )` : sql`${`{${skipJobIds.join(",")}}`}::uuid[]`;
   const claim = await db.execute<{ attemptId: string | null }>(sql`
-    select claim_apply_attempt(${managerId}, ${browser.id}, ${APPLY_PARALLEL_LIMIT}, ${APPLY_LEASE_SECONDS},
-      ${skips})::text as "attemptId"
+    select claim_apply_attempt(${managerId}, ${browser.id}, ${parallelLimit}, ${APPLY_LEASE_SECONDS},
+      ${skips}, ${options.autoApply === true}, ${options.requireMatchingNote === true})::text as "attemptId"
   `);
   const attemptId = claim.rows[0]?.attemptId;
   if (attemptId && selection) {
@@ -179,7 +194,9 @@ export async function claimNextApplication(
       .innerJoin(profiles, eq(profiles.userId, applyAttempts.candidateId))
       .where(and(eq(applyAttempts.id, attemptId), eq(applyAttempts.managerId, managerId),
         eq(applyAttempts.browserId, browser.id), eq(applyAttempts.candidateId, selection.candidateId),
-        inArray(applyAttempts.jobId, selection.jobIds), sql`length(btrim(${profiles.jdMatching})) > 0`)).limit(1);
+        inArray(applyAttempts.jobId, selection.jobIds),
+        options.autoApply ? hasEligibleExperienceCount() : sql`true`,
+        options.requireMatchingNote ? hasMatchingNote() : sql`true`)).limit(1);
     if (!scoped) {
       await db.delete(applyAttempts).where(and(eq(applyAttempts.id, attemptId),
         eq(applyAttempts.managerId, managerId), eq(applyAttempts.browserId, browser.id), eq(applyAttempts.status, "claimed")));

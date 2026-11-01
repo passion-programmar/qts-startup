@@ -12,7 +12,7 @@ import {
   mergeLearned,
   safeAutoAnswer,
   SUGGEST_MIN_TIMES,
-  isPerCandidateQuestion,
+  isNotGloballyReusableQuestion,
 } from "./question-memory-values";
 
 // Apply's question memory: what confirmed applications teach. Each question has one small row;
@@ -43,6 +43,7 @@ const excluded = (column: string) => sql.raw(`excluded."${column}"`);
 export async function recordLearnedAnswers(candidateId: string, items: LearnedAnswer[]): Promise<string[]> {
   const byKey = new Map<string, LearnedAnswer>();
   for (const item of items) {
+    if (isNotGloballyReusableQuestion(item.question)) continue;
     const key = normalizeQuestionKey(item.question);
     if (key && !byKey.has(key)) byKey.set(key, item);
   }
@@ -144,7 +145,7 @@ export async function listQuestionSuggestions(limit = 100): Promise<QuestionSugg
     .limit(limit);
   // Only questions every candidate can answer the same way: never personal facts ("Location"),
   // experience, or wishes ("What compensation are you targeting?").
-  return rows.filter((row) => !isPerCandidateQuestion(row.questionText)).map((row) => {
+  return rows.filter((row) => !isNotGloballyReusableQuestion(row.questionText)).map((row) => {
     const memory = toRow(row);
     return {
       id: row.id,
@@ -173,10 +174,10 @@ export type RememberedChoice = { questionKey: string; optionsKey: string; intend
 /** Every remembered choice, for Apply to fill a value that did not fit without asking the AI. */
 export async function rememberedChoices(): Promise<RememberedChoice[]> {
   const rows = await db
-    .select({ questionKey: applyQuestionMemory.questionKey, choices: applyQuestionMemory.choices })
+    .select({ questionKey: applyQuestionMemory.questionKey, questionText: applyQuestionMemory.questionText, choices: applyQuestionMemory.choices })
     .from(applyQuestionMemory)
     .where(sql`jsonb_array_length(${applyQuestionMemory.choices}) > 0`)
     .limit(2000);
-  return rows.flatMap((row) => (Array.isArray(row.choices) ? row.choices as MemoryChoice[] : [])
+  return rows.filter((row) => !isNotGloballyReusableQuestion(row.questionText)).flatMap((row) => (Array.isArray(row.choices) ? row.choices as MemoryChoice[] : [])
     .map((choice) => ({ questionKey: row.questionKey, optionsKey: choice.optionsKey, intended: choice.intended, choice: choice.choice })));
 }

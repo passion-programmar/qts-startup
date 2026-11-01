@@ -349,33 +349,41 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(serviceWorker.includes('Checking the oldest eligible saved job'));
   assert.ok(serviceWorker.includes('pinned: true'));
   // ChatGPT gets three minutes per answer; an error ("This response couldn't load") closes the tab
-  // and resends once in a fresh pinned tab; an unusable answer gets one follow-up; a failed job is
-  // tried once more in the run.
+  // and resends once in a fresh pinned tab; an unusable answer gets one follow-up; failed jobs retry
+  // while Generation stays on without a persisted failure count.
   assert.ok(serviceWorker.includes('const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;'));
   assert.ok(serviceWorker.includes('while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS)'));
   assert.ok(serviceWorker.includes("response couldn['’]t load"));
-  assert.ok(serviceWorker.includes("if (error?.name !== 'ChatGptPageError' || attempt > 0) throw error;"));
+  assert.ok(serviceWorker.includes("if ((!closed && error?.name !== 'ChatGptPageError') || attempt > 0) throw error;"));
   const askSource = serviceWorker.slice(
     serviceWorker.indexOf('async function askGenerationChatGpt'),
     serviceWorker.indexOf('async function runGenerationForTab'),
   );
   assert.ok(askSource.includes('await chrome.tabs.remove(chatTab.id)'));
-  assert.ok(askSource.includes('chatTab.id = (await acquireGenerationChatGptTab()).id;'));
+  assert.ok(askSource.includes('const created = await acquireGenerationChatGptTab();'));
+  assert.ok(askSource.includes('chatTab.id = created.id;'));
+  assert.ok(askSource.includes('chatTab.url = created.qtsChatGptUrl;'));
   assert.equal(askSource.includes('chrome.tabs.reload'), false);
   assert.ok(serviceWorker.includes('await runGenerationForTab(jobTabId, queuedJob, chatTab);'));
   assert.ok(serviceWorker.includes('if (!unusable || followUps > 0)'));
-  assert.ok(serviceWorker.includes('const retrying = failed.success === true && failed.canRetry === true && failures < 2;'));
+  assert.ok(serviceWorker.includes('Retrying while Generation is on.'));
+  assert.equal(serviceWorker.includes('failuresThisRun'), false);
   // One pinned ChatGPT tab serves up to ten jobs (a new chat each), and a slow or blocked ChatGPT page
   // gets up to two reloads. No job page is opened: the prompt uses the saved job.
   assert.ok(serviceWorker.includes('const GENERATION_JOBS_PER_CHATGPT_TAB = 10;'));
   assert.ok(serviceWorker.includes('const CHATGPT_LOAD_TIMEOUT_MS = 30 * 1000;'));
   assert.ok(serviceWorker.includes('const CHATGPT_RELOADS = 2;'));
+  assert.ok(serviceWorker.includes('async function getManagerChatGptUrl()'));
+  assert.ok(serviceWorker.includes('url: chatGptUrl,'));
+  assert.ok(serviceWorker.includes('await startNewChatGptChat(chatTab.id, chatTab.url);'));
+  assert.ok(serviceWorker.includes("await tabOwnership.ownerOf(tab.id, tab.windowId) === 'generation'"));
   const queueSource = serviceWorker.slice(serviceWorker.indexOf('async function processQueuedGenerationJobs'));
   assert.ok(queueSource.includes('await ensureChatGptReady(chatTab.id);'));
   assert.equal(queueSource.includes('url: queuedJob.jobUrl,'), false);
   assert.equal(queueSource.includes('await waitForTabSettled(jobTabId);'), false);
-  assert.ok(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'));
-  assert.ok(serviceWorker.includes('persistGenerationQueueRun(runId, excludedJobIds)'));
+  assert.equal(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'), false);
+  assert.equal(serviceWorker.includes('failuresThisRun'), false);
+  assert.ok(serviceWorker.includes('Retrying while Generation is on.'));
   assert.ok(serviceWorker.includes('notifyGenerationManager'));
   assert.ok(serviceWorker.includes('ACTIVE_GENERATION_JOB_KEY'));
   assert.ok(serviceWorker.includes('removeQueuedGenerationDownloads(downloadIds)'));
@@ -389,7 +397,8 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.equal(releaseRoute.includes('generationStatus: "queued"'), false);
   assert.ok(claimRoute.includes('.orderBy(asc(jobs.createdAt), asc(jobs.id))'));
   assert.equal(claimRoute.includes('jobs.status'), false);
-  assert.ok(claimRoute.includes('sql`length(btrim(${profiles.jdMatching})) > 0`'));
+  assert.ok(claimRoute.includes('requireMatchingNote ? hasMatchingNote() : sql`true`'));
+  assert.ok(claimRoute.includes('hasEligibleExperienceCount()'));
   assert.ok(claimRoute.includes('isNull(jobs.resumeLocalPath)'));
   // Any job not generated yet and not held by a Chrome; the claim writes only the hold.
   assert.ok(claimRoute.includes('ne(jobs.generationStatus, "completed")'));
@@ -420,6 +429,10 @@ test('Generation records nothing until the files are downloaded: a failed, cance
   assert.ok(routeSource('finalize').includes('generationStatus: "completed"'));
   assert.ok(hold.includes('GENERATION_HOLD_MS = 5 * 60 * 1000'));
   assert.ok(routeSource('queue').includes('row.generationStatus !== "completed"'));
+  assert.equal(jobActions.includes('generationAttemptCount'), false);
+  assert.equal(routeSource('fail').includes('generationAttemptCount'), false);
+  assert.ok(routeSource('fail').includes('ready: true'));
+  assert.ok(routeSource('status').includes('job.heldUntil > new Date() ? "processing" : "ready"'));
 });
 
 test('queued Generation recovers from restarts, lost finalize responses, and sign-out', () => {
@@ -464,16 +477,16 @@ test('queued Generation prompts use saved job and profile data only', () => {
 
   assert.ok(startRoute.includes('jobUrl: normalizeJobUrl(savedJob.jobUrl)'));
   assert.ok(startRoute.includes('jobDescription: savedJob.description'));
-  // JD matching notes decide which jobs Generation picks, but stay out of the prompt.
-  assert.ok(startRoute.includes('!savedJob.jdMatching?.trim()'));
+  // Gemini matching notes decide eligibility only for assigned Managers, and stay out of the prompt.
+  assert.ok(startRoute.includes('managerSettings?.useGeminiMatching === true && !savedJob.jdMatching?.trim()'));
   assert.equal(startRoute.includes('jdMatching: savedJob.jdMatching'), false);
   assert.ok(startRoute.includes('educations'));
   assert.ok(startRoute.includes('experiences'));
   assert.equal(startRoute.includes('readGenerationJob'), false);
   assert.ok(schema.includes('generationAttemptCount: integer("generation_attempt_count")'));
-  assert.ok(actions.includes('Reset is available only after both Generation attempts fail.'));
-  assert.ok(actions.includes('generationAttemptCount: 0'));
-  assert.ok(jobsPage.includes('generationAttemptCount: jobs.generationAttemptCount'));
+  assert.equal(actions.includes('Reset is available only after both Generation attempts fail.'), false);
+  assert.equal(actions.includes('generationAttemptCount: 0'), false);
+  assert.equal(jobsPage.includes('generationAttemptCount: jobs.generationAttemptCount'), false);
 });
 
 test('Generation distinguishes generated documents from delivered files', () => {
@@ -645,7 +658,7 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(forms.includes('This action cannot be undone.'));
   assert.equal(forms.includes('window.confirm('), false);
   assert.ok(forms.includes('ListPlus'));
-  assert.ok(forms.includes('"Reset Generation"'));
+  assert.equal(forms.includes('"Reset Generation"'), false);
   assert.ok(forms.includes('size-9 shrink-0 items-center justify-center'));
 });
 

@@ -9,7 +9,7 @@ Extension claims saved job and maintains lease
   -> POST /api/extension/generation/start
      -> load candidate/job data, select prompt and rotate template
      -> compose prompt and save pending generation run
-  -> send prompt in pinned ChatGPT tab, with QTS_GENERATION_ID marker
+  -> send prompt in a pinned tab opened at the Manager's ChatGPT URL, with QTS_GENERATION_ID marker
   -> read task-associated assistant response and extract JSON
   -> POST /api/extension/generation/complete
      -> require V2, parse, validate identity/target, clean and revalidate
@@ -23,9 +23,11 @@ Extension claims saved job and maintains lease
      -> job completed, paths/text saved, generation run delivered
 ```
 
-## Eligibility and prompt selection
+## Eligibility, retries and prompt selection
 
-The start route authenticates the Manager, checks ownership and the active job lease, and requires a saved description, candidate JD-matching notes, no existing resume path, and candidate name/email. The extension also checks the saved job URL, title and company. JD-matching notes control eligibility and are excluded from the prompt.
+The extension claims the oldest eligible saved job; the persisted `queued` status is not required. A Jobs-row action may save a prompt selection for that job, but does not gate whether the job can be claimed. Eligibility requires a saved description, at least three candidate experience records, no existing resume path, and an active, unblocked candidate account owned by the Manager. A JD-matching note is required only when that Manager is assigned Gemini matching for Get JD. The note is used for eligibility, never included in the Generation prompt. The start route rechecks ownership, the active lease, saved description, and resume path, plus candidate name/email. The extension also checks the saved job URL, title and company.
+
+The five-minute lease is the server's processing indicator. When it expires, the job is ready to be claimed by another Chrome and status checks report `ready`, not `processing`. Cancelling deletes the unfinished run, clears the hold, and removes any partial downloads; it does not increment or save a failure count. If Generation remains on, the same eligible job can be claimed again immediately. Other generation failures also retry while Generation is on, with a brief pause and no saved failure count. Shared setup failures and uncertain delivery stop the queue rather than retrying automatically.
 
 When `jobs.generationPromptId` is set, selection uses that specific active, unarchived Manager-owned OpenAI document-generation prompt. An unavailable explicit selection fails with `generation_prompt_missing`; it does not silently select another prompt. Otherwise, Manager prompt groups rotate by least-recent use (unused first), with the active Super Admin default used when no Manager prompt exists. Missing configuration stops Generation. The existing 24 PDF templates rotate separately by least-recent use. Selection history comes from saved generation runs.
 

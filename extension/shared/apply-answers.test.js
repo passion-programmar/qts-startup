@@ -570,37 +570,22 @@ test('every reusable answer reaches the AI as context, with its note', () => {
   assert.match(prompt, /How did you hear about us\?: LinkedIn job post \(note: Pick the closest choice\.\)/);
 });
 
-test('reusable salary, notice, sponsorship, right-to-work, and employment-type answers come before the profile, by topic', () => {
-  const row = (questionText, answer) => ({ questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
-  const reusable = [
-    row('What is your salary expectation?', '5000 EUR per month'),
-    row('What is your notice period?', '2 weeks'),
-    row('Will you require visa sponsorship?', 'No'),
-    row('Are you legally authorized to work in the EU?', 'Yes'),
-    row('What employment type are you interested in?', 'Permanent'),
-    row('Does the advertised salary align with your expectations?', 'Yes'),
-  ];
-  const profile = { ...candidate, needsSponsorship: true, salaryExpectationAmount: 70000, salaryExpectationPeriod: 'year' };
+test('candidate-specific salary, notice, and sponsorship answers come from this profile', () => {
+  const profile = { ...candidate, needsSponsorship: true };
   const { answers: resolved, open } = answers.resolveFields([
     field('Desired Pay'),
     field('Expected hourly rate', { kind: 'number' }),
     field('Date Available', { kind: 'date' }),
-    field('What is your notice period?', { id: 'notice', kind: 'select', options: ['Immediately', '2 weeks', '1 month'] }),
-    field("Will you require Elastic's sponsorship to continue or extend your work authorization?", { id: 'sponsor', kind: 'select', options: ['Yes', 'No'] }),
-    field('Are you legally authorized to work in Poland?', { id: 'poland', kind: 'radio', options: ['Yes', 'No'] }),
-    field('What employment type are you interested in?', { id: 'type', kind: 'checkbox-group', options: ['Permanent', 'Temporary', 'Secondments'] }),
-    field('Does the advertised salary align with your expectations?', { id: 'align', kind: 'radio', options: ['Yes', 'No'] }),
-  ], profile, reusable, { today: new Date(2026, 9, 26) });
+    field('What is your notice period?', { id: 'notice' }),
+    field('Will you require visa sponsorship?', { id: 'sponsor', kind: 'radio', options: ['Yes', 'No'] }),
+  ], profile, [], { today: new Date(2026, 9, 26) });
   assert.deepEqual(open, []);
-  assert.equal(resolved['Desired Pay'].value, '5000 EUR per month');
-  assert.equal(resolved['Desired Pay'].source, 'reusable');
-  assert.equal(resolved['Expected hourly rate'].value, '28.85');
-  assert.equal(resolved['Date Available'].value, '2026-11-09');
-  assert.equal(resolved.notice.value, '2 weeks');
-  assert.equal(resolved.sponsor.value, 'No');
-  assert.equal(resolved.poland.value, 'Yes');
-  assert.deepEqual(resolved.type.value, ['Permanent']);
-  assert.equal(resolved.align.value, 'Yes');
+  assert.equal(resolved['Desired Pay'].value, '70000 EUR per year');
+  assert.equal(resolved['Desired Pay'].source, 'profile');
+  assert.equal(resolved['Expected hourly rate'].value, '33.65');
+  assert.equal(resolved['Date Available'].value, '2026-11-02');
+  assert.equal(resolved.notice.value, '1 week');
+  assert.equal(resolved.sponsor.value, 'Yes');
 });
 
 test('without reusable answers on those topics, the profile facts still answer them', () => {
@@ -613,9 +598,9 @@ test('without reusable answers on those topics, the profile facts still answer t
   assert.equal(resolved['Will you require visa sponsorship?'].value, 'No');
 });
 
-test('with static facts only, relocation and notice come from reusable answers; without one, notice is the usual 1 week', () => {
+test('candidate-scoped relocation and notice answers stay reusable for that candidate', () => {
   const staticProfile = { firstName: 'Anna', lastName: 'Kowalska', email: 'anna@example.com', nationality: 'Polish', languages: 'English C1', yearsOfExperience: 8, eeoPreference: 'prefer_not_to_say' };
-  const row = (questionText, answer) => ({ questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
+  const row = (questionText, answer) => ({ scope: 'candidate', questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
   const { answers: resolved } = answers.resolveFields([
     field('Are you willing to relocate?', { kind: 'radio', options: ['Yes', 'No'] }),
     field('Notice period'),
@@ -636,10 +621,10 @@ test('with static facts only, relocation and notice come from reusable answers; 
   assert.deepEqual(open.map((entry) => entry.id), ['Will you require visa sponsorship?']);
 });
 
-test('diversity questions take Super Admin\'s reusable answers by topic, else decline, never a guess', () => {
-  const row = (questionText, answer) => ({ questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
+test('diversity questions use scoped saved answers by topic, else decline, never a guess', () => {
+  const row = (questionText, answer) => ({ scope: 'candidate', questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
   const reusable = [row('Gender', 'Prefer not to say'), row('Veteran status', 'I am not a protected veteran')];
-  const { answers: resolved, open } = answers.resolveFields([
+  const { answers: resolved, open, byHand } = answers.resolveFields([
     field('What is your gender identity?', { kind: 'select', options: ['Man', 'Woman', 'Non-binary', 'Prefer not to say'] }),
     field('Protected veteran status', { kind: 'radio', options: ['I am a protected veteran', 'I am not a protected veteran', 'I decline to answer'] }),
     field('Race / Ethnicity', { kind: 'select', options: ['Asian', 'White', 'Decline to self-identify'] }),
@@ -650,9 +635,9 @@ test('diversity questions take Super Admin\'s reusable answers by topic, else de
   assert.equal(resolved['Protected veteran status'].value, 'I am not a protected veteran');
   assert.equal(resolved['Race / Ethnicity'].value, 'Decline to self-identify');
   assert.equal(resolved['Sexual orientation'], undefined);
-  // "Prefer not to say" is not a choice here: the AI gets the reusable answer and is told not to guess.
-  assert.deepEqual(open.map((entry) => entry.id), ['no-decline']);
-  assert.match(open[0].hint, /"Prefer not to say".*never infer it from the name/);
+  // The saved candidate answer is not one of these choices, so the Manager decides rather than guessing.
+  assert.deepEqual(open, []);
+  assert.ok(byHand.some((entry) => entry.id === 'no-decline'));
 });
 
 test('diversity questions take the candidate\'s own profile answers, in each form\'s wording', () => {
@@ -666,7 +651,7 @@ test('diversity questions take the candidate\'s own profile answers, in each for
     field('Sexual orientation', { kind: 'select', options: ['Heterosexual', 'Gay', 'I prefer not to say'] }),
     field('Gender identity', { id: 'woman-text' }),
     field('Gender', { id: 'two-choices', kind: 'radio', options: ['Man', 'Lady'] }),
-  ], own, [{ questionKey: 'gender', questionText: 'Gender', answer: 'Prefer not to say' }]);
+  ], own, []);
   assert.equal(resolved.Gender.value, 'Female');
   assert.equal(resolved['Race / Ethnicity'].value, 'White (Not Hispanic or Latino)');
   assert.equal(resolved.hispanic.value, 'No');
@@ -711,36 +696,33 @@ test('the answer prompt gets the delivered résumé and cover letter as plain te
   assert.match(bare, /^\(none\) \(none\)/);
 });
 
-test('a remembered choice fills a value that did not fit, only on the same question and choices', () => {
-  const field = { id: 'f', label: 'Right to work in the UK? *', kind: 'select', options: ['No', 'Yes, I have ILR', 'Yes, I am a British citizen'] };
+test('a remembered shared choice fills a value that did not fit, only on the same question and choices', () => {
+  const field = { id: 'f', label: 'How did you hear about us?', kind: 'select', options: ['Indeed', 'LinkedIn Job Post', 'LinkedIn Recruiter'] };
   const remembered = [{
-    questionKey: answers.normalizeQuestionKey('Right to work in the UK?'),
-    optionsKey: answers.optionsKey(['Yes, I am a British citizen', 'Yes, I have ILR', 'No']),
-    intended: 'Yes',
-    choice: 'Yes, I have ILR',
+    questionKey: answers.normalizeQuestionKey('How did you hear about us?'),
+    optionsKey: answers.optionsKey(['Indeed', 'LinkedIn Job Post', 'LinkedIn Recruiter']),
+    intended: 'LinkedIn',
+    choice: 'LinkedIn Job Post',
   }];
-  assert.equal(answers.findRememberedChoice(field, 'yes', remembered), 'Yes, I have ILR');
-  assert.equal(answers.findRememberedChoice(field, 'No', remembered), null);
-  assert.equal(answers.findRememberedChoice({ ...field, options: ['Yes', 'No'] }, 'Yes', remembered), null);
-  assert.equal(answers.findRememberedChoice({ ...field, label: 'Other question' }, 'Yes', remembered), null);
+  assert.equal(answers.findRememberedChoice(field, 'LinkedIn', remembered), 'LinkedIn Job Post');
+  assert.equal(answers.findRememberedChoice(field, 'Indeed', remembered), null);
+  assert.equal(answers.findRememberedChoice({ ...field, options: ['LinkedIn Job Post', 'Indeed'] }, 'LinkedIn', remembered), null);
+  assert.equal(answers.findRememberedChoice({ ...field, label: 'Other question' }, 'LinkedIn', remembered), null);
   // The server keys choice lists the same way.
   assert.equal(answers.optionsKey(['B', ' a ']), 'a|b');
 });
 
-test('a reusable yes or no is the list\'s own yes or no, in any language; other answers carry the value meant', () => {
-  const row = (question, answer) => ({ questionKey: answers.normalizeQuestionKey(question), questionText: question, answer, note: null });
+test('a shared yes or no adapts to the offered choice; candidate preferences stay scoped', () => {
+  const row = (question, answer, scope) => ({ scope, questionKey: answers.normalizeQuestionKey(question), questionText: question, answer, note: null });
   const { answers: resolved } = answers.resolveFields([
-    field('Do you have the right to work?', { kind: 'select', options: ['Yes, I have ILR', 'No'] }),
-    field('Czy wyrażasz zgodę na badanie przeszłości?', { kind: 'radio', options: ['Tak', 'Nie'] }),
-  ], candidate, [row('Do you have the right to work?', 'Yes'), row('Czy wyrażasz zgodę na badanie przeszłości?', 'No')]);
-  assert.equal(resolved['Do you have the right to work?'].value, 'Yes, I have ILR');
-  assert.equal(resolved['Do you have the right to work?'].intended, 'Yes');
-  assert.equal(resolved['Czy wyrażasz zgodę na badanie przeszłości?'].value, 'Nie');
-  // Not a yes or no: the AI gives it in the field's form, keeping the meaning (checked after).
-  const { open } = answers.resolveFields([field('Preferred interview format', { kind: 'select', options: ['Video call', 'Phone call', 'On-site'] })],
-    candidate, [row('Preferred interview format', 'Online, via Teams')]);
-  assert.equal(open[0].intended, 'Online, via Teams');
-  assert.equal(open[0].fact, 'answer');
+    field('Do you agree to our privacy policy?', { kind: 'select', options: ['Yes, I agree', 'No'] }),
+  ], candidate, [row('Do you agree to our privacy policy?', 'Yes', 'everyone')]);
+  assert.equal(resolved['Do you agree to our privacy policy?'].value, 'Yes, I agree');
+  // An application-specific answer that does not match the choices stays with the Manager.
+  const { open, byHand } = answers.resolveFields([field('Preferred interview format', { kind: 'select', options: ['Video call', 'Phone call', 'On-site'] })],
+    candidate, [row('Preferred interview format', 'Online, via Teams', 'application')]);
+  assert.deepEqual(open, []);
+  assert.ok(byHand.some((entry) => entry.id === 'Preferred interview format'));
   // A reusable yes never comes back from the AI as a no.
   assert.equal(answers.keepsMeaning({ fact: 'answer', intended: 'Yes' }, 'No, I need sponsorship'), false);
   assert.equal(answers.keepsMeaning({ fact: 'answer', intended: 'Yes' }, 'Yes, I have ILR'), true);

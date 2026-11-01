@@ -53,56 +53,87 @@ The supported browser-extension workflow is deliberately narrow:
    responses for the Pacific day. Usage events (operation, key hash, token
    count, timestamp) back the quota accounting only and are pruned by the normal
    usage window; prompts and page content are not stored.
-6. Managers can queue Generation from a Jobs row. The signed-in extension
-   processes queued jobs sequentially through the job page and ChatGPT, then
-   downloads résumé PDF, cover-letter PDF, and JD text files locally, and
-   records the expected local resume path on the Jobs row.
-   Cancelling Generation marks the job `cancelled`, refunds the attempt in
-   progress, and removes files already downloaded by that run. Cancelled jobs
-   are not claimed again until the Manager queues them from the Jobs page.
-   If the service worker restarts mid-run, the next queue tick returns the
-   interrupted job to the queue; signing out does the same before the token
-   is cleared. Generation does not mark the job as applied; `applied` means the
-   application was submitted successfully, and exactly then the job has a bid.
-   A bid is created only when Apply completes, and only for a job whose
-   Generation is `completed`; until the Apply workflow ships, the Manager marks
-   it Applied on the Jobs page. Deleting the bid returns the job to To do.
-   Generation file names use Japan time. The extension's Generation action
-   can cancel an active run, including a queued run; Apply remains a release
-   placeholder.
+6. Generation claims the oldest eligible saved job whether or not a Manager
+   manually queued it from the Jobs row. It requires a saved description, at
+   least three candidate experience records, and no resume path. A JD-matching
+   note is required only when the Manager is assigned Gemini matching for Get
+   JD; the note is not included in the prompt. The signed-in extension runs
+   jobs sequentially through ChatGPT, downloads résumé PDF, cover-letter PDF,
+   and JD text locally, and records the expected resume path after delivery.
+   Cancelling cleans up the run and partial downloads without recording a
+   failure or attempt. While Generation stays on, the job is eligible for
+   immediate retry. Other generation failures also retry automatically while
+   Generation is on, without a saved failure count, with a brief pause between
+   retries. Shared setup problems and uncertain delivery stop the queue.
+   A five-minute hold expires when Chrome stops renewing it; the job then
+   appears ready to retry and another Chrome may claim it. If the service
+   worker restarts mid-run, the next queue tick releases the interrupted hold;
+   signing out does the same before the token is cleared. Generation does not
+   mark the job as applied; `applied` means the application was submitted
+   successfully, and exactly then the job has a bid.
+    A bid is created only after the Manager confirms successful submission, and
+    only for a job whose Generation is `completed`. Assisted Apply and Auto
+    Apply are implemented. Super Admin enables Apply per Manager and sets its
+    answer provider, review cadence, and (for Assisted Apply) optional automatic
+    Submit; the Manager still confirms the result. Auto Apply fills supported
+    forms but always leaves the site's Submit action to the Manager. Deleting a
+    bid returns the job to To do.
+    For Auto Apply, a successful Manager confirmation records the bid and deletes
+    the job row in the same database batch; an unconfirmed submission stays on
+    the Jobs page and is never replayed.
+    Generation file names use Japan time. The extension's Generation action
+    can cancel an active run, including a queued run. The Manager selects an
+    account and ready jobs in the Generation and Auto Apply pickers. Auto Apply
+    requires a résumé, no bid, and at least three experience entries; assigned
+    Gemini Get JD Managers also need matching notes. A live claim held by another
+    Chrome is visible but disabled. Cancel or closing Chrome releases the claim
+    while retaining a checkpoint for a later retry; a closed site's live form
+    cannot be restored, so the retry reopens it and reuses saved answers.
 7. Sign Out clears persisted extension authentication and Get JD status.
 
-Gemini evaluation is disabled by the `geminiEvaluation` runtime feature flag.
-The server classification and idempotent save endpoints remain implemented for
-a later release, but the current extension calls only the non-Gemini duplicate
-check while Get JD monitoring is active.
+The extension enables the Get JD Gemini capability, but the server selects
+General mode by default and uses Gemini only when Super Admin assigns Gemini
+matching to that Manager. The in-page preview is local extraction; General mode
+uses server duplicate/account/save APIs, while assigned Gemini mode uses the
+server evaluation route and automatically saves matches.
 
-Application-session, text-highlight, Gmail, and automatic-application code
-remains in the repository as unfinished product work. The Jobs-table
-Generation queue is supported; its generated files are rendered in memory and
-downloaded by the extension rather than persisted as server files. The résumé
-and cover-letter PDFs are printed by headless Chromium from the HTML templates
-in `public/resume-templates`, in the candidate's saved template, with no
-outside network requests and bundled open fonts (`css/fonts.css` and `fonts/`,
-generated by `scripts/build-resume-fonts.cjs`), so the result is the same on
-every server. Generation has no page limit; if Chromium itself fails, the
-built-in `pdf-lib` renderer produces the PDFs instead, and it still stops at
-two résumé pages and one cover-letter page. A Generation run opens one pinned
-ChatGPT tab first (30 seconds to load and 30 more for the message box, with up
-to two reloads), opens each job page in the background without waiting for
-it, starts a new chat in the same tab for each job, and replaces the tab after
-ten jobs or a failed job. In ChatGPT, Generation sends with
+Application-session, scanner, and Gmail code remains unfinished product work.
+Assisted Apply and Auto Apply use the supported Manager-authenticated claim,
+review, correction, and result routes. Auto Apply remains gated by the
+Super-Admin Manager setting and the Manager's account/job selection; its
+correction paths have synthetic extension and server coverage. The Jobs-table
+Generation queue is supported; generated files are downloaded locally by the
+extension, not stored as server files. On the normal path, the extension's
+Chrome renders the résumé and cover letter from the HTML templates in
+`public/resume-templates`, using the candidate's saved template and bundled
+fonts. Vercel supplies the print-job data and template assets but does not spend
+serverless CPU rendering those PDFs. The server-side `/api/pdf/print` Chromium
+renderer is the fallback for older extensions or local-print failure, and it
+is the only function that bundles Chromium. Both renderers enforce a three-page
+résumé and one-page cover-letter limit; technical server Chromium failures can
+use the built-in `pdf-lib` renderer, which enforces the same limits. The Resume
+page also prints in extension Chrome first and uses the server route as fallback.
+A Generation run opens one pinned ChatGPT tab at the Manager's configured ChatGPT
+Project URL (default `https://chatgpt.com/`; only HTTPS ChatGPT URLs are allowed).
+It starts a fresh chat from that URL for each job and replaces the tab after ten
+jobs or a failed job. Apply uses the same Manager URL and ten-job tab lifecycle.
+The Manager can continue working in their other ChatGPT tabs; Generation only
+replaces QTS-owned Generation tabs. The configured URL is fetched for each new
+ten-job batch. A tab gets 30 seconds to load and 30 more for the message box,
+with up to two reloads. In ChatGPT, Generation sends with
 the Send button (Enter if the prompt stays unsent), treats the answer as done
-when ChatGPT stops writing, and allows one minute for it. A ChatGPT error
+when ChatGPT stops writing, and allows three minutes for it. A ChatGPT error
 refreshes the tab and resends once; an answer that cannot be used gets one
-follow-up in the same chat with the reason. A failed job is tried once more in
-the same run before the queue moves on. The Resume page previews in the browser, with no server round
-trip: the same template page (`?embed=1&view=pages`) lays the document out
-in columns one page area tall, which Chromium splits with the same
-fragmentation it prints pages with, and shows each column as a sheet scaled to
-the panel width, so pages break where the PDF's do. The page's download
-button prints through `/api/pdf/print` (signed-in Managers only, no page
-limit). For previews and PDFs alike, `render.js` widens the gaps on every
+follow-up in the same chat with the reason. A failed job is retried while
+Generation stays on, with a brief pause and no saved failure count. The Resume
+page previews in the browser,
+with no server round trip: the same template page (`?embed=1&view=pages`) lays
+the document out in columns one page area tall, which Chromium splits with the
+same fragmentation it prints pages with, and shows each column as a sheet
+scaled to the panel width, so pages break where the PDF's do. Its Download
+action prints in extension Chrome first and falls back to `/api/pdf/print`; both
+paths enforce the résumé/cover-letter page limits. For previews and PDFs alike,
+`render.js` widens the gaps on every
 page but the last so that page ends at the bottom margin, which is smaller
 than the top margin. Local
 development sets `PDF_CHROME_EXECUTABLE_PATH` to an installed Chrome or Edge.
@@ -142,9 +173,14 @@ rules and database operations so multiple callers use the same behavior.
 | `GET /api/extension/auth/health` | None | Supported |
 | `POST /api/extension/auth/login` | Manager credentials | Supported |
 | `GET /api/extension/auth/me` | Manager bearer token | Supported |
-| `POST /api/extension/get-jd/check` | Manager bearer token | Current duplicate check |
-| `POST /api/extension/get-jd` | Manager bearer token | Reserved Gemini classification |
-| `POST /api/extension/get-jd/save` | Manager bearer token | Reserved idempotent save |
+| `GET /api/extension/features/me` | Manager bearer token | Supported per-Manager feature settings |
+| `GET /api/extension/work-items` | Manager bearer token | Supported Generation/Auto Apply picker |
+| `/api/extension/generation/*` | Manager bearer token | Supported queue and delivery lifecycle |
+| `/api/extension/apply/*` | Manager bearer token + registered Chrome | Supported Assisted Apply and Auto Apply |
+| `GET /api/extension/get-jd/mode` | Manager bearer token | Supported per-Manager matching mode |
+| `POST /api/extension/get-jd/check` | Manager bearer token | Supported Jobs/Bids precheck |
+| `POST /api/extension/get-jd` | Manager bearer token | Gemini evaluation for assigned Managers; see gate warning above |
+| `POST /api/extension/get-jd/save` | Manager bearer token | Supported job save and account selection |
 | `/api/candidates/*` | Undefined legacy contract | Disabled |
 | `/api/jobs/*` and `/api/v2/jobs/*` | Undefined legacy contract | Disabled |
 | `/api/application-*` | Server implementation absent | Disabled |

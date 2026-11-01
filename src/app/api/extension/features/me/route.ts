@@ -21,7 +21,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       managerCanManagePageExclusions(manager.id),
       managerCanManageJobDetectionUrlRules(manager.id),
       // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
-      db.select({ canUseApply: users.canUseApply, applyAiMode: users.applyAiMode })
+      db.select({
+        canUseApply: users.canUseApply,
+        applyAiMode: users.applyAiMode,
+        chatGptUrl: users.chatGptUrl,
+        autoApplyParallelLimit: users.autoApplyParallelLimit,
+      })
         .from(users).where(eq(users.id, manager.id)).limit(1),
     ]);
     return NextResponse.json(
@@ -34,6 +39,8 @@ export async function GET(request: Request): Promise<NextResponse> {
           canUseScanner: false,
           canUseApply: applySettings?.canUseApply === true,
           applyAiMode: applySettings?.applyAiMode === "gemini" ? "gemini" : "chatgpt",
+          chatGptUrl: applySettings?.chatGptUrl || "https://chatgpt.com/",
+          autoApplyParallelLimit: applySettings?.autoApplyParallelLimit ?? 2,
         },
       },
       { headers: { "Cache-Control": "no-store" } },

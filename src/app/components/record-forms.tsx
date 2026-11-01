@@ -19,7 +19,7 @@ import type { SubmittedAnswer } from "@/app/components/submitted-answers";
 export type CandidateOption = { id: string; name: string };
 export type GenerationPromptOption = { id: string; name: string };
 type CommonRecord = { id: string; candidateId: string; title: string; company: string; location: string | null; url: string };
-export type EditableJob = CommonRecord & { description: string | null; employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationAttemptCount: number; generationError: string | null };
+export type EditableJob = CommonRecord & { description: string | null; employmentType: string | null; workplaceType: string | null; salary: string | null; date: string; status: string; failureReason: string | null; generationStatus: string; generationError: string | null };
 // What happened to a job so far, shown read-only in its edit window: Generation, Apply, and each
 // Apply run's answers with their sources.
 export type ApplyStatusLine = { text: string; tone: "info" | "warn" | "error"; detail: string | null };
@@ -72,16 +72,13 @@ function GenerationQueueAction({ record, prompts }: { record: EditableJob; promp
   const queued = record.generationStatus === "queued";
   const processing = record.generationStatus === "processing";
   const cancellable = queued || processing;
-  const resetRequired = record.generationStatus === "failed" && record.generationAttemptCount >= 2;
   if (record.generationStatus === "completed") {
     return <span className="text-xs text-slate-500">Complete</span>;
   }
-  const intent = resetRequired ? "reset" : cancellable ? "cancel" : "queue";
+  const intent = cancellable ? "cancel" : "queue";
   const accessibleLabel = cancellable
     ? processing ? "Cancel running Generation" : "Cancel queued Generation"
-    : resetRequired
-        ? "Reset Generation"
-        : record.generationStatus === "failed"
+    : ["failed", "cancelled", "ready"].includes(record.generationStatus)
         ? "Retry Generation"
         : "Queue Generation";
   return (
@@ -115,9 +112,7 @@ function GenerationQueueAction({ record, prompts }: { record: EditableJob; promp
           ? <LoadingIcon className="size-3.5" />
           : cancellable
             ? <X aria-hidden="true" className="size-3.5" />
-            : resetRequired
-              ? <RotateCcw aria-hidden="true" className="size-3.5" />
-            : record.generationStatus === "failed"
+            : ["failed", "cancelled", "ready"].includes(record.generationStatus)
               ? <RotateCcw aria-hidden="true" className="size-3.5" />
               : <ListPlus aria-hidden="true" className="size-3.5" />}
       </button>
@@ -427,7 +422,6 @@ function JobCards({ record, track }: { record: EditableJob; track?: JobTrack }) 
           <TrackItem label="Generation">
             <span className="capitalize">{generation}</span>
             {record.generationStatus === "processing" && track?.generationBrowserName && <> on {track.generationBrowserName}</>}
-            <span className="text-slate-500"> · {record.generationAttemptCount} {record.generationAttemptCount === 1 ? "attempt" : "attempts"}</span>
           </TrackItem>
           {record.generationError && (
             <TrackItem label="Generation note" wide>

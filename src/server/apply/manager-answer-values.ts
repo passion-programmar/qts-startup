@@ -1,5 +1,5 @@
 import { normalizeQuestionKey, parseReusableAnswer } from "./apply-values";
-import { isPerCandidateQuestion } from "./question-memory-values";
+import { isPerCandidateQuestion, isNotGloballyReusableQuestion } from "./question-memory-values";
 
 export type AnswerScope = "manager" | "candidate" | "application";
 export type AnswerVariant = { kind: string; options: string[]; answer: string };
@@ -22,8 +22,9 @@ export function correctionScope(question: string): AnswerScope {
   // This is a source question, not a question asking for the candidate's LinkedIn URL.
   if (/how did you (hear|find|learn)|where did you (hear|find)|referral source/i.test(question)) return "manager";
   // Country, employer, location and job-dependent answers must not leak into unrelated applications.
-  if (/sponsor|authori[sz]|eligible|relocat|onsite|on-site|hybrid|salary|compensation|\bvisa\b|\brate\b|why|our product|this company|this role|this position|this job|heard of|referred|referral|recruiter|\bhere\b/i.test(question)) return "application";
+  if (/sponsor|authori[sz]|eligible|relocat|onsite|on-site|hybrid|salary|compensation|\bvisa\b|\brate\b|why|(?:this|that|our|the)\s+(?:company|employer|role|position|job|product|service)|heard of|\breferred\b|referral|recruiter|\bhere\b/i.test(question)) return "application";
   if (isPerCandidateQuestion(question) || /qualification|degree|citizen|notice|available|availability|start date/i.test(question)) return "candidate";
+  if (isNotGloballyReusableQuestion(question)) return "application";
   // Unknown questions are retained, visibly uncertain, until the Manager broadens their scope.
   return /privacy|terms|consent|how did you hear|source|newsletter/i.test(question) ? "manager" : "application";
 }
@@ -35,8 +36,7 @@ export function correctionKey(question: string): string {
 
 export function canShareQuestion(question: string): boolean {
   if (correctionKey(question) === "application source") return true;
-  return !profileField(question) && !isPerCandidateQuestion(question)
-    && !/sponsor|authori[sz]|eligible|citizen|\bvisa\b|relocat|onsite|on-site|hybrid|qualification|degree/i.test(question);
+  return !profileField(question) && !isNotGloballyReusableQuestion(question);
 }
 
 export function parseCorrection(item: unknown) {

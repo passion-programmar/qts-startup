@@ -49,7 +49,7 @@ type CreateUserFormProps = {
 };
 
 
-export function CreateUserForm({ role }: CreateUserFormProps) {
+export function CreateUserForm({ role, showJdMatchingNote = false }: CreateUserFormProps & { showJdMatchingNote?: boolean }) {
   const [educationRows, setEducationRows] = useState([0]);
   const [experienceRows, setExperienceRows] = useState([0]);
   const [isOpen, setIsOpen] = useState(false);
@@ -489,10 +489,12 @@ export type CandidateProfileValues = {
 export function EditCandidateProfileForm({
   candidate,
   readOnly = false,
+  showJdMatchingNote = false,
 }: {
   candidate: CandidateProfileValues;
   // A blocked ("deleted") candidate: everything can be read, nothing changed.
   readOnly?: boolean;
+  showJdMatchingNote?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [educationRows, setEducationRows] = useState(() =>
@@ -616,14 +618,16 @@ export function EditCandidateProfileForm({
               name="headline"
             />
           </div>
-          <TextAreaField
-            className="sm:col-span-2 lg:col-span-3"
-            defaultValue={candidate.jdMatching ?? ""}
-            id={fieldId("jdMatching")}
-            label="JD matching notes (optional)"
-            maxLength={5000}
-            name="jdMatching"
-          />
+          {showJdMatchingNote && (
+            <TextAreaField
+              className="sm:col-span-2 lg:col-span-3"
+              defaultValue={candidate.jdMatching ?? ""}
+              id={fieldId("jdMatching")}
+              label="JD matching notes (required for Gemini-assigned managers)"
+              maxLength={5000}
+              name="jdMatching"
+            />
+          )}
           <TextField
             autoComplete="url"
             defaultValue={candidate.linkedinUrl ?? ""}
@@ -753,6 +757,36 @@ export function EditCandidateProfileForm({
         </form>
       </Modal>
     </>
+  );
+}
+
+export function ToggleCandidateAccountStatusForm({
+  userId,
+  candidateName,
+  active,
+}: {
+  userId: string;
+  candidateName: string;
+  active: boolean;
+}) {
+  const [state, formAction, isPending] = useActionState(toggleCandidateAccountStatusAction, initialState);
+
+  return (
+    <form action={formAction}>
+      <input name="userId" type="hidden" value={userId} />
+      <button
+        className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition ${active ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100" : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100"}`}
+        disabled={isPending}
+        type="submit"
+      >
+        {isPending ? "Saving..." : active ? "Active" : "Inactive"}
+      </button>
+      {state.error && (
+        <span className="mt-1 block max-w-36 text-[10px] leading-tight text-rose-700" role="alert">
+          {state.error}
+        </span>
+      )}
+    </form>
   );
 }
 

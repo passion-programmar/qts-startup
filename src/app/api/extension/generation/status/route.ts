@@ -37,9 +37,10 @@ export async function GET(request: Request): Promise<NextResponse> {
         { status: 404 },
       );
     }
-    // Nothing but the end is recorded: done, still held by a Chrome ("processing"), or let go
-    // ("cancelled": a cancel, or a hold nobody renewed); the job itself stays ready to generate.
-    const generationStatus = job.generationStatus === "completed" ? "completed" : job.heldUntil ? "processing" : "cancelled";
+    // An expired lease no longer means work is in progress: another Chrome may claim the job.
+    const generationStatus = job.generationStatus === "completed"
+      ? "completed"
+      : job.heldUntil && job.heldUntil > new Date() ? "processing" : "ready";
     return NextResponse.json({
       success: true,
       generationStatus,

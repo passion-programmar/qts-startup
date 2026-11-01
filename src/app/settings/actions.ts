@@ -25,6 +25,8 @@ import {
 } from "@/server/apply/reusable-answers";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { DEFAULT_CHATGPT_URL, normalizeChatGptUrl } from "@/server/chatgpt/chatgpt-url";
+import { MAX_AUTO_APPLY_PARALLEL_LIMIT } from "@/server/apply/apply-values";
 
 export type PromptActionState = {
   error: string | null;
@@ -165,7 +167,74 @@ export async function updateManagerGeminiMatchingAction(
   };
 }
 
+export async function updateManagerChatGptUrlAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can change a Manager's ChatGPT URL." };
+  }
+  const managerId = readText(formData, "managerId", 36);
+  const submittedValue = formData.get("chatGptUrl");
+  if (typeof submittedValue !== "string" || submittedValue.length > 2048) {
+    return { ...emptyState, error: "Enter a ChatGPT URL no longer than 2048 characters." };
+  }
+  const value = submittedValue.trim();
+  const chatGptUrl = value ? normalizeChatGptUrl(value) : DEFAULT_CHATGPT_URL;
+  if (!isUuid(managerId) || !chatGptUrl) {
+    return { ...emptyState, error: "Enter a valid HTTPS ChatGPT URL, such as a Project link." };
+  }
+  try {
+    const [manager] = await db
+      .update(users)
+      .set({ chatGptUrl, updatedAt: new Date() })
+      .where(and(
+        eq(users.id, managerId),
+        eq(users.role, "manager"),
+        isNull(users.blockedAt),
+      ))
+      .returning({ id: users.id });
+    if (!manager) return { ...emptyState, error: "That active Manager was not found." };
+  } catch (error) {
+    logPromptActionFailure("updating the Manager ChatGPT URL", error);
+    return { ...emptyState, error: "The Manager's ChatGPT URL could not be saved." };
+  }
+  revalidatePath("/settings");
+  return {
+    error: null,
+    success: value ? "The Manager's ChatGPT URL was saved." : "The Manager's ChatGPT URL was reset to the default.",
+  };
+}
+
 // Super Admin turns Apply on per Manager and picks the AI that answers application questions.
+export async function updateOwnAutoApplyParallelLimitAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") {
+    return { ...emptyState, error: "Only Managers can change their Auto Apply concurrency." };
+  }
+  const rawLimit = formData.get("autoApplyParallelLimit");
+  const parallelLimit = typeof rawLimit === "string" && /^\d+$/.test(rawLimit) ? Number(rawLimit) : NaN;
+  if (!Number.isInteger(parallelLimit) || parallelLimit < 1 || parallelLimit > MAX_AUTO_APPLY_PARALLEL_LIMIT) {
+    return { ...emptyState, error: `Choose a whole number from 1 to ${MAX_AUTO_APPLY_PARALLEL_LIMIT}.` };
+  }
+  try {
+    const [manager] = await db.update(users)
+      .set({ autoApplyParallelLimit: parallelLimit, updatedAt: new Date() })
+      .where(and(eq(users.id, actor.id), eq(users.role, "manager"), isNull(users.blockedAt)))
+      .returning({ id: users.id });
+    if (!manager) return { ...emptyState, error: "Your active Manager account was not found." };
+  } catch (error) {
+    logPromptActionFailure("updating Auto Apply concurrency", error);
+    return { ...emptyState, error: "Auto Apply concurrency could not be saved." };
+  }
+  revalidatePath("/settings");
+  return { error: null, success: `Auto Apply will open up to ${parallelLimit} jobs at once when no profile is selected.` };
+}
+
 export async function updateManagerApplyAction(
   _previousState: PromptActionState,
   formData: FormData,

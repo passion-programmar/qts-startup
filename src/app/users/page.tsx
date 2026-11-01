@@ -14,6 +14,7 @@ import {
   DeleteCandidateAccountForm,
   DeleteStaffUserForm,
   EditCandidateProfileForm,
+  ToggleCandidateAccountStatusForm,
 } from "@/app/users/user-forms";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
@@ -101,6 +102,9 @@ export default async function UsersPage() {
   const actor = await getCurrentUser();
   if (!actor) redirect("/login");
 
+  const managerSettings = actor.role === "manager"
+    ? await db.select({ useGeminiMatching: users.useGeminiMatching }).from(users).where(eq(users.id, actor.id)).limit(1).then((rows) => rows[0] ?? null)
+    : null;
   const includeBlocked = actor.role === "super_admin";
   const result = await db.execute<UserRow>(sql`
     with recursive visible_users as (
@@ -286,7 +290,7 @@ export default async function UsersPage() {
 
         <div className="mt-5 space-y-5">
           <section>
-            <CreateUserForm role={createRole} />
+            <CreateUserForm role={createRole} showJdMatchingNote={actor.role === "manager" && Boolean(managerSettings?.useGeminiMatching)} />
           </section>
           <section className="min-w-0">
             <div className="mb-3 flex items-center justify-between">
@@ -376,6 +380,7 @@ export default async function UsersPage() {
                         "—"
                       ),
                       <EditCandidateProfileForm
+                        showJdMatchingNote={actor.role === "manager" && Boolean(managerSettings?.useGeminiMatching)}
                         candidate={{
                           userId: candidate.id,
                           firstName: candidate.first_name,
@@ -448,15 +453,26 @@ export default async function UsersPage() {
                         key="edit"
                         readOnly={Boolean(candidate.blocked_at)}
                       />,
-                      candidate.blocked_at ? (
-                        <span className="text-xs text-slate-500" key="delete">Blocked</span>
-                      ) : (
-                        <DeleteCandidateAccountForm
+                      <div className="flex items-center justify-center gap-2" key="status-actions">
+                        <ToggleCandidateAccountStatusForm
+                          active={!Boolean(candidate.blocked_at)}
                           candidateName={userName(candidate)}
-                          key="delete"
                           userId={candidate.id}
                         />
-                      ),
+                        {candidate.blocked_at ? (
+                          <span className="text-[10px] text-slate-500">Inactive</span>
+                        ) : (
+                          <span className="text-[10px] text-slate-500">Active</span>
+                        )}
+                        {candidate.blocked_at ? (
+                          <span className="text-xs text-slate-500">Blocked</span>
+                        ) : (
+                          <DeleteCandidateAccountForm
+                            candidateName={userName(candidate)}
+                            userId={candidate.id}
+                          />
+                        )}
+                      </div>,
                     ],
                   }))}
               />

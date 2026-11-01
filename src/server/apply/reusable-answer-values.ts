@@ -3,12 +3,19 @@
 // without a database.
 
 import { normalizeQuestionKey } from "./apply-values";
+import { isNotGloballyReusableQuestion } from "./question-memory-values";
 import { displayReusableAnswer, normalizeCheckboxAnswer } from "@/lib/checkbox-answer";
 
 export const REUSABLE_ANSWER_STATUSES = ["draft", "approved", "rejected"] as const;
 export type ReusableAnswerStatus = (typeof REUSABLE_ANSWER_STATUSES)[number];
 export const REUSABLE_ANSWER_SOURCES = ["manual", "learned", "manager", "ai"] as const;
 export type ReusableAnswerSource = (typeof REUSABLE_ANSWER_SOURCES)[number];
+
+export function globalReusableQuestionError(question: string): string | null {
+  return isNotGloballyReusableQuestion(question)
+    ? "Candidate-specific or application-specific answers cannot be shared across candidates."
+    : null;
+}
 
 /** Drafts one Manager may have waiting at once, so proposals stay reviewable. */
 export const MAX_DRAFTS_PER_MANAGER = 50;

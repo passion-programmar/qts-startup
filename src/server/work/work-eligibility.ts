@@ -1,22 +1,26 @@
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, isNull, ne, sql } from "drizzle-orm";
 import { jobs, profiles } from "@/db/schema";
 import { generationFree } from "@/server/generation/generation-hold";
 import { hasEffectiveJobDescription } from "@/server/jobs/job-description";
 import { jobHasBid } from "@/server/jobs/job-bids";
 
 export const hasMatchingNote = () => sql`length(regexp_replace(coalesce(${profiles.jdMatching}, ''), ${"\\s"}, '', 'g')) > 0`;
+export const hasEligibleExperienceCount = () => sql`exists (
+  select 1 from experiences e
+  where e.profile_user_id = ${profiles.userId}
+  group by e.profile_user_id
+  having count(*) >= 3
+)`;
 
-export function readyGeneration(now = new Date()) {
+export function readyGeneration(now = new Date(), requireMatchingNote = true) {
   return and(ne(jobs.generationStatus, "completed"), generationFree(now),
-    isNull(jobs.resumeLocalPath), hasEffectiveJobDescription(), hasMatchingNote());
+    isNull(jobs.resumeLocalPath), hasEffectiveJobDescription(),
+    requireMatchingNote ? hasMatchingNote() : sql`true`,
+    hasEligibleExperienceCount());
 }
 
-// Mirrors claim_apply_attempt eligibility; claiming still uses that existing locked function.
+// Auto Apply exposes every resumable job without a bid. Live claims remain visible in the picker
+// so they can be shown disabled, while the locked claim function prevents concurrent processing.
 export function readyAutoApply() {
-  return and(eq(jobs.generationStatus, "completed"), sql`${jobs.resumeLocalPath} is not null`,
-    ne(jobs.status, "applied"), sql`not ${jobHasBid()}`,
-    sql`not exists (select 1 from apply_attempts a where a.job_id = ${jobs.id}
-      and (a.status in ('waiting_confirmation', 'submitting', 'confirmed', 'not_confirmed', 'failed', 'skipped')
-        or (a.status in ('claimed', 'waiting_review') and a.lease_expires_at > now())))`,
-    sql`(select count(*) from apply_attempts a where a.job_id = ${jobs.id} and a.status = 'released') < 2`);
+  return and(sql`${jobs.resumeLocalPath} is not null`, sql`not ${jobHasBid()}`);
 }

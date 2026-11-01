@@ -9,6 +9,7 @@ import {
   type AnswerRow,
   type AnswerWarning,
   answerWarnings,
+  globalReusableQuestionError,
   MAX_DRAFTS_PER_MANAGER,
   MAX_VERSIONS_PER_QUESTION,
   type ReusableAnswerSource,
@@ -24,7 +25,7 @@ import {
 
 /** The answers Apply uses: every approved answer, the same fields as before review existed. */
 export async function loadApprovedReusableAnswers() {
-  return db
+  const rows = await db
     .select({
       questionKey: reusableAnswers.questionKey,
       questionText: reusableAnswers.questionText,
@@ -32,6 +33,7 @@ export async function loadApprovedReusableAnswers() {
       note: reusableAnswers.note,
     })
     .from(reusableAnswers);
+  return rows.filter((row) => !globalReusableQuestionError(row.questionText));
 }
 
 export type LibraryAnswer = {
@@ -195,6 +197,8 @@ async function comparableRows(): Promise<AnswerRow[]> {
  * approved answer per question.
  */
 export async function saveApprovedReusableAnswer(actorId: string, answerId: string | null, input: ReusableAnswerInput): Promise<Outcome> {
+  const scopeError = globalReusableQuestionError(input.questionText);
+  if (scopeError) return { ok: false, error: scopeError };
   const [clash] = await db.select({ id: reusableAnswers.id }).from(reusableAnswers)
     .where(eq(reusableAnswers.questionKey, input.questionKey)).limit(1);
   if (clash && clash.id !== answerId) return { ok: false, error: "That question already has a reusable answer; edit it instead." };
@@ -238,6 +242,8 @@ export async function deleteReusableAnswer(actorId: string, answerId: string): P
 export async function restoreReusableAnswerVersion(actorId: string, versionId: string): Promise<Outcome> {
   const [version] = await db.select().from(reusableAnswerVersions).where(eq(reusableAnswerVersions.id, versionId)).limit(1);
   if (!version) return { ok: false, error: "That version is no longer kept. Refresh the page." };
+  const scopeError = globalReusableQuestionError(version.questionText);
+  if (scopeError) return { ok: false, error: scopeError };
   const [current] = await db.select({ id: reusableAnswers.id }).from(reusableAnswers).where(eq(reusableAnswers.questionKey, version.questionKey)).limit(1);
   const now = new Date();
   const restored = {
@@ -275,6 +281,8 @@ export async function restoreReusableAnswerVersion(actorId: string, versionId: s
  * approved question; one draft per question waits at a time.
  */
 export async function proposeReusableAnswer(managerId: string, input: ReusableAnswerInput): Promise<Outcome> {
+  const scopeError = globalReusableQuestionError(input.questionText);
+  if (scopeError) return { ok: false, error: scopeError };
   const [[waiting], [mine]] = await db.batch([
     db.select({ id: reusableAnswerDrafts.id }).from(reusableAnswerDrafts)
       .where(and(eq(reusableAnswerDrafts.questionKey, input.questionKey), eq(reusableAnswerDrafts.status, "draft"))).limit(1),
@@ -311,6 +319,8 @@ export async function withdrawReusableAnswerProposal(managerId: string, draftId:
  * the draft becomes a new approved answer. Either way the draft leaves the drafts table.
  */
 export async function approveReusableAnswer(reviewerId: string, draftId: string, input: ReusableAnswerInput): Promise<Outcome> {
+  const scopeError = globalReusableQuestionError(input.questionText);
+  if (scopeError) return { ok: false, error: scopeError };
   const [[draft], [approved]] = await db.batch([
     db.select({ source: reusableAnswerDrafts.source, createdByUserId: reusableAnswerDrafts.createdByUserId }).from(reusableAnswerDrafts)
       .where(and(eq(reusableAnswerDrafts.id, draftId), eq(reusableAnswerDrafts.status, "draft"))).limit(1),

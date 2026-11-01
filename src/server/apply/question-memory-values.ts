@@ -32,21 +32,30 @@ const MAX_CHOICES = 10;
 const MAX_STORED_ANSWER = 100;
 
 // Facts that differ per person come from the profile and are never learned or shared.
-const PERSONAL_QUESTION = /\b(?:name|first|last|surname|e-?mail|phone|mobile|address|street|city|town|postcode|postal|zip|country|citizenship|linkedin|github|portfolio|website|gender|sex|race|veteran|age|dob|location|located|based|resid\w*|live|living)\b|\b(?:birth|nationalit|ethnic|disabilit|orientation|pronoun)/i;
+const PERSONAL_QUESTION = /\b(?:name|first|last|surname|e-?mail|phone|mobile|address|street|city|town|postcode|postal|zip|country|citizenship|employer|company|linkedin|github|portfolio|website|gender|sex|race|veteran|age|dob|location|located|based|resid\w*|live|living|sponsorship|eligible|visa)\b|\b(?:birth|nationalit|ethnic|disabilit|orientation|pronoun|right to work|authori[sz]\w*\s+to work|work authori[sz]\w*)/i;
 
 /** A question whose answer is the candidate's own fact (name, contact, where they live, birthday...). */
 export function isPersonalQuestion(question: string): boolean {
   return PERSONAL_QUESTION.test(question);
 }
 // Answers that depend on the candidate's own experience or wishes differ per candidate.
-const EXPERIENCE_QUESTION = /\b(years?|experience|how (long|many|much)|describe|tell us|why|explain|example|salary|rate|compensation|pay|notice|start|availab|level|proficien|expect\w*|desired|targeting|motivat\w*|about yourself)\b/i;
+const EXPERIENCE_QUESTION = /\b(years?|experience|how (long|many|much)|describe|tell us|why|explain|example|salary|rate|compensation|pay|notice|start|availab|level|proficien|expect\w*|desired|targeting|preferred|motivat\w*|about yourself|sponsorship|eligible|visa|relocat\w*|onsite|hybrid|remote|travel|commut\w*|employment type|contract type|job type|work arrangement|work schedule|shift pattern|office.?based|in.?office)\b|right to work|authori[sz]\w*\s+to work|work authori[sz]\w*|on-site|work from home/i;
+const APPLICATION_SOURCE_QUESTION = /how did you (hear|find|learn)|where did you (hear|find)|referral source/i;
+const JOB_CONTEXT_QUESTION = /\b(?:this|that|our|the)\s+(?:company|employer|role|position|job|product|service)\b/i;
+const APPLICATION_ONLY_QUESTION = /\b(?:privacy|terms|conditions|consent|attest\w*|certif\w*|authori[sz]\w*|data processing|background check|right to work|work authori[sz]\w*|sponsorship|visa|relocat\w*|salary|compensation|notice|availability|start date)\b/i;
 
 /**
  * A question each candidate answers differently: their own facts, experience, or wishes. Never one
  * reusable answer for everyone, so never suggested or added as one.
  */
 export function isPerCandidateQuestion(question: string): boolean {
-  return PERSONAL_QUESTION.test(question) || EXPERIENCE_QUESTION.test(question);
+  if (APPLICATION_SOURCE_QUESTION.test(question)) return false;
+  return PERSONAL_QUESTION.test(question) || EXPERIENCE_QUESTION.test(question) || JOB_CONTEXT_QUESTION.test(question);
+}
+
+/** Questions whose answers must never become cross-candidate defaults. */
+export function isNotGloballyReusableQuestion(question: string): boolean {
+  return isPerCandidateQuestion(question) || APPLICATION_ONLY_QUESTION.test(question);
 }
 // A site's reading of one candidate's résumé is that candidate's own, never learned for others.
 const NOT_LEARNED_SOURCES = new Set(["profile", "documents", "consent", "site"]);
@@ -68,7 +77,7 @@ export function parseLearnedAnswers(value: unknown): LearnedAnswer[] {
     const question = clean(item.question, 300);
     const answer = clean(item.answer, 2000);
     const source = clean(item.source, 20);
-    if (!question || !answer || NOT_LEARNED_SOURCES.has(source) || PERSONAL_QUESTION.test(question)) return [];
+    if (!question || !answer || NOT_LEARNED_SOURCES.has(source) || isNotGloballyReusableQuestion(question)) return [];
     const options = Array.isArray(item.options)
       ? item.options.slice(0, 30).map((option) => clean(option, 200)).filter(Boolean)
       : [];
@@ -129,7 +138,7 @@ export function mergeLearned(row: MemoryRow | null, item: LearnedAnswer, candida
  */
 export function safeAutoAnswer(row: MemoryRow, questionText: string): string | null {
   if (row.kind !== "choice" || row.timesSeen < AUTO_ADD_MIN_TIMES || row.answers.length !== 1) return null;
-  if (PERSONAL_QUESTION.test(questionText) || EXPERIENCE_QUESTION.test(questionText)) return null;
+  if (isNotGloballyReusableQuestion(questionText)) return null;
   const [only] = row.answers;
   return only.count >= AUTO_ADD_MIN_TIMES && only.candidates.length >= AUTO_ADD_MIN_CANDIDATES && only.answer.length <= MAX_STORED_ANSWER
     ? only.answer

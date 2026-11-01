@@ -12,7 +12,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => {
       const attach = Element.prototype.attachShadow;
       Element.prototype.attachShadow = function(options) { const root = attach.call(this, options); if(this.hasAttribute('data-qts-page-launcher')) window.testRoot = root; return root; };
-      window.calls = []; window.store = { authToken: 'synthetic', authExpiresAt: Date.now() + 3600000, qtsSessionUser: { id: 'manager', role: 'manager' } };
+      window.calls = []; window.accountResolvers = {}; window.store = { authToken: 'synthetic', authExpiresAt: Date.now() + 3600000, qtsSessionUser: { id: 'manager', role: 'manager' } };
       window.chrome = { runtime: { id: 'local-fixture', getURL: p => 'https://extension.test/' + p, onMessage: { addListener() {}, removeListener() {} }, sendMessage: async message => {
         window.calls.push(message);
         if(message.type === 'QTS_GET_LAUNCHER_STATE') return { active: true };
@@ -21,8 +21,18 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         if(message.action === 'cancel_status' && window.failCancellation) return { ok: false, error: 'Local cancellation failure. Retry.' };
         if(message.action === 'cancel_status') { window.store.qtsExtensionStatus = 'cancel'; return { ok: true }; }
         if(message.type === 'QTS_WORK_ITEMS') {
-          if(!message.candidateId) return { ok: true, accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform' }, { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '' }] };
+          if(!message.candidateId) return new Promise(resolve => {
+            window.accountResolvers[message.mode] = () => resolve({ ok: true, accounts: [
+              { id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform', eligibleJobCount: 8 },
+              { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '', eligibleJobCount: 3 },
+              { id: '33333333-3333-4333-8333-333333333333', name: 'Morgan Lee', category: 'Design', eligibleJobCount: 0 },
+            ] });
+          });
           if(message.candidateId.startsWith('2222') && !window.allowSecondAccount) return { ok: false, error: 'Local loading failure. Retry.' };
+          if(message.mode === 'auto_apply') return { ok: true, jobs: [
+            {id:'33333333-3333-4333-8333-333333333333',title:'Machine Learning Engineer III',company:'Mapbox',url:'https://example.test/held',busy:true,selectable:false},
+            {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://example.test/ready',busy:false,selectable:true},
+          ] };
           return { ok: true, jobs: [{id:'33333333-3333-4333-8333-333333333333',title:'Machine Learning Engineer III',company:'Mapbox',url:'https://www.remoterocketship.com/publicjobs/company/mapbox/jobs/machine-learning-engineer-iii-routing-cost-poland-remote/?tracking=complete'},
             {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://djinni.co/jobs/838846-senior-devops-engineer-contractor/'}] };
         }
@@ -38,8 +48,12 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('.menu').scrollWidth <= window.testRoot.querySelector('.menu').clientWidth), true, 'narrower panel has no horizontal overflow');
     assert.equal(await page.evaluate(() => window.calls.filter(m=>m.type==='QTS_WORK_ITEMS').length), 0, 'passive initialization does not fetch accounts');
     await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').focus());
-    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options.length === 3);
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].textContent), 'Jordan Taylor (Platform)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[0].textContent), 'Loading accounts…');
+    await page.evaluate(() => window.accountResolvers.generation());
+    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options.length === 4);
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].textContent), 'Jordan Taylor (Platform) (8+)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[2].textContent), 'Casey Smith (3)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[3].disabled), true);
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="generation"]'); s.value=s.options[1].value; s.dispatchEvent(new Event('change')); });
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length===2);
     const link = await page.evaluate(() => { const a=window.testRoot.querySelector('.work-link'); return {text:a.textContent,title:a.title,href:a.href,target:a.target,rel:a.rel,heading:a.querySelector('.work-title').title,domain:a.querySelector('.work-domain').title}; });
@@ -62,12 +76,20 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     const started = await page.evaluate(() => window.calls.find(m=>m.type==='QTS_PAGE_ACTION' && m.action==='generation'));
     assert.deepEqual(started.selection,{candidateId:'11111111-1111-4111-8111-111111111111',jobIds:['44444444-4444-4444-8444-444444444444']});
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').value),'');
+    await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').focus());
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').options[0].textContent), 'Loading accounts…');
+    await page.evaluate(() => window.accountResolvers.auto_apply());
+    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').options.length === 4);
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="auto_apply"]');s.value=s.options[1].value;s.dispatchEvent(new Event('change')); });
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length===2);
+    assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job input')].map(input => ({ checked: input.checked, disabled: input.disabled }))), [
+      { checked: false, disabled: true }, { checked: true, disabled: false },
+    ]);
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"]').textContent), /In progress · unavailable/);
     fs.mkdirSync('.pdf-verification',{recursive:true}); await page.screenshot({path:'.pdf-verification/work-picker-preview.png'});
     await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').click());
     await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='auto_apply'));
-    assert.equal(await page.evaluate(() => window.calls.find(m=>m.action==='auto_apply').selection.jobIds.length),2);
+    assert.deepEqual(await page.evaluate(() => window.calls.find(m=>m.action==='auto_apply').selection.jobIds), ['44444444-4444-4444-8444-444444444444']);
     await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="auto_apply"]');s.value=s.options[2].value;s.dispatchEvent(new Event('change')); });
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .error'));
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').disabled),true);

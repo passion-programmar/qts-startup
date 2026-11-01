@@ -141,7 +141,9 @@ function resetMock(options = {}) {
   Object.assign(mock, {
     log: [], answers: 0, prompts: [], heartbeats: 0, heartbeatLog: [], released: [], reviews: [], submitted: [], results: [], checks: [], resumes: 0,
     pageSubmitted: 0, claims: 0, byAttempt: {}, queue: options.queue || [], claimStatus: options.claimStatus || 200,
-    canUseApply: options.canUseApply ?? true, stopVersion: 0, fail429: options.fail429 || 0, heartbeat409: false,
+    canUseApply: options.canUseApply ?? true, autoApplyParallelLimit: options.autoApplyParallelLimit ?? 2,
+    stopVersion: 0, fail429: options.fail429 || 0, heartbeat409: false,
+    answerDelay: options.answerDelay || 0, activeAnswerRequests: 0, maxConcurrentAnswerRequests: 0,
     // 'rules' (fixed answers), 'invalid' (no JSON), 'quota' (429 every time), 'hang' (never answers).
     aiMode: options.aiMode || 'rules',
   });
@@ -165,11 +167,17 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/form-five') return html(FORM_FIVE);
     if (url.pathname === '/blank') return html('<!doctype html><title>Job page</title><h1>A job</h1>');
     if (url.pathname === '/page-submitted') { mock.pageSubmitted += 1; return json({}); }
-    if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { canUseApply: mock.canUseApply } });
+    if (url.pathname === '/api/extension/features/me') return json({ success: true, features: {
+      canUseApply: mock.canUseApply, autoApplyParallelLimit: mock.autoApplyParallelLimit,
+    } });
     if (url.pathname === '/api/extension/apply/claim') {
       mock.claims += 1;
       if (mock.claimStatus !== 200) return json({ success: false, message: 'Apply is not turned on for your account.' }, mock.claimStatus);
-      const next = mock.queue.shift() || null;
+      const selection = data.selection;
+      const index = selection
+        ? mock.queue.findIndex(application => application.candidate.id === selection.candidateId && selection.jobIds.includes(application.job.id))
+        : 0;
+      const next = index >= 0 ? mock.queue.splice(index, 1)[0] || null : null;
       if (next) next.aiMode = mock.assignedProvider || 'chatgpt';
       if (next) mock.byAttempt[next.attemptId] = next;
       return json({ success: true, application: next });
@@ -192,7 +200,13 @@ const server = http.createServer((req, res) => {
       if (mock.fail429 > 0) { mock.fail429 -= 1; return json({ success: false, message: 'Every Gemini key is busy; try again shortly.' }, 429); }
       const prompt = (data.turns || []).at(-1)?.text || '';
       mock.prompts.push(prompt);
-      return json({ success: true, reply: aiReply(prompt) });
+      mock.activeAnswerRequests += 1;
+      mock.maxConcurrentAnswerRequests = Math.max(mock.maxConcurrentAnswerRequests, mock.activeAnswerRequests);
+      setTimeout(() => {
+        mock.activeAnswerRequests -= 1;
+        json({ success: true, reply: aiReply(prompt) });
+      }, mock.answerDelay);
+      return;
     }
     if (url.pathname === '/api/extension/apply/documents') {
       return json({ success: true, documents: { folder: 'C:\\test-folder', resume: { filename: 'Ana_Test_CV.pdf', base64: pdf }, coverLetter: { filename: 'Ana_Test_Cover.pdf', base64: pdf } } });
@@ -274,7 +288,9 @@ async function launch({ ai = 'off' } = {}) {
   const control = await browser.newPage();
   await control.goto(`chrome-extension://${extensionId}/popup/popup.html`).catch(() => {});
   if (process.env.QTS_E2E_TRACE) console.log('[trace] control page');
-  ctx.action = (name) => control.evaluate((a) => chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: a }), name);
+  ctx.action = (name, selection) => control.evaluate(({ action, workSelection }) => chrome.runtime.sendMessage({
+    type: 'QTS_PAGE_ACTION', action, ...(workSelection ? { selection: workSelection } : {}),
+  }), { action: name, workSelection: selection });
   ctx.storage = (keys) => ctx.worker.evaluate((k) => chrome.storage.local.get(k), keys);
   ctx.phase = async () => (await ctx.storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs?.[0]?.phase;
   // The worker stops (restarted, updated, asleep) and a new one wakes (here: the popup opened).
@@ -388,6 +404,83 @@ test('two Auto Apply jobs run concurrently in one Chrome; a third waits and Canc
   } finally { await browser.close(); }
 });
 
+test('Manager concurrency setting opens three forms while Gemini answers one application at a time', { skip, timeout: 240000 }, async () => {
+  resetMock({
+    queue: [application(504, 'form-ai'), application(505, 'form-ai'), application(506, 'form-ai')],
+    autoApplyParallelLimit: 3,
+    answerDelay: 5000,
+  });
+  const { browser, action, storage } = await launch({ ai: 'gemini' });
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(async () => {
+      const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
+      const forms = (await browser.pages()).filter(page => page.url().startsWith(`${BASE}/form-ai`));
+      return forms.length === 3 && state?.runs?.length === 3 && state.runs.every(run => run.phase === 'needs_you');
+    }, 120000, 'three Auto Apply jobs to open concurrently');
+    const forms = (await browser.pages()).filter(page => page.url().startsWith(`${BASE}/form-ai`));
+    await forms[0].evaluate(() => document.getElementById('next1').click());
+    try {
+      await until(() => mock.answers === 1, 15000, 'the first Gemini turn to start');
+    } catch (error) {
+      const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
+      const form = await forms[0].evaluate(() => ({
+        step1: document.getElementById('step1').style.display !== 'none',
+        step2: document.getElementById('step2').style.display !== 'none',
+        firstName: document.getElementById('fn').value,
+        resume: document.getElementById('cv').files.length,
+        referral: document.getElementById('hear').value,
+      })).catch(() => null);
+      error.message += `; diagnostic=${JSON.stringify({ answers: mock.answers, runs: state?.runs?.map(run => ({ phase: run.phase, step: run.step })), form, requests: mock.log.slice(-12).map(entry => entry.path) })}`;
+      throw error;
+    }
+    for (const form of forms.slice(1)) {
+      await form.evaluate(() => document.getElementById('next1').click());
+      await sleep(250);
+    }
+    try {
+      await until(async () => {
+        const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
+        return state?.runs?.length === 3 && state.runs.every(run => run.phase === 'final');
+      }, 120000, 'Gemini to answer all three jobs');
+    } catch (error) {
+      const diagnostics = await Promise.all(forms.map(form => form.evaluate(() => ({
+        step1: document.getElementById('step1').style.display !== 'none',
+        step2: document.getElementById('step2').style.display !== 'none',
+        motivation: document.getElementById('mot').value,
+        experience: document.getElementById('dj').value,
+      })).catch(() => null)));
+      const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
+      error.message += `; diagnostic=${JSON.stringify({ answers: mock.answers, maxConcurrent: mock.maxConcurrentAnswerRequests, runs: state?.runs?.map(run => ({ phase: run.phase, step: run.step })), forms: diagnostics, recentRequests: mock.log.slice(-12).map(entry => entry.path) })}`;
+      throw error;
+    }
+    assert.equal(mock.maxConcurrentAnswerRequests, 1, 'Gemini answer turns are serialized across open jobs');
+    assert.equal(mock.answers, 3);
+    await action('cancel_status');
+    await until(() => mock.released.length === 3, 30000, 'all three applications to be released');
+  } finally { await browser.close(); }
+});
+
+test('choosing a profile forces its selected jobs to open one at a time', { skip, timeout: 180000 }, async () => {
+  const jobs = [application(507, 'form-ai'), application(508, 'form-ai'), application(509, 'form-ai')];
+  const candidateId = '00000000-0000-4000-8000-00000000c001';
+  jobs.forEach(job => { job.candidate.id = candidateId; });
+  resetMock({ queue: jobs, autoApplyParallelLimit: 5 });
+  const { browser, action, storage } = await launch({ ai: 'off' });
+  try {
+    const selection = { candidateId, jobIds: jobs.map(job => job.job.id) };
+    assert.equal((await action('auto_apply', selection)).ok, true);
+    await until(async () => {
+      const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
+      return state?.runs?.length === 1 && state.runs[0].phase === 'needs_you';
+    }, 90000, 'the selected profile job to open');
+    assert.equal((await browser.pages()).filter(page => page.url().startsWith(`${BASE}/form-ai`)).length, 1);
+    assert.equal(mock.queue.length, 2, 'the other selected jobs wait for the current one to finish');
+    await action('cancel_status');
+    await until(() => mock.released.length === 1, 30000, 'the open selected job to be released');
+  } finally { await browser.close(); }
+});
+
 test('Stage B: Auto Apply fills a three-step form from the profile, documents and approved answers, without AI, and waits for the Manager\'s Submit', { skip, timeout: 300000 }, async () => {
   resetMock({ queue: [application(1)] });
   const { browser, action, storage, phase } = await launch({ ai: 'off' });
@@ -462,6 +555,7 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     await until(() => mock.results.length === 1, 20000, 'the result');
     timings.total = Date.now() - started;
     assert.equal(mock.results[0].submitted, true);
+    assert.equal(mock.results[0].removeJob, true, 'the confirmed Auto Apply result records a bid and removes the job row');
     assert.equal(mock.pageSubmitted, 1, 'one Submit: the Manager\'s');
     assert.equal(mock.answers, 0, 'no AI with Auto Apply\'s AI off');
     assert.ok(mock.heartbeats >= 2, `heartbeats: ${mock.heartbeats}`);
@@ -475,14 +569,18 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
   }
 });
 
-test('closing an unfinished Auto Apply tab releases and automatically retries the same selected job', { skip, timeout: 180000 }, async () => {
-  const first = application(80);
+test('closing an unfinished Auto Apply tab releases the job and retries its saved answers on a fresh form', { skip, timeout: 240000 }, async () => {
+  const first = application(80, 'form-ai');
   resetMock({ queue: [first] });
-  const ctx = await launch({ ai: 'off' });
+  const ctx = await launch({ ai: 'gemini' });
   try {
     assert.equal((await ctx.action('auto_apply')).ok, true);
-    const form = await until(() => formPage(ctx.browser), 30000, 'the original application tab');
+    const form = await until(() => formPage(ctx.browser, '/form-ai'), 30000, 'the original application tab');
     await waitForAutoStep(ctx.storage, 1);
+    await form.click('#next1');
+    await until(async () => (await ctx.phase()) === 'final', 120000, 'the original application answers to be saved');
+    const originalAnswerCalls = mock.answers;
+    assert.ok(originalAnswerCalls > 0);
     mock.queue.push({ ...first, attemptId: attempt(81) });
     await form.close();
     await until(() => mock.released.some(row => row.attemptId === attempt(80)), 20000, 'automatic release of the closed tab');
@@ -491,6 +589,15 @@ test('closing an unfinished Auto Apply tab releases and automatically retries th
       return run?.attemptId === attempt(81) && ['needs_you', 'final'].includes(run.phase);
     }, 60000, 'automatic retry without a launcher click');
     assert.equal(mock.released.find(row => row.attemptId === attempt(80)).mode, 'later');
+    const retryForm = await until(() => formPage(ctx.browser, '/form-ai'), 30000, 'the retried application tab');
+    await retryForm.click('#next1');
+    await until(async () => (await ctx.phase()) === 'final', 120000, 'the saved answers to be replayed');
+    assert.equal(mock.answers, originalAnswerCalls, 'the retry reused the checkpoint instead of asking the AI again');
+    assert.deepEqual(await retryForm.evaluate(() => [
+      document.getElementById('mot').value,
+      document.getElementById('dj').value,
+      document.getElementById('cloud').value,
+    ]), ['Building reliable Python payment services on AWS, as I have done since 2019.', '9', 'AWS']);
     assert.equal(mock.submitted.length, 0);
     assert.equal(mock.pageSubmitted, 0);
     await ctx.action('cancel_status');
@@ -738,7 +845,7 @@ test('modes, permission, "Apply this page", Cancel and Stop all: refused without
 // Cancel and Stop all at every point that matters: as the form opens, while the AI is asked, the
 // moment the review is ready (before it waits for the Manager), during the review, and after the
 // worker restarted. Each time: the job given back, no heartbeat for it afterwards (no live claim),
-// the form's tab closed, nothing submitted, nothing left to resume, no ChatGPT switch held.
+// the form's tab closed, nothing submitted, a paused checkpoint retained, no ChatGPT switch held.
 // Two steps that change as they are filled: an answer that reveals a required question, a section the
 // page draws only when scrolled to, an answer the site refuses, then a right-to-work question, a terms
 // agreement as a list, and a cover-letter upload.
@@ -961,7 +1068,7 @@ test('manual steps: QTS fills each step and waits; the Manager\'s Next starts th
   }
 });
 
-test('Cancel and Stop all at every point: no live claim, no tab left open, nothing submitted', { skip, timeout: 900000 }, async () => {
+test('Cancel and Stop all at every point: no live claim, saved checkpoint, no tab left open or submission', { skip, timeout: 900000 }, async () => {
   resetMock();
   const ctx = await launch({ ai: 'off' });
   const results = {};
@@ -985,7 +1092,9 @@ test('Cancel and Stop all at every point: no live claim, no tab left open, nothi
     const outcome = {
       releaseMs: released.at - stoppedAt, mode: released.mode, renewedAfter, openFormTabs: openTabs,
       submitted: mock.submitted.filter((entry) => entry.attemptId === id).length, pageSubmitted: mock.pageSubmitted,
-      leftToResume: Object.keys(stored.qtsAutoApplyRuns || {}).length, chatSwitchHeld: Boolean(held),
+      pausedCheckpoint: stored.qtsAutoApplyRuns?.[id]?.paused === true,
+      pendingRelease: stored.qtsAutoApplyRuns?.[id]?.pendingRelease === true,
+      chatSwitchHeld: Boolean(held),
     };
     results[name] = outcome;
     assert.equal(outcome.mode, 'later', `${name}: only given back`);
@@ -993,7 +1102,8 @@ test('Cancel and Stop all at every point: no live claim, no tab left open, nothi
     assert.equal(outcome.openFormTabs, 0, `${name}: no form tab left`);
     assert.equal(outcome.submitted, 0, `${name}: nothing submitted`);
     assert.equal(outcome.pageSubmitted, 0, `${name}: the site got no Submit`);
-    assert.equal(outcome.leftToResume, 0, `${name}: nothing left to resume`);
+    assert.equal(outcome.pausedCheckpoint, true, `${name}: the saved process can be retried`);
+    assert.equal(outcome.pendingRelease, false, `${name}: the release completed`);
     assert.equal(outcome.chatSwitchHeld, false, `${name}: no ChatGPT switch held`);
   };
   const begin = async (n, form = 'form') => {

@@ -89,9 +89,14 @@ export async function POST(request: Request): Promise<NextResponse> {
         { status: 409 },
       );
     }
+    const [managerSettings] = await db
+      .select({ useGeminiMatching: users.useGeminiMatching })
+      .from(users)
+      .where(eq(users.id, manager.id))
+      .limit(1);
     if (
       !savedJob.description?.trim() ||
-      !savedJob.jdMatching?.trim() ||
+      (managerSettings?.useGeminiMatching === true && !savedJob.jdMatching?.trim()) ||
       savedJob.resumeLocalPath !== null
     ) {
       return NextResponse.json(
@@ -134,6 +139,12 @@ export async function POST(request: Request): Promise<NextResponse> {
             asc(experiences.sortOrder),
           ),
       ]);
+    if (experience.length < 3) {
+      return NextResponse.json(
+        { success: false, message: "Add at least three candidate experience records before starting Generation." },
+        { status: 409 },
+      );
+    }
     const fullName = [savedJob.firstName, savedJob.lastName].filter(Boolean).join(" ");
     if (!fullName || !savedJob.email) {
       return NextResponse.json(
