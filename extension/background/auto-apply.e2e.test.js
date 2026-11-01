@@ -406,6 +406,10 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     assert.match(panel2, /Needs you \(\d+\)/);
     assert.match(panel2, /Needs your answer: "What motivates you in your work\? \*"/);
     assert.match(panel2, /Optional, left empty \(\d+\)/);
+    assert.match(panel2, /Profile, documents & reusable answers/);
+    assert.match(panel2, /Reusable answers \(3\)/, 'the real worker supplies approved library answers');
+    assert.match(panel2, /Cluj-Napoca/, 'the real worker supplies profile reference data');
+    assert.match(panel2, /Dear Hiring Manager/, 'saved cover-letter text is available to copy');
     await shot(form, 'b-1-step2-needs-you');
 
     // The Manager writes the answer and clicks the site's Next: step 3 (the last one).

@@ -55,6 +55,15 @@
     .profile-value { display: block; margin-top: 2px; font-size: 10px; color: #66758c; }
     .src.ai { border-color: rgb(99 102 241 / .5); color: #a5b4fc; }
     .src.manager { border-color: rgb(249 115 22 / .55); color: #fdba74; }
+    .references { margin-top: 12px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; }
+    .references summary { padding: 9px 10px; cursor: pointer; color: #cbd5e1; font-weight: 700; }
+    .reference-card { margin: 0 8px 8px; border: 1px solid #243047; border-radius: 9px; }
+    .reference-item { display: block; width: calc(100% - 12px); margin: 6px; padding: 7px 8px; border: 1px solid #34425a; border-radius: 8px; background: #111a2e; color: #e2e8f0; text-align: left; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+    .reference-item:hover, .reference-item:focus-visible { border-color: #818cf8; }
+    .reference-label { display: block; color: #94a3b8; font-size: 10px; }
+    .reference-value { display: block; white-space: pre-wrap; }
+    .reference-note, .copy-status { padding: 0 10px 8px; color: #94a3b8; font-size: 11px; }
+    .copy-status { color: #a5b4fc; }
     .foot { padding: 10px 12px; border-top: 1px solid #243047; background: #0d1526; }
     .note { margin-bottom: 8px; color: #cbd5e1; font-weight: 600; }
     .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -118,6 +127,64 @@
     );
     if (answer.fieldId) row.addEventListener('click', () => global.__qtsApplyForm?.focusField?.(answer.fieldId));
     return row;
+  }
+
+  // Read-only references: copying never fills a field, accepts an answer, or sends a proposal.
+  const referenceOpen = new Set();
+  async function copyReference(value) {
+    try {
+      await navigator.clipboard.writeText(String(value));
+      return true;
+    } catch {
+      const box = element('textarea');
+      box.value = String(value);
+      box.style.cssText = 'position:fixed;left:-9999px;opacity:0;';
+      root.append(box);
+      box.select();
+      try { return document.execCommand('copy'); } catch { return false; } finally { box.remove(); }
+    }
+  }
+
+  function referencePanel(data) {
+    const container = element('details', 'references');
+    container.open = referenceOpen.has('all');
+    container.append(element('summary', '', 'Profile, documents & reusable answers'));
+    container.addEventListener('toggle', () => { if (container.open) referenceOpen.add('all'); else referenceOpen.delete('all'); });
+    container.append(element('div', 'reference-note', 'Click an item to copy, then paste into the form. Approved reusable answers are shared across all candidates.'));
+    const status = element('div', 'copy-status');
+    status.setAttribute('role', 'status');
+    function card(key, title, entries) {
+      const section = element('details', 'reference-card');
+      section.dataset.reference = key;
+      section.open = referenceOpen.has(key);
+      section.append(element('summary', '', `${title} (${entries.length})`));
+      section.addEventListener('toggle', () => { if (section.open) referenceOpen.add(key); else referenceOpen.delete(key); });
+      for (const [label, value, note] of entries) {
+        const item = element('button', 'reference-item');
+        item.type = 'button'; item.title = 'Click to copy';
+        item.append(element('span', 'reference-label', label), element('span', 'reference-value', value));
+        item.addEventListener('click', async () => { status.textContent = await copyReference(value) ? `Copied: ${label}` : 'Could not copy. Try again.'; });
+        section.append(item);
+        if (note) section.append(element('div', 'reference-note', note));
+      }
+      if (!entries.length) section.append(element('div', 'reference-note', 'No saved information.'));
+      container.append(section);
+    }
+    const p = data.profile || {};
+    const fields = [['First name', 'firstName'], ['Last name', 'lastName'], ['Email', 'email'], ['Phone', 'phone'], ['Headline', 'headline'], ['Street', 'addressLine1'], ['Postal code', 'postalCode'], ['City', 'city'], ['State / province', 'province'], ['Country', 'country'], ['Birthday', 'birthday'], ['Nationality', 'nationality'], ['Languages', 'languages'], ['Years of experience', 'yearsOfExperience'], ['LinkedIn', 'linkedinUrl'], ['GitHub', 'githubUrl'], ['Portfolio', 'portfolioUrl']];
+    card('profile', 'Profile', fields.filter(([, key]) => String(p[key] ?? '').trim()).map(([label, key]) => [label, String(p[key])]));
+    const dates = (entry) => [entry.startDate, entry.isCurrent ? 'Present' : entry.endDate].filter(Boolean).join(' – ');
+    card('experience', 'Experience', (data.experiences || []).map((entry) => [
+      [entry.jobTitle, entry.companyName].filter(Boolean).join(' — '),
+      [[entry.jobTitle, entry.companyName].filter(Boolean).join(' — '), [entry.location, entry.workMode, dates(entry)].filter(Boolean).join(' · '), entry.description].filter(Boolean).join('\n'),
+    ]));
+    card('education', 'Education', (data.educations || []).map((entry) => [entry.institution || 'Education',
+      [entry.institution, [entry.degree, entry.fieldOfStudy].filter(Boolean).join(', '), dates(entry), entry.description].filter(Boolean).join('\n'),
+    ]));
+    card('reusable', 'Reusable answers', (data.reusable || []).map((entry) => [entry.question, entry.answer, entry.note]));
+    card('documents', 'Documents & job description', [['Résumé', data.resumeText], ['Cover letter', data.coverLetterText], ['Job description', data.jobDescription]].filter(([, value]) => String(value || '').trim()));
+    container.append(status);
+    return container;
   }
 
   function render() {
@@ -224,6 +291,7 @@
       body.append(element('div', 'section', steps.length > 1 ? `Step ${step} · ${answers.length} answers` : `Filled answers (${answers.length})`));
       for (const answer of answers) body.append(answerRow(answer));
     }
+    if (state.auto && state.references) body.append(referencePanel(state.references));
     panel.append(body);
 
     const foot = element('div', 'foot');

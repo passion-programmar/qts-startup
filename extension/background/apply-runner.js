@@ -2188,6 +2188,15 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     },
     resumeFolder: application.job.resumeFolder,
     aiName: aiName(application),
+    ...(auto ? { references: {
+      profile: panelProfile(application.candidate),
+      experiences: application.profileDetails?.experiences || [],
+      educations: application.profileDetails?.educations || [],
+      reusable: (application.savedAnswers || []).map((entry) => ({ question: entry.questionText, answer: entry.answer, note: entry.note || null })),
+      resumeText: application.job.resumeText || '',
+      coverLetterText: application.job.coverLetterText || '',
+      jobDescription: application.job.description || '',
+    } } : {}),
     promptName: application.job.promptName,
     templateName: application.job.templateName,
     answers: Object.entries(answersUsed).map(([question, answer]) => ({
