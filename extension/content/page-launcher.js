@@ -1,3 +1,7 @@
+(function bootstrapPageLauncher() {
+// Manifest injection and active-tab restoration can race on a newly opened document.
+if (globalThis.__qtsPageLauncherNavigationListener && hasValidExtensionContext()) return;
+
 function hasValidExtensionContext() {
   try {
     return Boolean(chrome?.runtime?.id);
@@ -1491,7 +1495,7 @@ async function initializeQtsPageLauncher() {
     openPageExclusionPanel,
     toggleFromToolbar,
     setActive(value) {
-      if (active === value) return;
+      if (active === value && (!value || host.isConnected)) return;
       active = value;
       if (!active) {
         setOpen(false);
@@ -1626,6 +1630,7 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
   });
   window.addEventListener('pagehide', () => updatePageLauncherActivity(false));
   window.addEventListener('pageshow', () => refreshPageLauncherActivity().catch(() => {}));
+  window.addEventListener('focus', () => refreshPageLauncherActivity().catch(() => {}));
 }
 
 function updatePageLauncherActivity(value) {
@@ -1653,5 +1658,6 @@ function initializePageLauncherAfterLoad() {
   });
 }
 
-if (document.readyState === 'complete') initializePageLauncherAfterLoad();
-else window.addEventListener('load', initializePageLauncherAfterLoad, { once: true });
+if (document.readyState !== 'loading') initializePageLauncherAfterLoad();
+else document.addEventListener('DOMContentLoaded', initializePageLauncherAfterLoad, { once: true });
+})();

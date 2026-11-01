@@ -87,6 +87,7 @@ const getJdInFlightJobKeys = new Set();
 const getJdLastPageByTab = new Map();
 const launcherFocus = self.__qtsPageActivity.createLauncherFocus({
   chrome,
+  mount: (tabId) => chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/page-toast.js', 'content/page-launcher.js'] }),
   eligible: async (tab) => isExtractablePageUrl(tab.url)
     && !getJdHelperTabs.has(tab.id)
     && !self.__qtsChromePdf.isPrintTab(tab.id)
@@ -7065,6 +7066,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url;
   if (!url || !isExtractablePageUrl(url)) return;
   if (changeInfo.status === 'complete') {
+    if (tab.active) launcherFocus.sync().catch(() => {});
     (async () => {
       if (await isAutoApplyArmed()) maybeDetectApplyMethodOnOpen(tabId, url);
       maybeTrackAutoOpen(tabId, url);
@@ -7122,6 +7124,9 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
 });
 
 chrome.windows.onFocusChanged.addListener((windowId) => launcherFocus.sync(windowId).catch(() => {}));
+// Dragging a tab between windows can change ownership without a normal activation event.
+chrome.tabs.onAttached.addListener(() => launcherFocus.sync().catch(() => {}));
+chrome.tabs.onDetached.addListener(() => launcherFocus.sync().catch(() => {}));
 chrome.windows.onRemoved.addListener((windowId) => launcherFocus.removeWindow(windowId).catch(() => {}));
 chrome.tabs.onRemoved.addListener((tabId) => {
   getJdNavigation.remove(tabId).catch(() => {});

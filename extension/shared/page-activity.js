@@ -1,12 +1,21 @@
 // Event-driven UI ownership and navigation admission. No page extraction or polling here.
 (function initPageActivity(global) {
-  function createLauncherFocus({ chrome, eligible = async () => true }) {
+  function createLauncherFocus({ chrome, eligible = async () => true, mount }) {
     let previous = null;
     let revision = 0;
     let focusedWindowId;
-    const send = (id, active) => chrome.tabs.sendMessage(id, {
-      type: 'QTS_LAUNCHER_ACTIVE', active,
-    }, { frameId: 0 }).catch(() => {});
+    const send = async (id, active) => {
+      const message = { type: 'QTS_LAUNCHER_ACTIVE', active };
+      try { await chrome.tabs.sendMessage(id, message, { frameId: 0 }); } catch {
+        // Existing tabs may lack content scripts after an extension reload. Restore only the
+        // focused eligible tab, never a background/helper tab or a Get JD extraction script.
+        if (!active || !mount || !(await isActive(id))) return;
+        try {
+          await mount(id);
+          await chrome.tabs.sendMessage(id, { ...message, active: await isActive(id) }, { frameId: 0 });
+        } catch { /* Chrome's protected pages and tabs that closed during injection are skipped. */ }
+      }
+    };
     async function isActive(tabId) {
       const currentRevision = revision;
       const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -29,17 +38,22 @@
       focusedWindowId = typeof windowId === 'number' ? windowId : undefined;
       const currentRevision = ++revision;
       const old = previous;
-      previous = null;
-      if (old != null) await send(old, false);
       const window = focusedWindowId === undefined
         ? await chrome.windows.getLastFocused().catch(() => null)
         : await chrome.windows.get(focusedWindowId).catch(() => null);
-      if (currentRevision !== revision || !window?.focused) return;
+      if (currentRevision !== revision) return;
+      if (!window?.focused) {
+        previous = null;
+        if (old != null) await send(old, false);
+        return;
+      }
       focusedWindowId = window.id;
       const [tab] = await chrome.tabs.query({ active: true, windowId: window.id });
-      if (!tab || !(await eligible(tab)) || currentRevision !== revision) return;
-      previous = tab.id;
-      await send(tab.id, true);
+      const allowed = tab && await eligible(tab);
+      if (currentRevision !== revision) return;
+      previous = allowed ? tab.id : null;
+      if (old != null && old !== previous) await send(old, false);
+      if (allowed && currentRevision === revision) await send(tab.id, true);
     }
     function removeWindow(windowId) {
       if (focusedWindowId >= 0 && focusedWindowId !== windowId) return Promise.resolve();

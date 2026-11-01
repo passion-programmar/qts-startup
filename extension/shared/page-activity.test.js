@@ -90,6 +90,33 @@ test('rapid focus changes cannot activate a stale tab', async () => {
   assert.deepEqual(f.messages, []);
 });
 
+test('an active tab without content scripts is restored without extraction or a toolbar click', async () => {
+  const f = fixture(), mounted = [];
+  let ready = false;
+  f.chrome.tabs.sendMessage = async (id, message) => {
+    if (!ready) throw Error('Receiving end does not exist');
+    f.messages.push([id, message.active]);
+  };
+  const ui = createLauncherFocus({ chrome: f.chrome, mount: async id => { mounted.push(id); ready = true; } });
+  await ui.sync();
+  assert.deepEqual(mounted, [1]); assert.deepEqual(f.messages, [[1, true]]);
+  assert.deepEqual(f.evaluated, []);
+  await ui.sync();
+  assert.deepEqual(f.messages, [[1, true], [1, true]], 'same-tab resync never hides an open panel');
+  assert.deepEqual(mounted, [1], 'existing listeners are reused');
+});
+
+test('a tab that loses focus while restoration is pending is left inactive', async () => {
+  const f = fixture(); let release, ready = false;
+  f.chrome.tabs.sendMessage = async (id, message) => { if (!ready) throw Error('Missing receiver'); f.messages.push([id, message.active]); };
+  const ui = createLauncherFocus({ chrome: f.chrome, mount: () => new Promise(resolve => { release = () => { ready = true; resolve(); }; }) });
+  const pending = ui.sync();
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  f.focus(-1); await ui.sync(-1);
+  release(); await pending;
+  assert.deepEqual(f.messages, [[1, false]]);
+});
+
 
 test('enabling and restoring do not enumerate or evaluate loaded tabs', async () => {
   const f=fixture(); f.chrome.tabs.query=async()=>{ throw Error('Must not enumerate'); };
