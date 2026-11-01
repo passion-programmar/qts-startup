@@ -11,6 +11,7 @@ import { getCurrentUser } from "@/lib/session";
 import { listLibrary } from "@/server/apply/reusable-answers";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { displayReusableAnswer } from "@/lib/checkbox-answer";
 
 export const instant = false;
 
@@ -108,7 +109,7 @@ export default async function ProfilePage() {
                 {approvedAnswers.map((row) => (
                   <li className="rounded-lg bg-slate-50 px-3 py-2" key={row.id}>
                     <p className="text-xs font-semibold text-slate-800">{row.questionText}</p>
-                    <p className="mt-0.5 whitespace-pre-wrap text-xs text-slate-600">{row.answer}</p>
+                    <p className="mt-0.5 whitespace-pre-wrap text-xs text-slate-600">{displayReusableAnswer(row.answer)}</p>
                   </li>
                 ))}
               </ul>

@@ -3,6 +3,7 @@
 // without a database.
 
 import { normalizeQuestionKey } from "./apply-values";
+import { displayReusableAnswer, normalizeCheckboxAnswer } from "@/lib/checkbox-answer";
 
 export const REUSABLE_ANSWER_STATUSES = ["draft", "approved", "rejected"] as const;
 export type ReusableAnswerStatus = (typeof REUSABLE_ANSWER_STATUSES)[number];
@@ -51,7 +52,7 @@ export function similarQuestions(a: string, b: string): boolean {
   return shared / smaller >= 0.75 && (shared >= 2 || smaller <= 2);
 }
 
-const sameAnswer = (a: string, b: string) => a.replace(/\s+/g, " ").trim().toLowerCase() === b.replace(/\s+/g, " ").trim().toLowerCase();
+const sameAnswer = (a: string, b: string) => String(normalizeCheckboxAnswer(a)).replace(/\s+/g, " ").trim().toLowerCase() === String(normalizeCheckboxAnswer(b)).replace(/\s+/g, " ").trim().toLowerCase();
 
 export type AnswerRow = { id: string; questionKey: string; questionText: string; answer: string; status: string };
 export type AnswerWarning = {
@@ -83,5 +84,5 @@ export function answerWarnings(target: Omit<AnswerRow, "status">, others: Answer
 export function describeWarning(warning: AnswerWarning): string {
   const which = warning.status === "approved" ? "An approved answer" : "A draft";
   const question = warning.match === "same" ? "the same question" : `a similar question (“${warning.questionText}”)`;
-  return `${which} for ${question} ${warning.conflict ? `says “${warning.answer.slice(0, 120)}”` : "says the same"}.`;
+  return `${which} for ${question} ${warning.conflict ? `says “${displayReusableAnswer(warning.answer).slice(0, 120)}”` : "says the same"}.`;
 }

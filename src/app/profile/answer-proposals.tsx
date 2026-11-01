@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { Send, Undo2 } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
+import { displayReusableAnswer } from "@/lib/checkbox-answer";
 import {
   proposeReusableAnswerAction,
   withdrawReusableAnswerProposalAction,
@@ -77,7 +78,7 @@ export function ProposalList({ proposals }: { proposals: Proposal[] }) {
           {proposals.map((row) => (
             <li className="rounded-lg border border-slate-200 px-3 py-2" key={row.id}>
               <p className="text-xs font-semibold text-slate-800">{row.questionText}</p>
-              <p className="mt-0.5 whitespace-pre-wrap text-xs text-slate-600">{row.answer}</p>
+              <p className="mt-0.5 whitespace-pre-wrap text-xs text-slate-600">{displayReusableAnswer(row.answer)}</p>
               <form action={formAction} className="mt-1.5 flex items-center gap-2">
                 <input name="answerId" type="hidden" value={row.id} />
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${row.status === "draft" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700"}`}>

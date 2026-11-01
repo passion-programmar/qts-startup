@@ -15,6 +15,7 @@ import {
 import { ActionFeedback } from "@/app/settings/prompt-forms";
 import { SettingsCard } from "@/app/settings/settings-card";
 import { suggestionsFor } from "@/lib/answer-suggestions";
+import { checkboxAnswerValue, displayReusableAnswer } from "@/lib/checkbox-answer";
 
 const initialState: PromptActionState = { error: null, success: null };
 
@@ -46,6 +47,7 @@ export function ReusableAnswerForm({ answer, draft, review }: { answer?: Reusabl
   // The choices real forms offered for this question; one click puts it in the answer.
   const [question, setQuestion] = useState(answer?.questionText ?? draft?.questionText ?? "");
   const answerRef = useRef<HTMLTextAreaElement>(null);
+  const [checkboxValue, setCheckboxValue] = useState(() => checkboxAnswerValue(answer?.answer ?? draft?.answer));
   const suggestions = draft?.choices.length
     ? { choices: draft.choices, seenOn: "in applications" }
     : suggestionsFor(question);
@@ -70,7 +72,24 @@ export function ReusableAnswerForm({ answer, draft, review }: { answer?: Reusabl
         <label className="block text-[11px] font-semibold text-slate-600" htmlFor={`answer-${key}`}>
           Answer
         </label>
-        <textarea
+        {checkboxValue !== null ? (
+          <div className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+            <input name="answer" type="hidden" value={String(checkboxValue)} />
+            <input
+              checked={checkboxValue}
+              className="size-4 accent-indigo-600"
+              id={`answer-${key}`}
+              onChange={(event) => setCheckboxValue(event.target.checked)}
+              type="checkbox"
+            />
+            <label className="text-xs font-semibold text-slate-700" htmlFor={`answer-${key}`}>
+              {checkboxValue ? "Checked" : "Unchecked"}
+            </label>
+            <button className="ml-auto text-[11px] text-slate-500 underline" onClick={() => setCheckboxValue(null)} type="button">
+              Use text answer
+            </button>
+          </div>
+        ) : <textarea
           className={`${inputClass} min-h-16 resize-y py-2`}
           defaultValue={answer?.answer ?? draft?.answer ?? ""}
           id={`answer-${key}`}
@@ -80,8 +99,8 @@ export function ReusableAnswerForm({ answer, draft, review }: { answer?: Reusabl
           ref={answerRef}
           required
           rows={2}
-        />
-        {suggestions && (
+        />}
+        {checkboxValue === null && suggestions && (
           <div className="rounded-lg bg-slate-50 px-3 py-2">
             <p className="text-[11px] text-slate-500">
               Choices seen on forms ({suggestions.seenOn}). Click one to use it:
@@ -184,7 +203,7 @@ export function VersionList({ versions, empty }: { versions: VersionItem[]; empt
           <input name="versionId" type="hidden" value={version.id} />
           <p className="text-[11px] text-slate-500">{version.label}</p>
           <p className="mt-0.5 text-xs font-semibold text-slate-800">{version.questionText}</p>
-          <p className="mt-0.5 whitespace-pre-wrap text-xs text-slate-700">{version.answer}</p>
+          <p className="mt-0.5 whitespace-pre-wrap text-xs text-slate-700">{displayReusableAnswer(version.answer)}</p>
           {version.note && <p className="mt-0.5 text-[11px] text-slate-500">Note: {version.note}</p>}
           <button
             className="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-60"

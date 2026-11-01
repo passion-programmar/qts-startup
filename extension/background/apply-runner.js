@@ -1664,8 +1664,12 @@ function submittedAnswers(answersUsed, current) {
   const shown = new Map((current || []).map((entry) => [entry.label, entry.value]));
   const answers = Object.entries(answersUsed).map(([question, answer]) => {
     const now = shown.get(question);
-    const changed = now !== undefined && now !== '' && simple(now) !== simple(answer.value)
-      && !simple(now).includes(simple(answer.value));
+    const previousCheckbox = self.__qtsApplyAnswers.checkboxAnswerValue(answer.value);
+    const currentCheckbox = self.__qtsApplyAnswers.checkboxAnswerValue(now);
+    const changed = previousCheckbox !== null && currentCheckbox !== null
+      ? previousCheckbox !== currentCheckbox
+      : now !== undefined && now !== '' && simple(now) !== simple(answer.value)
+        && !simple(now).includes(simple(answer.value));
     return {
       question: question.slice(0, 300),
       answer: (changed ? now : answerText(answer.value)).slice(0, 2000),
@@ -2566,7 +2570,7 @@ async function waitForConfirmation(review, reviewState, answersUsed, current, re
  */
 async function proposeCorrections(application, answers) {
   const items = (answers || []).filter((entry) => entry.source === 'manager')
-    .map((entry) => ({ question: entry.question, answer: entry.answer })).slice(0, 10);
+    .map((entry) => ({ question: entry.question, answer: self.__qtsApplyAnswers.checkboxAnswerValue(entry.answer) ?? entry.answer })).slice(0, 10);
   if (!items.length) return 'Nothing to propose: change an answer on the form first.';
   const reply = await workerApiRequest('POST', '/api/extension/apply/propose-answers', { attemptId: application.attemptId, items });
   if (reply.success !== true) return reply.message || 'QTS could not send the proposals.';

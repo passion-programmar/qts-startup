@@ -2,6 +2,7 @@
 // without a database.
 
 import { resumeJsonVersion } from "@/app/pdf/document-data";
+import { normalizeCheckboxAnswer } from "@/lib/checkbox-answer";
 
 /** Job pages open at once per Chrome (any number of Chromes may work at the same time). */
 export const APPLY_PARALLEL_LIMIT = 2;
@@ -229,7 +230,7 @@ export type ReusableAnswerInput = { questionText: string; questionKey: string; a
 export function parseReusableAnswer(values: { question: unknown; answer: unknown; note: unknown }): ReusableAnswerInput | string {
   const text = (value: unknown) => (typeof value === "string" ? value.replace(/\r\n/g, "\n").trim() : "");
   const questionText = text(values.question).replace(/\s+/g, " ");
-  const answer = text(values.answer);
+  const answer = text(normalizeCheckboxAnswer(values.answer));
   const note = text(values.note);
   if (!questionText) return "Enter the question.";
   if (questionText.length > 300) return "The question is too long (300 characters at most).";

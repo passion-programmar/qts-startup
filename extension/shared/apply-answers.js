@@ -21,6 +21,16 @@
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
 
+  // Legacy labels and canonical boolean literals describe a checkbox state, never prose.
+  function checkboxAnswerValue(value) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value !== 'string') return null;
+    const text = value.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (['true', 'ticked', 'checked', '☑', '☑ checked'].includes(text)) return true;
+    if (['false', 'not ticked', 'unchecked', '☐', '☐ unchecked'].includes(text)) return false;
+    return null;
+  }
+
   function normalizeQuestionKey(question) {
     return String(question || '')
       .toLowerCase()
@@ -874,6 +884,8 @@
     const saved = { source: 'reusable', saved: answer, note: row.note || null, fact: 'answer' };
     const polarity = yesOrNo(answer);
     if (field.kind === 'checkbox' && !hasOptions(field)) {
+      const checked = checkboxAnswerValue(row.answer);
+      if (checked !== null) return { value: checked, ...saved };
       if (YES.test(answer.trim()) || polarity === true) return { value: true, ...saved };
       if (NO.test(answer.trim()) || polarity === false) return { value: false, ...saved };
     } else {
@@ -1441,7 +1453,7 @@
     return { ok: true };
   }
 
-  const api = { normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
+  const api = { checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

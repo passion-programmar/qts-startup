@@ -14,6 +14,7 @@ import { groupVersions } from "@/app/prompts/prompt-groups";
 import { prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { displayReusableAnswer } from "@/lib/checkbox-answer";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
@@ -277,7 +278,7 @@ export default async function SettingsPage() {
                   item
                   key={answer.id}
                   summary={[
-                    answer.answer,
+                    displayReusableAnswer(answer.answer),
                     answer.autoAdded ? "Added automatically" : answer.source !== "manual" ? SOURCE_LABELS[answer.source] : null,
                     warnings.length ? `${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}` : null,
                   ].filter(Boolean).join(" · ")}
@@ -315,7 +316,7 @@ export default async function SettingsPage() {
               const warnings = warningsOf(draft);
               return {
                 answer: { id: draft.id, questionText: draft.questionText, answer: draft.answer, note: draft.note },
-                summary: `${draft.answer} · ${SOURCE_LABELS[draft.source]}${draft.source === "manager" ? ` (${draft.createdBy})` : ""}${warnings.length ? ` · ${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}` : ""}`,
+                summary: `${displayReusableAnswer(draft.answer)} · ${SOURCE_LABELS[draft.source]}${draft.source === "manager" ? ` (${draft.createdBy})` : ""}${warnings.length ? ` · ${warnings.length} ${warnings.length === 1 ? "warning" : "warnings"}` : ""}`,
                 warnings,
               };
             })}
@@ -329,8 +330,8 @@ export default async function SettingsPage() {
               </p>
               <div className="space-y-3">
                 {rejectedRows.map((row) => (
-                  <SettingsCard item key={row.id} summary={`${row.answer} · ${SOURCE_LABELS[row.source]}${row.reviewedBy ? ` · rejected by ${row.reviewedBy}` : ""}`} title={row.questionText}>
-                    <p className="mb-3 whitespace-pre-wrap text-xs text-slate-700">{row.answer}</p>
+                  <SettingsCard item key={row.id} summary={`${displayReusableAnswer(row.answer)} · ${SOURCE_LABELS[row.source]}${row.reviewedBy ? ` · rejected by ${row.reviewedBy}` : ""}`} title={row.questionText}>
+                    <p className="mb-3 whitespace-pre-wrap text-xs text-slate-700">{displayReusableAnswer(row.answer)}</p>
                     <DeleteReusableAnswerButton answer={row} />
                   </SettingsCard>
                 ))}
