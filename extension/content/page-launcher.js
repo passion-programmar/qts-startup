@@ -412,9 +412,12 @@ async function initializeQtsPageLauncher() {
   async function cancelWorkPicker(action) {
     const picker = workPickers.get(action);
     if (picker.cancelling) return;
+    const scroll = picker.panel.querySelector('.work-jobs')?.scrollTop || 0;
     picker.cancelling = true;
     picker.select.disabled = true;
     renderWorkPicker(action);
+    const cancellingList = picker.panel.querySelector('.work-jobs');
+    if (cancellingList) cancellingList.scrollTop = scroll;
     try {
       const stored = await chrome.storage.local.get(['qtsExtensionStatus', 'qtsApplyKind']);
       const running = action === 'generation' ? stored.qtsExtensionStatus === 'generation'
@@ -425,14 +428,16 @@ async function initializeQtsPageLauncher() {
         if (reply.warning) rowNotes.set(action, [reply.message, 'warn']);
         else rowNotes.delete(action);
       }
-      picker.version += 1; // Discard any pending job-list response for the cleared account.
-      picker.select.value = '';
-      picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.loading = false;
+      // Stop the run, keeping this account's list and checked jobs available for review.
+      // Choosing another account uses loadWorkJobs and its existing stale-response guard.
+      picker.error = '';
     } catch (error) {
       picker.error = error.message || 'Could not cancel this run.';
     } finally {
       picker.cancelling = false;
       await syncModeActions();
+      const list = picker.panel.querySelector('.work-jobs');
+      if (list) list.scrollTop = scroll;
     }
   }
 

@@ -58,11 +58,12 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .error'));
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').disabled),true);
     assert.equal(await page.evaluate(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length),0);
-    // An idle picker clears locally without cancelling another mode.
+    // An idle picker stays open without cancelling another mode.
     const cancelsBefore=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length);
     await page.evaluate(()=>{window.store.qtsExtensionStatus='generation';window.store.qtsApplyKind=null;});
     await page.evaluate(()=>window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-cancel').click());
-    await page.waitForFunction(()=>window.testRoot.querySelector('[data-work-picker="auto_apply"]').hidden);
+    await page.waitForFunction(()=>!window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-cancel').disabled);
+    assert.equal(await page.evaluate(()=>window.testRoot.querySelector('[data-work-picker="auto_apply"]').hidden),false);
     assert.equal(await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length),cancelsBefore);
     // Both running modes use the existing stop action, with an expected-mode guard.
     for(const mode of ['generation','auto_apply']){
@@ -71,16 +72,27 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         window.store.qtsExtensionStatus=mode==='generation'?'generation':'apply';window.store.qtsApplyKind=mode==='auto_apply'?'auto':null;
         await window.__qtsPageLauncher.syncModeActions();
       },mode);
+      await page.waitForFunction(mode=>window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job`).length===2,{},mode);
+      await page.evaluate(mode=>{
+        const style=document.createElement('style');style.textContent='.work-jobs { max-height:36px !important; }';window.testRoot.append(style);
+        window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-jobs`).scrollTop=20;
+      },mode);
       await page.evaluate(mode=>{window.failCancellation=true;window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-cancel`).click();},mode);
       await page.waitForFunction(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .error`)?.textContent.includes('cancellation failure'),{},mode);
       assert.notEqual(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).value,mode),'','failed cancellation retains selection');
       await page.evaluate(()=>{window.failCancellation=false;});
       const before=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length);
+      const selectedBefore=await page.evaluate(mode=>[...window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job input:checked`)].map(n=>n.dataset.jobId),mode);
+      const requestsBefore=await page.evaluate(()=>window.calls.filter(m=>m.type==='QTS_WORK_ITEMS').length);
       await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-cancel`).click(),mode);
-      await page.waitForFunction(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"]`).hidden,{},mode);
+      await page.waitForFunction(mode=>!window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-cancel`).disabled,{},mode);
       const calls=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status'));
       assert.equal(calls.length,before+1);assert.equal(calls.at(-1).expectedAction,mode);
-      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).value,mode),'');
+      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"]`).hidden,mode),false,'Cancel keeps the job list open');
+      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).value,mode),'11111111-1111-4111-8111-111111111111');
+      assert.deepEqual(await page.evaluate(mode=>[...window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job input:checked`)].map(n=>n.dataset.jobId),mode),selectedBefore,'Cancel preserves checked jobs');
+      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-jobs`).scrollTop,mode),20,'Cancel preserves the list scroll position');
+      assert.equal(await page.evaluate(()=>window.calls.filter(m=>m.type==='QTS_WORK_ITEMS').length),requestsBefore,'Cancel does not refetch or clear the list');
       assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).disabled,mode),false,'another account can be chosen while cancellation finishes');
       await page.evaluate(mode=>{
         window.allowSecondAccount=true;
