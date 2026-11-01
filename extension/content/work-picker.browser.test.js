@@ -33,6 +33,9 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.addScriptTag({ path: path.resolve('extension/content/page-launcher.js') });
     await page.waitForFunction(() => Boolean(window.__qtsPageLauncher));
     await page.evaluate(() => window.__qtsPageLauncher.setOpen(true));
+    await page.waitForFunction(() => getComputedStyle(document.body).paddingRight === '384px');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('.menu').getBoundingClientRect().width), 384, 'launcher width is four fifths of 480px');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('.menu').scrollWidth <= window.testRoot.querySelector('.menu').clientWidth), true, 'narrower panel has no horizontal overflow');
     assert.equal(await page.evaluate(() => window.calls.filter(m=>m.type==='QTS_WORK_ITEMS').length), 0, 'passive initialization does not fetch accounts');
     await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').focus());
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options.length === 3);
@@ -70,8 +73,13 @@ test('account job pickers show compact links, full URL tooltips, independent sel
       await page.evaluate(async mode=>{
         const s=window.testRoot.querySelector(`[data-work-account="${mode}"]`);s.value=s.options[1].value;s.dispatchEvent(new Event('change'));
         window.store.qtsExtensionStatus=mode==='generation'?'generation':'apply';window.store.qtsApplyKind=mode==='auto_apply'?'auto':null;
+        window.store.qtsAutoApplyState=mode==='auto_apply'?{runs:[{phase:'needs_you',step:1}]}:null;
         await window.__qtsPageLauncher.syncModeActions();
       },mode);
+      assert.equal(await page.evaluate(mode=>{
+        const button=window.testRoot.querySelector(`[data-action="${mode}"]`), tag=button.querySelector('.action-tag');
+        return tag.getBoundingClientRect().right <= button.getBoundingClientRect().right;
+      },mode),true,'running status stays inside the narrower action button');
       await page.waitForFunction(mode=>window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job`).length===2,{},mode);
       await page.evaluate(mode=>{
         const style=document.createElement('style');style.textContent='.work-jobs { max-height:36px !important; }';window.testRoot.append(style);

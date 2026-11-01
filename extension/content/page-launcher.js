@@ -39,7 +39,7 @@ async function initializeQtsPageLauncher() {
 
   // While the actions panel is open the page moves left, so the panel never covers it (the Apply
   // and Get JD panels, which dock in the same place, take precedence).
-  const MENU_WIDTH = 'min(480px, 48vw)';
+  const MENU_WIDTH = 'min(384px, 48vw)';
   document.querySelectorAll('[data-qts-menu-dock]').forEach((node) => node.remove());
   const dock = document.createElement('style');
   dock.setAttribute('data-qts-menu-dock', '');
