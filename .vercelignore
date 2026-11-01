@@ -1,0 +1,6 @@
+.git
+.next
+node_modules
+.pdf-verification
+dist
+.env*
