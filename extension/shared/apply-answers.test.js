@@ -24,6 +24,24 @@ const candidate = {
 
 const field = (label, extra = {}) => ({ id: label, label, kind: 'text', required: true, ...extra });
 
+test('Apply and Auto Apply use a complete HTTPS LinkedIn URL from the saved account', () => {
+  for (const autoApply of [false, true]) {
+    for (const saved of ['linkedin.com/in/anna', 'www.linkedin.com/in/anna', 'http://linkedin.com/in/anna', 'https://linkedin.com/in/anna', 'https://www.linkedin.com/in/anna', '//linkedin.com/in/anna']) {
+      const profile = { ...candidate, linkedinUrl: ` ${saved} ` };
+      const result = answers.resolveFields([field('Linkedin profile link *', { id: 'linkedin', kind: 'url' })], profile, [], { autoApply });
+      assert.equal(result.answers.linkedin?.value, 'https://www.linkedin.com/in/anna', `${autoApply}: ${saved}`);
+      assert.equal(result.answers.linkedin?.source, 'profile');
+      assert.equal(profile.linkedinUrl, ` ${saved} `, 'saved data remains unchanged');
+    }
+    const path = 'linkedin.com/in/Anna-123/?originalSubdomain=ro#profile';
+    assert.equal(answers.resolveFields([field('LinkedIn', { id: 'li' })], { ...candidate, linkedinUrl: path }, [], { autoApply }).answers.li.value, `https://www.${path}`);
+    for (const linkedinUrl of [null, '', '   ']) {
+      const result = answers.resolveFields([field('LinkedIn', { id: 'li' })], { ...candidate, linkedinUrl }, [], { autoApply });
+      assert.equal(result.answers.li, undefined, 'an absent saved link is never invented');
+    }
+  }
+});
+
 test('profile facts answer the common questions', () => {
   const { answers: resolved, open, missing } = answers.resolveFields([
     field('First name'),

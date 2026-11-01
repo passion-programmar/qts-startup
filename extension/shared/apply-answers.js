@@ -301,6 +301,12 @@
   const YES_NO_QUESTION = /^(are|do|does|did|have|has|had|can|could|will|would|is|was|were|may|should|shall)\b/;
 
   // Each rule: the question it recognizes, and the candidate fact that answers it (or the missing fact's name).
+  // Supply an absolute LinkedIn URL without changing the saved profile or its account path.
+  function linkedinProfileUrl(value) {
+    if (typeof value !== 'string') return value;
+    return value.trim().replace(/^(?:(?:https?:)?\/\/)?(?:www\.)?linkedin\.com(?=[/?#]|$)/i, 'https://www.linkedin.com');
+  }
+
   const RULES = [
     { test: /first and last name|full name|legal name|^(your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name', personal: true },
     // English, then the Polish, German, French, and Spanish words forms use.
@@ -308,7 +314,7 @@
     { test: /\b(last|family) name\b|\bsurname\b|^(last|family)$|^nazwisko$|^nachname$|^nom( de famille)?$|^apellidos?$/, fact: (c) => c.lastName, name: 'last name', personal: true },
     { test: /e-?mail|^correo( electr[oó]nico)?$|^courriel$/, fact: (c) => c.email, name: 'email', personal: true },
     { test: /\b(phone|mobile|telephone|cell)\b|^(your )?contact (phone )?number$|^whats ?app( number)?$|^tel\.?$|^telefon(nummer| kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone', personal: true },
-    { test: /linkedin/, fact: (c) => c.linkedinUrl, name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
+    { test: /linkedin/, fact: (c) => linkedinProfileUrl(c.linkedinUrl), name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
     // City-labelled location fields are profile facts in both modes; sites vary parenthesis spacing.

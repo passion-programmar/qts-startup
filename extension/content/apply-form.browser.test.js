@@ -382,6 +382,23 @@ test('a phone box holding only its country\'s dialling code is empty and takes t
   assert.deepEqual(result, { ph: false, mb: false, own: true, age: true, empty: ['Phone number *'], ok: true, value: '+40264484948' });
 });
 
+test('LinkedIn autofill adds HTTPS and www from the saved account and respects a fixed field prefix', { skip }, async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<form><label for="full">Linkedin profile link *</label><input id="full" type="url" required><label for="handle">LinkedIn URL</label><div><span>https://www.linkedin.com/in/</span><input id="handle"></div></form>');
+    await page.addScriptTag({ path: FORM_FILE });
+    await page.addScriptTag({ path: path.join(__dirname, '../shared/apply-answers.js') });
+    const result = await page.evaluate(async () => {
+      const api = globalThis.__qtsApplyForm;
+      const resolved = globalThis.__qtsApplyAnswers.resolveFields(api.scanForm(), { linkedinUrl: 'linkedin.com/in/anna-123' }, [], { autoApply: true });
+      const filled = [];
+      for (const [id, answer] of Object.entries(resolved.answers)) filled.push((await api.fillField(id, answer.value)).ok);
+      return { full: document.getElementById('full').value, valid: document.getElementById('full').checkValidity(), handle: document.getElementById('handle').value, filled };
+    });
+    assert.deepEqual(result, { full: 'https://www.linkedin.com/in/anna-123', valid: true, handle: 'anna-123', filled: [true, true] });
+  } finally { await page.close(); }
+});
+
 test('a box after a fixed start ("https://linkedin.com/in/") takes only the handle; other boxes the whole value', { skip }, async () => {
   const result = await onPage(`<form>
       <label for="li">LinkedIn URL *</label><div class="group"><span class="addon">https://linkedin.com/in/</span><input id="li" placeholder="your-handle"></div>
