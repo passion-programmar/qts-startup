@@ -3137,6 +3137,7 @@ async function processApplyQueue() {
   } finally {
     await Promise.allSettled([...running]);
     applyLoopRunning = false;
+    await self.__qtsFinishWorkCancellation?.();
   }
 }
 
@@ -3176,4 +3177,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // An application being filled or waiting for the Manager: never paced down or turned off.
 const isBusy = () => activeReviews.size > 0;
 
-self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY };
+self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY };

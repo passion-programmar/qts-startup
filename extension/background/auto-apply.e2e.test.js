@@ -653,6 +653,7 @@ test('modes, permission, "Apply this page", Cancel and Stop all: refused without
     const afterStop = await storage(['qtsExtensionStatus', 'qtsApplyKind']);
     assert.notEqual(afterStop.qtsExtensionStatus, 'apply');
     assert.equal(afterStop.qtsApplyKind ?? null, null);
+    await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus == null, 20000, 'Stop all cleanup to finish before restarting');
 
     // Cancel while a step is being filled: interrupted at once, the tab closed, the job given back.
     mock.queue.push(application(3));
@@ -666,6 +667,7 @@ test('modes, permission, "Apply this page", Cancel and Stop all: refused without
     assert.deepEqual([mock.released[2].attemptId, mock.released[2].mode], [attempt(3), 'later']);
     assert.ok(results.cancelMs < 2000, `Cancel took ${results.cancelMs} ms`);
     assert.equal(mock.submitted.length, 0);
+    await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus == null, 20000, 'Cancel cleanup to finish before restarting');
 
     // The permission taken away: the next claim is refused and Auto Apply stops.
     mock.claimStatus = 403;

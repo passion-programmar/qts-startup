@@ -18,9 +18,11 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         if(message.type === 'QTS_GET_LAUNCHER_STATE') return { active: true };
         if(message.type === 'CHECK_EXTENSION_PAGE_ALLOWED') return { ok: true, excluded: false };
         if(message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, features: {} };
+        if(message.action === 'cancel_status' && window.failCancellation) return { ok: false, error: 'Local cancellation failure. Retry.' };
+        if(message.action === 'cancel_status') { window.store.qtsExtensionStatus = 'cancel'; return { ok: true }; }
         if(message.type === 'QTS_WORK_ITEMS') {
           if(!message.candidateId) return { ok: true, accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor' }, { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith' }] };
-          if(message.candidateId.startsWith('2222')) return { ok: false, error: 'Local loading failure. Retry.' };
+          if(message.candidateId.startsWith('2222') && !window.allowSecondAccount) return { ok: false, error: 'Local loading failure. Retry.' };
           return { ok: true, jobs: [{id:'33333333-3333-4333-8333-333333333333',title:'Machine Learning Engineer III',company:'Mapbox',url:'https://www.remoterocketship.com/publicjobs/company/mapbox/jobs/machine-learning-engineer-iii-routing-cost-poland-remote/?tracking=complete'},
             {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://djinni.co/jobs/838846-senior-devops-engineer-contractor/'}] };
         }
@@ -56,6 +58,39 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .error'));
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').disabled),true);
     assert.equal(await page.evaluate(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length),0);
+    // An idle picker clears locally without cancelling another mode.
+    const cancelsBefore=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length);
+    await page.evaluate(()=>{window.store.qtsExtensionStatus='generation';window.store.qtsApplyKind=null;});
+    await page.evaluate(()=>window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-cancel').click());
+    await page.waitForFunction(()=>window.testRoot.querySelector('[data-work-picker="auto_apply"]').hidden);
+    assert.equal(await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length),cancelsBefore);
+    // Both running modes use the existing stop action, with an expected-mode guard.
+    for(const mode of ['generation','auto_apply']){
+      await page.evaluate(async mode=>{
+        const s=window.testRoot.querySelector(`[data-work-account="${mode}"]`);s.value=s.options[1].value;s.dispatchEvent(new Event('change'));
+        window.store.qtsExtensionStatus=mode==='generation'?'generation':'apply';window.store.qtsApplyKind=mode==='auto_apply'?'auto':null;
+        await window.__qtsPageLauncher.syncModeActions();
+      },mode);
+      await page.evaluate(mode=>{window.failCancellation=true;window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-cancel`).click();},mode);
+      await page.waitForFunction(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .error`)?.textContent.includes('cancellation failure'),{},mode);
+      assert.notEqual(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).value,mode),'','failed cancellation retains selection');
+      await page.evaluate(()=>{window.failCancellation=false;});
+      const before=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length);
+      await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-cancel`).click(),mode);
+      await page.waitForFunction(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"]`).hidden,{},mode);
+      const calls=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status'));
+      assert.equal(calls.length,before+1);assert.equal(calls.at(-1).expectedAction,mode);
+      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).value,mode),'');
+      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).disabled,mode),false,'another account can be chosen while cancellation finishes');
+      await page.evaluate(mode=>{
+        window.allowSecondAccount=true;
+        const s=window.testRoot.querySelector(`[data-work-account="${mode}"]`);s.value=s.options[2].value;s.dispatchEvent(new Event('change'));
+      },mode);
+      await page.waitForFunction(mode=>window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job`).length===2,{},mode);
+      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-start`).disabled,mode),true,'starting waits for old run cleanup');
+      await page.evaluate(async()=>{window.store.qtsExtensionStatus=null;await window.__qtsPageLauncher.syncModeActions();});
+      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-start`).disabled,mode),false,'new selection can start after cleanup');
+    }
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); }
 });

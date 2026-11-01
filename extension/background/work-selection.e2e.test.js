@@ -28,6 +28,10 @@ test('real worker passes exact account/job scope to Generation and Auto Apply cl
         const control=await browser.newPage();await control.goto('chrome-extension://'+new URL(worker.url()).host+'/signin/signin.html');
         const ask=message=>control.evaluate(m=>chrome.runtime.sendMessage(m),message);
         const accounts=await ask({type:'QTS_WORK_ITEMS',mode});assert.equal(accounts.ok,true,JSON.stringify(accounts));assert.equal(accounts.accounts[0].id,scope.candidateId);
+        await worker.evaluate(()=>chrome.storage.local.set({qtsExtensionStatus:'cancel'}));
+        const stopping=await ask({type:'QTS_PAGE_ACTION',action:mode,selection:scope});
+        assert.equal(stopping.ok,false);assert.match(stopping.error,/still stopping/);
+        await worker.evaluate(()=>chrome.storage.local.set({qtsExtensionStatus:null}));
         const before=calls.length;
         assert.equal((await ask({type:'QTS_PAGE_ACTION',action:mode,selection:{candidateId:scope.candidateId,jobIds:[]}})).ok,false);
         assert.equal(calls.slice(before).some(c=>c.url.endsWith('/claim')),false);
@@ -35,6 +39,17 @@ test('real worker passes exact account/job scope to Generation and Auto Apply cl
         const endpoint=mode==='generation'?'/api/extension/generation/claim':'/api/extension/apply/claim';
         await wait(()=>calls.slice(before).some(c=>c.url===endpoint));
         assert.deepEqual(calls.slice(before).find(c=>c.url===endpoint).body.selection,{mode,...scope});
+        const wrongMode=mode==='generation'?'auto_apply':'generation';
+        assert.equal((await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:wrongMode})).ok,false,'a stale Cancel must not stop another mode');
+        assert.equal((await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:mode})).ok,true);
+        assert.equal((await worker.evaluate(async()=>chrome.storage.local.get('qtsWorkSelection'))).qtsWorkSelection,undefined);
+        await wait(async()=>!(await worker.evaluate(async()=>chrome.storage.local.get('qtsExtensionStatus'))).qtsExtensionStatus);
+        const nextScope={candidateId:'33333333-3333-4333-8333-333333333333',jobIds:['44444444-4444-4444-8444-444444444444']};
+        const nextBefore=calls.length;
+        assert.equal((await ask({type:'QTS_PAGE_ACTION',action:mode,selection:nextScope})).ok,true,'another selected account can start after cancellation');
+        await wait(()=>calls.slice(nextBefore).some(c=>c.url===endpoint));
+        assert.deepEqual(calls.slice(nextBefore).find(c=>c.url===endpoint).body.selection,{mode,...nextScope});
+        await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:mode});
         assert.equal(calls.some(c=>/generation\/start|apply\/start-job|apply\/submitted/.test(c.url)),false);
       }finally{await browser.close();}
     }

@@ -162,6 +162,10 @@ async function initializeQtsPageLauncher() {
     .work-footer { padding-top: 10px; border-top: 1px solid #263247; color: #94a3b8; font: 500 11px/1.4 system-ui, sans-serif; }
     .work-start { padding: 8px 10px; border: 1px solid #7160b0; border-radius: 8px; background: #29213f; color: #ede9fe; font: 600 12px/1.4 system-ui, sans-serif; cursor: pointer; }
     .work-start:disabled, .work-account:disabled { opacity: .5; cursor: not-allowed; }
+    .work-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .work-cancel { padding: 8px 10px; border: 1px solid #704050; border-radius: 8px; background: transparent; color: #fda4af; font: 600 12px/1.4 system-ui, sans-serif; cursor: pointer; }
+    .work-cancel:disabled { opacity: .5; cursor: wait; }
+    .work-cancel:focus-visible { outline: 2px solid #fda4af; outline-offset: 2px; }
     .action.custom { --tint: rgb(100 116 139 / .2); --ink: #cbd5e1; }
     .action.custom:disabled { cursor: not-allowed; }
     .action.text-highlights { --tint: rgb(245 158 11 / .16); --ink: #fcd34d; }
@@ -405,6 +409,33 @@ async function initializeQtsPageLauncher() {
     }
   }
 
+  async function cancelWorkPicker(action) {
+    const picker = workPickers.get(action);
+    if (picker.cancelling) return;
+    picker.cancelling = true;
+    picker.select.disabled = true;
+    renderWorkPicker(action);
+    try {
+      const stored = await chrome.storage.local.get(['qtsExtensionStatus', 'qtsApplyKind']);
+      const running = action === 'generation' ? stored.qtsExtensionStatus === 'generation'
+        : stored.qtsExtensionStatus === 'apply' && stored.qtsApplyKind === 'auto';
+      if (running) {
+        const reply = await chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: 'cancel_status', expectedAction: action });
+        if (!reply?.ok) throw new Error(reply?.error || 'Could not cancel this run.');
+        if (reply.warning) rowNotes.set(action, [reply.message, 'warn']);
+        else rowNotes.delete(action);
+      }
+      picker.version += 1; // Discard any pending job-list response for the cleared account.
+      picker.select.value = '';
+      picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.loading = false;
+    } catch (error) {
+      picker.error = error.message || 'Could not cancel this run.';
+    } finally {
+      picker.cancelling = false;
+      await syncModeActions();
+    }
+  }
+
   function renderWorkPicker(action) {
     const picker = workPickers.get(action), panel = picker.panel;
     panel.replaceChildren(); panel.hidden = !picker.select.value;
@@ -413,16 +444,17 @@ async function initializeQtsPageLauncher() {
     const allLabel = document.createElement('label');
     const all = Object.assign(document.createElement('input'), { type: 'checkbox', checked: picker.jobs.length > 0 && picker.selected.size === picker.jobs.length });
     all.indeterminate = picker.selected.size > 0 && picker.selected.size < picker.jobs.length;
-    all.disabled = !picker.jobs.length;
+    all.disabled = !picker.jobs.length || Boolean(picker.cancelling);
     all.addEventListener('change', () => { picker.selected = new Set(all.checked ? picker.jobs.map(job => job.id) : []); renderWorkPicker(action); });
     allLabel.append(all, 'Select all');
-    const refresh = Object.assign(document.createElement('button'), { type: 'button', className: 'work-refresh', textContent: 'Refresh', disabled: picker.loading });
+    const refresh = Object.assign(document.createElement('button'), { type: 'button', className: 'work-refresh', textContent: 'Refresh', disabled: picker.loading || Boolean(picker.cancelling) });
     refresh.addEventListener('click', () => loadWorkJobs(action));
     toolbar.append(allLabel, refresh); panel.append(toolbar);
     const list = Object.assign(document.createElement('div'), { className: 'work-jobs' });
     for (const job of picker.jobs) {
       const row = Object.assign(document.createElement('div'), { className: 'work-job', title: job.url });
       const check = Object.assign(document.createElement('input'), { type: 'checkbox', checked: picker.selected.has(job.id) });
+      check.disabled = Boolean(picker.cancelling);
       check.setAttribute('aria-label', `Select ${job.title}`);
       check.dataset.jobId = job.id;
       check.addEventListener('change', () => {
@@ -448,9 +480,14 @@ async function initializeQtsPageLauncher() {
     const footer = Object.assign(document.createElement('div'), { className: 'work-footer' });
     const start = Object.assign(document.createElement('button'), { type: 'button', className: 'work-start', textContent: action === 'generation' ? 'Generate selected' : 'Apply to selected' });
     const button = menu.querySelector(`[data-action="${action}"]`);
-    start.disabled = picker.loading || !picker.selected.size || button.disabled || button.classList.contains('running');
+    start.disabled = picker.cancelling || picker.loading || !picker.selected.size || button.disabled || button.classList.contains('running');
     start.addEventListener('click', () => runAction(action, button));
-    footer.append(`${picker.selected.size} selected`, start); panel.append(footer);
+    const cancel = Object.assign(document.createElement('button'), { type: 'button', className: 'work-cancel', textContent: picker.cancelling ? 'Cancelling…' : 'Cancel', disabled: Boolean(picker.cancelling) });
+    cancel.setAttribute('aria-label', `Cancel ${action === 'generation' ? 'Generation' : 'Auto Apply'} selection or run`);
+    cancel.addEventListener('click', () => cancelWorkPicker(action));
+    const buttons = Object.assign(document.createElement('div'), { className: 'work-buttons' });
+    buttons.append(cancel, start);
+    footer.append(`${picker.selected.size} selected`, buttons); panel.append(footer);
   }
 
   // Credentials are typed in an extension-origin frame, never in this page's DOM,
@@ -1224,6 +1261,9 @@ async function initializeQtsPageLauncher() {
       auto_apply: workStatus === 'generation' ? 'Generation is running in this Chrome. Stop it first.'
         : workStatus === 'apply' && !autoApplyOn ? 'Apply is running in this Chrome. Stop it first.' : '',
     };
+    if (workStatus === 'cancel') {
+      for (const action of ['generation', 'apply', 'auto_apply']) busy[action] = 'Stopping the previous run. You can choose the next account while it finishes.';
+    }
 
     let failed = false;
     for (const [action, row] of Object.entries(rows)) {
@@ -1273,7 +1313,7 @@ async function initializeQtsPageLauncher() {
     launcher.classList.toggle('failed', !needs && failed);
     launcher.classList.toggle('running', !needs && !failed && Object.values(rows).some((row) => row.active));
     for (const [action, picker] of workPickers) {
-      picker.select.disabled = Boolean(workStatus);
+      picker.select.disabled = ['generation', 'apply'].includes(workStatus) || Boolean(picker.cancelling);
       const scroll = picker.panel.querySelector('.work-jobs')?.scrollTop || 0;
       renderWorkPicker(action);
       const list = picker.panel.querySelector('.work-jobs');

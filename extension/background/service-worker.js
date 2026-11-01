@@ -5502,6 +5502,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, self.__qtsAutoApply.KIND_KEY]);
         const cancelledStatus = stored[EXTENSION_STATUS_KEY];
         const cancelledAuto = cancelledStatus === 'apply' && stored[self.__qtsAutoApply.KIND_KEY] === 'auto';
+        if (msg.expectedAction && !((msg.expectedAction === 'generation' && cancelledStatus === 'generation')
+          || (msg.expectedAction === 'auto_apply' && cancelledAuto))) {
+          sendResponse({ ok: false, error: 'That mode is no longer running. The current mode was left unchanged.' });
+          return;
+        }
         let serverCancelError = '';
         if (cancelledStatus === 'generation') {
           // Stop locally even if the server is unreachable; the run's cancel path retries server-side.
@@ -5514,7 +5519,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             serverCancelError = cancellation.message || 'Could not reach QTS.';
           }
         }
-        await stopWorkSlotLocally();
+        await stopWorkSlotLocally(true);
         const cancelledLabel = cancelledStatus === 'generation'
             ? 'Generation'
             : cancelledStatus === 'apply'
@@ -5529,6 +5534,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             ? `${cancelledLabel} stopped in this browser. QTS was not updated yet: ${serverCancelError}`
             : `${cancelledLabel} cancelled.`,
         });
+        return;
+      }
+      if (['apply', 'auto_apply', 'generation'].includes(action)
+        && (await chrome.storage.local.get(EXTENSION_STATUS_KEY))[EXTENSION_STATUS_KEY] === 'cancel') {
+        sendResponse({ ok: false, error: 'The previous run is still stopping. Choose your next account and try again when it finishes.' });
         return;
       }
       if (action === 'apply') {
@@ -6776,12 +6786,26 @@ async function syncBrowserHeartbeatAlarm() {
 }
 
 /** Stops the work slot in this Chrome only (Cancel, or "Stop all" seen on a heartbeat). */
-async function stopWorkSlotLocally() {
+async function stopWorkSlotLocally(clearSelection = false) {
   await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
+  if (clearSelection) await chrome.storage.local.remove('qtsWorkSelection');
   for (const [runningTabId, token] of generationCancellationByTab) {
     generationCancellationByTab.set(runningTabId, token + 1);
   }
+  await finishWorkCancellation();
 }
+
+// Release an idle cancelled slot immediately; active queues call this after cleanup.
+async function finishWorkCancellation() {
+  if (generationQueueInFlight || generationInFlightTabs.size
+    || self.__qtsApplyRunner?.isQueueRunning?.() || self.__qtsApplyRunner?.isBusy?.()
+    || self.__qtsAutoApply?.isRunning?.()) return;
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
+  if (stored[EXTENSION_STATUS_KEY] === 'cancel' && !stored[ACTIVE_GENERATION_JOB_KEY]) {
+    await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+  }
+}
+self.__qtsFinishWorkCancellation = finishWorkCancellation;
 
 async function sendBrowserHeartbeat() {
   const modes = await browserModes();
