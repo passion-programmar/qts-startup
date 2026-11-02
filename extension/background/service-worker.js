@@ -114,7 +114,7 @@ const GENERATION_NO_START_MS = 60 * 1000;
 const GENERATION_STOPPED_EMPTY_MS = 15 * 1000;
 // Without ChatGPT's copy button, an answer that stopped changing this long counts as finished.
 const GENERATION_ANSWER_QUIET_MS = 3000;
-// One pinned ChatGPT tab serves this many jobs (a new chat each), then a fresh tab takes over.
+// One pinned ChatGPT conversation serves this many jobs, then a fresh tab takes over.
 const GENERATION_JOBS_PER_CHATGPT_TAB = 10;
 const GENERATION_QUEUE_ALARM = 'qts-generation-queue';
 let lastSourceTabId = null;
@@ -3384,7 +3384,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         throw new Error('Could not close all existing ChatGPT tabs before Generation.');
       }
     }
-    return { ...created, qtsChatGptUrl: chatGptUrl, shownBefore };
+    return { ...created, shownBefore };
   }
 
   // A step card in the corner of the ChatGPT tab, so the Manager can follow Generation there. It also
@@ -3475,14 +3475,6 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       await sleep(1000);
       await chrome.tabs.reload(chatTabId);
     }
-  }
-
-  // A new chat in the pinned ChatGPT tab for the next job.
-  async function startNewChatGptChat(chatTabId, chatGptUrl = self.__qtsChatGptUrl.DEFAULT_URL) {
-    await chrome.tabs.update(chatTabId, { url: chatGptUrl });
-    // Let the navigation begin, so the readiness check does not see the previous page.
-    await sleep(1500);
-    await ensureChatGptReady(chatTabId);
   }
 
   /**
@@ -3774,7 +3766,6 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         await chrome.tabs.remove(chatTab.id).catch(() => {});
         const created = await acquireGenerationChatGptTab();
         chatTab.id = created.id;
-        chatTab.url = created.qtsChatGptUrl;
         await updateGenerationBrowserState({ chatTabId: chatTab.id, phase: 'opening_chatgpt' });
         await ensureChatGptReady(chatTab.id);
       }
@@ -3859,7 +3850,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         generationId,
         chatTabId: pinnedChatTab.id,
       });
-      // The queue opened the pinned ChatGPT tab (and a new chat in it) before the job page.
+      // The queue opened the pinned ChatGPT conversation before starting this job.
       chatTab = pinnedChatTab;
       ensureGenerationIsActive(cancellationKey, cancellationToken);
       const active = {
@@ -4291,21 +4282,21 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (statusBeforePageOpen[EXTENSION_STATUS_KEY] !== 'generation') {
             throw generationCancelledError();
           }
-          // ChatGPT first: one pinned tab serves up to ten jobs, each in a new chat, then a fresh tab.
+          // ChatGPT first: one pinned conversation serves up to ten jobs, then a fresh tab.
           const tabStillOpen = chatTab && await chrome.tabs.get(chatTab.id).then(() => true, () => false);
           if (!tabStillOpen || chatTab.jobs >= GENERATION_JOBS_PER_CHATGPT_TAB) {
             if (tabStillOpen) await chrome.tabs.remove(chatTab.id).catch(() => {});
             const created = await acquireGenerationChatGptTab();
-            chatTab = { id: created.id, jobs: 0, url: created.qtsChatGptUrl };
+            chatTab = { id: created.id, jobs: 0 };
             // The first job remembers the tab to return to when Generation ends.
             tabBeforeChatGpt ??= created.shownBefore;
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
             await ensureChatGptReady(chatTab.id);
           } else {
-            // ChatGPT in front before its new chat loads (Chrome slows hidden tabs).
+            // Reuse the same conversation so the configured GPT and project context remain active.
             tabBeforeChatGpt ??= await showGenerationChatGptTab(chatTab.id);
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
-            await startNewChatGptChat(chatTab.id, chatTab.url);
+            await ensureChatGptReady(chatTab.id);
           }
           chatTab.jobs += 1;
           // Still in front while ChatGPT writes, if the Manager looked at another tab meanwhile.

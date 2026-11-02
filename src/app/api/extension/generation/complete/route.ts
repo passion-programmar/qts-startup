@@ -138,7 +138,7 @@ export async function POST(request: Request): Promise<NextResponse> {
               candidate.country,
               candidate.postalCode,
             ].filter(Boolean).join(", "),
-            resumeLocation: generationResumeLocation(candidate.userId, candidate),
+            resumeLocation: generationResumeLocation(candidate),
           },
           job: { title: run.jobTitle ?? "", company: run.company ?? "" },
         };

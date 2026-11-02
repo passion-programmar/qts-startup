@@ -10,16 +10,29 @@ const candidateLocation = {
   postalCode: "400659",
 };
 
-test("the requested candidate's generated resume location contains only city and country", () => {
+test("generated resume location contains only city and country", () => {
   assert.equal(
-    generationResumeLocation("427c4d75-1eb3-4d57-83c0-de054faad75a", candidateLocation),
+    generationResumeLocation(candidateLocation),
     "Cluj-Napoca, Romania",
   );
 });
 
-test("other candidates retain the existing full generated resume location", () => {
+test("generated resume location excludes street, province, and postal code for any candidate", () => {
   assert.equal(
-    generationResumeLocation("another-candidate", candidateLocation),
-    "37, Strada Firiza, Cluj-Napoca, Cluj, Romania, 400659",
+    generationResumeLocation({
+      ...candidateLocation,
+      addressLine1: "Strada Bohatiel Alexandru, 22",
+      city: "Baia Mare",
+      province: "Maramureș",
+      postalCode: "400476",
+    }),
+    "Baia Mare, Romania",
+  );
+});
+
+test("missing city or country is omitted", () => {
+  assert.equal(
+    generationResumeLocation({ city: null, country: "Romania" }),
+    "Romania",
   );
 });

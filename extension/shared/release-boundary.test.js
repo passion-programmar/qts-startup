@@ -362,20 +362,19 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(askSource.includes('await chrome.tabs.remove(chatTab.id)'));
   assert.ok(askSource.includes('const created = await acquireGenerationChatGptTab();'));
   assert.ok(askSource.includes('chatTab.id = created.id;'));
-  assert.ok(askSource.includes('chatTab.url = created.qtsChatGptUrl;'));
   assert.equal(askSource.includes('chrome.tabs.reload'), false);
   assert.ok(serviceWorker.includes('await runGenerationForTab(jobTabId, queuedJob, chatTab);'));
   assert.ok(serviceWorker.includes('if (!unusable || followUps > 0)'));
   assert.ok(serviceWorker.includes('Retrying while Generation is on.'));
   assert.equal(serviceWorker.includes('failuresThisRun'), false);
-  // One pinned ChatGPT tab serves up to ten jobs (a new chat each), and a slow or blocked ChatGPT page
+  // One pinned ChatGPT conversation serves up to ten jobs, and a slow or blocked ChatGPT page
   // gets up to two reloads. No job page is opened: the prompt uses the saved job.
   assert.ok(serviceWorker.includes('const GENERATION_JOBS_PER_CHATGPT_TAB = 10;'));
   assert.ok(serviceWorker.includes('const CHATGPT_LOAD_TIMEOUT_MS = 30 * 1000;'));
   assert.ok(serviceWorker.includes('const CHATGPT_RELOADS = 2;'));
   assert.ok(serviceWorker.includes('async function getManagerChatGptUrl()'));
   assert.ok(serviceWorker.includes('url: chatGptUrl,'));
-  assert.ok(serviceWorker.includes('await startNewChatGptChat(chatTab.id, chatTab.url);'));
+  assert.equal(serviceWorker.includes('startNewChatGptChat(chatTab.id'), false);
   assert.ok(serviceWorker.includes("await tabOwnership.ownerOf(tab.id, tab.windowId) === 'generation'"));
   const queueSource = serviceWorker.slice(serviceWorker.indexOf('async function processQueuedGenerationJobs'));
   assert.ok(queueSource.includes('await ensureChatGptReady(chatTab.id);'));

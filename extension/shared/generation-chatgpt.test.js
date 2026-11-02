@@ -56,5 +56,31 @@ test('builds a task-specific prompt without asking ChatGPT to return transport m
   const prompt = helper.buildTaskPrompt('Return the document package.', id);
   assert.match(prompt, /^QTS_GENERATION_ID: 807bc8f8/);
   assert.match(prompt, /Do not include it in the output JSON/);
+  assert.match(prompt, /new, independent job in the same conversation/);
+  assert.match(prompt, /Ignore all earlier job-specific prompts and answers/);
   assert.match(prompt, /Return the document package\.$/);
+});
+
+test('Generation keeps the existing ChatGPT conversation for jobs within the tab limit', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../background/service-worker.js'), 'utf8');
+  const start = source.indexOf('          const tabStillOpen = chatTab &&');
+  const end = source.indexOf('          chatTab.jobs += 1;', start) + '          chatTab.jobs += 1;'.length;
+  assert.ok(start >= 0 && end > start);
+  const queueStep = source.slice(start, end);
+  const calls = [];
+  const context = vm.createContext({
+    chatTab: { id: 8, jobs: 1, url: 'https://chatgpt.com/g/manager-project' },
+    queuedJob: { id: 'job-2' },
+    tabBeforeChatGpt: null,
+    GENERATION_JOBS_PER_CHATGPT_TAB: 10,
+    chrome: { tabs: { get: async id => ({ id }) } },
+    showGenerationChatGptTab: async id => { calls.push(['show', id]); return 4; },
+    updateGenerationBrowserState: async state => calls.push(['state', state]),
+    ensureChatGptReady: async id => calls.push(['ready', id]),
+    acquireGenerationChatGptTab: async () => { throw new Error('must not open another tab'); },
+  });
+  await vm.runInContext(`(async () => { ${queueStep} })()`, context);
+  assert.equal(context.chatTab.id, 8);
+  assert.equal(context.chatTab.jobs, 2);
+  assert.deepEqual(calls.map(([type]) => type), ['show', 'state', 'ready']);
 });

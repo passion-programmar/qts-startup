@@ -86,6 +86,5 @@ test('Generation opens the Manager URL and closes only its previous QTS tab', as
 
   const tab = await context.acquireGenerationChatGptTab();
   assert.equal(tab.url, 'https://chatgpt.com/g/manager-project');
-  assert.equal(tab.qtsChatGptUrl, 'https://chatgpt.com/g/manager-project');
   assert.deepEqual(removed, [3]);
 });

@@ -19,6 +19,7 @@
     return [
       marker,
       'The identifier above is transport metadata. Do not include it in the output JSON.',
+      'This is a new, independent job in the same conversation. Ignore all earlier job-specific prompts and answers. Use only the instructions and candidate/job data in this message, and return documents only for this job.',
       '',
       source,
     ].join('\n');
