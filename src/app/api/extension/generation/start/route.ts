@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { educations, experiences, generationRuns, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
+import { generationResumeLocation } from "@/server/generation/resume-contact-location";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import {
   composeGenerationPrompt,
@@ -165,6 +166,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         savedJob.country,
         savedJob.postalCode,
       ].filter(Boolean).join(", "),
+      resumeLocation: generationResumeLocation(savedJob.candidateId, savedJob),
       // JD matching notes stay out: they pick jobs for Get JD, not what the resume says.
       education,
       experience,

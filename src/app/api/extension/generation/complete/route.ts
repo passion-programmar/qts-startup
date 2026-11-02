@@ -8,6 +8,7 @@ import { parsePdfPackage, resumeJsonVersion } from "@/app/pdf/document-data";
 import { cleanGeneratedDocuments } from "@/server/generation/clean-documents";
 import { generationOutputIssue, type GenerationOutputFacts } from "@/server/generation/generation-output-validation";
 import { describeResumeShape } from "@/server/generation/response-shape";
+import { generationResumeLocation } from "@/server/generation/resume-contact-location";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const maxResponseLength = 1_000_000;
@@ -99,6 +100,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       if (run.jobId && parsedPackage) {
         const [candidate] = await db
           .select({
+            userId: profiles.userId,
             firstName: profiles.firstName,
             lastName: profiles.lastName,
             email: profiles.candidateEmail,
@@ -136,6 +138,7 @@ export async function POST(request: Request): Promise<NextResponse> {
               candidate.country,
               candidate.postalCode,
             ].filter(Boolean).join(", "),
+            resumeLocation: generationResumeLocation(candidate.userId, candidate),
           },
           job: { title: run.jobTitle ?? "", company: run.company ?? "" },
         };

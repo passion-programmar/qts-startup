@@ -71,6 +71,21 @@ test("accepts schema-valid documents with matching identity and target", () => {
   assert.equal(generationOutputIssue(parsedPackage(), facts), null);
 });
 
+test("validates resume and cover-letter locations separately when a resume-only location is configured", () => {
+  const resumeOnlyLocationFacts = structuredClone(facts);
+  resumeOnlyLocationFacts.candidate.resumeLocation = "Cluj-Napoca, Romania";
+  const matching = structuredClone(response);
+  matching.resume.contact.location = "Cluj-Napoca, Romania";
+  assert.equal(generationOutputIssue(parsedPackage(matching), resumeOnlyLocationFacts), null);
+
+  matching.resume.contact.location = "37, Strada Firiza, Cluj-Napoca, Cluj, Romania, 400659";
+  assert.match(generationOutputIssue(parsedPackage(matching), resumeOnlyLocationFacts) ?? "", /contact details/);
+
+  matching.resume.contact.location = "Cluj-Napoca, Romania";
+  matching.coverLetter.candidate.location = "Cluj-Napoca, Romania";
+  assert.match(generationOutputIssue(parsedPackage(matching), resumeOnlyLocationFacts) ?? "", /contact details/);
+});
+
 test("Manager-controlled headline, skills, ATS wording and experience are not source-matched", () => {
   const changed = structuredClone(response);
   changed.resume.title = "Cloud Platform and Engineering Leader";

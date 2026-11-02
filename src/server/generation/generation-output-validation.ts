@@ -7,6 +7,7 @@ export type GenerationOutputFacts = {
     phone: string;
     linkedinUrl: string;
     location: string;
+    resumeLocation?: string;
   };
   job: {
     title: string;
@@ -31,10 +32,15 @@ export function generationOutputIssue(
     if (
       !samePhone(candidate.phone, facts.candidate.phone)
       || !sameLinkedIn(candidate.linkedinUrl, facts.candidate.linkedinUrl)
-      || !sameText(candidate.location, facts.candidate.location)
     ) {
       return "The generated documents must preserve the candidate's saved contact details.";
     }
+  }
+  if (
+    !sameText(resume.candidate.location, facts.candidate.resumeLocation ?? facts.candidate.location)
+    || !sameText(coverLetter.candidate.location, facts.candidate.location)
+  ) {
+    return "The generated documents must preserve the candidate's saved contact details.";
   }
   if (coverLetter.signatureName && !sameText(coverLetter.signatureName, facts.candidate.fullName)) {
     return "The cover-letter signature must use the candidate's saved name.";
