@@ -1557,6 +1557,8 @@ function PdfTemplateField({
   id: string;
   defaultValue?: PdfTemplate;
 }) {
+  const isActiveTemplate = pdfTemplateValues.some((template) => template === defaultValue);
+
   return (
     <div>
       <label className="mb-2 block text-xs font-semibold text-slate-700" htmlFor={id}>
@@ -1573,6 +1575,9 @@ function PdfTemplateField({
             {pdfTemplateLabels[template]}
           </option>
         ))}
+        {!isActiveTemplate && (
+          <option value={defaultValue}>{pdfTemplateLabels[defaultValue]} (saved template)</option>
+        )}
       </select>
     </div>
   );

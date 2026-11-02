@@ -8,6 +8,7 @@ import {
   isPdfTemplate,
   pdfTemplateDesigns,
   pdfTemplateLabels,
+  pdfTemplateSupportedValues,
   pdfTemplateValues,
 } from "@/server/pdf/pdf-templates";
 
@@ -44,9 +45,10 @@ const data: PdfPackage = {
   },
 };
 
-test("every one-column template renders a valid resume and cover letter PDF", async () => {
-  assert.equal(pdfTemplateValues.length, 24);
-  for (const template of pdfTemplateValues) {
+test("every supported template renders a valid resume and cover letter PDF", async () => {
+  assert.equal(pdfTemplateValues.length, 13);
+  assert.equal(pdfTemplateSupportedValues.length, 24);
+  for (const template of pdfTemplateSupportedValues) {
     const rendered = await renderPdfPackage(data, template);
     assert.equal(Buffer.from(rendered.resume).subarray(0, 4).toString(), "%PDF", template);
     assert.equal(Buffer.from(rendered.coverLetter).subarray(0, 4).toString(), "%PDF", template);
@@ -57,11 +59,19 @@ test("every one-column template renders a valid resume and cover letter PDF", as
   }
 });
 
-test("templates are numbered QTS Template 1 to 24 in rotation order and exclude retired IDs", () => {
+test("active templates are renumbered in rotation order and hidden templates remain supported", () => {
+  assert.deepEqual(
+    [...pdfTemplateValues],
+    [
+      "startup", "minimal", "classic", "centered", "corporate", "creative",
+      "nordic", "ledger", "banded", "executive", "academic", "graphite", "qts-standard",
+    ],
+  );
   assert.deepEqual(
     pdfTemplateValues.map((template) => pdfTemplateLabels[template]),
-    Array.from({ length: 24 }, (_, index) => `QTS Template ${index + 1}`),
+    Array.from({ length: 13 }, (_, index) => `QTS Template ${index + 1}`),
   );
+  assert.equal(isPdfTemplate("bold"), true);
   assert.equal(isPdfTemplate("qts-standard"), true);
   assert.equal(isPdfTemplate("flowcv"), false);
   assert.equal(isPdfTemplate("orchid"), false);

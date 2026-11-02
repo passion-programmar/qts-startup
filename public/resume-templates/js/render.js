@@ -28,6 +28,14 @@
   "use strict";
 
   const TEMPLATES = window.RESUME_TEMPLATES || [];
+  const ACTIVE_TEMPLATE_IDS = window.ACTIVE_RESUME_TEMPLATE_IDS;
+  if (!Array.isArray(ACTIVE_TEMPLATE_IDS)) {
+    throw new Error("The active resume template list is missing.");
+  }
+  const ACTIVE_TEMPLATES = ACTIVE_TEMPLATE_IDS.map((id) => TEMPLATES.find((template) => template.id === id));
+  if (ACTIVE_TEMPLATES.some((template) => !template)) {
+    throw new Error("An active resume template is missing from the template registry.");
+  }
   const OPTIONS = window.RESUME_OPTIONS || {};
   const DEFAULT_TEMPLATE = "qts-standard";
   const DEFAULT_DATA_URL = "data/sample-full.json";
@@ -1163,7 +1171,7 @@
   function setupToolbar() {
     const select = document.getElementById("template-select");
     if (select) {
-      TEMPLATES.forEach((template) => select.append(new Option(template.name, template.id)));
+      ACTIVE_TEMPLATES.forEach((template) => select.append(new Option(template.name, template.id)));
       select.addEventListener("change", () => {
         params.set("template", select.value);
         replaceUrl();

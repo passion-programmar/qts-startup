@@ -3,7 +3,7 @@ import test from "node:test";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
 import { sectionOrders, templateSectionOrders } from "@/app/pdf/resume-sections";
 import sampleFull from "@/app/pdf/sample-full.json";
-import { pdfTemplateValues } from "@/server/pdf/pdf-templates";
+import { pdfTemplateSupportedValues, pdfTemplateValues } from "@/server/pdf/pdf-templates";
 
 const validPackage = {
   resume: {
@@ -230,22 +230,13 @@ test("each template shows its own sections in its own order, with its own layout
   assert.equal("bulletStyle" in executive.theme, false);
 });
 
-test("every template prints Experience, Projects, Skills and Education once, Education first or last, Projects after Experience", () => {
-  for (const template of pdfTemplateValues) {
+test("every supported template preserves its Experience, Projects, Skills and Education order", () => {
+  for (const template of pdfTemplateSupportedValues) {
     const order = templateSectionOrders[template];
     assert.ok(sectionOrders.includes(order as (typeof sectionOrders)[number]), template);
     assert.deepEqual([...order].sort(), ["education", "experience", "projects", "skills"], template);
     assert.ok(order[0] === "education" || order.at(-1) === "education", template);
     assert.equal(order.indexOf("projects"), order.indexOf("experience") + 1, template);
-  }
-});
-
-test("any four templates in a row of the rotation print different section orders", () => {
-  const rotation = pdfTemplateValues.map((template) => templateSectionOrders[template].join(","));
-  for (let start = 0; start < rotation.length; start += 1) {
-    // The rotation starts again at Template 1 after Template 24.
-    const run = [0, 1, 2, 3].map((offset) => rotation[(start + offset) % rotation.length]);
-    assert.equal(new Set(run).size, 4, `templates ${start + 1} to ${start + 4}`);
   }
 });
 

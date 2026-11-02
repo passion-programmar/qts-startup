@@ -1,45 +1,52 @@
-// Listed by template number: the rotation goes through them in this order.
-export const pdfTemplateValues = [
+// All designs remain supported so saved documents keep rendering with their original template.
+export const pdfTemplateSupportedValues = [
   "startup", "centered", "corporate", "ledger", "bold", "technical",
   "professional", "executive", "timeline", "graphite", "modern-serif", "compact",
   "minimal", "harvard", "nordic", "academic", "swiss", "slate",
   "high-contrast", "classic", "qts-standard", "elegant", "creative", "banded",
 ] as const;
-export type PdfTemplate = (typeof pdfTemplateValues)[number];
+export type PdfTemplate = (typeof pdfTemplateSupportedValues)[number];
+
+// Active templates, in the order used for new selections and Generation rotation.
+export const pdfTemplateValues = [
+  "startup", "minimal", "classic", "centered", "corporate", "creative",
+  "nordic", "ledger", "banded", "executive", "academic", "graphite", "qts-standard",
+] as const satisfies readonly PdfTemplate[];
+
 export type LegacyPdfTemplate =
   | "heritage" | "laurel" | "vellum" | "pewter" | "regent" | "onyx"
   | "palette" | "indigo" | "amber-crest" | "garnet" | "reef" | "verdant"
   | "ember" | "terminal" | "meridian" | "flowcv";
 
 export function isPdfTemplate(value: string): value is PdfTemplate {
-  return pdfTemplateValues.includes(value as PdfTemplate);
+  return (pdfTemplateSupportedValues as readonly string[]).includes(value);
 }
 
 export const pdfTemplateLabels: Record<PdfTemplate, string> = {
   startup: "QTS Template 1",
-  centered: "QTS Template 2",
-  corporate: "QTS Template 3",
-  ledger: "QTS Template 4",
-  bold: "QTS Template 5",
-  technical: "QTS Template 6",
-  professional: "QTS Template 7",
-  executive: "QTS Template 8",
-  timeline: "QTS Template 9",
-  graphite: "QTS Template 10",
-  "modern-serif": "QTS Template 11",
-  compact: "QTS Template 12",
-  minimal: "QTS Template 13",
-  harvard: "QTS Template 14",
-  nordic: "QTS Template 15",
-  academic: "QTS Template 16",
-  swiss: "QTS Template 17",
-  slate: "QTS Template 18",
-  "high-contrast": "QTS Template 19",
-  classic: "QTS Template 20",
-  "qts-standard": "QTS Template 21",
-  elegant: "QTS Template 22",
-  creative: "QTS Template 23",
-  banded: "QTS Template 24",
+  centered: "QTS Template 4",
+  corporate: "QTS Template 5",
+  ledger: "QTS Template 8",
+  bold: "Archived · QTS Template 5",
+  technical: "Archived · QTS Template 6",
+  professional: "Archived · QTS Template 7",
+  executive: "QTS Template 10",
+  timeline: "Archived · QTS Template 9",
+  graphite: "QTS Template 12",
+  "modern-serif": "Archived · QTS Template 11",
+  compact: "Archived · QTS Template 12",
+  minimal: "QTS Template 2",
+  harvard: "Archived · QTS Template 14",
+  nordic: "QTS Template 7",
+  academic: "QTS Template 11",
+  swiss: "Archived · QTS Template 17",
+  slate: "Archived · QTS Template 18",
+  "high-contrast": "Archived · QTS Template 19",
+  classic: "QTS Template 3",
+  "qts-standard": "QTS Template 13",
+  elegant: "Archived · QTS Template 22",
+  creative: "QTS Template 6",
+  banded: "QTS Template 9",
 };
 
 export type PdfTemplateDesign = {

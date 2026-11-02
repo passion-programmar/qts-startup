@@ -321,7 +321,37 @@ test('uploads that read the résumé to fill the form are recognised on any site
   assert.equal(resolved.easy, undefined);
   assert.equal(resolved.general.file, 'resume');
   assert.equal(resolved.message.value, coverLetterText);
-  assert.equal(resolved.line, undefined);
+  assert.equal(resolved.line.value, coverLetterText);
+});
+
+test('optional Message, Comment, and Cover Letter fields use the generated cover letter before saved answers', () => {
+  const coverLetterText = 'Dear Hiring Team,\n\nI am applying for this role.';
+  const fields = [
+    field('Message', { id: 'message', kind: 'textarea', required: false }),
+    field('Comment (optional)', { id: 'comment', kind: 'textarea', required: false }),
+    field('Cover Letter', { id: 'cover-letter', kind: 'textarea', required: false }),
+  ];
+  const { answers: resolved, open } = answers.resolveFields(fields, candidate, [
+    { questionText: 'Message', answer: 'An older saved message', scope: 'candidate' },
+  ], { coverLetterText });
+
+  assert.equal(resolved.message.value, coverLetterText);
+  assert.equal(resolved.comment.value, coverLetterText);
+  assert.equal(resolved['cover-letter'].value, coverLetterText);
+  assert.ok(Object.values(resolved).every((answer) => answer.source === 'documents'));
+  assert.deepEqual(open, []);
+});
+
+test('a short message field adapts the generated cover letter to its character limit', () => {
+  const coverLetterText = 'Dear Hiring Team, I am applying for this role.';
+  const { answers: resolved, open } = answers.resolveFields([
+    field('Message', { id: 'message', kind: 'text', required: false, maxLength: 20 }),
+  ], candidate, [], { coverLetterText });
+
+  assert.equal(resolved.message, undefined);
+  assert.equal(open.length, 1);
+  assert.match(open[0].hint, /generated cover letter as the source/);
+  assert.match(open[0].hint, /20 characters/);
 });
 
 test('a salutation comes from the profile\'s gender in any language; never guessed, never a job title', () => {

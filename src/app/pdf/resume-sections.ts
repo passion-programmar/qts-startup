@@ -53,34 +53,33 @@ const orderC = ["education", "experience", "projects", "skills"] as const;
 const orderD = ["education", "skills", "experience", "projects"] as const;
 export const sectionOrders = [orderA, orderB, orderC, orderD] as const;
 
-// The order each template prints its sections in, listed by template number. The templates take
-// the four orders in turn (A, B, C, D, A, ...) in rotation order, so any four templates in a row
-// of the Generation rotation print different orders, 24 back to 1 included.
+// Section order stays attached to each design ID so saved documents render as before. Generation
+// rotates only the active template IDs; its selection order is defined in pdf-templates.ts.
 export const templateSectionOrders: Record<PdfTemplate, readonly ResumeSectionId[]> = {
   startup: orderA, // QTS Template 1
-  centered: orderB, // QTS Template 2
-  corporate: orderC, // QTS Template 3
-  ledger: orderD, // QTS Template 4
-  bold: orderA, // QTS Template 5
-  technical: orderB, // QTS Template 6
-  professional: orderC, // QTS Template 7
-  executive: orderD, // QTS Template 8
-  timeline: orderA, // QTS Template 9
-  graphite: orderB, // QTS Template 10
-  "modern-serif": orderC, // QTS Template 11
-  compact: orderD, // QTS Template 12
-  minimal: orderA, // QTS Template 13
-  harvard: orderB, // QTS Template 14
-  nordic: orderC, // QTS Template 15
-  academic: orderD, // QTS Template 16
-  swiss: orderA, // QTS Template 17
-  slate: orderB, // QTS Template 18
-  "high-contrast": orderC, // QTS Template 19
-  classic: orderD, // QTS Template 20
-  "qts-standard": orderA, // QTS Template 21
-  elegant: orderB, // QTS Template 22
-  creative: orderC, // QTS Template 23
-  banded: orderD, // QTS Template 24
+  centered: orderB, // QTS Template 4
+  corporate: orderC, // QTS Template 5
+  ledger: orderD, // QTS Template 8
+  bold: orderA, // Archived, previously QTS Template 5
+  technical: orderB, // Archived, previously QTS Template 6
+  professional: orderC, // Archived, previously QTS Template 7
+  executive: orderD, // QTS Template 10
+  timeline: orderA, // Archived, previously QTS Template 9
+  graphite: orderB, // QTS Template 12
+  "modern-serif": orderC, // Archived, previously QTS Template 11
+  compact: orderD, // Archived, previously QTS Template 12
+  minimal: orderA, // QTS Template 2
+  harvard: orderB, // Archived, previously QTS Template 14
+  nordic: orderC, // QTS Template 7
+  academic: orderD, // QTS Template 11
+  swiss: orderA, // Archived, previously QTS Template 17
+  slate: orderB, // Archived, previously QTS Template 18
+  "high-contrast": orderC, // Archived, previously QTS Template 19
+  classic: orderD, // QTS Template 3
+  "qts-standard": orderA, // QTS Template 13
+  elegant: orderB, // Archived, previously QTS Template 22
+  creative: orderC, // QTS Template 6
+  banded: orderD, // QTS Template 9
 };
 
 type PrintableItem = {

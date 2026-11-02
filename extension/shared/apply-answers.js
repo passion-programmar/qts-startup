@@ -521,6 +521,23 @@
     if (['text', 'url'].includes(field.kind) && IMAGE_WORDS.test(label) && /\b(url|link)\b/.test(label)) {
       return { skip: 'A link to a photo or image.' };
     }
+    // A generated cover letter is the source of truth for any text field that asks for a
+    // cover letter, message, or comment, including optional fields and saved-answer matches.
+    if (!hasOptions(field) && ['textarea', 'text'].includes(field.kind)
+      && (COVER_LETTER_BOX.test(label) || MESSAGE_BOX.test(label))) {
+      const letter = String(context.coverLetterText || '').trim();
+      if (letter && (!field.maxLength || letter.length <= field.maxLength)) {
+        return { value: letter, source: 'documents' };
+      }
+      if (letter && field.maxLength) {
+        return {
+          ask: letter,
+          from: 'document',
+          note: `Adapt the generated cover letter to fit within ${field.maxLength} characters without losing its main message.`,
+        };
+      }
+      return null;
+    }
     const controlled = controlledAnswer(field, savedAnswers);
     if (controlled) return controlled;
     // Required consent and certification boxes are ticked; optional ones (marketing, future jobs) are left.
@@ -540,12 +557,6 @@
     }
     const salutation = salutationAnswer(field, candidate);
     if (salutation) return salutation;
-    // A cover letter typed into the form is the one Generation wrote; a shorter one comes from the AI.
-    if (!hasOptions(field) && ['textarea', 'text'].includes(field.kind) && (COVER_LETTER_BOX.test(label) || (field.kind === 'textarea' && MESSAGE_BOX.test(label)))) {
-      const letter = context.coverLetterText;
-      if (letter && (!field.maxLength || letter.length <= field.maxLength)) return { value: letter, source: 'documents' };
-      return null;
-    }
     // Diversity questions (gender, race, veteran, disability...): Super Admin's reusable answer for
     // the question or its topic, else the form's decline option, else empty when optional. A required
     // one without either goes to the AI, which picks the declining or most neutral choice.
@@ -1004,7 +1015,7 @@
 
   // A box for the cover letter, or a message to the employer, takes Generation's cover letter text.
   const COVER_LETTER_BOX = /cover letter|motivation(al)? letter|letter of motivation/;
-  const MESSAGE_BOX = /message (to|for) (the )?(hiring (team|manager)|recruit(er|ing team)|employer|company|team)|note to (the )?(hiring|recruit)|let (the|us) (company|team|employer|hiring team|recruiter) know (about )?(your|why)/;
+  const MESSAGE_BOX = /\b(messages?|comments?)\b|note to (the )?(hiring|recruit)|let (the|us) (company|team|employer|hiring team|recruiter) know (about )?(your|why)/;
 
   const IMAGE_WORDS = /\b(photos?|photograph|pictures?|pic|images?|headshot|avatar|selfie|portrait)\b/;
   const IMAGE_FILE = /^(image\/.*|\.(jpe?g|jfif|pjpeg|pjp|png|gif|webp|avif|heic|heif|bmp|svg|ico|tiff?))$/;
@@ -1110,7 +1121,9 @@
         const note = resolved.note ? ` (note: ${resolved.note})` : '';
         const hint = resolved.from === 'reusable'
           ? `The reusable answer for this question is "${resolved.ask}"${note}; give it in a form this field takes.`
-          : `The candidate's profile says "${resolved.ask}"${note}; give it in a form this field takes.`;
+          : resolved.from === 'document'
+            ? `Use the generated cover letter as the source for this field. "${resolved.ask}"${note}`
+            : `The candidate's profile says "${resolved.ask}"${note}; give it in a form this field takes.`;
         // The value meant: a remembered choice for it may fill the field without the AI. A personal
         // fact's name (fact) lets Apply check that the AI's pick still says the same.
         open.push({ ...field, hint, intended: String(resolved.intended ?? resolved.ask), ...(resolved.fact ? { fact: resolved.fact } : {}) });
