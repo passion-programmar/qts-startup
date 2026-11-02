@@ -26,7 +26,7 @@ function pipeline({ printError = false, technicalFailure = false, interrupted = 
       __qtsRuntimeConfig: { getServerUrl: async () => 'https://qts.example' },
       __qtsChromePdf: { printDocuments: async () => {
         events.push('print');
-        if (printError) throw Object.assign(new Error('The résumé exceeds three A4 pages.'), { name: 'DocumentPageLimitError' });
+        if (printError) throw Object.assign(new Error('The résumé exceeds five A4 pages.'), { name: 'DocumentPageLimitError' });
         return technicalFailure ? null : { resume: 'UERG', 'cover-letter': 'UERG' };
       } },
     },

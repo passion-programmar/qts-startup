@@ -93,7 +93,7 @@ async function renderResumePdf(
   document: ResumeDocument,
   template: PdfTemplate | LegacyPdfTemplate,
 ): Promise<Uint8Array> {
-  const pdf = await createWriter(template, 3, containsRomanianCharacters(document));
+  const pdf = await createWriter(template, 5, containsRomanianCharacters(document));
   const headline = document.candidate.headline ?? document.targetRole;
   const contactParts = template === "flowcv" ? [
     document.candidate.location,

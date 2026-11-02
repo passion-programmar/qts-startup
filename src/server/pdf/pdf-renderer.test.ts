@@ -201,7 +201,7 @@ test("all templates render Romanian characters in both documents", async () => {
   }
 });
 
-test("the fallback rejects a résumé that exceeds three pages without truncation", async () => {
+test("the fallback rejects a résumé that exceeds five pages without truncation", async () => {
   const overlong: PdfPackage = {
     ...data,
     resume: {
@@ -213,7 +213,7 @@ test("the fallback rejects a résumé that exceeds three pages without truncatio
   await assert.rejects(
     renderPdfPackage(overlong, "minimal"),
     (error: unknown) => error instanceof DocumentPageLimitError
-      && /3 A4 pages/.test(error.message)
+      && /5 A4 pages/.test(error.message)
       && /not truncated/.test(error.message),
   );
 });

@@ -125,13 +125,13 @@ test('any failure gives null so the server prints, and the tab still closes', as
 });
 
 test('rejects actual oversized PDFs without returning downloadable files, and cleans up', async () => {
-  for (const options of [{ resumePages: 4 }, { coverPages: 2 }]) {
+  for (const options of [{ resumePages: 6 }, { coverPages: 2 }]) {
     const { state, calls } = fakeChrome(options);
     try {
       await assert.rejects(chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' }), {
         name: 'DocumentPageLimitError',
         message: options.resumePages
-          ? 'The résumé exceeds three A4 pages. Its content was not truncated.'
+          ? 'The résumé exceeds five A4 pages. Its content was not truncated.'
           : 'The cover letter exceeds one A4 page. Shorten its paragraphs.',
       });
       assert.equal(calls.filter(([method]) => method === 'Page.printToPDF').length, options.resumePages ? 1 : 2);
@@ -149,7 +149,7 @@ test('the packaged PDF validator reads compressed PDF page trees', async () => {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/pdf-lib/pdf-lib.min.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'chrome-pdf.js'), 'utf8'), context);
   const pdf = await PDFDocument.create();
-  for (let index = 0; index < 4; index += 1) pdf.addPage();
+  for (let index = 0; index < 6; index += 1) pdf.addPage();
   context.base64 = await pdf.saveAsBase64({ useObjectStreams: true });
   await assert.rejects(vm.runInContext('__qtsChromePdf.validatePdf(base64, "resume")', context), { name: 'DocumentPageLimitError' });
 });
