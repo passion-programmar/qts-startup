@@ -48,6 +48,7 @@ async function initializeGetJdReviewOnce() {
   let selectedPageExclusionId = null;
   let jobDetectionRules = [];
   let selectedJobDetectionRuleId = null;
+  let autoApplyCustomUrls = [];
   const highlightColorPalette = [
     { name: 'Red', value: '#ef4444' },
     { name: 'Orange', value: '#f97316' },
@@ -372,6 +373,20 @@ async function initializeGetJdReviewOnce() {
             <ul class="manager-settings-list" data-job-detection-list></ul>
           </section>
         </div>
+        <div class="manager-settings-view" data-settings-view="auto-apply-custom-urls" hidden>
+          <section class="manager-settings-group">
+            <h3>Auto Apply URL prefixes</h3>
+            <p>Unselected Auto Apply runs skip jobs from these domains. Select a matching job to include it; selected Custom URL jobs use Gemini for AI answers.</p>
+            <form data-auto-apply-custom-url-form>
+              <label class="manager-settings-label" for="qts-manager-auto-apply-custom-url">Domain</label>
+              <input class="manager-settings-input" id="qts-manager-auto-apply-custom-url" name="url" type="text" maxlength="2048" placeholder="djni.co" autocomplete="off" required>
+              <div class="manager-settings-actions">
+                <button type="submit" class="manager-settings-save" data-auto-apply-custom-url-save>Add Custom URL</button>
+              </div>
+            </form>
+            <ul class="manager-settings-list" data-auto-apply-custom-url-list></ul>
+          </section>
+        </div>
       </div>`;
     const textColorPicker = createManagerColorPicker('Text color', '#111827', 'textColor');
     const backgroundColorPicker = createManagerColorPicker('Background color', '#fef08a', 'backgroundColor');
@@ -385,6 +400,7 @@ async function initializeGetJdReviewOnce() {
       status: section.querySelector('[data-settings-status]'),
       highlightView: section.querySelector('[data-settings-view="text-highlights"]'),
       pageView: section.querySelector('[data-settings-view="page-exclusions"]'),
+      autoApplyCustomUrlsView: section.querySelector('[data-settings-view="auto-apply-custom-urls"]'),
       highlightForm: section.querySelector('[data-highlight-form]'),
       highlightText: section.querySelector('#qts-manager-highlight-text'),
       textColorInput: textColorPicker.input,
@@ -408,6 +424,9 @@ async function initializeGetJdReviewOnce() {
       jobDetectionList: section.querySelector('[data-job-detection-list]'),
       jobDetectionCancel: section.querySelector('[data-job-detection-cancel]'),
       jobDetectionSave: section.querySelector('[data-job-detection-save]'),
+      autoApplyCustomUrlForm: section.querySelector('[data-auto-apply-custom-url-form]'),
+      autoApplyCustomUrlList: section.querySelector('[data-auto-apply-custom-url-list]'),
+      autoApplyCustomUrlSave: section.querySelector('[data-auto-apply-custom-url-save]'),
     };
     section.querySelector('[data-settings-back]').addEventListener('click', closeManagerSettings);
     refs.highlightForm.addEventListener('submit', saveHighlightRule);
@@ -419,6 +438,7 @@ async function initializeGetJdReviewOnce() {
     refs.exclusionCancel.addEventListener('click', () => resetSettingsForm('page-exclusions'));
     refs.jobDetectionForm.addEventListener('submit', saveJobDetectionRule);
     refs.jobDetectionCancel.addEventListener('click', () => resetSettingsForm('job-detection'));
+    refs.autoApplyCustomUrlForm.addEventListener('submit', saveAutoApplyCustomUrl);
     return refs;
   }
 
@@ -528,7 +548,7 @@ async function initializeGetJdReviewOnce() {
   // options.prefillBlockedUrl fills the blocked-URL field for the Manager to review and save.
   async function openManagerSettings(panel, tabId, permissions = {}, options = {}) {
     if (
-      !['text-highlights', 'page-exclusions'].includes(panel)
+      !['text-highlights', 'page-exclusions', 'auto-apply-custom-urls'].includes(panel)
       || !Number.isInteger(tabId)
     ) {
       throw new Error('Choose a valid Manager settings panel and page.');
@@ -551,6 +571,8 @@ async function initializeGetJdReviewOnce() {
       || (panel === 'page-exclusions'
         && !managerSettingsPermissions.canManagePageExclusions
         && !managerSettingsPermissions.canManageJobDetectionUrlRules)
+      || (panel === 'auto-apply-custom-urls'
+        && !managerSettingsPermissions.canManageJobDetectionUrlRules)
     ) {
       throw new Error('Ask your Super Admin for access to these settings.');
     }
@@ -560,25 +582,31 @@ async function initializeGetJdReviewOnce() {
     elements.panel.classList.add('is-manager-settings');
     settings.title.textContent = panel === 'text-highlights'
       ? 'Text highlights on all websites'
-      : 'URL Settings';
+      : panel === 'auto-apply-custom-urls' ? 'Custom URLs' : 'URL Settings';
     settings.hint.textContent = panel === 'text-highlights'
       ? 'Rules are shared from the database and automatically highlighted across supported HTTP and HTTPS websites. Select a saved phrase below to edit it in the shared editor. Only Managers assigned by Super can change them.'
-      : 'Manage the URL rules assigned to this Manager account.';
+      : panel === 'auto-apply-custom-urls'
+        ? 'Add domains that Auto Apply should skip unless you select their jobs.'
+        : 'Manage the URL rules assigned to this Manager account.';
     settings.status.textContent = 'Loading settings…';
     settings.status.classList.remove('is-error');
     settings.highlightView.hidden = panel !== 'text-highlights';
     settings.pageView.hidden = panel !== 'page-exclusions';
+    settings.autoApplyCustomUrlsView.hidden = panel !== 'auto-apply-custom-urls';
     if (panel === 'text-highlights') {
       settings.highlightView.insertBefore(settings.status, settings.highlightList);
-    } else {
+    } else if (panel === 'page-exclusions') {
       settings.pageView.appendChild(settings.status);
+    } else {
+      settings.autoApplyCustomUrlsView.appendChild(settings.status);
     }
     settings.exclusionGroup.hidden = false;
     settings.jobDetectionGroup.hidden = !managerSettingsPermissions.canManageJobDetectionUrlRules;
     setPanelVisible(true);
     try {
       if (panel === 'text-highlights') await loadHighlightRules();
-      else await loadUrlSettings();
+      else if (panel === 'page-exclusions') await loadUrlSettings();
+      else await loadAutoApplyCustomUrls();
       if (panel === 'page-exclusions') settings.status.textContent = '';
       const blockedUrlInput = settings.root.querySelector('#qts-manager-job-url');
       if (
@@ -728,6 +756,54 @@ async function initializeGetJdReviewOnce() {
     }
     await Promise.all(requests);
     renderUrlSettings();
+  }
+
+  async function loadAutoApplyCustomUrls() {
+    const response = await sendSettingsMessage({ type: 'GET_MANAGER_AUTO_APPLY_CUSTOM_URLS' });
+    autoApplyCustomUrls = response.customUrls || [];
+    renderAutoApplyCustomUrls();
+    setSettingsStatus(`${autoApplyCustomUrls.length} Custom URL(s) loaded.`, false);
+  }
+
+  function renderAutoApplyCustomUrls() {
+    const { autoApplyCustomUrlList } = host.__qtsElements.managerSettings;
+    autoApplyCustomUrlList.replaceChildren();
+    if (!autoApplyCustomUrls.length) {
+      const empty = document.createElement('li');
+      empty.className = 'manager-settings-empty';
+      empty.textContent = 'No Custom URLs.';
+      autoApplyCustomUrlList.appendChild(empty);
+    }
+    autoApplyCustomUrls.forEach((customUrl) => {
+      const item = document.createElement('li');
+      item.className = 'manager-settings-rule';
+      const value = document.createElement('span');
+      value.className = 'manager-settings-rule-value';
+      value.textContent = customUrl.url;
+      const actions = document.createElement('span');
+      actions.className = 'manager-settings-rule-actions';
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.textContent = 'Delete';
+      deleteButton.addEventListener('click', async () => {
+        deleteButton.disabled = true;
+        try {
+          const response = await sendSettingsMessage({
+            type: 'DELETE_MANAGER_AUTO_APPLY_CUSTOM_URL',
+            customUrlId: customUrl.id,
+          });
+          autoApplyCustomUrls = response.customUrls || [];
+          renderAutoApplyCustomUrls();
+          setSettingsStatus('Custom URL deleted.', false);
+        } catch (error) {
+          setSettingsStatus(error.message, true);
+          deleteButton.disabled = false;
+        }
+      });
+      actions.appendChild(deleteButton);
+      item.append(value, actions);
+      autoApplyCustomUrlList.appendChild(item);
+    });
   }
 
   function appendUrlRule(list, rule, edit, remove) {
@@ -905,6 +981,27 @@ async function initializeGetJdReviewOnce() {
     }
   }
 
+  async function saveAutoApplyCustomUrl(event) {
+    event.preventDefault();
+    const settings = host.__qtsElements.managerSettings;
+    const save = settings.autoApplyCustomUrlSave;
+    save.disabled = true;
+    try {
+      const response = await sendSettingsMessage({
+        type: 'ADD_MANAGER_AUTO_APPLY_CUSTOM_URL',
+        url: settings.autoApplyCustomUrlForm.elements.namedItem('url').value.trim(),
+      });
+      autoApplyCustomUrls = response.customUrls || [];
+      settings.autoApplyCustomUrlForm.reset();
+      renderAutoApplyCustomUrls();
+      setSettingsStatus('Custom URL saved.', false);
+    } catch (error) {
+      setSettingsStatus(error.message, true);
+    } finally {
+      save.disabled = false;
+    }
+  }
+
   function resetSettingsForm(type) {
     const settings = host?.__qtsElements?.managerSettings;
     if (!settings) return;
@@ -922,11 +1019,13 @@ async function initializeGetJdReviewOnce() {
       settings.exclusionForm.reset();
       settings.exclusionSave.textContent = 'Add keyword';
       settings.exclusionCancel.hidden = true;
-    } else {
+    } else if (type === 'job-detection') {
       selectedJobDetectionRuleId = null;
       settings.jobDetectionForm.reset();
       settings.jobDetectionSave.textContent = 'Add blocked URL';
       settings.jobDetectionCancel.hidden = true;
+    } else {
+      settings.autoApplyCustomUrlForm.reset();
     }
   }
 

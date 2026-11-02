@@ -610,6 +610,13 @@
       "when": 1793557181130,
       "tag": "0086_cultured_ender_wiggin",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1793578126366,
+      "tag": "0087_right_wonder_man",
+      "breakpoints": true
     }
   ]
 }

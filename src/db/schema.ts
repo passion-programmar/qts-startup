@@ -344,6 +344,24 @@ export const extensionJobDetectionUrlRules = pgTable(
   ],
 );
 
+export const autoApplyCustomUrls = pgTable(
+  "auto_apply_custom_urls",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    urlPrefix: text("url_prefix").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("auto_apply_custom_urls_manager_prefix_unique").on(table.managerId, table.urlPrefix),
+    index("auto_apply_custom_urls_manager_id_index").on(table.managerId),
+  ],
+);
+
 export const prompts = pgTable(
   "prompts",
   {

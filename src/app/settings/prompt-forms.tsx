@@ -256,8 +256,9 @@ export function ManagerApplyForm({
           <input name="managerId" type="hidden" value={managerId} />
           <input name="aiMode" type="hidden" value={usesGemini ? "chatgpt" : "gemini"} />
           <span className="text-xs font-medium text-slate-700">
-            Apply + Auto Apply answers: {usesGemini ? "Gemini" : "ChatGPT"}
+            Assisted Apply answers: {usesGemini ? "Gemini" : "ChatGPT"}
           </span>
+          <span className="text-xs text-slate-500">Auto Apply always uses ChatGPT.</span>
           <button
             className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
             disabled={isPending}
@@ -354,9 +355,6 @@ export function OwnAutoApplyParallelLimitForm({ parallelLimit }: { parallelLimit
       <label className="block text-xs font-semibold text-slate-700" htmlFor="auto-apply-parallel-limit">
         Maximum open Auto Apply jobs
       </label>
-      <p className="text-xs leading-5 text-slate-500">
-        Without a profile selection, Auto Apply fills this many jobs together. Choosing a profile always runs its jobs one at a time. AI answers are queued one job at a time for both ChatGPT and Gemini.
-      </p>
       <div className="flex flex-wrap items-center gap-3">
         <input
           className="h-10 w-24 rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"

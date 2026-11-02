@@ -676,6 +676,18 @@ async function saveManagerJobDetectionUrlRulesResponse(result) {
   return { ...result, rules };
 }
 
+async function validateAutoApplyCustomUrlsResponse(result) {
+  if (result.success !== true || !Array.isArray(result.customUrls)) return result;
+  const manager = await self.__qtsAccountAuth?.readWorkerSessionUser?.();
+  if (!manager?.id || result.managerId !== manager.id) {
+    return { success: false, message: 'The Custom URLs response belongs to a different Manager.' };
+  }
+  const customUrls = result.customUrls.filter((entry) =>
+    entry && typeof entry.id === 'string' && typeof entry.url === 'string',
+  );
+  return { ...result, customUrls };
+}
+
 async function notifyPageUrlAccess(tabId, url) {
   const rules = await getCachedManagerJobDetectionUrlRules();
   await chrome.tabs.sendMessage(tabId, {
@@ -6175,6 +6187,58 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })().catch((error) => sendResponse({
       ok: false,
       error: error instanceof Error ? error.message : 'Could not delete this job-detection URL rule.',
+    }));
+    return true;
+  }
+  if (msg.type === 'GET_MANAGER_AUTO_APPLY_CUSTOM_URLS') {
+    workerApiRequest('GET', '/api/extension/auto-apply-custom-urls')
+      .then(validateAutoApplyCustomUrlsResponse)
+      .then((result) => sendResponse({
+        ok: result.success === true,
+        customUrls: result.customUrls || [],
+        error: result.success === true ? undefined : result.message || 'Could not load Custom URLs.',
+      }))
+      .catch((error) => sendResponse({
+        ok: false,
+        customUrls: [],
+        error: error instanceof Error ? error.message : 'Could not load Custom URLs.',
+      }));
+    return true;
+  }
+  if (msg.type === 'ADD_MANAGER_AUTO_APPLY_CUSTOM_URL') {
+    (async () => {
+      const result = await workerApiRequest('POST', '/api/extension/auto-apply-custom-urls', {
+        url: String(msg.url || ''),
+      });
+      const saved = await validateAutoApplyCustomUrlsResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        customUrls: saved.customUrls || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not save this Custom URL.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not save this Custom URL.',
+    }));
+    return true;
+  }
+  if (msg.type === 'DELETE_MANAGER_AUTO_APPLY_CUSTOM_URL') {
+    (async () => {
+      const customUrlId = String(msg.customUrlId || '');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(customUrlId)) {
+        sendResponse({ ok: false, error: 'Invalid Custom URL ID.' });
+        return;
+      }
+      const result = await workerApiRequest('DELETE', `/api/extension/auto-apply-custom-urls/${customUrlId}`);
+      const saved = await validateAutoApplyCustomUrlsResponse(result);
+      sendResponse({
+        ok: saved.success === true,
+        customUrls: saved.customUrls || [],
+        error: saved.success === true ? undefined : saved.message || 'Could not delete this Custom URL.',
+      });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not delete this Custom URL.',
     }));
     return true;
   }

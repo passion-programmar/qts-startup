@@ -8,7 +8,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 const managerId = "99999999-9999-4999-8999-999999999999";
 const candidateId = "11111111-1111-4111-8111-111111111111";
 const jobId = "22222222-2222-4222-8222-222222222222";
-const fixture = { authenticated: true, geminiAssigned: true, rows: [] as unknown[][], queries: [] as { sql: string; params: unknown[] }[], joins: [] as string[], claims: [] as unknown[][],
+const fixture = { authenticated: true, geminiAssigned: true, rows: [] as unknown[][], queries: [] as { sql: string; params: unknown[] }[], joins: [] as string[], selects: [] as unknown[], claims: [] as unknown[][],
   claimedAttempt: null as string | null, deletes: 0,
   record(query: Parameters<PgDialect["sqlToQuery"]>[0]) { this.queries.push(new PgDialect().sqlToQuery(query)); },
   recordJoin(query: Parameters<PgDialect["sqlToQuery"]>[0]) { this.joins.push(new PgDialect().sqlToQuery(query).sql); } };
@@ -20,7 +20,7 @@ async function bundle(entry: string, extra: Record<string, string> = {}) {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/extension-auth": `export const getExtensionManager=async()=>globalThis.__qtsWorkFixture.authenticated?{id:'${managerId}'}:null;`,
-    "@/lib/db": `export const db={execute:async query=>{const f=globalThis.__qtsWorkFixture;f.record(query);return {rows:[{attemptId:f.claimedAttempt}]}},delete:()=>({where:async query=>{const f=globalThis.__qtsWorkFixture;f.record(query);f.deletes++;}}),select:()=>{const f=globalThis.__qtsWorkFixture;const q={};for(const k of ['from','innerJoin','groupBy','orderBy'])q[k]=()=>q;q.leftJoin=(_table,join)=>{f.recordJoin(join);return q};q.where=query=>{f.record(query);return q};q.limit=async()=>f.rows.shift()||[];return q;}};`,
+    "@/lib/db": `export const db={execute:async query=>{const f=globalThis.__qtsWorkFixture;f.record(query);return {rows:[{attemptId:f.claimedAttempt}]}},delete:()=>({where:async query=>{const f=globalThis.__qtsWorkFixture;f.record(query);f.deletes++;}}),select:fields=>{const f=globalThis.__qtsWorkFixture;f.selects.push(fields);const q={};for(const k of ['from','innerJoin','groupBy','orderBy'])q[k]=()=>q;q.leftJoin=(_table,join)=>{f.recordJoin(join);return q};q.where=query=>{f.record(query);return q};q.limit=async()=>f.rows.shift()||[];return q;}};`,
     "@/server/browsers/extension-browsers": `export const resolveExtensionBrowser=async()=>({id:'browser',canTakeWork:true});`,
     "@/server/database/database-usage": `export const scheduleDailyCleanup=()=>{};`,
     "@/server/jobs/get-jd-mode": `export const getGetJdMatchingMode=async()=>globalThis.__qtsWorkFixture.geminiAssigned?'gemini':'manual';`,
@@ -46,7 +46,7 @@ test.before(async () => {
   })).POST;
   scopedApply = (await bundle("src/server/apply/apply-attempts.ts")).claimNextApplication as unknown as typeof scopedApply;
 });
-test.beforeEach(() => { fixture.authenticated = true; fixture.geminiAssigned = true; fixture.rows = []; fixture.queries = []; fixture.joins = []; fixture.claims = []; fixture.claimedAttempt = null; fixture.deletes = 0; });
+test.beforeEach(() => { fixture.authenticated = true; fixture.geminiAssigned = true; fixture.rows = []; fixture.queries = []; fixture.joins = []; fixture.selects = []; fixture.claims = []; fixture.claimedAttempt = null; fixture.deletes = 0; });
 const request = (query = "") => new Request("http://localhost/api/extension/work-items?mode=generation" + query);
 const claim = (selection?: unknown, mode?: string) => new Request("http://localhost/api/extension/claim", { method: "POST", body: JSON.stringify({ selection, mode }) });
 
@@ -153,6 +153,19 @@ test("unselected Auto Apply uses the Manager's configured open-job limit", async
   fixture.rows = [[{ parallelLimit: 4 }]];
   assert.equal(await scopedApply(managerId, { id: "browser" }, [], undefined, { autoApply: true }), null);
   assert.ok(fixture.queries[1].params.includes(4));
+  assert.match(fixture.queries[1].sql, /auto_apply_custom_urls/);
+  assert.match(fixture.queries[1].sql, /url_prefix/);
+  assert.match(fixture.queries[1].sql, /like \('%\.'/);
+});
+test("selected Auto Apply includes the Custom URL domain check for its Gemini override", async () => {
+  const attemptId = "33333333-3333-4333-8333-333333333333";
+  fixture.claimedAttempt = attemptId;
+  fixture.rows = [[{ parallelLimit: 2 }], [{ id: attemptId, customUrlGemini: true }], []];
+  assert.equal(await scopedApply(managerId, { id: "browser" }, [], { candidateId, jobIds: [jobId] }, { autoApply: true }), null);
+  const customUrlGemini = (fixture.selects[1] as Record<string, Parameters<PgDialect["sqlToQuery"]>[0]>).customUrlGemini;
+  const customUrlQuery = new PgDialect().sqlToQuery(customUrlGemini);
+  assert.match(customUrlQuery.sql, /auto_apply_custom_urls/);
+  assert.match(customUrlQuery.sql, /url_prefix/);
 });
 test("a concurrent claim outside the selection is released before any application is loaded or returned", async () => {
   fixture.rows = [[{ parallelLimit: 2 }]];

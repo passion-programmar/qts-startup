@@ -57,7 +57,7 @@ export default async function ManagerPromptsPage() {
       <main className="py-1 text-slate-900">
         <div className="mx-auto max-w-4xl space-y-6">
           <PageHeader
-            description="Generation rotates through your prompts by least-recent use, or you can choose an active prompt for a queued job. Candidate/job data and the protected output format are supplied automatically. With no prompts of your own, Super Admin's default prompt is used."
+            description=""
             title="My AI prompts"
           />
 

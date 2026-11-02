@@ -3,6 +3,7 @@ import "server-only";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   applyAttempts,
+  autoApplyCustomUrls,
   bids,
   educations,
   experiences,
@@ -47,6 +48,7 @@ import { hasEligibleExperienceCount, hasMatchingNote } from "@/server/work/work-
 export type ClaimedApplication = {
   attemptId: string;
   aiMode: "chatgpt" | "gemini";
+  autoApplyCustomUrlGemini: boolean;
   // Apply clicks Submit itself (Super Admin's per-Manager option); the bid still waits for Yes.
   autoSubmit: boolean;
   // When Apply stops for review (Super Admin, per Manager): every step, or once before Submit.
@@ -172,6 +174,7 @@ export async function claimNextApplication(
       ? 1
       : Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
   }
+  const skipCustomUrlJobs = options.autoApply && !selection;
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
   // Exclude all rows outside the explicit selection; an empty/stale selection never falls back.
   const skips = selection ? sql`ARRAY(
@@ -182,6 +185,18 @@ export async function claimNextApplication(
           and not exists (select 1 from profiles p where p.user_id = j.candidate_id
             and length(regexp_replace(coalesce(p.jd_matching, ''), '\\s', '', 'g')) > 0)))
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
+  )` : skipCustomUrlJobs ? sql`ARRAY(
+    select j.id from jobs j
+    where j.manager_id = ${managerId}
+      and exists (
+        select 1 from ${autoApplyCustomUrls}
+        where ${autoApplyCustomUrls.managerId} = ${managerId}
+          and (
+            lower(regexp_replace(split_part(lower(btrim(j.job_url)), '://', 2), '[:/?#].*$', '')) = ${autoApplyCustomUrls.urlPrefix}
+            or lower(regexp_replace(split_part(lower(btrim(j.job_url)), '://', 2), '[:/?#].*$', '')) like ('%.' || ${autoApplyCustomUrls.urlPrefix})
+          )
+      )
+    union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
   )` : sql`${`{${skipJobIds.join(",")}}`}::uuid[]`;
   const claim = await db.execute<{ attemptId: string | null }>(sql`
     select claim_apply_attempt(${managerId}, ${browser.id}, ${parallelLimit}, ${APPLY_LEASE_SECONDS},
@@ -190,7 +205,18 @@ export async function claimNextApplication(
   const attemptId = claim.rows[0]?.attemptId;
   if (attemptId && selection) {
     // A concurrent insert after the exclusion snapshot must never escape the selected batch.
-    const [scoped] = await db.select({ id: applyAttempts.id }).from(applyAttempts)
+    const [scoped] = await db.select({
+      id: applyAttempts.id,
+      customUrlGemini: options.autoApply ? sql<boolean>`exists (
+        select 1 from ${autoApplyCustomUrls}
+        where ${autoApplyCustomUrls.managerId} = ${managerId}
+          and (
+            lower(regexp_replace(split_part(lower(btrim(${jobs.jobUrl})), '://', 2), '[:/?#].*$', '')) = ${autoApplyCustomUrls.urlPrefix}
+            or lower(regexp_replace(split_part(lower(btrim(${jobs.jobUrl})), '://', 2), '[:/?#].*$', '')) like ('%.' || ${autoApplyCustomUrls.urlPrefix})
+          )
+      )` : sql<boolean>`false`,
+    }).from(applyAttempts)
+      .innerJoin(jobs, eq(jobs.id, applyAttempts.jobId))
       .innerJoin(profiles, eq(profiles.userId, applyAttempts.candidateId))
       .where(and(eq(applyAttempts.id, attemptId), eq(applyAttempts.managerId, managerId),
         eq(applyAttempts.browserId, browser.id), eq(applyAttempts.candidateId, selection.candidateId),
@@ -202,12 +228,13 @@ export async function claimNextApplication(
         eq(applyAttempts.managerId, managerId), eq(applyAttempts.browserId, browser.id), eq(applyAttempts.status, "claimed")));
       return null;
     }
+    return loadApplication(attemptId, scoped.customUrlGemini === true);
   }
   return attemptId ? loadApplication(attemptId) : null;
 }
 
 /** Everything the Chrome needs to work on an attempt: the job, the candidate, the answers. */
-async function loadApplication(attemptId: string): Promise<ClaimedApplication | null> {
+async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = false): Promise<ClaimedApplication | null> {
   const [row] = await db
     .select({
       managerId: applyAttempts.managerId,
@@ -279,9 +306,11 @@ async function loadApplication(attemptId: string): Promise<ClaimedApplication | 
     deliveredResume, deliveredCoverLetter, aiMode, autoSubmit, reviewMode, siteAccountPassword, ...candidate
   } = row;
   const savedAnswers = await loadApplicationAnswers(managerId, candidate.candidateId, jobId);
+  const effectiveAiMode = autoApplyCustomUrlGemini ? "gemini" : aiMode === "gemini" ? "gemini" : "chatgpt";
   return {
     attemptId,
-    aiMode: aiMode === "gemini" ? "gemini" : "chatgpt",
+    aiMode: effectiveAiMode,
+    autoApplyCustomUrlGemini,
     autoSubmit,
     reviewMode: reviewModeOf(reviewMode),
     job: {
@@ -306,7 +335,7 @@ async function loadApplication(attemptId: string): Promise<ClaimedApplication | 
     // A reusable salary answer may need converting to another currency.
     exchangeRates: await loadExchangeRates(),
     rememberedChoices: await rememberedChoices(),
-    answerPrompt: await defaultAnswerPrompt(aiMode === "gemini" ? "gemini" : "chatgpt"),
+    answerPrompt: await defaultAnswerPrompt(effectiveAiMode),
     siteAccountPassword: decryptSiteAccountPassword(siteAccountPassword),
   };
 }

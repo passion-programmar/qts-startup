@@ -2,7 +2,7 @@
 // assisted Apply (runAssistedApplication), which stays as it is. It takes Apply's claims (the same
 // server routes, sign-in, and ownership checks) and fills with the automatic engine (runApplication
 // with auto: true): the résumé and cover letter, the candidate's profile facts, and Super Admin's
-// approved reusable answers first; then AI (the Manager-assigned provider (ChatGPT by default)) for the questions left, one batch per
+// approved reusable answers first; then ChatGPT for the questions left, one batch per
 // form step, written from the job description, résumé, and profile and filled; one the documents and
 // approved facts do not show is pointed out on the review.
 // Steps go on by themselves while nothing needs the Manager; the last step always waits for the
@@ -15,8 +15,7 @@ const AUTO_APPLY_STATE_KEY = 'qtsAutoApplyState';
 // What a restarted worker or a retried job needs: its tab, step, answers so far, and whether the
 // Manager already submitted it. Unsubmitted checkpoints are retained while paused.
 const AUTO_APPLY_RUNS_KEY = 'qtsAutoApplyRuns';
-// The AI for open questions: 'gemini' (through the QTS server), 'chatgpt' (this Chrome's
-// ChatGPT tab), or 'off' (Stage B: nothing but documents, profile, and approved answers).
+// Legacy local preference retained for the debug-only no-AI test mode.
 const AUTO_APPLY_AI_KEY = 'qtsAutoApplyAi';
 // { budget, timeoutMs }: local, bounded overrides of the AI request limit and wait (tests only).
 const AUTO_APPLY_AI_LIMITS_KEY = 'qtsAutoApplyAiLimits';
@@ -67,7 +66,7 @@ function changeStoredRuns(change) {
   return write;
 }
 
-/** Manager-assigned ChatGPT (default) or Gemini, with no-AI debug mode, and Auto Apply's limits, on one claimed application. */
+/** ChatGPT, with debug-only no-AI mode and Auto Apply's limits, on one claimed application. */
 async function prepareAutoApplication(application) {
   const stored = await chrome.storage.local.get([AUTO_APPLY_AI_KEY, AUTO_APPLY_AI_LIMITS_KEY, AUTO_APPLY_CHAT_FOCUS_KEY, 'qtsApplyDebug']);
   const choice = stored[AUTO_APPLY_AI_KEY];
@@ -75,8 +74,8 @@ async function prepareAutoApplication(application) {
   const limits = stored[AUTO_APPLY_AI_LIMITS_KEY] || {};
   const bounded = (value, low, high, otherwise) => (Number.isFinite(Number(value)) ? Math.min(Math.max(Number(value), low), high) : otherwise);
   application.autoAi = !(stored.qtsApplyDebug === true && choice === 'off');
-  // Provider is assigned to the Manager on the server, not overridden by stale Chrome storage.
-  application.aiMode = application.aiMode === 'gemini' ? 'gemini' : 'chatgpt';
+  // Only an explicitly selected Custom URL job gets the Gemini exception; all others use ChatGPT.
+  application.aiMode = application.autoApplyCustomUrlGemini === true ? 'gemini' : 'chatgpt';
   application.chatFocus = stored[AUTO_APPLY_CHAT_FOCUS_KEY] !== false;
   application.minimalPrompt = true;
   application.aiBudget = bounded(limits.budget, 1, 20, AUTO_APPLY_AI_BUDGET);

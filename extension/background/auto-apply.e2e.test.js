@@ -1,6 +1,7 @@
 // End-to-end test of Auto Apply in the REAL extension in Chrome (service worker, Auto Apply controller,
 // automatic engine, form engine, answer rules, review panel) against a local mock QTS server on
-// 127.0.0.1 with synthetic application forms. The mock plays Gemini by fixed rules (never real AI).
+// 127.0.0.1 with synthetic application forms. A local fixture supplies deterministic ChatGPT
+// replies; no real AI service or application is used.
 // Nothing leaves this machine. The only Submit clicks are the test playing the Manager on the local
 // form. QTS_E2E_HEADFUL=1 shows the Chrome window; QTS_E2E_SHOTS=<folder> saves screenshots.
 // Run with: npm run test:apply-e2e (skipped when Chrome is not installed; QTS_CHROME sets it).
@@ -283,6 +284,12 @@ async function launch({ ai = 'off' } = {}) {
       qtsSessionUser: { id: 'e2e', role: 'manager', displayName: 'E2E' }, qtsApplyDebug: true, qtsBrowserName: 'E2E Chrome', qtsAutoApplyAi: choice,
     });
   }, BASE, ai);
+  await ctx.worker.evaluate(() => {
+    // Keep browser tests offline while exercising Auto Apply's ChatGPT path and serialization.
+    applyChatTab = async () => -1;
+    askChatGpt = async (_tabId, application, prompt) =>
+      askGemini(application, [{ role: 'user', text: prompt }]);
+  });
   if (process.env.QTS_E2E_TRACE) console.log('[trace] storage set');
   // An extension page to send the panel's actions from, as the launcher does.
   const control = await browser.newPage();
@@ -404,7 +411,7 @@ test('two Auto Apply jobs run concurrently in one Chrome; a third waits and Canc
   } finally { await browser.close(); }
 });
 
-test('Manager concurrency setting opens three forms while Gemini answers one application at a time', { skip, timeout: 240000 }, async () => {
+test('Manager concurrency opens three forms with ChatGPT turns serialized, even when Gemini is assigned', { skip, timeout: 240000 }, async () => {
   resetMock({
     queue: [application(504, 'form-ai'), application(505, 'form-ai'), application(506, 'form-ai')],
     autoApplyParallelLimit: 3,
@@ -421,7 +428,7 @@ test('Manager concurrency setting opens three forms while Gemini answers one app
     const forms = (await browser.pages()).filter(page => page.url().startsWith(`${BASE}/form-ai`));
     await forms[0].evaluate(() => document.getElementById('next1').click());
     try {
-      await until(() => mock.answers === 1, 15000, 'the first Gemini turn to start');
+      await until(() => mock.answers === 1, 15000, 'the first mocked ChatGPT turn to start');
     } catch (error) {
       const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
       const form = await forms[0].evaluate(() => ({
@@ -442,7 +449,7 @@ test('Manager concurrency setting opens three forms while Gemini answers one app
       await until(async () => {
         const state = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState;
         return state?.runs?.length === 3 && state.runs.every(run => run.phase === 'final');
-      }, 120000, 'Gemini to answer all three jobs');
+      }, 120000, 'ChatGPT to answer all three jobs');
     } catch (error) {
       const diagnostics = await Promise.all(forms.map(form => form.evaluate(() => ({
         step1: document.getElementById('step1').style.display !== 'none',
@@ -454,7 +461,7 @@ test('Manager concurrency setting opens three forms while Gemini answers one app
       error.message += `; diagnostic=${JSON.stringify({ answers: mock.answers, maxConcurrent: mock.maxConcurrentAnswerRequests, runs: state?.runs?.map(run => ({ phase: run.phase, step: run.step })), forms: diagnostics, recentRequests: mock.log.slice(-12).map(entry => entry.path) })}`;
       throw error;
     }
-    assert.equal(mock.maxConcurrentAnswerRequests, 1, 'Gemini answer turns are serialized across open jobs');
+    assert.equal(mock.maxConcurrentAnswerRequests, 1, 'ChatGPT answer turns are serialized across open jobs');
     assert.equal(mock.answers, 3);
     await action('cancel_status');
     await until(() => mock.released.length === 3, 30000, 'all three applications to be released');
@@ -605,7 +612,7 @@ test('closing an unfinished Auto Apply tab releases the job and retries its save
   } finally { await ctx.browser.close(); }
 });
 
-test('Stage C: approved answers first, then one Gemini batch for the step (retried after a 429), every answer filled, one the documents do not show provisional until accepted or edited (Submit held till then); corrections saved immediately at Manager or candidate scope', { skip, timeout: 300000 }, async () => {
+test('Stage C: approved answers first, then one ChatGPT batch for the step (retried after a 429), every answer filled, one the documents do not show provisional until accepted or edited (Submit held till then); corrections saved immediately at Manager or candidate scope', { skip, timeout: 300000 }, async () => {
   resetMock({ queue: [application(10, 'form-ai')], fail429: 1 });
   const { browser, action, storage, phase } = await launch({ ai: 'gemini' });
   try {
@@ -1197,7 +1204,7 @@ test('Cancel and Stop all at every point: no live claim, saved checkpoint, no ta
   }
 });
 
-test('Gemini failures (mocked): invalid JSON, quota exhausted, no answer in time, request budget; each ends at the review with the questions left for the Manager', { skip, timeout: 420000 }, async () => {
+test('Mocked ChatGPT failures: invalid JSON, quota exhausted, no answer in time, request budget; each ends at the review with the questions left for the Manager', { skip, timeout: 420000 }, async () => {
   resetMock();
   const ctx = await launch({ ai: 'gemini' });
   const cases = {};

@@ -284,7 +284,7 @@ async function initializeQtsPageLauncher() {
   menuFoot.className = 'menu-foot';
   menu.append(menuBrand, menuList, menuFoot);
 
-  // In this order; Highlight and Site Setting show only for a Manager assigned them, Custom is not built yet.
+  // In this order; tools show only for a Manager assigned them.
   const actions = [
     ['Work'],
     ['get_jd', 'Get JD', '⌕', 'get-jd'],
@@ -295,6 +295,7 @@ async function initializeQtsPageLauncher() {
     ['Tools'],
     ['text_highlights', 'Highlight', '✎', 'text-highlights'],
     ['page_exclusions', 'Site Setting', '⊘', 'page-exclusions'],
+    ['auto_apply_custom_urls', 'Custom URLs', '↗', 'custom-urls'],
     ['session', 'Sign In', '↪', 'logout'],
   ];
   // Today's counts, above the actions: new job URLs (each job once), job rows added, applications.
@@ -853,11 +854,13 @@ async function initializeQtsPageLauncher() {
   async function syncTextHighlightAction(refresh = false) {
     const highlightButton = menu.querySelector('[data-action="text_highlights"]');
     const exclusionsButton = menu.querySelector('[data-action="page_exclusions"]');
-    if (!highlightButton && !exclusionsButton) return;
+    const customUrlsButton = menu.querySelector('[data-action="auto_apply_custom_urls"]');
+    if (!highlightButton && !exclusionsButton && !customUrlsButton) return;
     const signedIn = await syncSessionAction();
     if (!signedIn) {
       if (highlightButton) highlightButton.hidden = true;
       if (exclusionsButton) exclusionsButton.hidden = true;
+      if (customUrlsButton) customUrlsButton.hidden = true;
       toolsHeading.hidden = true;
       return;
     }
@@ -871,7 +874,15 @@ async function initializeQtsPageLauncher() {
         || (response.canManagePageExclusions !== true && response.canManageJobDetectionUrlRules !== true);
       exclusionsButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
     }
-    toolsHeading.hidden = Boolean(highlightButton?.hidden !== false && exclusionsButton?.hidden !== false);
+    if (customUrlsButton) {
+      customUrlsButton.hidden = response?.ok !== true || response.canManageJobDetectionUrlRules !== true;
+      customUrlsButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
+    }
+    toolsHeading.hidden = Boolean(
+      highlightButton?.hidden !== false
+      && exclusionsButton?.hidden !== false
+      && customUrlsButton?.hidden !== false
+    );
   }
 
   // The Get JD panel is injected on demand instead of on every page.
@@ -934,6 +945,15 @@ async function initializeQtsPageLauncher() {
       ['canManagePageExclusions', 'canManageJobDetectionUrlRules'],
       'URL settings access',
       options,
+    );
+  }
+
+  async function openAutoApplyCustomUrlsPanel(button) {
+    await openManagerPanel(
+      button,
+      'auto-apply-custom-urls',
+      'canManageJobDetectionUrlRules',
+      'Custom URLs access',
     );
   }
 
@@ -1396,6 +1416,10 @@ async function initializeQtsPageLauncher() {
     }
     if (action === 'page_exclusions') {
       await openPageExclusionPanel(button);
+      return;
+    }
+    if (action === 'auto_apply_custom_urls') {
+      await openAutoApplyCustomUrlsPanel(button);
       return;
     }
     // The panel stays open: the row itself shows what the click changed.
