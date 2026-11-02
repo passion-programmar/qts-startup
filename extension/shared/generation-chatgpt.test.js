@@ -64,7 +64,7 @@ test('builds a task-specific prompt without asking ChatGPT to return transport m
 test('Generation keeps the existing ChatGPT conversation for jobs within the tab limit', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../background/service-worker.js'), 'utf8');
   const start = source.indexOf('          const tabStillOpen = chatTab &&');
-  const end = source.indexOf('          chatTab.jobs += 1;', start) + '          chatTab.jobs += 1;'.length;
+  const end = source.indexOf('          // Still in front while ChatGPT writes', start);
   assert.ok(start >= 0 && end > start);
   const queueStep = source.slice(start, end);
   const calls = [];
@@ -81,6 +81,6 @@ test('Generation keeps the existing ChatGPT conversation for jobs within the tab
   });
   await vm.runInContext(`(async () => { ${queueStep} })()`, context);
   assert.equal(context.chatTab.id, 8);
-  assert.equal(context.chatTab.jobs, 2);
+  assert.equal(context.chatTab.jobs, 1, 'a tab is counted only after the job is delivered');
   assert.deepEqual(calls.map(([type]) => type), ['show', 'state', 'ready']);
 });

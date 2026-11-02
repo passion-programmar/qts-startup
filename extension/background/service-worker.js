@@ -4012,8 +4012,13 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     };
   }
 
-  async function downloadQueuedGenerationFiles(generationId, jobId, downloadIds, windowId) {
+  async function downloadQueuedGenerationFiles(generationId, jobId, downloadIds, windowId, chatTabId) {
     await ensureQueuedGenerationIsActive(jobId);
+    await showGenerationChatGptStep(
+      chatTabId,
+      '6/6 · Preparing files',
+      'Preparing the résumé, cover letter, and JD download files...',
+    );
     const artifactResult = await readGenerationArtifacts(generationId, windowId);
     if (
       artifactResult.success !== true
@@ -4023,13 +4028,40 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       throw new Error(artifactResult.message || 'QTS could not prepare the three download files.');
     }
     const files = validateApplicationDownloadFiles(artifactResult.files);
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
       await ensureQueuedGenerationIsActive(jobId);
+      const fileName = file.downloadPath.split('/').at(-1) || 'file';
+      await showGenerationChatGptStep(
+        chatTabId,
+        '6/6 · Downloading files',
+        `Downloading ${fileName} (${index + 1} of ${files.length})...`,
+      );
       const downloadId = await startApplicationFileDownload(file);
       downloadIds.push(downloadId);
       await waitForQueuedDownload(downloadId, jobId);
+      await showGenerationChatGptStep(
+        chatTabId,
+        '6/6 · Downloading files',
+        `Downloaded ${fileName} (${index + 1} of ${files.length}).`,
+        'success',
+      );
     }
     await ensureQueuedGenerationIsActive(jobId);
+  }
+
+  async function handleQueuedGenerationFailureTab(chatTab, answerSaved, reason) {
+    if (!Number.isInteger(chatTab?.id)) return chatTab;
+    if (!answerSaved) {
+      await chrome.tabs.remove(chatTab.id).catch(() => {});
+      return null;
+    }
+    await showGenerationChatGptStep(
+      chatTab.id,
+      '6/6 · Delivery failed; retrying',
+      `${reason} Keeping this ChatGPT conversation open while QTS retries the job.`,
+      'warn',
+    );
+    return chatTab;
   }
 
   function waitForQueuedDownload(downloadId, jobId) {
@@ -4267,6 +4299,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const jobTabId = null;
         let generationId = '';
         let finalizeAttempted = false;
+        let answerSaved = false;
         const downloadIds = [];
         generationHeartbeatOkAt.set(queuedJob.id, Date.now());
         try {
@@ -4298,16 +4331,22 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
             await ensureChatGptReady(chatTab.id);
           }
-          chatTab.jobs += 1;
           // Still in front while ChatGPT writes, if the Manager looked at another tab meanwhile.
           await bringTabToFront(chatTab.id);
           // No job page is opened: the prompt uses the saved job (description, title, company).
           const result = await runGenerationForTab(jobTabId, queuedJob, chatTab);
           generationId = result.generationId;
+          answerSaved = true;
           await updateGenerationBrowserState({ phase: 'downloading' });
           // The PDFs are printed in a hidden tab of the ChatGPT window, out of the Manager's way.
           const printWindowId = (await getTab(chatTab.id))?.windowId;
-          await downloadQueuedGenerationFiles(result.generationId, queuedJob.id, downloadIds, printWindowId);
+          await downloadQueuedGenerationFiles(
+            result.generationId,
+            queuedJob.id,
+            downloadIds,
+            printWindowId,
+            chatTab.id,
+          );
           finalizeAttempted = true;
           const finalized = await workerApiRequest(
             'POST',
@@ -4318,6 +4357,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             throw new Error(finalized.message || 'QTS could not finish the queued job.');
           }
           await reportQueuedGenerationDelivered(jobTabId);
+          chatTab.jobs += 1;
           completedCount += 1;
         } catch (error) {
           let handledError = error;
@@ -4325,6 +4365,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (serverStatus === 'completed') {
             // Finalize committed even though its response was lost; keep the delivered files.
             await reportQueuedGenerationDelivered(jobTabId);
+            if (answerSaved && chatTab) chatTab.jobs += 1;
             completedCount += 1;
             continue;
           }
@@ -4332,11 +4373,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             handledError = generationCancelledError();
           }
           const reason = handledError instanceof Error ? handledError.message : 'Generation failed.';
-          // A failed job may have left ChatGPT stuck: the next job gets a fresh pinned tab.
-          if (chatTab) {
-            await chrome.tabs.remove(chatTab.id).catch(() => {});
-            chatTab = null;
-          }
+          chatTab = await handleQueuedGenerationFailureTab(chatTab, answerSaved, reason);
           // Without a status answer, a sent finalize may have committed, so the files might be the delivery.
           const deliveryUnknown = finalizeAttempted && !serverStatus;
           if (downloadIds.length > 0 && !deliveryUnknown) {

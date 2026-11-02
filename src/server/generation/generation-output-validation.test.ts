@@ -71,18 +71,21 @@ test("accepts schema-valid documents with matching identity and target", () => {
   assert.equal(generationOutputIssue(parsedPackage(), facts), null);
 });
 
-test("validates resume and cover-letter locations separately when a resume-only location is configured", () => {
+test("accepts city-country on the resume while preserving the full cover-letter address", () => {
   const resumeOnlyLocationFacts = structuredClone(facts);
-  resumeOnlyLocationFacts.candidate.resumeLocation = "Cluj-Napoca, Romania";
+  resumeOnlyLocationFacts.candidate.location =
+    "Strada Bohatiel Alexandru, 22, Baia Mare, Maramureș, Romania, 400476";
+  resumeOnlyLocationFacts.candidate.resumeLocation = "Baia Mare, Romania";
   const matching = structuredClone(response);
-  matching.resume.contact.location = "Cluj-Napoca, Romania";
+  matching.resume.contact.location = "Baia Mare, Romania";
+  matching.coverLetter.candidate.location = resumeOnlyLocationFacts.candidate.location;
   assert.equal(generationOutputIssue(parsedPackage(matching), resumeOnlyLocationFacts), null);
 
-  matching.resume.contact.location = "37, Strada Firiza, Cluj-Napoca, Cluj, Romania, 400659";
+  matching.resume.contact.location = resumeOnlyLocationFacts.candidate.location;
   assert.match(generationOutputIssue(parsedPackage(matching), resumeOnlyLocationFacts) ?? "", /contact details/);
 
-  matching.resume.contact.location = "Cluj-Napoca, Romania";
-  matching.coverLetter.candidate.location = "Cluj-Napoca, Romania";
+  matching.resume.contact.location = "Baia Mare, Romania";
+  matching.coverLetter.candidate.location = "Baia Mare, Romania";
   assert.match(generationOutputIssue(parsedPackage(matching), resumeOnlyLocationFacts) ?? "", /contact details/);
 });
 
