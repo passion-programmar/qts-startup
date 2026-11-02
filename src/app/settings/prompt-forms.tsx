@@ -12,6 +12,7 @@ import {
   updateManagerApplyAction,
   updateManagerGeminiMatchingAction,
   updateManagerChatGptUrlAction,
+  updateOwnChatGptUrlAction,
   updateOwnAutoApplyParallelLimitAction,
   type PromptActionState,
 } from "@/app/settings/actions";
@@ -338,6 +339,38 @@ export function ManagerChatGptUrlForm({
       <ActionFeedback state={state} />
       <button
         className="inline-flex h-8 items-center gap-1 rounded-lg bg-indigo-600 px-3 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+        disabled={isPending}
+        type="submit"
+      >
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
+        {isPending ? "Saving..." : "Save URL"}
+      </button>
+    </form>
+  );
+}
+
+export function OwnChatGptUrlForm({ chatGptUrl }: { chatGptUrl: string }) {
+  const [state, formAction, isPending] = useActionState(updateOwnChatGptUrlAction, initialState);
+  return (
+    <form action={formAction} className="space-y-3">
+      <label className="block text-xs font-semibold text-slate-700" htmlFor="own-chatgpt-url">
+        Your ChatGPT Project URL
+      </label>
+      <input
+        className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+        defaultValue={chatGptUrl}
+        id="own-chatgpt-url"
+        maxLength={2048}
+        name="chatGptUrl"
+        placeholder="https://chatgpt.com/g/g-p-..."
+        type="url"
+      />
+      <p className="text-xs leading-5 text-slate-500">
+        Generation and Apply use this URL to open a fresh ChatGPT conversation for each job. Leave it blank to use chatgpt.com.
+      </p>
+      <ActionFeedback state={state} />
+      <button
+        className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
         disabled={isPending}
         type="submit"
       >

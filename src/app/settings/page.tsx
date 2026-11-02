@@ -10,6 +10,7 @@ import {
   ManagerPageExclusionAccessForm,
   ManagerJobDetectionUrlAccessForm,
   ManagerChatGptUrlForm,
+  OwnChatGptUrlForm,
   OwnAutoApplyParallelLimitForm,
 } from "@/app/settings/prompt-forms";
 import { groupVersions } from "@/app/prompts/prompt-groups";
@@ -65,7 +66,10 @@ const promptGroups = [
 export default async function SettingsPage() {
   const currentUser = await requireUser();
   if (currentUser.role === "manager") {
-    const [manager] = await db.select({ autoApplyParallelLimit: users.autoApplyParallelLimit })
+    const [manager] = await db.select({
+      autoApplyParallelLimit: users.autoApplyParallelLimit,
+      chatGptUrl: users.chatGptUrl,
+    })
       .from(users).where(and(eq(users.id, currentUser.id), isNull(users.blockedAt))).limit(1);
     if (!manager) redirect("/");
     return (
@@ -73,10 +77,13 @@ export default async function SettingsPage() {
         <main className="py-1">
           <div className="mx-auto max-w-3xl">
             <PageHeader
-              description="Choose how many Auto Apply forms each Chrome can work on together."
+              description="Set your ChatGPT Project URL and choose how many Auto Apply forms each Chrome can work on together."
               eyebrow="Manager settings"
-              title="Auto Apply settings"
+              title="Your settings"
             />
+            <SettingsCard title="ChatGPT Project URL" summary="Choose where your ChatGPT conversations open">
+              <OwnChatGptUrlForm chatGptUrl={manager.chatGptUrl} />
+            </SettingsCard>
             <SettingsCard summary={`${manager.autoApplyParallelLimit} jobs at once`} title="Concurrent jobs">
               <OwnAutoApplyParallelLimitForm parallelLimit={manager.autoApplyParallelLimit} />
             </SettingsCard>

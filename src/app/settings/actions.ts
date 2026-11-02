@@ -207,6 +207,45 @@ export async function updateManagerChatGptUrlAction(
   };
 }
 
+export async function updateOwnChatGptUrlAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") {
+    return { ...emptyState, error: "Only Managers can change their own ChatGPT URL." };
+  }
+  const submittedValue = formData.get("chatGptUrl");
+  if (typeof submittedValue !== "string" || submittedValue.length > 2048) {
+    return { ...emptyState, error: "Enter a ChatGPT URL no longer than 2048 characters." };
+  }
+  const value = submittedValue.trim();
+  const chatGptUrl = value ? normalizeChatGptUrl(value) : DEFAULT_CHATGPT_URL;
+  if (!chatGptUrl) {
+    return { ...emptyState, error: "Enter a valid HTTPS ChatGPT URL, such as a Project link." };
+  }
+  try {
+    const [manager] = await db
+      .update(users)
+      .set({ chatGptUrl, updatedAt: new Date() })
+      .where(and(
+        eq(users.id, actor.id),
+        eq(users.role, "manager"),
+        isNull(users.blockedAt),
+      ))
+      .returning({ id: users.id });
+    if (!manager) return { ...emptyState, error: "Your active Manager account was not found." };
+  } catch (error) {
+    logPromptActionFailure("updating your ChatGPT URL", error);
+    return { ...emptyState, error: "Your ChatGPT URL could not be saved." };
+  }
+  revalidatePath("/settings");
+  return {
+    error: null,
+    success: value ? "Your ChatGPT URL was saved." : "Your ChatGPT URL was reset to the default.",
+  };
+}
+
 // Super Admin turns Apply on per Manager and picks the AI that answers application questions.
 export async function updateOwnAutoApplyParallelLimitAction(
   _previousState: PromptActionState,
