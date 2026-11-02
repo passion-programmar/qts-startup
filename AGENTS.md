@@ -7,3 +7,8 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Deployment preference
+
+- Production only: never trigger or create a Preview deployment.
+- Before pushing deployment changes, verify the branch is configured as Vercel's Production branch. Push only when the push will deploy to Production; if the target or outcome is unclear, stop and ask.
