@@ -1,10 +1,9 @@
 // Apply's assistant panel on a job page (injected by the service worker into each job tab it opens).
 // Docked on the right like Get JD's panel, it shows the account and the job, two copy buttons
 // (résumé + job description, and with the profile), the candidate's profile, experience, education,
-// and Super Admin's reusable answers as cards (every item copied with a click), what QTS filled, and
-// the required questions still empty. At the bottom: Submitted (saves the bid, deletes the job row)
-// and Cancel (closes the page; the job stays). The site's own buttons are never watched. When new
-// boxes show on the page, the panel tells QTS so it fills them at once.
+// and Super Admin's reusable answers as cards (every item copied with a click). Normal Apply follows
+// safe Start/Continue navigation and fills only saved documents, profile facts, and reusable answers
+// on visible application forms; the Manager completes the rest and clicks Submitted after site Submit.
 (function initApplyAssist(global) {
   if (global.__qtsApplyAssist) return;
   // A panel left by an earlier run of the extension (reloaded or updated) can no longer reach QTS:
@@ -66,15 +65,13 @@
     .link { display: inline-block; margin-top: 4px; color: #60a5fa; font-size: 12px; text-decoration: none; }
     .link:hover { text-decoration: underline; }
     .badge { display: inline-block; padding: 0 4px; border-radius: 3px; background: #10b981; color: #052e1f; font-weight: 600; }
-    .folder { display: block; width: 100%; margin-top: 10px; padding: 7px 9px; border: 1px dashed #34425a; border-radius: 8px; background: #0e1626; color: #93c5fd; text-align: left; font-weight: 600; word-break: break-all; }
-    .folder:hover { background: #1a2438; }
+    .resume-path { margin-bottom: 12px; padding: 10px; border: 1px solid #34425a; border-radius: 10px; background: #0e1626; }
+    .path-copy { display: block; width: 100%; margin-top: 6px; padding: 8px; border: 1px dashed #34425a; border-radius: 8px; background: #111a2e; color: #93c5fd; text-align: left; overflow-wrap: anywhere; }
+    .path-copy:hover { background: #1a2438; }
+    .path-value { display: block; margin-top: 4px; color: #e2e8f0; font: 11px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+    .path-copied { margin-top: 6px; color: #6ee7b7; font-size: 11px; }
     .status { margin: 12px 0 0; padding: 8px 10px; border: 1px solid rgb(16 185 129 / .3); border-radius: 10px; background: rgb(16 185 129 / .1); color: #6ee7b7; font-size: 12px; }
-    .status.working { display: flex; align-items: center; gap: 8px; border-color: rgb(99 102 241 / .3); background: rgb(99 102 241 / .1); color: #a5b4fc; }
     .status.idle { border-color: #243047; background: #0d1526; color: #94a3b8; }
-    .refill { margin-top: 6px; padding: 5px 10px; border: 1px solid rgb(99 102 241 / .5); border-radius: 8px; color: #c7d2fe; background: transparent; font: 600 12px/1.4 inherit; cursor: pointer; }
-    .refill:hover { background: rgb(99 102 241 / .18); }
-    .spinner { flex: 0 0 12px; width: 12px; height: 12px; border: 2px solid rgb(99 102 241 / .3); border-top-color: #818cf8; border-radius: 50%; animation: spin 1s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
     .alert { margin: 12px 0 0; padding: 8px 10px; border: 1px solid rgb(244 63 94 / .3); border-radius: 10px; background: rgb(244 63 94 / .1); color: #fda4af; font-size: 12px; }
     .alert strong { display: block; margin-bottom: 3px; color: #fecdd3; }
     .alert li { margin-left: 16px; cursor: pointer; }
@@ -94,6 +91,10 @@
     .item .value { color: #f1f5f9; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: hidden; }
     .item.copied { background: rgb(16 185 129 / .16); }
     .item.copied .label::after { content: '  ✓ copied'; color: #6ee7b7; font-weight: 700; }
+    .item-row { display: flex; gap: 4px; }
+    .item-row .item { min-width: 0; flex: 1 1 0; grid-template-columns: max-content minmax(0, 1fr); gap: 5px; padding-right: 4px; padding-left: 4px; }
+    .item-row .item:only-child { flex-basis: 100%; }
+    .item-row .label { white-space: nowrap; }
     .entry { margin: 6px 0; padding: 4px 0; border-top: 1px solid #243047; }
     .entry:first-child { border-top: 0; }
     .none { padding: 8px; color: #66758c; font-size: 12px; }
@@ -140,8 +141,6 @@
   let state = null;
   let busy = false;
   let hidden = false;
-  let emptyRequired = [];
-  let lastKeyAt = 0;
   // Which cards are open; the profile is open first.
   const openCards = new Set(['profile']);
   // Where the panel was scrolled, kept on every redraw; a card just opened is brought to the top.
@@ -314,6 +313,20 @@
     return node;
   }
 
+  function itemRow(entries) {
+    const row = element('div', 'item-row');
+    for (const [label, value] of entries) {
+      if (String(value ?? '').trim()) row.append(item(label, value));
+    }
+    return row;
+  }
+
+  function resumeFolderSuffix(folder) {
+    const parts = String(folder || '').split(/[\\/]+/).filter(Boolean);
+    const mskIndex = parts.findIndex((part) => part.toLowerCase() === 'msk');
+    return mskIndex >= 0 ? parts.slice(mskIndex + 1).join('\\') : '';
+  }
+
   function card(key, title, count, fill) {
     const node = element('div', `card${openCards.has(key) ? '' : ' closed'}`);
     node.dataset.card = key;
@@ -413,6 +426,20 @@
     account.append(element('h2', '', state.candidate), element('span', 'chrome', state.chromeName || ''));
     scroll.append(element('div', 'label-top', 'Account'), account);
 
+    const resumeSuffix = resumeFolderSuffix(state.resumeFolder);
+    if (resumeSuffix) {
+      const resumePath = element('div', 'resume-path');
+      resumePath.append(element('div', 'label-top', 'Resume folder after MSK'));
+      const pathButton = element('button', 'path-copy', resumeSuffix);
+      pathButton.type = 'button';
+      pathButton.title = 'Copy this path suffix for Windows Explorer';
+      pathButton.addEventListener('click', async () => {
+        showToast(await copyText(resumeSuffix) ? 'Resume folder path copied' : 'Could not copy');
+      });
+      resumePath.append(pathButton);
+      scroll.append(resumePath);
+    }
+
     const copies = element('div', 'copies');
     copies.append(
       copyButton('Copy résumé + JD', 'copy-all', resumeAndJobText),
@@ -440,31 +467,12 @@
       link.rel = 'noopener';
       job.append(link);
     }
-    if (state.resumeFolder) {
-      const folder = element('button', 'folder', `📁 Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`);
-      folder.type = 'button';
-      folder.title = 'Open the résumé folder in Windows Explorer';
-      folder.addEventListener('click', () => send('open_folder'));
-      job.append(folder);
-    }
     scroll.append(job);
 
-    if (state.filling) {
-      const working = element('div', 'status working');
-      working.append(element('span', 'spinner'), element('span', '', 'QTS is filling what it knows…'));
-      scroll.append(working);
-    } else {
-      scroll.append(state.filled
-        ? element('div', 'status', `✓ QTS filled ${state.filled} answer${state.filled === 1 ? '' : 's'} (résumé, profile, reusable answers). Check them, fill the rest, then Submit.`)
-        : element('div', 'status idle', 'Nothing filled on this page yet.'));
-      // Looks at this page again as if the job were new: boxes met before are filled again when
-      // empty (text already written stays), and an embedded job-board form is opened again.
-      const refill = element('button', 'refill', '↻ Fill again');
-      refill.type = 'button';
-      refill.title = 'Look at this page again and fill what QTS knows, as if the job were new';
-      refill.addEventListener('click', () => send('refill'));
-      scroll.append(refill);
-    }
+    const status = state.filling
+      ? 'Filling saved résumé, cover letter, profile facts, and reusable answers on the visible form…'
+      : state.status || 'QTS fills only saved documents, profile facts, and reusable answers on visible application forms. You handle everything else and submit.';
+    scroll.append(element('div', `status${state.filling ? ' working' : ' idle'}`, status));
     if (state.problems?.length) {
       const box = element('div', 'alert');
       box.append(element('strong', '', 'Needs you'));
@@ -477,20 +485,6 @@
       box.append(list);
       scroll.append(box);
     }
-    if (state.mode === 'assist' && emptyRequired.length) {
-      const box = element('div', 'alert empty');
-      box.append(element('strong', '', `Still empty (${emptyRequired.length} required)`));
-      const list = element('ul', '');
-      for (const entry of emptyRequired.slice(0, 12)) {
-        const line = element('li', '', entry.label || 'A question without a name');
-        line.title = 'Show it on the form';
-        line.addEventListener('click', () => global.__qtsApplyForm?.focusField?.(entry.id));
-        list.append(line);
-      }
-      box.append(list);
-      scroll.append(box);
-    }
-
     const facts1 = profileFacts(state.profile);
     const disclosures = disclosureFacts(state.profile);
     scroll.append(card('profile', 'Profile', facts1.length, (body) => {
@@ -510,11 +504,12 @@
         const box = element('div', 'entry');
         box.append(
           item('Job title', entry.jobTitle),
-          item('Company', entry.companyName),
-          ...(entry.location ? [item('Location', entry.location)] : []),
+          itemRow([['Company', entry.companyName], ['Location', entry.location]]),
           ...(entry.workMode ? [item('Work mode', words(entry.workMode))] : []),
-          ...(month(entry.startDate) ? [item('From', month(entry.startDate))] : []),
-          item('To', entry.isCurrent ? 'Present' : month(entry.endDate) || '—'),
+          itemRow([
+            ['From', month(entry.startDate)],
+            ['To', entry.isCurrent ? 'Present' : month(entry.endDate) || '—'],
+          ]),
           ...(entry.description ? [item('Description', entry.description)] : []),
         );
         body.append(box);
@@ -528,8 +523,10 @@
           item('School', entry.institution),
           ...(entry.degree ? [item('Degree', entry.degree)] : []),
           ...(entry.fieldOfStudy ? [item('Field of study', entry.fieldOfStudy)] : []),
-          ...(month(entry.startDate) ? [item('From', month(entry.startDate))] : []),
-          item('To', entry.isCurrent ? 'Present' : month(entry.endDate) || '—'),
+          itemRow([
+            ['From', month(entry.startDate)],
+            ['To', entry.isCurrent ? 'Present' : month(entry.endDate) || '—'],
+          ]),
           ...(entry.description ? [item('Description', entry.description)] : []),
         );
         body.append(box);
@@ -544,7 +541,7 @@
     const foot = element('div', 'foot');
     if (state.message) foot.append(element('div', 'message', state.message));
     const actions = element('div', 'actions');
-    foot.append(element('div', 'note', 'Fill the rest, click the site\'s Submit, then Submitted here.'));
+    foot.append(element('div', 'note', 'Review QTS-filled values, complete the rest, click the site\'s Submit, then mark Submitted here.'));
     actions.append(
       actionButton('Submitted', 'submitted', 'submitted', () => ({ answers: currentAnswers() })),
       actionButton('Cancel', 'cancel', 'cancel'),
@@ -572,26 +569,10 @@
     }
   }
 
-  // The required questions still empty, as the Manager fills them (only redrawn when they change).
-  setInterval(() => {
-    if (!state || state.mode !== 'assist') return;
-    let now = [];
-    try {
-      now = (global.__qtsApplyForm?.emptyRequired?.() || []).map((entry) => ({ id: entry.id, label: entry.label }));
-    } catch {
-      now = [];
-    }
-    if (JSON.stringify(now) === JSON.stringify(emptyRequired)) return;
-    emptyRequired = now;
-    render();
-  }, 2000);
-
   // The site's own buttons are never watched: the application ends only with Submitted or Cancel here.
 
-  // New boxes on the page (the next step, a pop-up form, a section shown by an answer, a new
-  // address in a single-page site): QTS is told half a second after the page settles, and only when
-  // the boxes shown changed, so it fills them at once without reading the page for nothing.
-  // A large frame counts too: a job board's form embedded after the page loaded (Ashby, Greenhouse).
+  // New pages or safe navigation controls are reported after they settle so the worker can follow
+  // Start/Continue signals until the application form appears. A large frame counts too.
   const BOX_SELECTOR = 'input:not([type="hidden"]), select, textarea, [role="combobox"], [role="radiogroup"], [role="checkbox"], [contenteditable="true"], iframe';
   let boxesSeen = '';
   let changeTimer = null;
@@ -625,11 +606,6 @@
   });
   global.addEventListener('popstate', pageChanged);
   global.addEventListener('hashchange', pageChanged);
-  // QTS waits while the Manager types on this page.
-  document.addEventListener('keydown', (event) => {
-    if (!event.composedPath().includes(host)) lastKeyAt = Date.now();
-  }, true);
-
   // The worker sleeps when idle; the panel keeps it awake while the page is open.
   setInterval(() => { if (state) send('ping'); }, 20000);
 
@@ -637,11 +613,9 @@
     render(nextState) {
       state = nextState;
       busy = false;
-      if (nextState?.mode !== 'assist') emptyRequired = [];
       render();
       return true;
     },
-    lastKeyAt: () => lastKeyAt,
     remove() {
       state = null;
       setDocked(false);

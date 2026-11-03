@@ -36,6 +36,15 @@ test('runtime config rejects unencrypted server URLs outside this machine', asyn
   assert.equal(await loadRuntimeConfig('https://qts.example.com/').getServerUrl(), 'https://qts.example.com');
 });
 
+test('sign-in environment selects Hosting by default and the local development server explicitly', async () => {
+  const defaultConfig = loadRuntimeConfig();
+  assert.equal(await defaultConfig.getServerEnvironment(), 'hosting');
+  assert.equal(defaultConfig.getServerUrlForEnvironment('hosting'), 'https://qts-job-system.vercel.app');
+  assert.equal(defaultConfig.getServerUrlForEnvironment('local'), 'http://127.0.0.1:3000');
+  assert.equal(defaultConfig.getEnvironmentForServerUrl('http://localhost:3000'), 'local');
+  assert.throws(() => defaultConfig.getServerUrlForEnvironment('other'), /Choose Hosting or Local/);
+});
+
 test('Get JD and assigned Gemini evaluation are enabled while scanner automation stays disabled', () => {
   const config = loadRuntimeConfig();
   assert.equal(config.isFeatureEnabled('getJd'), true);

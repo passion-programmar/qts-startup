@@ -1,16 +1,13 @@
-// Apply's answers for one form page. Facts come only from the candidate's profile and saved answers;
-// questions they cannot answer go to the AI in one request, whose answers are checked before use.
-// A required fact the profile lacks stops the application instead of being guessed.
+// Apply's answers for one form page. Profile and reusable answers take priority; remaining questions
+// go to the configured AI instructions, and its responses are checked against the field itself.
 
 (function initApplyAnswers(global) {
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
   const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
-  const CONSENT = /\b(agree|consent|acknowledge|privacy|terms|certify|confirm that|i have read|accurate|true and complete|data processing|gdpr)\b/i;
-  // Auto Apply: personal facts never left to the AI when the profile lacks them.
   const PERSONAL_FACT = /authori[sz]|\bsponsor|\bvisa\b|citizen|nationality|right to work|work permit|permanent resident|relocat|security clearance|criminal|date of birth|\bage\b|over 18|gender|veteran|disab|\brace\b|ethnic/i;
   const WORK_RIGHT_QUESTION = /\b(legally )?(authori[sz]ed|eligible|entitled|permitted|allowed|right) to (work|be employed)\b|\bwork (authori[sz]ation|permit|visa)\b|\bright to work\b/i;
   // Auto Apply: a question that asks the candidate to agree to, consent to, or attest something.
-  const LEGAL_QUESTION = /\b(agree|consent|acknowledge|privacy (policy|notice)|terms (and conditions|of (use|service))|above[- ]mentioned terms|certify|attest(ation)?|i have read|data processing|gdpr|confirm that (everything|all|the information)|true and (your own|complete|accurate))\b/i;
+  const LEGAL_QUESTION = /\b(agree|consent|acknowledge|accept|privacy (policy|notice)|terms (and conditions|of (use|service))|above[- ]mentioned terms|certif(?:y|ication)|attest(ation)?|i have read|data processing|gdpr|confirm that (everything|all|the information)|true and (your own|complete|accurate)|electronic signature)\b/i;
   // Questions about salary, notice or start date, and sponsorship, for the profile rules and for
   // Super Admin's reusable answers on the same topics.
   const SALARY_QUESTION = /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b|stawk|wynagrodzeni/;
@@ -538,23 +535,32 @@
       }
       return null;
     }
-    const controlled = controlledAnswer(field, savedAnswers);
-    if (controlled) return controlled;
-    // Required consent and certification boxes are ticked; optional ones (marketing, future jobs) are left.
-    // Agreeing to the terms or privacy policy is needed to apply even when the box is not marked required.
-    if (field.kind === 'checkbox' && !hasOptions(field) && CONSENT.test(label)) {
-      const neededToApply = field.required || (/\b(terms|privacy|data processing|gdpr)\b/.test(label) && !OPT_IN.test(label));
-      return neededToApply ? { value: true, source: 'consent' } : { skip: 'Optional consent box.' };
+    // Optional marketing and future-contact opt-ins are never accepted automatically.
+    if (OPT_IN.test(label)) return { skip: 'Optional opt-in.' };
+    const policyAgreement = /\b(privacy|terms|data processing|gdpr)\b/i.test(label);
+    const requiredAgreement = (field.required || policyAgreement) && !OPT_IN.test(label);
+    // The Manager explicitly allows required agreements and attestations to be accepted before review.
+    // A conflicting saved answer must not leave a required agreement unchecked.
+    if (requiredAgreement && LEGAL_QUESTION.test(label)
+      && field.kind === 'checkbox' && !hasOptions(field)) {
+      return { value: true, source: 'consent' };
     }
-    // Auto Apply: a legal agreement, consent, or attestation asked as a choice ("Do you agree and confirm
-    // with the above terms?", "Candidate AI Usage Attestation") is the Manager's decision, never the AI's.
-    if (context.autoApply && hasOptions(field) && field.options.length > 1 && LEGAL_QUESTION.test(label)) {
-      return { skip: 'A legal agreement or consent: the Manager decides.', byHand: `A legal agreement or consent: answer "${field.label}" yourself.` };
-    }
-    // A single choice that acknowledges a statement ("I acknowledge this statement") is the answer.
-    if (hasOptions(field) && field.options.length === 1 && CONSENT.test(String(field.options[0]))) {
+    if (requiredAgreement && hasOptions(field) && field.options.length === 1
+      && LEGAL_QUESTION.test(String(field.options[0]))) {
       return { value: field.options[0], source: 'consent' };
     }
+    if (requiredAgreement && hasOptions(field)
+      && ['select', 'radio', 'menu', 'combobox'].includes(field.kind)
+      && LEGAL_QUESTION.test(label)) {
+      const affirmative = field.options.filter((option) => (
+        YES_START.test(String(option).trim())
+        || /^(?:i\s+)?(?:agree|accept|consent|acknowledge|certify|attest)\b/i.test(String(option).trim())
+      ));
+      if (affirmative.length === 1) return { value: affirmative[0], source: 'consent' };
+      return { skip: 'The required agreement has no single clear affirmative choice.', byHand: `Choose the agreement for "${field.label}" yourself.` };
+    }
+    const controlled = controlledAnswer(field, savedAnswers);
+    if (controlled) return controlled;
     const salutation = salutationAnswer(field, candidate);
     if (salutation) return salutation;
     // Diversity questions (gender, race, veteran, disability...): Super Admin's reusable answer for
@@ -568,6 +574,7 @@
       if (own) return own;
       const row = (savedAnswers || []).find((entry) => entry.questionKey === key)
         ?? (topic ? topicAnswer(field, topic, savedAnswers) : null);
+      if (context.autoApply && !row) return { missing: topic || 'diversity preference' };
       const neutral = 'Choose the option that declines or is most neutral; never infer it from the name, photo, or résumé.';
       if (row) {
         const reused = reusableAnswer(field, row);
@@ -644,11 +651,7 @@
     {
       if (rule.yesNo) {
         const fact = rule.yesNo(candidate);
-        // Auto Apply: a yes/no fact the profile lacks (work authorization, sponsorship) is the
-        // Manager's, never the AI's "most suitable answer".
-        if ((fact === null || fact === undefined) && context.autoApply) {
-          return { skip: `No ${rule.name} in the profile: left for the Manager.`, byHand: `The profile has no ${rule.name}: answer "${field.label}" yourself, or add it to the profile.` };
-        }
+        if ((fact === null || fact === undefined) && context.autoApply) return { missing: rule.name };
         if (fact === null || fact === undefined) return { missing: rule.name };
         const value = yesNoAnswer(field, fact);
         // Choices that are not yes/no (a list of visa types) go to the AI with the profile's yes or no.
@@ -659,17 +662,15 @@
         return resolveSalary(field, label, candidate, context.exchangeRates) ?? { ask: salaryText(candidate) };
       }
       if (rule.notice) {
-        // Auto Apply (context.autoApply): an unknown notice is the Manager's, never the usual 1 week.
-        if (context.autoApply && !hasNotice(candidate)) {
-          return { skip: 'No notice period in the profile: left for the Manager.', byHand: `The profile has no notice period or start date: fill "${field.label}" by hand, or add a reusable answer for it.` };
-        }
+        if (context.autoApply && !hasNotice(candidate)) return { missing: 'notice period' };
         return resolveNotice(field, label, candidate, context.today)
           ?? { ask: `notice period ${noticeWords(noticeDays(candidate)).toLowerCase()}, can start ${formatDate(startDate(candidate, context.today))}` };
       }
       const fact = rule.fact(candidate);
       if (fact === null || fact === undefined || fact === '') {
         if (rule.optionalIfMissing && !field.required) return { skip: `No ${rule.name} in the profile.` };
-        // A personal fact the profile lacks is never guessed: the Manager fills it, or adds it to the profile.
+        // Auto Apply gives unresolved facts to the Super Admin's configured answer instructions.
+        if (context.autoApply && (rule.neverGuess || rule.personal)) return { missing: rule.name };
         if (rule.neverGuess || rule.personal) {
           return { skip: `No ${rule.name} in the profile: left for the Manager.`, byHand: `The profile has no ${rule.name}: fill "${field.label}" by hand, or add it to the profile.` };
         }
@@ -1086,30 +1087,23 @@
     const answers = {};
     const open = [];
     const missing = [];
-    // Questions left for the Manager, with why: a personal fact the profile lacks.
+    // Fields intentionally left for the Manager (for example an unclear field in assisted Apply).
     const byHand = [];
     for (const field of fields) {
       if (field.hidden || field.disabled) continue;
       const resolved = resolveField(field, candidate, savedAnswers, context);
       // A box no text names for sure (labelUnresolved): only a fact its name hint matches fills it
       // ("first_name"); it is never asked of the AI as if it were some question.
-      if (field.labelUnresolved && (!resolved || resolved.missing || resolved.ask)) {
+      if (field.labelUnresolved && (!resolved || resolved.missing || resolved.ask) && !context.autoApply) {
         if (field.required) byHand.push({ id: field.id, label: field.label, message: `QTS couldn't tell which question this box is for${field.label ? ` ("${field.label}")` : ''}: fill it by hand.` });
         continue;
       }
-      // Auto Apply: a right-to-work question nothing in the profile answers is the Manager's.
-      if (!resolved && context.autoApply && WORK_RIGHT_QUESTION.test(labelOf(field))) {
-        if (field.required) byHand.push({ id: field.id, label: field.label, message: `The profile does not say where the candidate may work: answer "${field.label}" yourself, or add it to the profile.` });
-        continue;
-      }
       if (!resolved) {
+        if (context.autoApply && (PERSONAL_FACT.test(labelOf(field)) || WORK_RIGHT_QUESTION.test(labelOf(field)))) {
+          open.push({ ...field, hint: 'Use the supplied candidate facts and follow the configured answer instructions.' });
+          continue;
+        }
         if (field.kind !== 'checkbox' || field.required) open.push(field);
-        continue;
-      }
-      // Auto Apply: a personal fact the profile lacks (right to work, sponsorship, citizenship…) is
-      // the Manager's, never the AI's guess; facts the résumé shows (years) still go to the AI.
-      if (resolved.missing && context.autoApply && PERSONAL_FACT.test(`${resolved.missing} ${labelOf(field)}`)) {
-        if (field.required) byHand.push({ id: field.id, label: field.label, message: `The profile has no ${resolved.missing}: answer "${field.label}" yourself, or add it to the profile.` });
         continue;
       }
       if (resolved.missing) {
@@ -1181,7 +1175,7 @@
     'Reply with JSON only, in this shape: {"answers":[{"id":"<question id>","value":"<answer>","status":"ready"}]}',
     'status "review" with value null and a short "reason" when nothing given (candidate facts, résumé, job description, reusable answers) supports an answer, for example the candidate\'s own account name, a reference\'s contact, or a figure not stated: never guess a fact. Otherwise "ready".',
     'A question with "labelUncertain": true has text taken only from its box\'s hint: answer it only when that text clearly says what it asks, else status "review".',
-    'Answer every question id. For "options", copy exactly one option character for character; for type "checkbox-group" or "multiple": true, every option that truly fits the candidate, separated by " | ".',
+    'For "options", copy exactly one option character for character; for type "checkbox-group" or "multiple": true, every option that truly fits the candidate, separated by " | ".',
     'For "optionsPartial": true, "options" are only some of the list\'s choices (shown for sample searches): copy one when it fits; otherwise answer as for "choicesUnknown".',
     'For "choicesUnknown": true (a list whose choices could not be read), "value" is a JSON list: with "multiple": true, every choice that truly fits; otherwise up to 4 wordings of the one answer that such a list most likely uses, the best first (for example ["5-8 years", "5+ years", "More than 5 years"]).',
     'Respect maxLength, and min and max for numbers. A number takes digits only. A date uses its "format", else YYYY-MM-DD.',
@@ -1195,7 +1189,15 @@
     '- Requirement questions ("Do you have experience with X?"): Yes when the résumé shows X or closely related experience; No only when it clearly lacks it.',
     '- Free text: confident and specific. Open with how the candidate meets this job\'s main requirements, in the job description\'s own terms, then one or two concrete results from the résumé (with its numbers). A one-line box: one or two sentences; a large box: three to six sentences, unless maxLength or a note says otherwise. No generic phrases.',
     '- Willingness questions the candidate facts and reusable answers do not cover (travel, assessments, background checks, interview availability): Yes.',
+  ];
+  const AUTO_APPLY_REPLY_FORMAT = [
+    REPLY_FORMAT[0],
+    'Answer every question id. Do not return "review", "needs_review", or a null value. Follow the supplied answer instructions; when a question is not directly covered, give the best answer those instructions allow.',
+    'A question with "labelUncertain": true has text taken only from its box\'s hint; use the question text and supplied context to answer according to the supplied answer instructions.',
+    'For "options", copy exactly one option character for character; for type "checkbox-group" or "multiple": true, every option that fits, separated by " | ".',
+    ...REPLY_FORMAT.slice(4),
   ].join('\n');
+  const answerReplyFormat = (autoApply) => autoApply ? AUTO_APPLY_REPLY_FORMAT : REPLY_FORMAT.join('\n');
 
   // Facts the AI never needs for open questions (the profile answers contact and diversity questions
   // itself): left out of Auto Apply's prompts.
@@ -1278,7 +1280,7 @@
    * The AI request for a page's open questions: Super Admin's prompt (or the default) with its
    * placeholders filled, then the fixed reply format. One message, answered as strict JSON.
    */
-  function buildAnswerPrompt({ template, job, candidate: profile, resumeText, coverLetterText, documentsJson, fields, exchangeRates, today, savedAnswers, minimal = false }) {
+  function buildAnswerPrompt({ template, job, candidate: profile, resumeText, coverLetterText, documentsJson, fields, exchangeRates, today, savedAnswers, minimal = false, autoApply = minimal }) {
     // The AI sees the salary, notice, and sponsorship Apply uses: Super Admin's reusable ones first.
     const candidate = withReusableFacts(profile, savedAnswers, exchangeRates);
     const questions = JSON.stringify(questionList(fields));
@@ -1311,7 +1313,7 @@
     let prompt = source.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (whole, name) => (name in values ? values[name] : whole));
     // A prompt that leaves the questions out still gets them, or there would be nothing to answer.
     if (!/\{\{\s*(questions|application_question)\s*\}\}/.test(source)) prompt += `\n\nQuestions:\n${questions}`;
-    return `${prompt}\n\n${REPLY_FORMAT}`;
+    return `${prompt}\n\n${answerReplyFormat(autoApply)}`;
   }
 
   /** { ok: true, value } with the cleaned answer, or { ok: false, reason }. */
@@ -1360,7 +1362,7 @@
    * The AI's answers matched to the open fields: { answers, invalid } where invalid lists each
    * unusable answer with its reason, for the one fix-up request.
    */
-  function parseAnswerReply(text, fields) {
+  function parseAnswerReply(text, fields, { autoApply = false } = {}) {
     const source = String(text || '');
     let parsed = null;
     const candidates = [...[...source.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((match) => match[1]), source];
@@ -1380,17 +1382,18 @@
       .filter((entry) => entry && typeof (entry.id ?? entry.fieldId) === 'string')
       .map((entry) => ({ ...entry, id: entry.id ?? entry.fieldId }));
     const replies = new Map(entries.map((entry) => [entry.id, entry.value]));
-    // Questions the AI says nothing supports an answer to (status "review" or "needs_review"): never
-    // filled, never asked again; the Manager answers them, with the AI's short reason.
-    const reviewReasons = new Map(entries
+    // Auto Apply retries refusals; standard Apply leaves them for the Manager.
+    const refused = new Map(entries
       .filter((entry) => /^(review|needs_review)$/i.test(String(entry.status || '')))
       .map((entry) => [entry.id, String(entry.reason || '').replace(/\s+/g, ' ').trim().slice(0, 140)]));
     const answers = {};
     const invalid = [];
     const review = [];
     for (const field of fields) {
-      if (reviewReasons.has(field.id)) {
-        review.push({ id: field.id, label: field.label, ...(reviewReasons.get(field.id) ? { reason: reviewReasons.get(field.id) } : {}) });
+      if (refused.has(field.id)) {
+        const reason = refused.get(field.id);
+        if (autoApply) invalid.push({ id: field.id, label: field.label, reason: reason || 'the AI declined to answer' });
+        else review.push({ id: field.id, label: field.label, ...(reason ? { reason } : {}) });
         continue;
       }
       const reply = replies.get(field.id);
@@ -1419,13 +1422,13 @@
    * The one follow-up for answers that could not be used: before filling (not an option, too long)
    * or after (the site rejected them). Each question comes again with its options and the reason.
    */
-  function buildFixPrompt(invalid, fields = []) {
+  function buildFixPrompt(invalid, fields = [], { autoApply = false } = {}) {
     const byId = new Map(questionList(fields).map((question) => [question.id, question]));
     const again = invalid.map((entry) => ({ ...(byId.get(entry.id) || { id: entry.id, question: entry.label }), problem: entry.reason }));
     return [
       'Some answers could not be used. Answer only these again, following the same rules and fixing each problem:',
       JSON.stringify(again),
-      REPLY_FORMAT,
+      answerReplyFormat(autoApply),
     ].join('\n');
   }
 

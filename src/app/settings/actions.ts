@@ -253,7 +253,7 @@ export async function updateOwnAutoApplyParallelLimitAction(
 ): Promise<PromptActionState> {
   const actor = await requireUser();
   if (actor.role !== "manager") {
-    return { ...emptyState, error: "Only Managers can change their Auto Apply concurrency." };
+    return { ...emptyState, error: "Only Managers can change their Apply concurrency." };
   }
   const rawLimit = formData.get("autoApplyParallelLimit");
   const parallelLimit = typeof rawLimit === "string" && /^\d+$/.test(rawLimit) ? Number(rawLimit) : NaN;
@@ -267,11 +267,11 @@ export async function updateOwnAutoApplyParallelLimitAction(
       .returning({ id: users.id });
     if (!manager) return { ...emptyState, error: "Your active Manager account was not found." };
   } catch (error) {
-    logPromptActionFailure("updating Auto Apply concurrency", error);
-    return { ...emptyState, error: "Auto Apply concurrency could not be saved." };
+    logPromptActionFailure("updating Apply concurrency", error);
+    return { ...emptyState, error: "Apply concurrency could not be saved." };
   }
   revalidatePath("/settings");
-  return { error: null, success: `Auto Apply will open up to ${parallelLimit} jobs at once when no profile is selected.` };
+  return { error: null, success: `Apply and Auto Apply will open up to ${parallelLimit} jobs at once.` };
 }
 
 export async function updateManagerApplyAction(

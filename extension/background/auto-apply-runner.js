@@ -3,8 +3,8 @@
 // server routes, sign-in, and ownership checks) and fills with the automatic engine (runApplication
 // with auto: true): the résumé and cover letter, the candidate's profile facts, and Super Admin's
 // approved reusable answers first; then ChatGPT for the questions left, one batch per
-// form step, written from the job description, résumé, and profile and filled; one the documents and
-// approved facts do not show is pointed out on the review.
+// form step using the Manager's configured answer instructions, then presents the filled answers
+// for the Manager's review.
 // Steps go on by themselves while nothing needs the Manager; the last step always waits for the
 // Manager, who clicks the site's Submit. The Manager sets the open-job concurrency, and one mode per
 // Chrome: Apply and Auto Apply share the work slot ('apply' in qtsExtensionStatus), and this key says

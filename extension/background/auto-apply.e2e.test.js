@@ -66,6 +66,41 @@ const FORM = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
   });
 </script></body></html>`;
 
+const JOB_WITH_ACCOUNT_FALLBACK = `<!doctype html><html><body>
+  <a id="signin" target="_blank" href="/account-login">Sign in</a>
+</body></html>`;
+const ACCOUNT_LOGIN = `<!doctype html><html><body>
+  <form onsubmit="event.preventDefault(); fetch('/account-login-submitted?email=' + encodeURIComponent(email.value) + '&password=' + encodeURIComponent(password.value)).then(() => { location.href = '/form?job=490'; });">
+    <label for="email">Email</label><input id="email" type="email">
+    <label for="password">Password</label><input id="password" name="password" type="password">
+    <button type="submit">Sign in</button>
+  </form>
+</body></html>`;
+const EMAIL_FIRST = `<!doctype html><html><body>
+  <form onsubmit="event.preventDefault(); location.href = '/register-account';">
+    <label for="email">Email address</label><input id="email" type="email" required>
+    <button type="submit">Continue!</button>
+  </form>
+</body></html>`;
+const REGISTER_ACCOUNT = `<!doctype html><html><body>
+  <h1>Create your account</h1>
+  <form onsubmit="event.preventDefault(); fetch('/account-register-submitted?firstName=' + encodeURIComponent(first.value) + '&lastName=' + encodeURIComponent(last.value) + '&email=' + encodeURIComponent(email.value) + '&password=' + encodeURIComponent(password.value) + '&confirmation=' + encodeURIComponent(confirm.value)).then(() => { location.href = '/verify-account'; });">
+    <label for="first">First name</label><input id="first" required>
+    <label for="last">Last name</label><input id="last" required>
+    <label for="email">Email</label><input id="email" type="email" required>
+    <label for="password">Password</label><input id="password" type="password" required>
+    <label for="confirm">Confirm password</label><input id="confirm" type="password" required>
+    <button type="submit">Create account</button>
+  </form>
+</body></html>`;
+const VERIFY_ACCOUNT = `<!doctype html><html><body>
+  <p>We sent a verification code to your email.</p>
+  <form onsubmit="event.preventDefault(); location.href = '/form?job=491';">
+    <label for="code">Verification code</label><input id="code" autocomplete="one-time-code" required>
+    <button type="submit">Verify</button>
+  </form>
+</body></html>`;
+
 // Two steps for AI: details; then questions the AI answers (two supported, two not) and consent.
 const FORM_AI = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Initech - Apply</title></head><body>
 <form id="app" onsubmit="event.preventDefault(); fetch('/page-submitted', { method: 'POST' }); window.submitted = (window.submitted || 0) + 1;">
@@ -141,6 +176,7 @@ const mock = {};
 function resetMock(options = {}) {
   Object.assign(mock, {
     log: [], answers: 0, prompts: [], heartbeats: 0, heartbeatLog: [], released: [], reviews: [], submitted: [], results: [], checks: [], resumes: 0,
+    accountLogins: [], accountRegistrations: [],
     pageSubmitted: 0, claims: 0, byAttempt: {}, queue: options.queue || [], claimStatus: options.claimStatus || 200,
     canUseApply: options.canUseApply ?? true, autoApplyParallelLimit: options.autoApplyParallelLimit ?? 2,
     stopVersion: 0, fail429: options.fail429 || 0, heartbeat409: false,
@@ -166,6 +202,25 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/form-gpt') return html(FORM_GPT);
     if (url.pathname === '/form-dyn') return html(FORM_DYN);
     if (url.pathname === '/form-five') return html(FORM_FIVE);
+    if (url.pathname === '/job-login') return html(JOB_WITH_ACCOUNT_FALLBACK);
+    if (url.pathname === '/account-login') return html(ACCOUNT_LOGIN);
+    if (url.pathname === '/email-first') return html(EMAIL_FIRST);
+    if (url.pathname === '/register-account') return html(REGISTER_ACCOUNT);
+    if (url.pathname === '/verify-account') return html(VERIFY_ACCOUNT);
+    if (url.pathname === '/account-login-submitted') {
+      mock.accountLogins.push({ email: url.searchParams.get('email'), password: url.searchParams.get('password') });
+      return json({});
+    }
+    if (url.pathname === '/account-register-submitted') {
+      mock.accountRegistrations.push({
+        firstName: url.searchParams.get('firstName'),
+        lastName: url.searchParams.get('lastName'),
+        email: url.searchParams.get('email'),
+        password: url.searchParams.get('password'),
+        confirmation: url.searchParams.get('confirmation'),
+      });
+      return json({});
+    }
     if (url.pathname === '/blank') return html('<!doctype html><title>Job page</title><h1>A job</h1>');
     if (url.pathname === '/page-submitted') { mock.pageSubmitted += 1; return json({}); }
     if (url.pathname === '/api/extension/features/me') return json({ success: true, features: {
@@ -284,12 +339,16 @@ async function launch({ ai = 'off' } = {}) {
       qtsSessionUser: { id: 'e2e', role: 'manager', displayName: 'E2E' }, qtsApplyDebug: true, qtsBrowserName: 'E2E Chrome', qtsAutoApplyAi: choice,
     });
   }, BASE, ai);
-  await ctx.worker.evaluate(() => {
+  ctx.installAiMock = () => ctx.worker.evaluate(() => {
     // Keep browser tests offline while exercising Auto Apply's ChatGPT path and serialization.
     applyChatTab = async () => -1;
-    askChatGpt = async (_tabId, application, prompt) =>
-      askGemini(application, [{ role: 'user', text: prompt }]);
+    self.__qtsTestAiCalls = [];
+    askChatGpt = async (_tabId, application, prompt) => {
+      self.__qtsTestAiCalls.push({ attemptId: application.attemptId, signal: application.aiAbortSignal });
+      return askGemini(application, [{ role: 'user', text: prompt }]);
+    };
   });
+  await ctx.installAiMock();
   if (process.env.QTS_E2E_TRACE) console.log('[trace] storage set');
   // An extension page to send the panel's actions from, as the launcher does.
   const control = await browser.newPage();
@@ -320,6 +379,7 @@ async function launch({ ai = 'off' } = {}) {
       }
       return null;
     }, 30000, 'a new worker');
+    await ctx.installAiMock();
     await wake.close().catch(() => {});
   };
   return ctx;
@@ -389,6 +449,62 @@ const tokens = (text) => Math.round(String(text).length / 4);
 test.before(() => new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve)));
 // Chrome keeps connections open: they are closed so the server (and the test run) can end.
 test.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
+
+test('a sign-in fallback follows the new tab, signs in with saved account details, then waits for the Manager', { skip, timeout: 180000 }, async () => {
+  const job = application(490, 'job-login');
+  job.job.url = `${BASE}/job-login`;
+  job.siteAccountPassword = 'SavedEmployerPassword123!';
+  resetMock({ queue: [job] });
+  const { browser, action, storage } = await launch({ ai: 'gemini' });
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    const form = await until(() => formPage(browser), 60000, 'the application form after sign-in');
+    await waitForAutoStep(storage, 1, ['needs_you', 'final'], 60000);
+    assert.equal((await browser.pages()).some((page) => page.url().startsWith(`${BASE}/job-login`)), false, 'the source job tab closes after handoff');
+    assert.deepEqual(mock.accountLogins, [{
+      email: 'ana.test@example.com',
+      password: 'SavedEmployerPassword123!',
+    }]);
+    assert.equal(mock.answers, 0, 'account credentials are not sent to AI');
+    assert.equal(mock.submitted.length, 0, 'the job application is not submitted automatically');
+    await action('cancel_status');
+    await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus !== 'apply', 20000, 'the run to stop');
+  } finally { await browser.close(); }
+});
+
+test('registration uses saved details, pauses for verification, then resumes when the Manager completes it', { skip, timeout: 180000 }, async () => {
+  const job = application(491, 'email-first');
+  job.job.url = `${BASE}/email-first`;
+  job.siteAccountPassword = 'SavedEmployerPassword123!';
+  resetMock({ queue: [job] });
+  const { browser, action, storage } = await launch({ ai: 'off' });
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    const verification = await until(() => formPage(browser, '/verify-account'), 60000, 'the verification page');
+    await until(() => mock.accountRegistrations.length === 1, 15000, 'the automatic account registration');
+    assert.deepEqual(mock.accountRegistrations, [{
+      firstName: 'Ana',
+      lastName: 'Test',
+      email: 'ana.test@example.com',
+      password: 'SavedEmployerPassword123!',
+      confirmation: 'SavedEmployerPassword123!',
+    }]);
+    const verificationPanel = await until(async () => {
+      const text = await panelText(verification);
+      return /Complete the email or text verification[\s\S]*Continue here/.test(text) ? text : null;
+    }, 20000, 'the verification pause instructions');
+    assert.match(verificationPanel, /Complete the email or text verification[\s\S]*Continue here/);
+    assert.equal(mock.submitted.length, 0, 'registration and verification do not submit the job application');
+
+    await verification.type('#code', '123456');
+    await verification.click('button[type="submit"]');
+    await waitForAutoStep(storage, 1, ['needs_you', 'final'], 60000);
+    assert.ok(await formPage(browser), 'the application page is reached after the Manager completes verification');
+    assert.equal(mock.submitted.length, 0, 'QTS stops for the Manager before the application is submitted');
+    await action('cancel_status');
+    await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus !== 'apply', 20000, 'the run to stop');
+  } finally { await browser.close(); }
+});
 
 test('two Auto Apply jobs run concurrently in one Chrome; a third waits and Cancel releases both', { skip, timeout: 180000 }, async () => {
   resetMock({ queue: [application(501, 'form-ai'), application(502, 'form-ai'), application(503, 'form-ai')] });
@@ -543,7 +659,8 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     timings.toFinalReview = Date.now() - started;
     const panel3 = await until(async () => { const text = await panelText(form); return /Review, then Submit/.test(text) ? text : null; }, 20000, 'the final review').catch(() => panelText(form));
     assert.match(panel3, /Review, then Submit/);
-    assert.match(panel3, /I agree to the privacy policy/, 'the consent box is left for the Manager');
+    assert.doesNotMatch(panel3, /Needs your answer: "I agree to the privacy policy/, 'the required consent is filled before review');
+    assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true);
     await shot(form, 'b-2-final-review');
 
     // Automatic Submit is on for this Manager, yet nothing was submitted: Auto Apply waits.
@@ -551,8 +668,7 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     assert.equal(mock.pageSubmitted, 0);
     assert.equal(mock.submitted.length, 0);
 
-    // The Manager ticks the box and clicks the site's Submit: only then is it recorded; Yes makes the bid.
-    await form.click('#privacy');
+    // The Manager still reviews and clicks the site's Submit; only then is it recorded.
     const clicked = Date.now();
     await form.click('#submit');
     await until(() => mock.submitted.length === 1, 20000, 'the Submit record');
@@ -612,7 +728,7 @@ test('closing an unfinished Auto Apply tab releases the job and retries its save
   } finally { await ctx.browser.close(); }
 });
 
-test('Stage C: approved answers first, then one ChatGPT batch for the step (retried after a 429), every answer filled, one the documents do not show provisional until accepted or edited (Submit held till then); corrections saved immediately at Manager or candidate scope', { skip, timeout: 300000 }, async () => {
+test('Stage C: approved answers first, one ChatGPT batch for the step, then the Manager reviews all filled answers; corrections save immediately', { skip, timeout: 300000 }, async () => {
   resetMock({ queue: [application(10, 'form-ai')], fail429: 1 });
   const { browser, action, storage, phase } = await launch({ ai: 'gemini' });
   try {
@@ -635,7 +751,7 @@ test('Stage C: approved answers first, then one ChatGPT batch for the step (retr
     assert.equal(state.cloud, 'AWS');
     // Filled too, though the documents do not show them: 9 years (the profile says 6) and a
     // certification only the job names.
-    assert.deepEqual([state.dj, state.extra, state.privacy], ['9', 'I am a certified Kubernetes administrator.', false]);
+    assert.deepEqual([state.dj, state.extra, state.privacy], ['9', 'I am a certified Kubernetes administrator.', true]);
     assert.equal(mock.prompts.length, 1, 'one AI batch for the step');
     assert.equal(mock.answers, 2, 'the 429 was tried once more');
     const prompt = mock.prompts[0];
@@ -644,11 +760,14 @@ test('Stage C: approved answers first, then one ChatGPT batch for the step (retr
     assert.deepEqual(asked, ['What motivates you in your work? *', 'How many years of experience with Django do you have? *', 'Which cloud platform have you used most?', 'Anything else you would like to share?'],
       'only the open questions are sent; the profile and approved answers covered the rest');
     assert.match(prompt, /What motivates you/);
-    const panel = await until(async () => { const text = await panelText(form); return /Provisional AI answer/.test(text) ? text : null; }, 20000, 'the review with its provisional answers').catch(() => panelText(form));
-    // The checklist: both unbacked answers provisional, with why and where; the consent box needs the Manager.
-    assert.match(panel, /Provisional AI answer: accept or edit: "How many years of experience with Django do you have\? \*" — it says 9\+ years; the profile says 6[^·]* · step 2/);
-    assert.match(panel, /Provisional AI answer: accept or edit: "Anything else you would like to share\?" — it names Kubernetes/);
-    assert.match(panel, /Needs your answer: "I agree to the privacy policy/);
+    const panel = await until(async () => {
+      const text = await panelText(form);
+      return /Needs you \(|Review, then Submit|Everything QTS could check is in order/.test(text) ? text : null;
+    }, 20000, 'the completed Manager review panel');
+    assert.doesNotMatch(panel, /Provisional AI answer/);
+    assert.match(panel, /How many years of experience with Django do you have\?/);
+    assert.match(panel, /I am a certified Kubernetes administrator/);
+    assert.doesNotMatch(panel, /Needs your answer: "I agree to the privacy policy/, 'the required consent is filled before review');
     assert.match(panel, /Verified \(\d+\)/);
     await shot(form, 'c-1-final-review');
 
@@ -666,18 +785,7 @@ test('Stage C: approved answers first, then one ChatGPT batch for the step (retr
     assert.equal(mock.checks.length, 1, 'unchanged values are not saved again');
     await shot(form, 'c-2-saved');
 
-    // The site's Submit is held while one provisional answer (the certification) is neither accepted
-    // nor edited; accepting it lets the Manager's Submit through.
-    await form.click('#privacy');
-    await form.click('#submit');
-    await sleep(2000);
-    assert.equal(mock.submitted.length, 0, 'Submit held back');
-    assert.equal(await form.evaluate(() => window.submitted || 0), 0, 'the page did not submit');
-    const held = await panelText(form);
-    assert.match(held, /Submit was held: deal with what is marked/);
-    assert.doesNotMatch(held, /accept or edit: "How many years/, 'the edited Django answer counts as settled');
-    assert.doesNotMatch(held, /Needs your answer: "I agree to the privacy policy/, 'the ticked consent box counts at once');
-    assert.equal(await clickPanelButton(form, 'Accept'), true);
+    // Required consent is already checked; the Manager reviews the form and submits it.
     await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing left blocking');
     await shot(form, 'c-3-provisional-settled');
     // Submit stays the Manager's; Yes records the answers with their sources.
@@ -691,7 +799,7 @@ test('Stage C: approved answers first, then one ChatGPT batch for the step (retr
     assert.equal(sources['How many years of experience with Django do you have? *'], 'manager');
     assert.equal(mock.answers, 2, 'no AI request after the review');
     const last = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState.last;
-    console.log(`[auto-apply C] ${JSON.stringify({ toFinalReviewMs: toReview, aiBatches: mock.prompts.length, aiHttpRequests: mock.answers, promptChars: prompt.length, promptTokensEst: tokens(prompt), aiCallsCounted: last?.aiCalls, accuracy: '4/4 filled (2 provisional: 1 edited, 1 accepted before Submit)' })}`);
+    console.log(`[auto-apply C] ${JSON.stringify({ toFinalReviewMs: toReview, aiBatches: mock.prompts.length, aiHttpRequests: mock.answers, promptChars: prompt.length, promptTokensEst: tokens(prompt), aiCallsCounted: last?.aiCalls, accuracy: '4/4 filled for Manager review; one corrected before Submit' })}`);
   } finally {
     await browser.close();
   }
@@ -916,7 +1024,7 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
     // Discovered: the question "Yes" revealed, and the one drawn on scroll (answered from the profile).
     assert.equal(values.pf, 'Yes', 'the approved answer');
     assert.equal(values.country, 'Romania', 'the section drawn only when scrolled to was found and filled');
-    assert.match(first, /Needs your answer: "Portfolio URL \*" — The profile has no portfolio/);
+    assert.match(first, /Needs your answer: "Portfolio URL \*" — Still empty: "Portfolio URL \*"\./);
     assert.match(first, /Did not take: check it: "How many years of professional experience do you have\? \*" — The site shows: Enter a number from 0 to 3/);
     assert.match(first, /Verified \(\d+\)/);
     assert.doesNotMatch(first, /Nothing blocks Submit/);
@@ -937,7 +1045,7 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
     await form.click('#next1');
     await until(async () => (await phase()) === 'final', 60000, 'the last step');
     const last = await until(async () => { const text = await panelText(form); return /Review, then Submit/.test(text) && /Needs you \(/.test(text) ? text : null; }, 20000, 'the final checklist');
-    assert.match(last, /Needs your answer: "Are you legally authorized to work in the United States\? \*" — The profile does not say where the candidate may work/);
+    assert.match(last, /Needs your answer: "Are you legally authorized to work in the United States\? \*" — Still empty: "Are you legally authorized to work in the United States\? \*"\./);
     assert.match(last, /Needs your answer: "Do you agree to the terms and conditions of this application\? \*" — A legal agreement or consent/);
     assert.equal(await form.evaluate(() => document.getElementById('cl').files[0]?.name), 'Ana_Test_Cover.pdf');
     // Earlier steps stay on the checklist, marked as not on this page.
@@ -1095,13 +1203,17 @@ test('Cancel and Stop all at every point: no live claim, saved checkpoint, no ta
     const renewedAfter = mock.heartbeatLog.filter((entry) => entry.attemptId === id && entry.at > released.at).length;
     const stored = await ctx.storage(['qtsAutoApplyRuns']);
     const held = await ctx.worker.evaluate(async () => (await chrome.storage.session.get('qtsAutoApplyChatSwitch')).qtsAutoApplyChatSwitch || null);
+    const queuesIdle = await ctx.worker.evaluate(async () => {
+      const idle = (queue) => Promise.race([queue.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 25))]);
+      return (await Promise.all([idle(autoApplyAiQueue), idle(autoApplyChatQueue)])).every(Boolean);
+    });
     const openTabs = await ctx.worker.evaluate(async (prefix) => (await chrome.tabs.query({})).filter((tab) => tab.url.startsWith(prefix)).length, `${BASE}/form`);
     const outcome = {
       releaseMs: released.at - stoppedAt, mode: released.mode, renewedAfter, openFormTabs: openTabs,
       submitted: mock.submitted.filter((entry) => entry.attemptId === id).length, pageSubmitted: mock.pageSubmitted,
       pausedCheckpoint: stored.qtsAutoApplyRuns?.[id]?.paused === true,
       pendingRelease: stored.qtsAutoApplyRuns?.[id]?.pendingRelease === true,
-      chatSwitchHeld: Boolean(held),
+      chatSwitchHeld: Boolean(held), aiQueuesIdle: queuesIdle,
     };
     results[name] = outcome;
     assert.equal(outcome.mode, 'later', `${name}: only given back`);
@@ -1112,6 +1224,7 @@ test('Cancel and Stop all at every point: no live claim, saved checkpoint, no ta
     assert.equal(outcome.pausedCheckpoint, true, `${name}: the saved process can be retried`);
     assert.equal(outcome.pendingRelease, false, `${name}: the release completed`);
     assert.equal(outcome.chatSwitchHeld, false, `${name}: no ChatGPT switch held`);
+    assert.equal(outcome.aiQueuesIdle, true, `${name}: the AI queues are free`);
   };
   const begin = async (n, form = 'form') => {
     mock.queue.push(application(n, form));
@@ -1136,8 +1249,32 @@ test('Cancel and Stop all at every point: no live claim, saved checkpoint, no ta
       mock.aiMode = 'hang';
       n += 1;
       const asked = mock.answers;
-      await begin(n, 'form-ai');
-      await until(() => mock.answers > asked, 120000, 'the AI asked');
+      const aiForm = await begin(n, 'form-ai');
+      await until(() => aiForm.evaluate(() => {
+        const firstName = document.getElementById('fn');
+        const email = document.getElementById('em');
+        const resume = document.getElementById('cv');
+        const referral = document.getElementById('hear');
+        return Boolean(firstName?.value && email?.value && resume?.files.length && referral?.value);
+      }), 120000, 'step 1 fields filled');
+      await aiForm.click('#next1');
+      try {
+        await until(() => mock.answers > asked, 30000, 'the AI asked');
+      } catch (error) {
+        const state = await ctx.storage(['qtsExtensionStatus', 'qtsAutoApplyState']);
+        const internals = await ctx.worker.evaluate(async () => ({
+          activeAttempts: [...activeReviews.keys()],
+          aiCalls: (self.__qtsTestAiCalls || []).map(({ attemptId, signal }) => ({ attemptId, aborted: signal?.aborted })),
+          aiQueueIdle: await Promise.race([autoApplyAiQueue.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 50))]),
+          chatQueueIdle: await Promise.race([autoApplyChatQueue.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 50))]),
+        })).catch(() => null);
+        const formState = await aiForm.evaluate(() => ({
+          step1: document.getElementById('step1').style.display !== 'none',
+          step2: document.getElementById('step2').style.display !== 'none',
+        })).catch(() => null);
+        error.message += `; diagnostic=${JSON.stringify({ asked, answers: mock.answers, status: state.qtsExtensionStatus, run: state.qtsAutoApplyState?.runs?.[0], requests: mock.log.slice(-12).map(entry => entry.path), internals, formState })}`;
+        throw error;
+      }
       await sleep(1000);
       at = Date.now();
       await stop(how);
@@ -1222,7 +1359,7 @@ test('Mocked ChatGPT failures: invalid JSON, quota exhausted, no answer in time,
     const values = await form.evaluate(() => ({ mot: document.getElementById('mot').value, dj: document.getElementById('dj').value, cloud: document.getElementById('cloud').value }));
     // The review as drawn (after its checklist is checked on the page).
     const panel = await until(async () => { const text = await panelText(form); return /Needs you \(|Nothing blocks Submit/.test(text) ? text : null; }, 20000, `${name}: the checklist`).catch(() => panelText(form));
-    cases[name] = { ms: Date.now() - started, requests: mock.answers - before, values, panel: (panel.match(/(Gemini did not answer[^)]*\)|Fill by hand: "[^"]+"[^.]*)/g) || []).slice(0, 2) };
+    cases[name] = { ms: Date.now() - started, requests: mock.answers - before, values, panel: (panel.match(/(ChatGPT did not answer[^.]*|Gemini did not answer[^.]*|Fill by hand: "[^"]+"[^.]*)/g) || []).slice(0, 2) };
     if (process.env.QTS_E2E_TRACE) console.log(`[trace] case ${name}: ${JSON.stringify(cases[name])}${cases[name].panel.length ? '' : ` panel: ${panel.replace(/^.*?Review/s, 'Review').slice(0, 700)}`}`);
     await shot(form, `e-${name}`);
     await ctx.action('cancel_status');
@@ -1240,11 +1377,11 @@ test('Mocked ChatGPT failures: invalid JSON, quota exhausted, no answer in time,
     const quota = await runCase('quota', 41, { aiMode: 'quota' });
     assert.equal(quota.requests, 3);
     assert.ok(quota.ms >= 13000, `${quota.ms} ms`);
-    assert.match(quota.panel.join(' '), /Gemini did not answer/);
+    assert.match(quota.panel.join(' '), /ChatGPT did not answer/);
     // No answer in time (5 s here): the same bounded retries, never a stall.
     const hang = await runCase('timeout', 42, { aiMode: 'hang', limits: { timeoutMs: 5000 } });
     assert.equal(hang.requests, 3);
-    assert.match(hang.panel.join(' '), /Gemini did not answer.*did not answer in time/);
+    assert.match(hang.panel.join(' '), /ChatGPT did not answer.*did not answer in time/);
     // The application's request budget (1 here) stops the follow-up a bad reply would need.
     const budget = await runCase('budget', 43, { aiMode: 'invalid', limits: { budget: 1 } });
     assert.equal(budget.requests, 1);
@@ -1359,9 +1496,7 @@ test('ChatGPT (real AI, optional): approved answers first, one request per step,
     assert.equal(mock.answers, 0, 'Gemini was not used');
     assert.equal(mock.pageSubmitted, 0, 'nothing submitted: the Manager submits');
     assert.equal(checks['approved: how did you hear'] && checks['approved: visa sponsorship'], true, 'approved answers came first');
-    // A claim the résumé does not show may be filled now, but stays provisional for the Manager.
-    if (!checks['CKA: never "Yes"']) assert.match(panel, /Provisional ChatGPT answers[\s\S]*CKA/i, 'an unsupported certification is provisional');
-    if (!checks['Rust: no invented years']) assert.match(panel, /Provisional ChatGPT answers[\s\S]*Rust/i, 'invented Rust years are provisional');
+    assert.doesNotMatch(panel, /Provisional ChatGPT answers/, 'the Manager reviews filled answers directly');
   } finally {
     await ctx.browser.close();
   }

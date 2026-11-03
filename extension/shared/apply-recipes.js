@@ -1,6 +1,5 @@
 // Where Apply starts for a job link. Ashby, Greenhouse, and Lever have known form addresses; every
-// other site opens at the job page, where Apply finds the button that starts the application. Sites
-// that need a candidate account and login are skipped with a reason, so the Manager applies by hand.
+// other site opens at the job page, where Apply finds the action that starts the application.
 
 (function initApplyRecipes(global) {
   const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -37,9 +36,10 @@
     if (greenhouseJob && /^\d+$/.test(greenhouseJob)) {
       return { site: 'greenhouse', formUrl: `https://boards.greenhouse.io/embed/job_app?token=${greenhouseJob}` };
     }
-    // Oracle's candidate sites also run under company domains (explore-jobs.ciklum.com).
+    // Oracle's candidate sites also run under company domains (explore-jobs.ciklum.com). These
+    // pages use the same Apply-first, account-action fallback as other job pages.
     if (ACCOUNT_SITES.test(host) || /\/hcmUI\/CandidateExperience\/|\/sites\/[^/]+\/job\/\d+/i.test(path)) {
-      return { site: 'account', unsupported: 'This site needs a candidate account and login; Apply supports it in a later release.' };
+      return { site: 'account', formUrl: url.href, findStart: true };
     }
     if (!/^https?:$/.test(url.protocol)) return { site: 'unknown', unsupported: 'The job link is not a web page.' };
     return { site: 'other', formUrl: url.href, findStart: true };

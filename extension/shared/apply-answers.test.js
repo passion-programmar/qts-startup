@@ -463,15 +463,36 @@ test('a currency and a frequency dropdown next to the salary take the candidate\
   assert.equal(resolved.Frequency.value, 'Monthly');
 });
 
-test('an unmarked terms box is ticked, marketing and talent-pool boxes are not', () => {
+test('required agreements and attestations are accepted; optional opt-ins stay empty', () => {
   const { answers: resolved } = answers.resolveFields([
     field('I agree to the terms and conditions & privacy policy', { kind: 'checkbox', required: false }),
+    field('I certify that the information provided is true and accurate', { kind: 'checkbox' }),
     field('I agree to receive marketing emails and newsletters', { id: 'marketing', kind: 'checkbox', required: false }),
     field('I consent to being kept in the talent pool for future opportunities under the privacy policy', { id: 'pool', kind: 'checkbox', required: false }),
-  ], candidate, []);
+  ], candidate, [
+    { scope: 'everyone', questionKey: answers.normalizeQuestionKey('I certify that the information provided is true and accurate'), questionText: 'I certify that the information provided is true and accurate', answer: 'false' },
+    { scope: 'everyone', questionKey: answers.normalizeQuestionKey('I agree to receive marketing emails and newsletters'), questionText: 'I agree to receive marketing emails and newsletters', answer: 'true' },
+  ]);
   assert.equal(resolved['I agree to the terms and conditions & privacy policy'].value, true);
+  assert.equal(resolved['I certify that the information provided is true and accurate'].value, true, 'an existing false saved answer cannot leave a required agreement unchecked');
+  assert.equal(resolved['I certify that the information provided is true and accurate'].source, 'consent');
   assert.equal(resolved.marketing, undefined);
   assert.equal(resolved.pool, undefined);
+});
+
+test('required agreement choices use a single clear affirmative option, otherwise remain for review', () => {
+  const { answers: resolved, byHand } = answers.resolveFields([
+    field('Do you agree to the terms and conditions?', { id: 'terms', kind: 'select', options: ['Select…', 'Yes, I agree', 'No, I do not agree'] }),
+    field('I acknowledge the privacy notice', { id: 'privacy', kind: 'radio', options: ['I acknowledge', 'I do not acknowledge'] }),
+    field('I agree to the data processing policy', { id: 'ambiguous', kind: 'select', options: ['Yes, I agree', 'I agree'] }),
+    field('I agree to receive job alerts', { id: 'alerts', kind: 'radio', options: ['Yes', 'No'] }),
+  ], candidate, [], { autoApply: true });
+  assert.equal(resolved.terms.value, 'Yes, I agree');
+  assert.equal(resolved.terms.source, 'consent');
+  assert.equal(resolved.privacy.value, 'I acknowledge');
+  assert.equal(resolved.ambiguous, undefined);
+  assert.ok(byHand.some((entry) => entry.id === 'ambiguous'));
+  assert.equal(resolved.alerts, undefined, 'optional job-alert consent is not selected');
 });
 
 test('a currency list that runs the code into the name picks the candidate\'s currency', () => {
@@ -651,6 +672,16 @@ test('candidate-scoped relocation and notice answers stay reusable for that cand
   assert.deepEqual(open.map((entry) => entry.id), ['Will you require visa sponsorship?']);
 });
 
+test('Auto Apply asks the configured AI for unresolved personal facts instead of routing them to the Manager', () => {
+  const { answers: resolved, open, byHand } = answers.resolveFields([
+    field('Are you legally authorized to work in the United States?', { id: 'auth', kind: 'radio', options: ['Yes', 'No'] }),
+    field('Will you now or in the future require visa sponsorship?', { id: 'visa', kind: 'radio', options: ['Yes', 'No'] }),
+  ], { firstName: 'Anna', lastName: 'Kowalska' }, [], { autoApply: true });
+  assert.deepEqual(Object.keys(resolved), []);
+  assert.deepEqual(open.map((entry) => entry.id), ['auth', 'visa']);
+  assert.deepEqual(byHand, []);
+});
+
 test('diversity questions use scoped saved answers by topic, else decline, never a guess', () => {
   const row = (questionText, answer) => ({ scope: 'candidate', questionKey: answers.normalizeQuestionKey(questionText), questionText, answer });
   const reusable = [row('Gender', 'Prefer not to say'), row('Veteran status', 'I am not a protected veteran')];
@@ -668,6 +699,22 @@ test('diversity questions use scoped saved answers by topic, else decline, never
   // The saved candidate answer is not one of these choices, so the Manager decides rather than guessing.
   assert.deepEqual(open, []);
   assert.ok(byHand.some((entry) => entry.id === 'no-decline'));
+});
+
+test('Auto Apply asks its configured prompt about diversity answers not present in the profile or saved answers', () => {
+  const { answers: resolved, open } = answers.resolveFields([
+    field('What is your gender identity?', { kind: 'select', options: ['Man', 'Woman', 'Prefer not to say'] }),
+  ], { firstName: 'Anna', lastName: 'Kowalska' }, [], { autoApply: true });
+  assert.deepEqual(resolved, {});
+  assert.deepEqual(open.map((entry) => entry.id), ['What is your gender identity?']);
+});
+
+test('Auto Apply sends an unclear required field to the configured prompt for interpretation', () => {
+  const { open, byHand } = answers.resolveFields([
+    field('company_question_1', { id: 'mystery', labelUnresolved: true, required: true }),
+  ], candidate, [], { autoApply: true });
+  assert.deepEqual(open.map((entry) => entry.id), ['mystery']);
+  assert.deepEqual(byHand, []);
 });
 
 test('diversity questions take the candidate\'s own profile answers, in each form\'s wording', () => {
@@ -770,7 +817,9 @@ test('the AI sees help text, lists it could not read, and lists that take severa
   assert.doesNotMatch(prompt, /"options":"/);
   assert.match(prompt, /"multiple":true/);
   assert.match(prompt, /"note":"Gross annual, in EUR","placeholder":"e.g. 60000"/);
-  assert.match(prompt, /every option that truly fits/);
+  assert.match(prompt, /every option that truly fits the candidate/);
+  const autoPrompt = answers.buildAnswerPrompt({ job: {}, candidate, fields, minimal: true });
+  assert.match(autoPrompt, /every option that fits/);
   const reply = JSON.stringify({ answers: [
     { id: fields[0].id, value: '3-5 years' },
     { id: fields[1].id, value: 'Model explainability | Bias testing' },
@@ -821,8 +870,13 @@ test('Location(City) spacing variants use the saved city in both modes, ahead of
     }
     const absent = answers.resolveFields([field('Location(City)*')], { ...profile, city: null }, [], { autoApply });
     assert.equal(absent.answers['Location(City)*'], undefined);
-    assert.equal(absent.open.length, 0);
-    assert.match(absent.byHand[0].message, /profile has no city/i);
+    if (autoApply) {
+      assert.equal(absent.open.length, 1);
+      assert.deepEqual(absent.byHand, []);
+    } else {
+      assert.equal(absent.open.length, 0);
+      assert.match(absent.byHand[0].message, /profile has no city/i);
+    }
     const different = answers.resolveFields([field('Preferred job location(city)'), field('Office location(city)')], profile, [], { autoApply });
     assert.equal(Object.values(different.answers).some(answer => answer.value === profile.city), false);
   }
@@ -914,32 +968,44 @@ test('a list read only in part takes the AI\'s own wording; a complete one does 
   assert.match(answers.buildAnswerPrompt({ job: {}, candidate, fields: [partial] }), /"optionsPartial":true/);
 });
 
-test('the AI may say nothing supports an answer: that question is neither filled nor asked again', () => {
+test('Auto Apply retries an AI refusal under the supplied answer instructions', () => {
   const fields = [
     field('GitHub username', { required: true }),
     field('Years of Python?', { kind: 'select', options: ['0-2', '3-5', '6+'] }),
     field('Your city', { labelConfidence: 'low' }),
   ];
-  const prompt = answers.buildAnswerPrompt({ job: {}, candidate, fields });
+  const prompt = answers.buildAnswerPrompt({ job: {}, candidate, fields, autoApply: true });
   assert.match(prompt, /"status":"ready"/);
-  assert.match(prompt, /status "review" with value null and a short "reason"/);
+  assert.match(prompt, /Do not return "review", "needs_review", or a null value/);
   assert.match(prompt, /"labelUncertain":true/);
   const reply = JSON.stringify({ answers: [
-    { id: 'GitHub username', value: null, status: 'review' },
+    { id: 'GitHub username', value: null, status: 'review', reason: 'not in the documents' },
     { id: 'Years of Python?', value: '6+', status: 'ready' },
     { id: 'Your city', value: 'Warsaw' },
   ] });
-  const parsed = answers.parseAnswerReply(reply, fields);
-  assert.deepEqual(parsed.review, [{ id: 'GitHub username', label: 'GitHub username' }]);
-  assert.deepEqual(parsed.invalid, []);
+  const parsed = answers.parseAnswerReply(reply, fields, { autoApply: true });
+  assert.deepEqual(parsed.review, []);
+  assert.deepEqual(parsed.invalid, [{ id: 'GitHub username', label: 'GitHub username', reason: 'not in the documents' }]);
   assert.equal(parsed.answers['Years of Python?'].value, '6+');
   assert.equal(parsed.answers['GitHub username'], undefined);
+  assert.match(answers.buildFixPrompt(parsed.invalid, fields, { autoApply: true }), /Do not return "review", "needs_review", or a null value/);
   // A reply that is not JSON at all: every question is invalid, nothing is filled.
   const broken = answers.parseAnswerReply('Sure! Here are the answers: years 6+', fields);
   assert.deepEqual(Object.keys(broken.answers), []);
   assert.equal(broken.invalid.length, 3);
   // An answer that is not one of a complete list's options is refused, never matched loosely.
   assert.match(answers.parseAnswerReply(JSON.stringify({ answers: [{ id: 'Years of Python?', value: '6' }] }), [fields[1]]).invalid[0].reason, /"6" is not one of the options/);
+});
+
+test('standard Apply leaves AI refusals for the Manager', () => {
+  const question = field('GitHub username', { required: true });
+  const prompt = answers.buildAnswerPrompt({ job: {}, candidate, fields: [question] });
+  assert.match(prompt, /status "review" with value null/);
+  const parsed = answers.parseAnswerReply(JSON.stringify({
+    answers: [{ id: question.id, value: null, status: 'review', reason: 'not in the documents' }],
+  }), [question]);
+  assert.deepEqual(parsed.invalid, []);
+  assert.deepEqual(parsed.review, [{ id: question.id, label: question.label, reason: 'not in the documents' }]);
 });
 
 test('an upload named only "Upload file" takes the document its section heading names', () => {
@@ -1003,8 +1069,8 @@ test('Auto Apply: no built-in notice default; the assisted Apply keeps it', () =
   assert.equal(assisted.answers.n.value, '1 week');
   const auto = answers.resolveFields(fields, person, [], { today: new Date('2026-10-29'), autoApply: true });
   assert.equal(auto.answers.n, undefined);
-  assert.deepEqual(auto.byHand.map((entry) => entry.id), ['n', 's']);
-  assert.match(auto.byHand[0].message, /no notice period or start date/);
+  assert.deepEqual(auto.open.map((entry) => entry.id), ['n', 's']);
+  assert.deepEqual(auto.byHand, []);
   // A notice Super Admin approved is used.
   const approved = answers.resolveFields(fields, person, [{ questionKey: 'what is your notice period', questionText: 'What is your notice period?', answer: '2 weeks', scope: 'everyone' }], { today: new Date('2026-10-29'), autoApply: true });
   assert.equal(approved.answers.n.value, '2 weeks');

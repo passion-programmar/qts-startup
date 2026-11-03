@@ -51,6 +51,7 @@ const server = http.createServer((req, res) => {
     const data = JSON.parse(body || '{}');
     const json = (reply) => { res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' }); res.end(JSON.stringify(reply)); };
     if (url.pathname === '/jobs/7') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' }); return res.end(FORM); }
+    if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { autoApplyParallelLimit: 2 } });
     // Nothing in the queue: only the page the Manager chooses is applied to.
     if (url.pathname === '/api/extension/apply/claim') return json({ success: true, application: null });
     if (url.pathname === '/api/extension/apply/page') {

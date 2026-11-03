@@ -2,6 +2,7 @@
   if (global.__qtsRuntimeConfig) return;
 
   const DEFAULT_SERVER_URL = 'https://qts-job-system.vercel.app';
+  const LOCAL_SERVER_URL = 'http://127.0.0.1:3000';
   const SERVER_URL_STORAGE_KEY = 'qtsServerUrl';
   const features = Object.freeze({
     getJd: true,
@@ -42,16 +43,35 @@
     return normalizeServerUrl(stored[SERVER_URL_STORAGE_KEY]);
   }
 
+  function getServerUrlForEnvironment(environment) {
+    if (environment === 'hosting') return DEFAULT_SERVER_URL;
+    if (environment === 'local') return LOCAL_SERVER_URL;
+    throw new Error('Choose Hosting or Local before signing in.');
+  }
+
+  function getEnvironmentForServerUrl(value) {
+    const url = new URL(normalizeServerUrl(value));
+    return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) ? 'local' : 'hosting';
+  }
+
+  async function getServerEnvironment() {
+    return getEnvironmentForServerUrl(await getServerUrl());
+  }
+
   function isFeatureEnabled(feature) {
     return features[feature] === true;
   }
 
   global.__qtsRuntimeConfig = Object.freeze({
     DEFAULT_SERVER_URL,
+    LOCAL_SERVER_URL,
     SERVER_URL_STORAGE_KEY,
     features,
     normalizeServerUrl,
     getServerUrl,
+    getServerUrlForEnvironment,
+    getEnvironmentForServerUrl,
+    getServerEnvironment,
     isFeatureEnabled,
   });
 })(typeof self !== 'undefined' ? self : globalThis);

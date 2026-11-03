@@ -206,6 +206,81 @@ test('pages are told apart: form, partial form, email-first, sign-in, account, c
   assert.equal(await kind(`<main><h1>Thank you for applying!</h1><p>We have received your application.</p></main>`), 'application_submitted');
   assert.equal(await kind(`<main><h1>Data Scientist</h1><p>About the role…</p><button>Apply now</button></main>`), 'application_navigation');
   assert.equal(await kind(`<main><h1>Welcome</h1></main>`), 'unsupported_page');
+  const withSearchAndNewsletter = await onPage(`<header><form role="search"><label for="q">City</label><input id="q"><button>Search jobs</button></form></header>
+    <main><h1>Data Scientist</h1><a id="apply" href="https://jobs.example/form" target="_blank">Apply now</a></main>
+    <footer><form class="newsletter"><label for="n">Email</label><input id="n" type="email"><button>Subscribe</button></form></footer>`,
+  `const page = api.classifyPage().type; const start = api.clickStart([], { assistant: true }); return { page, start: start.ok, href: start.href };`);
+  assert.equal(withSearchAndNewsletter.page, 'application_navigation');
+  assert.equal(withSearchAndNewsletter.start, true);
+  assert.match(withSearchAndNewsletter.href, /\/form$/);
+});
+
+test('application actions take priority over account actions; sign-in/register is the fallback', { skip }, async () => {
+  const priority = await onPage(`<a id="login" href="/login">Sign in</a>
+    <button id="apply">Apply now</button><a id="register" href="/register">Register</a>
+    <script>document.getElementById('apply').addEventListener('click', () => { window.clicked = 'apply'; });
+      document.getElementById('login').addEventListener('click', () => { window.clicked = 'login'; });</script>`,
+  `const result = api.clickStart(); return { result, clicked: window.clicked };`);
+  assert.equal(priority.clicked, 'apply');
+  assert.equal(priority.result.action, 'application');
+
+  const fallback = await onPage(`<a id="login" href="/login">Sign in</a><a href="/register">Register</a>
+    <script>document.getElementById('login').addEventListener('click', () => { window.clicked = 'login'; });</script>`,
+  `const result = api.clickStart(); return { result, clicked: window.clicked };`);
+  assert.equal(fallback.clicked, 'login');
+  assert.equal(fallback.result.action, 'account');
+});
+
+test('application start and pre-form Continue signals allow punctuation but never Submit', { skip }, async () => {
+  const started = await onPage(`<main><h1>Automation AI Manager</h1><button id="apply">Apply now!</button></main>
+    <script>document.getElementById('apply').addEventListener('click', () => {
+      document.querySelector('main').innerHTML = '<h1>Apply</h1><button id="continue">Continue!</button>';
+      document.getElementById('continue').addEventListener('click', () => {
+        document.querySelector('main').innerHTML = '<form><label for="name">Name</label><input id="name"></form><button id="submit" type="submit">Submit application!</button>';
+        document.getElementById('submit').addEventListener('click', () => { window.submitted = true; });
+      });
+    });</script>`,
+  `const first = api.clickStart();
+   const second = api.clickStart([first.text]);
+   return { first, second, page: api.classifyPage().type, buttons: api.buttons(), submitted: Boolean(window.submitted) };`);
+  assert.deepEqual(started.first, { ok: true, action: 'application', text: 'Apply now' });
+  assert.deepEqual(started.second, { ok: true, action: 'application', text: 'Continue' });
+  assert.equal(started.page, 'unknown');
+  assert.deepEqual(started.buttons, { submit: true, next: false, submitDisabled: false });
+  assert.equal(started.submitted, false);
+});
+
+test('account steps use saved email and password, but stop for unrecognized registration fields', { skip }, async () => {
+  const credentials = await onPage(`<form id="login" onsubmit="event.preventDefault()">
+    <label for="email">Email</label><input id="email" type="email" required>
+    <label for="password">Password</label><input id="password" type="password" required>
+    <button type="submit">Sign in</button>
+  </form><script>document.querySelector('button').addEventListener('click', () => { window.loggedIn = true; });</script>`,
+  `const type = api.classifyPage().type;
+   const filled = api.fillAccountForm({ email: 'candidate@example.test', password: 'stored-password' });
+   const clicked = api.clickAccountAction(type);
+   return { type, filled, clicked, email: document.getElementById('email').value,
+     password: document.getElementById('password').value, loggedIn: Boolean(window.loggedIn) };`);
+  assert.equal(credentials.type, 'authentication_required');
+  assert.equal(credentials.filled.ok, true);
+  assert.equal(credentials.filled.fieldsFilled, 2);
+  assert.equal(JSON.stringify(credentials.filled).includes('stored-password'), false);
+  assert.equal(credentials.email, 'candidate@example.test');
+  assert.equal(credentials.password, 'stored-password');
+  assert.equal(credentials.loggedIn, true);
+
+  const registration = await onPage(`<form>
+    <label for="first">First name</label><input id="first" required>
+    <label for="last">Last name</label><input id="last" required>
+    <label for="email">Email</label><input id="email" type="email" required>
+    <label for="password">Password</label><input id="password" type="password" required>
+    <label for="confirm">Confirm password</label><input id="confirm" type="password" required>
+    <label><input type="checkbox" required>Accept terms</label>
+    <button type="submit">Create account</button>
+  </form>`,
+  `return api.fillAccountForm({ email: 'candidate@example.test', firstName: 'Ada', lastName: 'Lovelace', password: 'stored-password' });`);
+  assert.equal(registration.ok, false);
+  assert.match(registration.reason, /additional information/);
 });
 
 test('a list that says it is loading is waited for, within a limit', { skip }, async () => {

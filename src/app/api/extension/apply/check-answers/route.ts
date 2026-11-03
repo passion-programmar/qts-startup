@@ -34,6 +34,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ success: true, results, savedAnswers: answers }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Could not save Manager corrections.", error);
-    return NextResponse.json({ success: false, message: "Some changes may not have saved. Click Check to retry; no approval is required." }, { status: 500 });
+    return NextResponse.json({ success: false, message: "Some changes may not have saved; no approval is required." }, { status: 500 });
   }
 }

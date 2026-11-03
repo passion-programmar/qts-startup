@@ -7,8 +7,8 @@
 // Rules (docs/architecture.md): the candidate's profile and saved answers fill what they can, each
 // answer checked against what the site accepts; everything else, and any profile answer the site
 // rejects, goes to ChatGPT with Super Admin's answer prompt (its tab shown while it writes), with
-// one follow-up for answers that do not fit. What Apply cannot do (a CAPTCHA, a rejected field,
-// ChatGPT failing, an upload) comes to the review marked; a sign-in wall leaves the job to the Manager.
+// one follow-up for answers that do not fit. Account secrets, verification codes, and CAPTCHA stay
+// with the Manager; application answers are filled for the Manager to review before submission.
 
 const APPLY_QUEUE_ALARM = 'qts-apply-queue';
 const APPLY_WINDOW_KEY = 'qtsApplyWindowId';
@@ -29,7 +29,7 @@ const AUTO_APPLY_MAX_STEPS = 12;
 // The longest Apply waits for the AI's answers through the QTS server.
 const APPLY_AI_TIMEOUT_MS = 120 * 1000;
 // Clicks to reach the form from a job page: "Apply for this job", then perhaps "Apply manually".
-const APPLY_START_STEPS = 3;
+const APPLY_START_STEPS = 8;
 const APPLY_START_WAIT_MS = 15 * 1000;
 let applyLoopRunning = false;
 
@@ -170,6 +170,8 @@ async function waitForFormFields(tabId, { minFields = 3 } = {}) {
   while (Date.now() < deadline) {
     const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()).catch(() => null);
     const visible = (fields || []).filter((field) => !field.hidden && !field.disabled);
+    const page = await inForm(tabId, (current) => globalThis.__qtsApplyForm.classifyPage(current), [fields || []]).catch(() => null);
+    if (['email_first_application', 'authentication_required', 'registration_required', 'verification_required', 'captcha_required'].includes(page?.type)) return fields || [];
     // Two scans in a row with the same number of fields: the form is built. A later step (the form
     // already open) may hold a single question, such as a consent box before Submit.
     if (visible.length >= minFields && visible.length === previous) return fields;
@@ -182,9 +184,8 @@ async function waitForFormFields(tabId, { minFields = 3 } = {}) {
 /** An application form is showing: an email field next to a name field or an upload. */
 async function applicationFormShown(tabId) {
   const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()).catch(() => null);
-  const visible = (fields || []).filter((field) => !field.hidden && !field.disabled);
-  return visible.some((field) => field.kind === 'email' || /e-?mail/i.test(field.label))
-    && visible.some((field) => field.kind === 'file' || /\bname\b/i.test(field.label));
+  const page = await inForm(tabId, (current) => globalThis.__qtsApplyForm.classifyPage(current), [fields || []]).catch(() => null);
+  return ['application_form', 'partial_application_form'].includes(page?.type);
 }
 
 /**
@@ -192,25 +193,78 @@ async function applicationFormShown(tabId) {
  * following "Apply manually"), follow a new tab or page, or open an embedded job-site form.
  * onTab hears about a new tab so the caller keeps the right one. Returns the tab with the form.
  */
-async function reachApplicationForm(tab, onTab) {
+async function reachApplicationForm(tab, onTab, application, { handleAccountSteps = true } = {}) {
   const clicked = [];
   for (let step = 0; step < APPLY_START_STEPS; step += 1) {
     await inForm(tab.id, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
     // Pages often build their content after loading; give the form a few seconds to appear.
+    let page = null;
     for (let waited = 0; waited < 6000; waited += 1000) {
-      if (await applicationFormShown(tab.id)) return tab;
+      page = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+      if (['application_form', 'partial_application_form'].includes(page?.type)) return tab;
+      if (['email_first_application', 'authentication_required', 'registration_required',
+        'verification_required', 'captcha_required'].includes(page?.type)) break;
       await sleep(1000);
     }
-    const blockers = await inForm(tab.id, () => globalThis.__qtsApplyForm.detectBlockers()).catch(() => []);
-    if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
-    // An email-first step's "Apply"/"Continue" would send the email on (maybe into a sign-in): never
-    // clicked by Apply; the Manager is asked instead.
-    const page = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
-    if (['email_first_application', 'authentication_required', 'registration_required', 'verification_required'].includes(page?.type)) {
-      throw await pageStop(tab.id, 'The site asks to sign in or create an account.');
+    page ||= await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+    if (['captcha_required', 'verification_required'].includes(page?.type)) {
+      throw await pageStop(tab.id, page.reason || 'The site needs a manual security or verification step.');
+    }
+    if (['email_first_application', 'authentication_required', 'registration_required'].includes(page?.type)) {
+      if (!handleAccountSteps) {
+        throw new ApplyStop('Sign in or create an account on the employer site yourself. QTS will continue to the form when the page advances.', {
+          skip: false, keepTab: true, pageType: 'account_needs_you',
+        });
+      }
+      const account = await inForm(tab.id, (values) => globalThis.__qtsApplyForm.fillAccountForm(values), [{
+        email: application.candidate.email,
+        firstName: application.candidate.firstName,
+        lastName: application.candidate.lastName,
+        password: application.siteAccountPassword,
+      }]).catch(() => ({ ok: false, reason: 'QTS could not inspect the account form. Review it manually.' }));
+      if (!account?.ok) {
+        throw new ApplyStop(account?.reason || 'Review the account form and continue manually.', {
+          skip: false, keepTab: true, pageType: 'account_needs_you',
+        });
+      }
+      const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
+      const beforeUrl = (await getTab(tab.id))?.url;
+      const action = await inForm(tab.id, (type) => globalThis.__qtsApplyForm.clickAccountAction(type), [account.pageType])
+        .catch(() => ({ ok: false, error: 'QTS could not continue the account form. Review it manually.' }));
+      if (!action?.ok) {
+        throw new ApplyStop(action?.error || 'Review the account form and continue manually.', {
+          skip: false, keepTab: true, pageType: 'account_needs_you',
+        });
+      }
+      let advanced = false;
+      for (let waited = 0; waited < APPLY_START_WAIT_MS; waited += 1000) {
+        await sleep(1000);
+        const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && entry.openerTabId === tab.id);
+        if (opened) {
+          const previousTab = tab;
+          tab = opened;
+          onTab(tab);
+          await tabOwnership.markTab(tab.id, 'apply');
+          chrome.tabs.remove(previousTab.id).catch(() => {});
+          await waitForTabComplete(tab.id, 45 * 1000);
+          advanced = true;
+          break;
+        }
+        const current = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+        if (current?.type !== account.pageType || (await getTab(tab.id))?.url !== beforeUrl) {
+          advanced = true;
+          break;
+        }
+      }
+      if (!advanced) {
+        throw new ApplyStop('QTS filled the account details, but the site did not continue. Check the page and continue manually.', {
+          skip: false, keepTab: true, pageType: 'account_needs_you',
+        });
+      }
+      continue;
     }
     const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
-    const start = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip), [clicked]).catch(() => null);
+    const start = await inForm(tab.id, (skip, assistant) => globalThis.__qtsApplyForm.clickStart(skip, { assistant }), [clicked, !handleAccountSteps]).catch(() => null);
     if (start?.email) throw new ApplyStop('This job takes applications by email; apply by hand.');
     if (!start?.ok) break;
     if (start.frameUrl) {
@@ -237,6 +291,12 @@ async function reachApplicationForm(tab, onTab) {
         break;
       }
       if (await applicationFormShown(tab.id)) return tab;
+      const currentPage = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+      if (['email_first_application', 'authentication_required', 'registration_required',
+        'verification_required', 'captcha_required'].includes(currentPage?.type)) {
+        movedOn = true;
+        break;
+      }
       if ((await getTab(tab.id))?.url !== urlBefore) movedOn = true;
     }
     // A link the page caught instead of following (Jobgether's sign-up box when not signed in):
@@ -246,6 +306,7 @@ async function reachApplicationForm(tab, onTab) {
       await sleep(500);
       await waitForTabComplete(tab.id, 45 * 1000);
     }
+    if (start.action === 'account') return tab;
   }
   if (await applicationFormShown(tab.id)) return tab;
   const closed = await inForm(tab.id, () => globalThis.__qtsApplyForm.jobClosed()).catch(() => '');
@@ -255,23 +316,23 @@ async function reachApplicationForm(tab, onTab) {
   // A whole page that is a human check, or a sign-in wall: said as it is (never gone around).
   const gate = await inForm(tab.id, () => globalThis.__qtsApplyForm.pageGate()).catch(() => null);
   if (gate?.kind === 'bot_check') throw new ApplyStop(`The site asked for a human check ("${String(gate.text).slice(0, 60)}"); QTS does not get around it. Open the job and apply by hand.`, { pageType: 'captcha_required' });
-  if (gate?.kind === 'login') throw new ApplyStop(`The site asks to sign in or create an account before applying ("${String(gate.text).slice(0, 60)}"); account handling comes in a later release. Apply by hand.`, { pageType: 'authentication_required' });
+  if (gate?.kind === 'login') throw new ApplyStop(`The site asks to sign in or create an account before applying ("${String(gate.text).slice(0, 60)}"); enter credentials yourself and continue.`, { pageType: 'authentication_required' });
   throw await pageStop(tab.id, 'No application form or Apply button was found on the job page; apply by hand.');
 }
 
 /**
  * Why a page is not an application form Apply fills, as a stop with the reason: an email-first step
- * (its Continue may send a sign-in code or open an account page: never followed by Apply), a sign-in
- * page, or the given reason. Apply never signs in, creates accounts, or continues such steps itself.
+ * (its Continue may send a sign-in code or open an account page), a human check, or the given reason.
  */
 async function pageStop(tabId, otherwise) {
   const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
   diag('page', page);
   const reasons = {
     email_first_application: 'The site asks for an email first; its next step may be a sign-in or a code sent by email. Apply by hand.',
-    authentication_required: 'The site asks to sign in or create an account.',
-    registration_required: 'The site asks to create an account; apply by hand.',
+    authentication_required: 'The site asks to sign in; enter credentials yourself, then continue.',
+    registration_required: 'The site asks to create an account; enter account credentials yourself, then continue.',
     verification_required: 'The site asks for a code sent by email or text; apply by hand.',
+    account_needs_you: 'Complete this account step manually, then Continue in QTS to resume.',
     captcha_required: 'The site shows a security check (CAPTCHA); open it in the Apply window and apply by hand.',
     application_closed: 'The job is closed on the site.',
     application_submitted: 'The site says an application was already sent.',
@@ -481,6 +542,7 @@ function answerPromptFor(application, fields) {
   return self.__qtsApplyAnswers.buildAnswerPrompt({
     // Auto Apply sends only the context open questions need.
     minimal: application.minimalPrompt === true,
+    autoApply: application.minimalPrompt === true,
     template: application.answerPrompt?.template,
     job: application.job,
     candidate: application.candidate,
@@ -531,7 +593,7 @@ async function askAiToFix(application, problems, fields, keepAlive) {
   return withAutoApplyAiQueue(application, () => {
     if (application.aiMode !== 'gemini' && application.chatFocus !== undefined) {
       const retryFields = fields.filter(field => problems.some(entry => entry.id === field.id));
-      return askChatGptForAutoApply(application, retryFields, keepAlive, self.__qtsApplyAnswers.buildFixPrompt(problems, retryFields));
+      return askChatGptForAutoApply(application, retryFields, keepAlive, self.__qtsApplyAnswers.buildFixPrompt(problems, retryFields, { autoApply: application.minimalPrompt === true }));
     }
     return application.aiMode === 'gemini'
       ? askGeminiToFix(application, problems, fields)
@@ -559,8 +621,12 @@ async function askGemini(application, turns) {
   diag('ai-send', { turns: turns.length, characters: turns.reduce((sum, turn) => sum + String(turn.text || '').length, 0) });
   // A reply that never comes ends as "did not answer" (the Manager writes it, or asks again), never a stall.
   const timeoutMs = application.aiTimeoutMs || APPLY_AI_TIMEOUT_MS;
+  const requestOptions = {
+    timeoutMs,
+    ...(application.aiAbortSignal ? { signal: application.aiAbortSignal } : {}),
+  };
   const sent = Date.now();
-  let result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, { timeoutMs });
+  let result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, requestOptions);
   // Auto Apply (application.aiRetryWaits): a busy key pool (429), an unavailable server (503, 504) or
   // no answer in time is tried again a bounded number of times, waiting longer each time. A failed
   // Gemini call (500, 502: the server already tried its other keys) is not: asking again would only
@@ -569,7 +635,7 @@ async function askGemini(application, turns) {
     if (result.success === true || ![0, 429, 503, 504].includes(Number(result._httpStatus) || 0)) break;
     diag('ai-retry', { status: result._httpStatus || 0, waitMs: wait });
     await sleep(wait);
-    result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, { timeoutMs });
+    result = await workerApiRequest('POST', '/api/extension/apply/answers', { attemptId: application.attemptId, turns }, requestOptions);
   }
   diag('ai-reply', { ok: result.success === true, characters: String(result.reply || '').length });
   (application.aiTimings ||= []).push({ phase: 'gemini', ms: Date.now() - sent, ok: result.success === true, status: result._httpStatus || 0 });
@@ -583,9 +649,9 @@ async function askGeminiForAnswers(application, fields) {
   const first = answerPromptFor(application, fields);
   const reply = await askGemini(application, [{ role: 'user', text: first }]);
   application.geminiTurns = [{ role: 'user', text: first }, { role: 'model', text: reply }];
-  const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields);
+  const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields, { autoApply: application.minimalPrompt === true });
   noteForReview(application, review, fields);
-  const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
+  const needed = invalid;
   if (!needed.length || !followUpAllowed(application, needed, fields)) return answers;
   return { ...answers, ...(await askGeminiToFix(application, needed, fields)) };
 }
@@ -595,9 +661,9 @@ async function askGeminiToFix(application, problems, fields) {
   const retryFields = fields.filter((field) => problems.some((entry) => entry.id === field.id));
   const reply = await askGemini(application, [
     ...(application.geminiTurns || []),
-    { role: 'user', text: helpers.buildFixPrompt(problems, retryFields) },
+    { role: 'user', text: helpers.buildFixPrompt(problems, retryFields, { autoApply: application.minimalPrompt === true }) },
   ]);
-  const retried = helpers.parseAnswerReply(reply, retryFields);
+  const retried = helpers.parseAnswerReply(reply, retryFields, { autoApply: application.minimalPrompt === true });
   noteForReview(application, retried.review, retryFields);
   noteUnanswered(application, retried.invalid, retryFields);
   return retried.answers;
@@ -619,9 +685,9 @@ async function askChatGptForAnswers(application, fields, keepAlive) {
   const helpers = self.__qtsApplyAnswers;
   const first = answerPromptFor(application, fields);
   const reply = await askChatGpt(chatTabId, application, first, keepAlive);
-  const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields);
+  const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields, { autoApply: application.minimalPrompt === true });
   noteForReview(application, review, fields);
-  const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
+  const needed = invalid;
   if (!needed.length) return answers;
   return { ...answers, ...(await askChatGptToFix(application, needed, fields, keepAlive)) };
 }
@@ -736,10 +802,10 @@ async function askChatGptForAutoApplyRound(application, fields, keepAlive, corre
     if (timing.focused) application.onAi?.({ state: 'asking', provider: 'ChatGPT', focused: true });
     const reply = await askChatGpt(tabId, application, [answerPromptFor(application, fields), correction].filter(Boolean).join('\n\n'), keepAlive, timing);
     const parseStarted = Date.now();
-    const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields);
+    const { answers, invalid, review } = helpers.parseAnswerReply(reply, fields, { autoApply: application.minimalPrompt === true });
     timing.parseMs = Date.now() - parseStarted;
     noteForReview(application, review, fields);
-    const needed = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
+    const needed = invalid;
     const fixed = needed.length && followUpAllowed(application, needed, fields) ? await askChatGptToFix(application, needed, fields, keepAlive) : {};
     timing.ok = true;
     return { ...answers, ...fixed };
@@ -780,6 +846,7 @@ async function askChatGpt(chatTabId, application, prompt, keepAlive, timing = nu
   // The answer wait checks in every 3 seconds; the claim is renewed no more often than every 15.
   let renewed = 0;
   const server = async () => {
+    if (application.aiAbortSignal?.aborted) throw new Error('Auto Apply was stopped while ChatGPT was answering.');
     if (Date.now() - renewed < AUTO_APPLY_HEARTBEAT_MS) return;
     renewed = Date.now();
     await keepAlive();
@@ -919,8 +986,8 @@ async function waitForLightChatGptAnswer(tabId, answersBefore, server) {
 async function askChatGptToFix(application, problems, fields, keepAlive) {
   const helpers = self.__qtsApplyAnswers;
   const retryFields = fields.filter((field) => problems.some((entry) => entry.id === field.id));
-  const reply = await askChatGpt(application.chatTabId, application, helpers.buildFixPrompt(problems, retryFields), keepAlive, application.chatRound || null);
-  const retried = helpers.parseAnswerReply(reply, retryFields);
+  const reply = await askChatGpt(application.chatTabId, application, helpers.buildFixPrompt(problems, retryFields, { autoApply: application.minimalPrompt === true }), keepAlive, application.chatRound || null);
+  const retried = helpers.parseAnswerReply(reply, retryFields, { autoApply: application.minimalPrompt === true });
   noteForReview(application, retried.review, retryFields);
   noteUnanswered(application, retried.invalid, retryFields);
   return retried.answers;
@@ -934,13 +1001,12 @@ function noteForReview(application, review, fields) {
   // Questions the AI found nothing to answer with (status "review"): required ones go to the
   // Manager; optional ones are left empty. Auto Apply does not ask about them again.
   for (const entry of review || []) application.aiRefused?.set(entry.label, `${aiName(application)} found nothing that supports an answer${entry.reason ? ` (${entry.reason})` : ''}`);
-  const required = (review || []).filter((entry) => fields.find((field) => field.id === entry.id)?.required);
-  (application.aiReview ||= []).push(...required);
+  (application.aiReview ||= []).push(...(review || []));
 }
 
 function noteUnanswered(application, invalid, fields) {
-  const required = invalid.filter((entry) => fields.find((field) => field.id === entry.id)?.required);
-  (application.aiUnanswered ||= []).push(...required);
+  application.aiUnanswered ||= [];
+  application.aiUnanswered.push(...invalid);
 }
 
 /**
@@ -1078,12 +1144,10 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
  * for the Manager's review. Returns { used, problems, canAskAgain }.
  */
 /**
- * Fills one form page. options.assist (Apply as the Manager's assistant): only what QTS knows for
- * sure (documents, cover letter, profile facts, reusable answers; no AI), never a text box that
- * already holds something, never a box options.skip(field) says was met on an earlier pass, never a
- * box outside the application (search, newsletter), and no checks for the Manager (the panel lists
- * what is still empty); only uploads and values the site refused are reported. The résumé and
- * cover letter are prepared once per application and reused on every page.
+ * Fills one form page. options.assist (Normal Apply): only documents, profile facts and reusable
+ * answers (no AI), never a text box that already holds something, never a box options.skip(field)
+ * says was met on an earlier pass, and never a box outside the application. The résumé and cover
+ * letter are prepared once per application and reused on every page.
  */
 async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   const attempts = [];
@@ -1101,11 +1165,11 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   if (application.factSources) {
     await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: () => { globalThis.__qtsAutoApplyRules = true; } }).catch(() => {});
   }
-  // The sources a box may be filled from (the assistant: documents, profile, reusable answers;
-  // Auto Apply passes its own), and options.noAi (Auto Apply): no AI is asked; what no source answers
-  // is listed as unresolved instead.
-  const allowed = assist ? ASSIST_SOURCES : options.sources || null;
-  const noAi = options.noAi === true;
+  // Normal Apply allows documents, profile facts and reusable answers. Auto Apply passes its own
+  // source allowlist, which also includes required agreements. Unanswered fields are never sent to AI.
+  const allowed = assist ? NORMAL_APPLY_SOURCES : options.sources || null;
+  let noAi = options.noAi === true;
+  let accountPage = false;
   const unresolved = [];
   // Auto Apply: AI answers filled though the documents and approved facts do not show them, with why;
   // provisional until the Manager accepts or edits each (the site's Submit waits for that).
@@ -1209,15 +1273,9 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     for (const field of fields) {
       const answer = answersById[field.id];
       if (!answer) continue;
-      // Auto Apply (application.factSources): the AI's answer is filled (it writes from the job
-      // description, résumé, and profile); one the documents and approved facts do not show is
-      // provisional until the Manager accepts or edits it.
-      if (application.factSources) {
-        const verdict = helpers.verifyAiAnswer(field, answer.value, application.factSources);
-        if (!verdict.ok && !provisional.some((entry) => entry.id === field.id)) {
-          provisional.push({ id: field.id, label: field.label, value: answerText(answer.value).slice(0, 400), reason: verdict.reason });
-        }
-      }
+      // Auto Apply leaves factual judgment to the Manager's review; response shape and field
+      // constraints were already checked by parseAnswerReply.
+      if (application.factSources) continue;
       if (helpers.keepsMeaning(field, answer.value)) {
         if (answer.alternatives) answer.alternatives = answer.alternatives.filter((value) => helpers.keepsMeaning(field, value));
         continue;
@@ -1238,13 +1296,19 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         : await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm());
     if (round === 0 && !assist) {
       await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
-      const blockers = await inForm(tabId, () => globalThis.__qtsApplyForm.detectBlockers());
-      if (blockers?.includes('login')) throw new ApplyStop('The site asks to sign in or create an account.');
+      const page = await inForm(tabId, (current) => globalThis.__qtsApplyForm.classifyPage(current), [fields || []]).catch(() => null);
+      accountPage = ['authentication_required', 'registration_required', 'verification_required'].includes(page?.type);
+      if (accountPage) {
+        noAi = true;
+        problem('This page needs account or verification details. Enter passwords and one-time codes yourself, then use the site’s sign-in/continue control; QTS will resume on the next application page.');
+      }
       if (application.factSources) {
-        // Auto Apply, on every step: a sign-in wall or human check is said as it is (never gone around).
+        // Auto Apply never bypasses a CAPTCHA or supplies a one-time verification code.
         const gate = await inForm(tabId, () => globalThis.__qtsApplyForm.pageGate()).catch(() => null);
-        if (gate?.kind === 'bot_check') throw new ApplyStop(`The site asked for a human check ("${String(gate.text).slice(0, 60)}"); QTS does not get around it. Finish the application by hand.`, { skip: false, keepTab: true });
-        if (gate?.kind === 'login') throw new ApplyStop(`The site asks to sign in or create an account ("${String(gate.text).slice(0, 60)}"); account handling comes in a later release. Finish by hand.`, { skip: false, keepTab: true });
+        if (gate?.kind === 'bot_check') {
+          noAi = true;
+          problem(`Solve the human check ("${String(gate.text).slice(0, 60)}") yourself. QTS does not get around it.`);
+        }
         // Sections a site draws only when scrolled to are on the page before it is read (round 1 reads again).
         await inForm(tabId, () => globalThis.__qtsApplyForm.revealLazySections()).catch(() => null);
       }
@@ -1330,7 +1394,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     const discoveryStarted = Date.now();
     // The assistant opens only the lists it has an answer for: no list opens on the page for nothing.
     const toDiscover = assist
-      ? fresh.filter((field) => ASSIST_SOURCES.has(helpers.resolveFields([field], application.candidate, application.savedAnswers, {
+      ? fresh.filter((field) => allowed.has(helpers.resolveFields([field], application.candidate, application.savedAnswers, {
         exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText, autoApply: Boolean(application.factSources),
       }).answers[field.id]?.source))
       : fresh;
@@ -1347,8 +1411,8 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       autoApply: Boolean(application.factSources),
     });
     const { answers } = resolved;
-    // The assistant fills only the documents, the profile's facts, and reusable answers (no rules,
-    // no consent ticks): the rest is the Manager's.
+    // The assistant fills only documents, profile facts, reusable answers, and required agreements;
+    // the rest is the Manager's.
     if (allowed) for (const [id, answer] of Object.entries(answers)) if (!allowed.has(answer.source)) delete answers[id];
     diag('resolved', { step, round, answered: Object.keys(answers).length, toAi: resolved.open.length, byHand: (resolved.byHand || []).length });
     // A personal fact the profile lacks is the Manager's to fill, never the AI's to guess.
@@ -1529,10 +1593,10 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
           try {
             const fixed = keepProfileMeaning(await askAiToFix(application, issues, toAsk, keepAlive), toAsk);
             await fillAnswers(fixed, toAsk.filter((field) => tried.has(field.id)), (field, answer, error) => {
-              if (field.required) problem(`Fill by hand: "${field.label}" — the site said: ${error}. Tried: ${tried.get(field.id)}; then "${[].concat(answer.value).join(' | ')}".`, field);
+                problem(`Fill by hand: "${field.label}" — the site said: ${error}. Tried: ${tried.get(field.id)}; then "${[].concat(answer.value).join(' | ')}".`, field);
             });
           } catch (error) {
-            for (const field of toAsk.filter((entry) => tried.has(entry.id) && entry.required)) {
+              for (const field of toAsk.filter((entry) => tried.has(entry.id))) {
               problem(`Fill by hand: "${field.label}" — ${tried.get(field.id)}.`, field);
             }
             if (!(error instanceof ApplyStop)) throw error;
@@ -1542,7 +1606,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         if (error instanceof ApplyStop) throw error;
         canAskAgain = true;
         const reason = error instanceof Error ? error.message : `${aiName(application)} did not answer.`;
-        for (const field of toAsk.filter((entry) => entry.required || entry.kind === 'textarea')) {
+        for (const field of toAsk) {
           problem(`${aiName(application)} did not answer "${field.label}" (${reason}). Write it, or Ask ${aiName(application)} again.`, field, 'chatgpt');
         }
       }
@@ -1877,19 +1941,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== 'QTS_APPLY_PANEL' || typeof msg.attemptId !== 'string') return false;
   (async () => {
     if (msg.action === 'ping') return { ok: true };
-    // New boxes on an assistant's page: filled at once.
+    // New pages or safe navigation controls on an assistant's page.
     if (msg.action === 'fields_changed') {
       activeReviews.get(msg.attemptId)?.assistant?.poke(sender.tab?.id);
       return { ok: true };
-    }
-    // "Fill again" on the panel: this page as if the job were new.
-    if (msg.action === 'refill') {
-      activeReviews.get(msg.attemptId)?.assistant?.refill(sender.tab?.id);
-      return { ok: true };
-    }
-    if (msg.action === 'open_folder') {
-      const review = activeReviews.get(msg.attemptId);
-      return review?.resumeFolder ? openDownloadedFolder(review.resumeFolder) : { ok: false, error: 'No résumé folder for this job.' };
     }
     if (['recheck', 'reuse_answer'].includes(msg.action)) {
       const held = activeReviews.get(msg.attemptId);
@@ -2018,16 +2073,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 const tabsOf = (review) => review.tabIds || new Set(review.tabId != null ? [review.tabId] : []);
 
 chrome.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.status !== 'complete') return;
+  if (change.status !== 'complete' && change.status !== 'loading') return;
   for (const review of activeReviews.values()) {
     if (!tabsOf(review).has(tabId) || !review.panel) continue;
-    if (review.panel.mode === 'review') {
+    if (change.status === 'complete' && review.panel.mode === 'review') {
       // The page changed under a review: the Manager clicked the site's Next (go on to the next
       // step) or Submit (ask Yes/No) themselves.
       answerManager(review.attemptId, { action: review.panel.final ? 'submitted' : 'continue_manual', noticed: true });
     }
+    // Inject at document start when possible; the complete event retries if the page was not ready.
     showReviewPanel(tabId, review.panel).catch(() => {});
-    // A page loaded in an assistant's tab (a redirect, a sign-in, the next step): filled at once.
+    // A new document or visible form (a redirect, sign-in, or next step): resume the flow immediately.
     review.assistant?.poke(tabId);
   }
 });
@@ -2064,11 +2120,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // panel shows there, QTS fills there, and its Submit counts.
 chrome.tabs.onCreated.addListener((tab) => {
   for (const review of activeReviews.values()) {
-    if (!review.tabIds || tab.openerTabId == null || !review.tabIds.has(tab.openerTabId)) continue;
-    review.tabIds.add(tab.id);
-    review.tabId = tab.id;
-    tabOwnership.markTab(tab.id, 'apply').catch(() => {});
-    rememberApplySession(review).catch(() => {});
+    if (tab.openerTabId == null) continue;
+    if (review.tabIds?.has(tab.openerTabId)) {
+      review.tabIds.add(tab.id);
+      review.tabId = tab.id;
+      tabOwnership.markTab(tab.id, 'apply').catch(() => {});
+      rememberApplySession(review).catch(() => {});
+      continue;
+    }
+    if (review.auto && review.followChildTabs && review.tabId === tab.openerTabId) {
+      const originalTabId = review.tabId;
+      review.onTab?.(tab);
+      tabOwnership.markTab(tab.id, 'apply').catch(() => {});
+      chrome.tabs.remove(originalTabId).catch(() => {});
+      answerManager(review.attemptId, { action: 'continue_manual' });
+    }
   }
 });
 
@@ -2099,11 +2165,14 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   // Auto Apply: Cancel, Stop all, or a lost claim interrupts the work at once (the step being filled,
   // a wait), not only between steps; the form's tab closes, which ends whatever was still running there.
   let signalStop = () => {};
+  const aiAbortController = auto ? new AbortController() : null;
+  if (aiAbortController) application.aiAbortSignal = aiAbortController.signal;
   const stopped = new Promise((resolve) => { signalStop = resolve; });
   let stopRequested = false;
   const onStatusChange = (changes, area) => {
     if (area === 'local' && changes[EXTENSION_STATUS_KEY] && changes[EXTENSION_STATUS_KEY].newValue !== 'apply') {
       stopRequested = true;
+      aiAbortController?.abort();
       signalStop('Auto Apply was stopped.');
     }
   };
@@ -2123,6 +2192,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId: application.attemptId });
     if (renewed._httpStatus === 409) {
       lostClaim = true;
+      aiAbortController?.abort();
       signalStop('This application was stopped on the Jobs page, or another Chrome holds it.');
       // A review waiting for the Manager ends too: the job is no longer this Chrome's.
       if (auto) answerManager(application.attemptId, { action: 'lost' });
@@ -2149,7 +2219,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   const submitsItself = () => !auto && application.autoSubmit;
   const unresolved = new Map((resume?.unresolved || []).map((entry) => [entry.label, entry]));
   // Auto Apply: provisional AI answers by question ({ id, label, value, reason, step, accepted }).
-  const provisional = new Map((resume?.provisional || []).map((entry) => [entry.label, entry]));
+  const provisional = new Map();
   // Auto Apply: every question met on every step and where it stands (auto-apply-checklist.js).
   const checklist = auto && self.__qtsAutoApplyChecklist ? self.__qtsAutoApplyChecklist.create(resume?.checklist || []) : null;
   // What a restarted worker needs to go on: kept by the Auto Apply controller at every step's end.
@@ -2244,8 +2314,17 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     job: application.job,
     resumeFolder: application.job.resumeFolder,
     panel: null,
+    followChildTabs: false,
     // Auto Apply: Cancel or Stop all before its review waits (panel and notice still being shown) is kept.
-    ...(auto ? { auto: true, onClosed: () => { tabClosed = true; signalStop('The application tab was closed. QTS will retry it automatically.'); } } : {}),
+    ...(auto ? { auto: true, onClosed: () => {
+      tabClosed = true;
+      aiAbortController?.abort();
+      signalStop('The application tab was closed. QTS will retry it automatically.');
+    } } : {}),
+  };
+  review.onTab = (opened) => {
+    tab = opened;
+    review.tabId = opened.id;
   };
   activeReviews.set(application.attemptId, review);
   publishApplyState();
@@ -2302,19 +2381,31 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     : report('release', { mode, reason: reason.slice(0, 480), appliedAnswers: appliedAnswers(answersUsed) });
   let tab = null;
   let submitted = false;
-  // An email-first step (only an email and a Continue): QTS types the profile's email; the Manager
-  // clicks the site's Continue, whose next page may be a sign-in, an account, or a code sent by email
-  // (never Apply's to take), then Continue here. Asked once per application.
-  let emailFirstAsked = false;
-  const emailFirstStep = async (tabId, stepNumber) => {
-    const email = application.candidate.email || '';
-    const typed = email && await inForm(tabId, async (value) => {
-      const api = globalThis.__qtsApplyForm;
-      const box = api.scanForm().find((field) => !field.hidden && !field.disabled && (field.kind === 'email' || /e-?mail/i.test(field.label)));
-      return box ? (await api.fillField(box.id, value)).ok === true : false;
-    }, [email]).catch(() => false);
-    const message = `This site asks for the email first${typed ? ' (QTS typed the profile\'s email)' : ''}. Click the site's Continue yourself; if it then asks to sign in, create an account, or enter a code, do that or Skip. When the application form shows, press Continue here.`;
-    return askManager(review, reviewState('review', { step: stepNumber, final: false, problems: [{ message, fieldId: null }] }), 'problem', 'The site asks for an email first.');
+  const manualAccountStep = async (stepNumber, message, notice) => {
+    return askManager(review, reviewState('review', {
+      step: stepNumber, final: false, problems: [{ message, fieldId: null }],
+    }), 'problem', notice);
+  };
+  const navigateToApplication = async (stepNumber) => {
+    for (let checkpoint = 0; ; checkpoint += 1) {
+      try {
+        tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; }, application);
+        return null;
+      } catch (error) {
+        if (!(error instanceof ApplyStop)
+          || !['account_needs_you', 'verification_required', 'captcha_required'].includes(error.pageType)
+          || checkpoint >= 4) throw error;
+        const message = error.pageType === 'verification_required'
+          ? 'Complete the email or text verification on the employer site, then choose Continue here. QTS will resume without reading or entering the verification code.'
+          : error.message || 'Complete this account step manually, then choose Continue here.';
+        const decision = await manualAccountStep(stepNumber, message, error.pageType === 'captcha_required'
+          ? 'Solve the security check, then Continue.'
+          : error.pageType === 'verification_required'
+            ? 'Complete verification, then Continue.'
+            : 'Complete this account step, then Continue.');
+        if (!['continue', 'continue_manual'].includes(decision.action)) return decision.action;
+      }
+    }
   };
   try {
     // Resumed after a restart: the form is already open in its tab, at its step.
@@ -2324,25 +2415,10 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     review.tabId = tab.id;
     if (!resumedTab) await interruptible(waitForTabComplete(tab.id, 45 * 1000));
     if (recipe.findStart && !resumedTab) {
-      try {
-        tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
-      } catch (error) {
-        if (error instanceof ApplyStop && error.pageType === 'email_first_application') {
-          emailFirstAsked = true;
-          const decision = await emailFirstStep(tab.id, 1);
-          if (decision.action !== 'continue') return await finishBeforeSubmit(decision.action);
-          tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
-        } else {
-          // A security check before the job page goes to the Manager: solve it, then Continue.
-          if (!(error instanceof ApplyStop) || !/CAPTCHA|security check/i.test(error.message)) throw error;
-          const decision = await askManager(review, reviewState('review', {
-            step: 1, final: false, problems: [{ message: 'Solve the security check (CAPTCHA) on this page, then Continue.', fieldId: null }],
-          }), 'problem', 'Solve the CAPTCHA, then Continue.');
-          if (decision.action !== 'continue') return await finishBeforeSubmit(decision.action);
-          tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; });
-        }
-      }
+      const decision = await navigateToApplication(1);
+      if (decision) return await finishBeforeSubmit(decision);
     }
+    review.followChildTabs = true;
 
     let step = resume && resumedTab ? resume.step || 1 : 1;
     let fillAgain = false;
@@ -2355,6 +2431,13 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     for (;;) {
       if (!(await isApplyOn())) throw new ApplyStop('Apply was cancelled.', { skip: false, keepTab: false });
       if (lostClaim) throw new ApplyStop('This Chrome lost the application to another one.', { skip: false, keepTab: false });
+      const currentPage = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+      if (['email_first_application', 'authentication_required', 'registration_required',
+        'verification_required', 'captcha_required'].includes(currentPage?.type)) {
+        const decision = await navigateToApplication(step);
+        if (decision) return await finishBeforeSubmit(decision);
+        continue;
+      }
       application.formTabId = tab.id;
       currentStep = step;
       await report('review', { review: false, appliedAnswers: appliedAnswers(answersUsed) });
@@ -2384,11 +2467,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
           ? { sources: ASSIST_SOURCES, noAi: application.autoAi === false, listUnresolved: true, stop: async () => lostClaim || !(await isApplyOn()) }
           : undefined));
       } catch (error) {
-        // A form address that opened on an email-first step: the Manager goes past it (once).
-        if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application' || emailFirstAsked) throw error;
-        emailFirstAsked = true;
-        const decision = await emailFirstStep(tab.id, step);
-        if (decision.action !== 'continue') return await finishBeforeSubmit(decision.action);
+        if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application') throw error;
+        const decision = await navigateToApplication(step);
+        if (decision) return await finishBeforeSubmit(decision);
         continue;
       }
       Object.assign(answersUsed, filled.used);
@@ -2539,7 +2620,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
                 notice = `${saved} change${saved === 1 ? '' : 's'} saved. ${failed.length ? `Not saved: ${failed.map((entry) => entry.reason).join('; ')}. Click Check to retry.` : 'Available for future matching autofill; no approval needed.'}`;
               } else notice = 'No changed or newly answered fields to save.';
             } catch (error) {
-              notice = `Not saved: ${error.message || error}. Click Check to retry.`;
+              const message = String(error instanceof Error ? error.message : error).trim();
+              const retry = /click Check to retry/i.test(message) ? '' : '. Click Check to retry.';
+              notice = `Not saved: ${message.replace(/[.\s]+$/, '')}${retry}`;
             }
           }
           await recheckPage(tab.id, step);
@@ -2627,8 +2710,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     // Stopped while ChatGPT answered with its tab selected: the application's tab first (its own
     // closing below then shows the Manager's tab it was opened from).
     if (auto) await giveBackChatTab(application.attemptId).catch(() => {});
-    // Auto Apply preserves the last completed form step when cancellation or a close interrupted it.
-    const resumePending = auto && (stopRequested || tabClosed);
+    // Auto Apply preserves the last completed form step when stopped, closed, or when its claim is lost.
+    const resumePending = auto && (stopRequested || tabClosed || lostClaim);
     if (resumePending) await captureInterruptedAnswers();
     await onProgress({ step: currentStep, phase: 'ended', reason: stop.message, resumePending, memory: memory() });
     await release(stop.dryRun ? 'test' : auto ? 'later' : stop.skip ? 'skip' : 'error', stop.message).catch(() => {});
@@ -2643,6 +2726,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   } finally {
     clearInterval(heartbeat);
     if (auto) chrome.storage.onChanged.removeListener(onStatusChange);
+    if (auto) delete application.aiAbortSignal;
     activeReviews.delete(application.attemptId);
     publishApplyState();
     reviewWaiters.delete(application.attemptId);
@@ -2655,10 +2739,10 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     }
   }
 
-  // Skip, Later, a closed tab, or Apply turned off during review: the job is given back.
+  // Skip, Later, a closed tab, a lost claim, or Apply turned off during review: the job is given back.
   async function finishBeforeSubmit(action) {
     const mode = action === 'skip' && !auto ? 'skip' : 'later';
-    const resumePending = auto && (stopRequested || tabClosed || action === 'closed' || action === 'cancel');
+    const resumePending = auto && (stopRequested || tabClosed || ['closed', 'cancel', 'lost'].includes(action));
     if (resumePending) await captureInterruptedAnswers();
     await onProgress({ step: currentStep, phase: 'ended', reason: action, resumePending, memory: memory() });
     if (auto && !resumePending) await noteCancelledJob(application.job.id).catch(() => {});
@@ -2739,52 +2823,16 @@ async function resumeSubmittedApplication(record) {
 }
 
 // ---- Apply as the Manager's assistant ----
-// Each Chrome keeps up to two job pages open, each with a panel: the candidate's profile,
+// Each Chrome keeps the Manager-configured number of applications open, each with a panel: the candidate's profile,
 // experience, education, and Super Admin's reusable answers (every item copied with a click), and
-// two copy buttons (résumé + job description, and with the profile). On every page of the journey
-// (the form's steps, a pop-up, the employer's site in a tab the job page opened) QTS fills, as soon
-// as boxes show, only what it knows for sure: the résumé and cover letter, profile facts, reusable
-// answers; never AI, never a search, newsletter, or job-alert form, never a sign-in or create-account
-// form (the Manager types those, copying the site account password from the panel), and it never
-// clicks the site's buttons.
-// The Manager does the rest, clicks the site's Submit, then Submitted at the bottom of the panel (the
-// site's buttons are never watched), or Cancel. Submitted saves the bid and deletes the job row;
-// Cancel closes the page and leaves the job as it was.
-const APPLY_TABS_PER_CHROME = 2;
-// Where the assistant's answers may come from: the résumé and cover letter, the profile, reusable answers.
-const ASSIST_SOURCES = new Set(['documents', 'profile', 'reusable']);
-// The page tells QTS when new boxes show (content/apply-assist.js); this slower look is the backup.
-const ASSIST_LOOK_EVERY_MS = 15 * 1000;
-// While the Manager types on a page, QTS waits this long and looks again.
-const ASSIST_TYPING_WAIT_MS = 3000;
-// The longest one fill pass holds the other pages back.
-const ASSIST_PASS_LIMIT_MS = 60 * 1000;
+// two copy buttons (résumé + job description, and with the profile). Normal Apply safely follows
+// Start/Continue actions and fills only saved documents, profile facts, and reusable answers as soon
+// as application fields are visible. The Manager fills the rest and submits on the employer site;
+// only Submitted on the panel records the bid.
+const ASSIST_SOURCES = new Set(['documents', 'profile', 'reusable', 'consent']);
+const NORMAL_APPLY_SOURCES = new Set(['documents', 'profile', 'reusable']);
 // Jobs cancelled in this Chrome since Apply was turned on: not opened again until Apply restarts.
 const APPLY_CANCELLED_KEY = 'qtsApplyCancelledJobs';
-// One page is filled at a time in this Chrome, so the open pages never fill over each other.
-let assistFillChain = Promise.resolve();
-
-/** A page's address without its #part: each step at its own address is its own page. */
-function assistPageOf(url) {
-  return String(url || '').split('#')[0];
-}
-
-/**
- * The assistant's two keys for a box: the box itself on this tab's page (met once, then it is the
- * Manager's, even if emptied), and its question on the page (a box the page draws anew, empty, is
- * filled at most twice there; an upload once), so nothing is filled or uploaded over and over.
- */
-function assistKeys(tabId, page, field) {
-  // An upload's section heading is part of its question: "Upload file" under "Upload your CV" and
-  // under "Add a cover letter" (steps at one address) are two uploads.
-  const question = HAS_WORDS.test(field.label || '') ? `${field.kind}|${field.label}|${field.section || ''}` : field.id;
-  return { box: `${tabId}|${page}|${field.id}`, question: `${tabId}|${page}|${question}` };
-}
-
-function assistSkips(assistant, tabId, page, field) {
-  const keys = assistKeys(tabId, page, field);
-  return assistant.handled.has(keys.box) || (assistant.tries.get(keys.question) || 0) >= (field.kind === 'file' ? 1 : 2);
-}
 
 // The assistant's open applications, by attempt: the job and the tabs it lives in. Kept in local
 // storage so that after the extension restarts (reloaded, updated, the worker stopped) the same
@@ -2867,71 +2915,104 @@ async function noteCancelledJob(jobId) {
   if (jobId && !ids.includes(jobId)) await chrome.storage.session.set({ [APPLY_CANCELLED_KEY]: [...ids, jobId].slice(-200) });
 }
 
+async function getManagerApplyParallelLimit() {
+  const settings = await workerApiRequest('GET', '/api/extension/features/me');
+  const configured = Number(settings.features?.autoApplyParallelLimit);
+  if (settings.success !== true || !Number.isInteger(configured) || configured < 1 || configured > 10) {
+    throw new Error(settings.message || 'QTS could not load your Apply concurrency setting.');
+  }
+  return configured;
+}
+
 // Apply turned off: the cancelled jobs may be opened again next time.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes[EXTENSION_STATUS_KEY] || changes[EXTENSION_STATUS_KEY].newValue === 'apply') return;
   chrome.storage.session.remove(APPLY_CANCELLED_KEY).catch(() => {});
 });
 
-/**
- * Looks at one of an application's pages (any step of the form, the employer's site, a pop-up) and
- * fills the boxes QTS has not met there yet; none while the Manager typed there in the last 3
- * seconds. Text the Manager or the site wrote stays; a box met once is the Manager's from then on.
- * Sign-in and create-account forms are the Manager's (the panel copies the site account password),
- * and boxes outside the application (search, newsletter, job alerts) are never filled.
- */
-async function assistFillPass(tabId, application, assistant) {
-  const tab = await getTab(tabId);
-  if (!tab || tab.status !== 'complete') return;
-  const page = assistPageOf(tab.url);
-  const look = await inForm(tabId, () => ({
-    fields: globalThis.__qtsApplyForm.scanForAssist(),
-    embedded: globalThis.__qtsApplyForm.embeddedApplicationUrl(),
-    typing: Date.now() - (globalThis.__qtsApplyAssist?.lastKeyAt?.() || 0) < 3000,
-  })).catch(() => null);
-  if (!look) return;
-  // A company page showing a job board's form in a frame QTS cannot read (jobs.elastic.co with
-  // Greenhouse): the form opens in this tab, once per page, where QTS fills it.
-  if (look.embedded && !assistant.openedForms.has(`${tabId}|${page}`)) {
-    assistant.openedForms.add(`${tabId}|${page}`);
-    await chrome.tabs.update(tabId, { url: look.embedded }).catch(() => {});
-    return;
-  }
-  if (look.typing) {
-    setTimeout(() => assistant.poke(tabId), ASSIST_TYPING_WAIT_MS);
-    return;
-  }
-  const skip = (field) => assistSkips(assistant, tabId, page, field);
-  const unmet = (look.fields || []).filter((field) => !field.hidden && !field.disabled && !field.filled && !field.unrelated && !field.account && !skip(field));
-  if (!unmet.length) return;
-  const pass = assistFillChain.then(async () => {
-    if (assistant.stopped) return;
-    assistant.filling = true;
-    await assistant.show();
-    try {
-      // A page that goes away mid-fill (the Manager clicked Next) never holds up the other pages.
-      const filled = await Promise.race([
-        fillFormPage(tabId, application, assistant.keepAlive, 1, { assist: true, skip }),
-        sleep(ASSIST_PASS_LIMIT_MS).then(() => ({ used: {}, problems: [], met: [] })),
-      ]);
-      Object.assign(assistant.used, filled.used);
-      const counted = new Set();
-      for (const field of [...unmet, ...(filled.met || [])]) {
-        const keys = assistKeys(tabId, page, field);
-        assistant.handled.add(keys.box);
-        if (counted.has(keys.question)) continue;
-        counted.add(keys.question);
-        assistant.tries.set(keys.question, (assistant.tries.get(keys.question) || 0) + 1);
-      }
-      const known = new Set(filled.problems.map((entry) => entry.message));
-      assistant.problems = [...assistant.problems.filter((entry) => !known.has(entry.message)), ...filled.problems];
-    } finally {
-      assistant.filling = false;
-      await assistant.show();
+async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
+  const signature = await inForm(tabId, () => {
+    const api = globalThis.__qtsApplyForm;
+    const fields = api.scanForAssist().filter((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account);
+    return fields.map((field) => `${field.id}:${field.label}:${field.kind}:${field.filled ? 1 : 0}`).join('|');
+  }).catch(() => null);
+  if (signature == null || assistant.formSignatures.get(tabId) === signature) return;
+  assistant.formSignatures.set(tabId, signature);
+  const filledFields = assistant.filledFields.get(tabId) || new Set();
+  assistant.filledFields.set(tabId, filledFields);
+  assistant.fillingTabs.add(tabId);
+  assistant.status = 'Filling saved résumé, cover letter, profile facts, and reusable answers on the visible form…';
+  await assistant.show();
+  try {
+    const filled = await fillFormPage(tabId, application, keepAlive, 1, {
+      assist: true,
+      skip: (field) => filledFields.has(field.id),
+      stop: async () => assistant.stopped || !activeReviews.has(application.attemptId),
+    });
+    for (const answer of Object.values(filled.used || {})) if (answer.fieldId) filledFields.add(answer.fieldId);
+    assistant.problems = filled.problems || [];
+    const count = Object.keys(filled.used || {}).length;
+    assistant.status = count
+      ? `Filled ${count} saved answer${count === 1 ? '' : 's'}. Review them, complete the rest, then submit on the employer site.`
+      : 'Form ready. QTS found no additional saved values to fill; complete the form and submit on the employer site.';
+  } catch (error) {
+    assistant.formSignatures.delete(tabId);
+    assistant.status = 'Application form detected. Complete any fields QTS could not fill, then submit on the employer site.';
+    if (!(error instanceof ApplyStop)) {
+      assistant.problems = [{
+        message: `Could not fill saved values on the application form: ${error instanceof Error ? error.message : String(error)}`,
+        fieldId: null,
+      }];
+      console.error('Could not fill saved values on the application form.', error);
     }
-  });
-  assistFillChain = pass.catch(() => {});
-  await pass;
+  } finally {
+    assistant.fillingTabs.delete(tabId);
+    await assistant.show();
+  }
+}
+
+/**
+ * Normal Apply follows safe Start/Continue steps and fills only saved documents, profile facts and
+ * reusable answers as soon as application form fields are visible. It never uses AI or submits.
+ */
+async function assistFillPass(tabId, application, assistant, keepAlive) {
+  const tab = await getTab(tabId);
+  if (!tab || assistant.stopped) return;
+  const pageInfo = await inForm(tabId, () => {
+    const api = globalThis.__qtsApplyForm;
+    const page = api.classifyPage();
+    const actions = [...document.querySelectorAll('a, button, input[type="button"], input[type="submit"], [role="button"]')]
+      .filter((element) => element.offsetWidth || element.offsetHeight || element.getClientRects().length)
+      .map((element) => (element.innerText || element.value || element.getAttribute('aria-label') || '').trim())
+      .filter(Boolean);
+    return {
+      type: page.type,
+      key: `${location.href}|${page.type}|${document.querySelector('h1')?.innerText || ''}|${actions.join('|')}`,
+    };
+  }).catch(() => null);
+  if (!pageInfo) return;
+  if (['application_form', 'partial_application_form'].includes(pageInfo.type)) {
+    assistant.navigationAttempts.delete(tabId);
+    await fillVisibleAssistForm(tabId, application, assistant, keepAlive);
+    return;
+  }
+  if (assistant.navigationAttempts.get(tabId) === pageInfo.key) return;
+  assistant.navigationAttempts.set(tabId, pageInfo.key);
+  try {
+    const formTab = await reachApplicationForm(tab, (opened) => assistant.onTab(opened), application, { handleAccountSteps: false });
+    if (assistant.stopped) return;
+    assistant.onTab(formTab);
+    await fillVisibleAssistForm(formTab.id, application, assistant, keepAlive);
+  } catch (error) {
+    assistant.problems = [{
+      message: error instanceof ApplyStop
+        ? error.message
+        : `Could not safely navigate to the application form: ${error instanceof Error ? error.message : String(error)}`,
+      fieldId: null,
+    }];
+    if (!(error instanceof ApplyStop)) console.error('Could not navigate to the application form.', error);
+    await assistant.show();
+  }
 }
 
 /** The candidate's profile facts for the panel, in the order a form asks for them. */
@@ -2977,35 +3058,35 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   activeReviews.set(attemptId, review);
   publishApplyState();
   const assistant = {
-    used: {}, handled: new Set(), tries: new Map(), problems: [], filling: false, stopped: false, keepAlive, show: null,
-    // Pages whose embedded job-board form was opened in their tab (once each).
-    openedForms: new Set(),
-    // "Fill again": the tab's boxes, uploads and embedded forms are forgotten, so the page is
-    // filled as if the job were new (text already in a box still stays), at once.
-    refill(tabId) {
-      if (assistant.stopped || tabId == null || !tabsOf(review).has(tabId)) return;
-      const ofTab = (key) => key.startsWith(`${tabId}|`);
-      for (const key of [...assistant.handled]) if (ofTab(key)) assistant.handled.delete(key);
-      for (const key of [...assistant.tries.keys()]) if (ofTab(key)) assistant.tries.delete(key);
-      for (const key of [...assistant.openedForms]) if (ofTab(key)) assistant.openedForms.delete(key);
-      assistant.problems = [];
-      assistant.poke(tabId);
+    problems: [], message: null, show: null, stopped: false,
+    status: 'QTS follows safe Start/Continue steps; on visible forms it fills only saved documents, profile facts, and reusable answers. You handle everything else and submit.',
+    navigationAttempts: new Map(),
+    navigationRuns: new Map(),
+    pendingNavigation: new Set(),
+    formSignatures: new Map(),
+    filledFields: new Map(),
+    fillingTabs: new Set(),
+    onTab(opened) {
+      review.tabId = opened.id;
+      review.tabIds?.add(opened.id);
     },
-    // Tabs with a fill pass on its way, and those to look at once more when it ends.
-    looking: new Set(), lookAgain: new Set(),
-    // Fills one of this application's tabs now (new boxes shown, a page loaded); a second request
-    // while it fills becomes one more pass after it.
+    // Follow safe navigation actions when a page loads or its controls change.
     poke(tabId) {
-      if (assistant.stopped || tabId == null || !tabsOf(review).has(tabId)) return;
-      if (assistant.looking.has(tabId)) {
-        assistant.lookAgain.add(tabId);
+      if (tabId == null || assistant.stopped || !tabsOf(review).has(tabId)) return;
+      if (assistant.navigationRuns.has(tabId)) {
+        assistant.pendingNavigation.add(tabId);
         return;
       }
-      assistant.looking.add(tabId);
-      assistFillPass(tabId, application, assistant).catch(() => {}).finally(() => {
-        assistant.looking.delete(tabId);
-        if (assistant.lookAgain.delete(tabId)) assistant.poke(tabId);
-      });
+      const run = assistFillPass(tabId, application, assistant, keepAlive)
+        .catch((error) => {
+          console.error('Could not inspect application navigation.', error);
+        })
+        .finally(() => {
+          if (assistant.navigationRuns.get(tabId) !== run) return;
+          assistant.navigationRuns.delete(tabId);
+          if (assistant.pendingNavigation.delete(tabId) && !assistant.stopped) assistant.poke(tabId);
+        });
+      assistant.navigationRuns.set(tabId, run);
     },
   };
   review.assistant = assistant;
@@ -3033,8 +3114,9 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     experiences: application.profileDetails?.experiences || [],
     educations: application.profileDetails?.educations || [],
     reusable: (application.savedAnswers || []).map((entry) => ({ question: entry.questionText, answer: entry.answer, note: entry.note || null })),
-    filled: Object.keys(assistant.used).length,
-    filling: assistant.filling,
+    message: assistant.message,
+    status: assistant.status,
+    filling: assistant.fillingTabs.size > 0,
     problems: assistant.problems,
     ...extra,
   });
@@ -3055,22 +3137,9 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   let learnedAtSubmit = [];
   // The bid's first step reached QTS (the Manager answered; only saving the bid is left).
   let marked = false;
-  // Every tab of the application is filled when the page says boxes changed, and looked at every
-  // 15 seconds as a backup.
-  let fillerRun = 0;
-  const startFiller = () => {
-    assistant.stopped = false;
-    const run = ++fillerRun;
-    (async () => {
-      while (!assistant.stopped && run === fillerRun && activeReviews.has(attemptId)) {
-        for (const tabId of tabsOf(review)) assistant.poke(tabId);
-        await sleep(ASSIST_LOOK_EVERY_MS);
-      }
-    })();
-  };
   const readAnswers = async (given) => {
     const current = (given?.length ? given : null) || await inForm(review.tabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) || [];
-    return { answers: submittedAnswers(assistant.used, current), learned: learnedAnswers(assistant.used, current) };
+    return { answers: submittedAnswers({}, current), learned: learnedAnswers({}, current) };
   };
   // Submitted when the application record is gone (its hold ran out while the Chrome was away):
   // the bid is saved from the job itself.
@@ -3085,16 +3154,9 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
       review.tabIds = new Set([adoptTabId]);
       review.tabId = adoptTabId;
     } else if (resumeTabIds?.length) {
-      // The extension restarted with this job's pages open: they are worked in again, and what
-      // they already show is left as it is (met), as the Manager may have chosen it.
+      // The extension restarted with this job's pages open: keep them available for the Manager.
       review.tabIds = new Set(resumeTabIds);
       review.tabId = resumeTabIds[resumeTabIds.length - 1];
-      for (const tabId of resumeTabIds) {
-        const page = assistPageOf((await getTab(tabId))?.url);
-        const shown = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist()
-          .filter((field) => !field.hidden && !globalThis.__qtsApplyForm.isUnanswered(field))).catch(() => []);
-        for (const field of shown || []) assistant.handled.add(assistKeys(tabId, page, field).box);
-      }
     } else {
       const othersOpen = [...activeReviews.values()].some((entry) => entry !== review && entry.assist && entry.tabId != null);
       tab = await openApplyTab(application.job.url, { active: !othersOpen });
@@ -3104,14 +3166,13 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
       await report('review', { review: true, appliedAnswers: [] });
     }
     await rememberApplySession(review);
-    if (tab) await waitForTabComplete(tab.id, 45 * 1000).catch(() => {});
     await showPanel('assist');
-    startFiller();
+    for (const tabId of tabsOf(review)) assistant.poke(tabId);
     for (;;) {
       const decision = await waitForManager(attemptId);
+      assistant.stopped = true;
       // Submitted on the panel (the site's own buttons are never watched): the bid, and the job row deleted.
       if (decision.action === 'submitted') {
-        assistant.stopped = true;
         if (!marked) {
           ({ answers: answersAtSubmit, learned: learnedAtSubmit } = await readAnswers(decision.answers));
           const sent = await report('submitted', { appliedAnswers: answersAtSubmit, learned: learnedAtSubmit });
@@ -3123,7 +3184,6 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
           }
           if (!sent.success) {
             await showPanel('assist', { message: fromJob?.message || sent.message || 'QTS did not save the bid; try again.' });
-            startFiller();
             continue;
           }
           marked = true;
@@ -3140,11 +3200,9 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
       if (decision.action === 'lost') return;
       // Remove on the panel: the job row is deleted and its tabs closed.
       if (decision.action === 'remove' && !marked) {
-        assistant.stopped = true;
         const removed = await report('release', { mode: 'remove', reason: 'Removed by the Manager.' });
         if (!removed.success) {
           await showPanel('assist', { message: removed.message || 'QTS did not remove the job; try again.' });
-          startFiller();
           continue;
         }
         await closeTabs();
@@ -3169,7 +3227,6 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
       await noteCancelledJob(application.job.id);
     }
   } finally {
-    assistant.stopped = true;
     clearInterval(heartbeat);
     activeReviews.delete(attemptId);
     publishApplyState();
@@ -3188,8 +3245,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
 async function processApplyQueue() {
   if (applyLoopRunning) return;
   applyLoopRunning = true;
-  // Normal Apply opens up to its two-tab limit (one in test mode); Auto Apply uses the Manager's
-  // configured limit below.
+  // Apply and Auto Apply use the Manager's configured open-application limit.
   const running = new Set();
   const track = (work) => {
     const run = work.catch(() => {}).finally(() => {
@@ -3203,29 +3259,27 @@ async function processApplyQueue() {
   const autoApply = await self.__qtsAutoApply?.isOn?.() === true;
   try {
     const storedSelection = autoApply ? (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection : null;
-    let autoApplyParallelLimit = APPLY_TABS_PER_CHROME;
-    if (autoApply) {
-      const settings = await workerApiRequest('GET', '/api/extension/features/me');
-      const configured = Number(settings.features?.autoApplyParallelLimit);
-      if (settings.success !== true || !Number.isInteger(configured) || configured < 1 || configured > 10) {
-        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
-        await notifyApply(settings.message || 'QTS could not load your Auto Apply concurrency setting. Try again.');
-        return;
-      }
-      autoApplyParallelLimit = storedSelection?.mode === 'auto_apply' ? 1 : configured;
+    let configuredLimit;
+    try {
+      configuredLimit = await getManagerApplyParallelLimit();
+    } catch (error) {
+      await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+      await notifyApply(`${error instanceof Error ? error.message : 'QTS could not load your Apply concurrency setting.'} Try again.`);
+      return;
     }
+    const applyParallelLimit = autoApply && storedSelection?.mode === 'auto_apply' ? 1 : configuredLimit;
     // Pages still open from before the extension restarted are taken up first (they count as open).
-    if (await isApplyOn() && !autoApply) for (const run of await resumeApplySessions(APPLY_TABS_PER_CHROME)) track(run);
+    if (await isApplyOn() && !autoApply) for (const run of await resumeApplySessions(applyParallelLimit)) track(run);
     // Auto Apply: its applications left open by a restarted worker go on first (up to its run limit).
     if (await isApplyOn() && autoApply) {
       for (const run of await self.__qtsAutoApply.resumeRuns(
         storedSelection?.mode === 'auto_apply' ? storedSelection : undefined,
-        autoApplyParallelLimit,
+        applyParallelLimit,
       )) track(run);
     }
     while (await isApplyOn()) {
       const testMode = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
-      if (running.size >= (testMode ? 1 : autoApply ? autoApplyParallelLimit : APPLY_TABS_PER_CHROME)) {
+      if (running.size >= (testMode ? 1 : applyParallelLimit)) {
         await Promise.race(running);
         continue;
       }
@@ -3284,7 +3338,7 @@ async function processApplyQueue() {
 
 // "Apply this page": the launcher on a job page asks which of the Manager's accounts have this job
 // (generated, no bid), then starts the one chosen in that very tab. Only while Apply is on; a job
-// chosen this way opens even when this Chrome has its two pages open.
+// chosen this way also respects the Manager's configured open-application limit.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== 'QTS_APPLY_PAGE_ACCOUNTS' && msg?.type !== 'QTS_APPLY_PAGE_START') return false;
   (async () => {
@@ -3306,6 +3360,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         : { ok: false, error: reply.message || 'QTS could not look up this page.' };
     }
     if (owner) return { ok: false, error: `This tab is already ${owner.candidate}'s application.` };
+    const parallelLimit = await getManagerApplyParallelLimit();
+    if (activeReviews.size >= parallelLimit) {
+      return { ok: false, error: `Your limit of ${parallelLimit} open application${parallelLimit === 1 ? '' : 's'} is already in use.` };
+    }
     const reply = await workerApiRequest('POST', '/api/extension/apply/start-job', { jobId: msg.jobId });
     if (reply.success !== true || !reply.application) return { ok: false, error: reply.message || 'QTS could not start this job.' };
     await tabOwnership.markTab(tab.id, 'apply').catch(() => {});

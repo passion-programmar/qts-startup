@@ -5474,8 +5474,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: 'User Name and Password are required.' });
           return;
         }
+        let serverUrl;
+        try {
+          const environment = msg.serverEnvironment || await self.__qtsRuntimeConfig.getServerEnvironment();
+          serverUrl = self.__qtsRuntimeConfig.getServerUrlForEnvironment(environment);
+        } catch (error) {
+          sendResponse({ ok: false, error: error.message || 'Choose Hosting or Local before signing in.' });
+          return;
+        }
+        await chrome.storage.local.set({
+          [self.__qtsRuntimeConfig.SERVER_URL_STORAGE_KEY]: serverUrl,
+        });
         await self.__qtsAccountAuth?.clearAuth?.();
-        const serverUrl = await self.__qtsRuntimeConfig.getServerUrl();
         let response;
         try {
           response = await fetch(`${serverUrl}/api/extension/auth/login`, {

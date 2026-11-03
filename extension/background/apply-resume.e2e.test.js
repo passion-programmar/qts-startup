@@ -51,6 +51,7 @@ const server = http.createServer((req, res) => {
     const data = JSON.parse(body || '{}');
     const json = (reply, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' }); res.end(JSON.stringify(reply)); };
     if (url.pathname === '/form/1') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' }); return res.end(FORM); }
+    if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { autoApplyParallelLimit: 2 } });
     if (url.pathname === '/api/extension/apply/claim') { log.claims += 1; return json({ success: true, application: log.claims === 1 ? APPLICATION : null }); }
     if (url.pathname === '/api/extension/apply/resume') { log.resumed.push(data); return json({ success: true, application: APPLICATION }); }
     if (url.pathname === '/api/extension/apply/heartbeat') return json({ success: true, leaseSeconds: 600 });

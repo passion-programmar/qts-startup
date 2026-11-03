@@ -386,7 +386,7 @@ export function OwnAutoApplyParallelLimitForm({ parallelLimit }: { parallelLimit
   return (
     <form action={formAction} className="space-y-3">
       <label className="block text-xs font-semibold text-slate-700" htmlFor="auto-apply-parallel-limit">
-        Maximum open Auto Apply jobs
+        Maximum open applications
       </label>
       <div className="flex flex-wrap items-center gap-3">
         <input
@@ -399,7 +399,7 @@ export function OwnAutoApplyParallelLimitForm({ parallelLimit }: { parallelLimit
           required
           type="number"
         />
-        <span className="text-xs text-slate-500">1–10 jobs · default 2</span>
+        <span className="text-xs text-slate-500">1–10 jobs across Apply and Auto Apply · default 2</span>
       </div>
       <ActionFeedback state={state} />
       <button

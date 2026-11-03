@@ -17,6 +17,7 @@
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
   const START_TEXT = /^(apply|apply now|apply (for|to) (this|the) (job|position|role|vacancy|opening)|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?|apply (directly )?(on|at|via|through) (the )?(employer|company|hiring company|recruiter)['’]?s? (site|website|page|career(s)? (site|page))|apply (on|at) (company|employer) (site|website)|apply externally|apply on website|(continue|go|proceed) to (the )?(application|apply|employer['’]?s? site))$/i;
   const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|enter (your )?(details|information) manually|continue (manually|without .{1,30}))$/i;
+  const ACCOUNT_ACTION_TEXT = /^(sign ?in|log ?in|register|sign ?up|create (an |your )?account|candidate login|candidate portal|apply with an account)$/i;
   const NOT_START = /linkedin|indeed|seek|xing|glassdoor|easy apply|with (google|facebook|apple|github|resume|cv)|later|save|share|refer|alert|similar|sign ?in|log ?in|register|autofill/i;
   // Job-site systems whose form a company page embeds in a frame; opening the frame shows the form.
   const FORM_FRAME = /greenhouse\.io\/(embed\/)?job_app|boards(\.eu)?\.greenhouse\.io|jobs(\.eu)?\.lever\.co|jobs\.ashbyhq\.com|apply\.workable\.com|smartrecruiters\.com|recruitee\.com|teamtailor\.com|personio\.(de|com)|bamboohr\.com|jobvite\.com|breezy\.hr|comeet\.(co|com)|pinpointhq\.com|join\.com|homerun\.co|applytojob\.com/i;
@@ -2202,7 +2203,7 @@
     const candidates = allElements().filter((element) => (
       (element.tagName === 'BUTTON' || (element.tagName === 'INPUT' && ['submit', 'button'].includes(element.type))
         || element.getAttribute('role') === 'button')
-      && isShown(element) && !element.disabled && pattern.test(buttonText(element))
+      && isShown(element) && !element.disabled && pattern.test(startText(element))
     ));
     if (candidates.length === 1) return candidates[0];
     // A page can show "Apply Now" at the top and "Submit application" under the form: the one that
@@ -2222,7 +2223,7 @@
     const submitDisabled = allElements().some((element) => (
       (element.tagName === 'BUTTON' || (element.tagName === 'INPUT' && element.type === 'submit'))
       && isShown(element) && (element.disabled || element.getAttribute('aria-disabled') === 'true')
-      && SUBMIT_TEXT.test(buttonText(element))
+      && SUBMIT_TEXT.test(startText(element))
     ));
     return { submit: Boolean(findButton('submit')), next: Boolean(findButton('next')), submitDisabled };
   }
@@ -2249,15 +2250,128 @@
   }
 
   function startText(element) {
-    return buttonText(element).replace(/[→›»↗➔>]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return buttonText(element)
+      .replace(/[→›»↗➔>]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[!?.,:;…]+$/u, '')
+      .trim();
+  }
+
+  function accountControls(pageType) {
+    const visible = allElements().filter((element) => {
+      if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) || !isShown(element) || element.disabled) return false;
+      const type = (element.getAttribute('type') || '').toLowerCase();
+      return !['hidden', 'submit', 'button', 'image', 'reset'].includes(type) && !unrelatedBox(element);
+    });
+    const anchor = visible.find((element) => element.type === 'password')
+      || visible.find((element) => element.type === 'email' || /e-?mail|user ?name|username|login/i.test(
+        `${labelFor(element)} ${element.placeholder || ''} ${element.name || ''} ${element.id || ''}`,
+      ));
+    if (!anchor) return [];
+    const form = formOf(anchor);
+    return visible.filter((element) => (form ? formOf(element) === form : !element.closest(PAGE_FRAME)));
+  }
+
+  /** Fill only identified account fields from Manager-approved candidate data; never returns values. */
+  function fillAccountForm(values = {}) {
+    const pageType = classifyPage().type;
+    if (!['email_first_application', 'authentication_required', 'registration_required'].includes(pageType)) {
+      return { ok: false, reason: 'The current page is not a supported email or account step.' };
+    }
+    const controls = accountControls(pageType);
+    const assignments = new Map();
+    const textOfControl = (element) => cleanText([
+      labelFor(element), element.getAttribute('aria-label'), element.placeholder,
+      element.name, element.id, element.autocomplete,
+    ].filter(Boolean).join(' ')).toLowerCase();
+    const passwords = controls.filter((element) => element.tagName === 'INPUT' && element.type === 'password');
+    const registration = pageType === 'registration_required';
+    const email = String(values.email || '').trim();
+    const password = String(values.password || '');
+    const firstName = String(values.firstName || '').trim();
+    const lastName = String(values.lastName || '').trim();
+    const fullName = [firstName, lastName].filter(Boolean).join(' ');
+
+    for (const control of controls) {
+      const label = textOfControl(control);
+      if (control.type === 'password') {
+        if (!password) return { ok: false, reason: 'No employer-site password is saved. Enter the account details manually.' };
+        if (passwords.length > (registration ? 2 : 1)) {
+          return { ok: false, reason: 'The account page requests additional password details. Review it manually.' };
+        }
+        assignments.set(control, password);
+        continue;
+      }
+      if (control.type === 'email' || /\b(e-?mail|username|user name|login)\b/.test(label)) {
+        if (!email) return { ok: false, reason: 'The candidate has no saved email address for this account step.' };
+        assignments.set(control, email);
+        continue;
+      }
+      if (registration && /\b(first|given) name\b/.test(label)) {
+        if (!firstName) return { ok: false, reason: 'The candidate has no saved first name for registration.' };
+        assignments.set(control, firstName);
+        continue;
+      }
+      if (registration && /\b(last|family|sur) ?name\b/.test(label)) {
+        if (!lastName) return { ok: false, reason: 'The candidate has no saved last name for registration.' };
+        assignments.set(control, lastName);
+        continue;
+      }
+      if (registration && /\b(full name|your name)\b/.test(label)) {
+        if (!fullName) return { ok: false, reason: 'The candidate has no saved name for registration.' };
+        assignments.set(control, fullName);
+      }
+    }
+    if (!email || !controls.some((element) => assignments.has(element) && element.type !== 'password')) {
+      return { ok: false, reason: 'The account page has no recognized email or username field. Review it manually.' };
+    }
+    if (pageType !== 'email_first_application' && !passwords.length) {
+      return { ok: false, reason: 'The account page has no recognized password field. Review it manually.' };
+    }
+    const unrecognized = controls.filter((element) => !assignments.has(element));
+    if (unrecognized.length) {
+      return { ok: false, reason: 'The account page asks for additional information. Review it manually.' };
+    }
+    for (const [control, value] of assignments) {
+      if (control.value === value) continue;
+      if (control.value) return { ok: false, reason: 'The account page already contains different values. Review them before continuing.' };
+      setNativeValue(control, value);
+      if (control.value !== value) return { ok: false, reason: 'The site did not accept the account details. Review the page manually.' };
+    }
+    return { ok: true, pageType, fieldsFilled: assignments.size };
+  }
+
+  /** Click only the account step's own Continue, Sign in, or Create account action. */
+  function clickAccountAction(pageType) {
+    const patterns = {
+      email_first_application: /^(continue|next|next step|proceed)$/i,
+      authentication_required: /^(sign ?in|log ?in|login|continue|next)$/i,
+      registration_required: /^(create (an )?account|register|sign ?up|continue|next)$/i,
+    };
+    const pattern = patterns[pageType];
+    if (!pattern) return { ok: false, error: 'This account step cannot be continued automatically.' };
+    const controls = accountControls(pageType);
+    const form = controls.map(formOf).find(Boolean) || null;
+    const buttons = allElements().filter((element) => clickable(element)
+      && (element.tagName === 'A' || element.tagName === 'BUTTON' || element.tagName === 'INPUT' || element.getAttribute('role') === 'button')
+      && pattern.test(startText(element))
+      && (form ? formOf(element) === form : !element.closest(PAGE_FRAME)));
+    if (buttons.length !== 1) return { ok: false, error: 'No single safe account Continue, Sign in, or Create account button was found.' };
+    const button = buttons[0];
+    button.scrollIntoView({ block: 'center' });
+    button.click();
+    return { ok: true, text: startText(button) };
   }
 
   /**
    * On a job page without a form: clicks what starts the application ("Apply for this job"; on a
-   * second screen "Apply manually"), skipping buttons already tried. Without one, a form embedded
-   * in a frame is reported so the tab can open it. { ok, text } | { ok, frameUrl } | { email } | { ok: false }.
+   * second screen "Apply manually"), or a plain Next/Continue on a page without application fields.
+   * Only when no application action exists does it use a visible sign-in/register link. An embedded
+   * form takes priority over that fallback.
+   * { ok, text } | { ok, frameUrl } | { email } | { ok: false }.
    */
-  function clickStart(alreadyClicked = []) {
+  function clickStart(alreadyClicked = [], { assistant = false } = {}) {
     const tried = new Set(alreadyClicked);
     const candidates = allElements().filter((element) => clickable(element) && !tried.has(startText(element)));
     const manual = candidates.find((element) => MANUAL_TEXT.test(startText(element)) && !/linkedin|indeed/i.test(startText(element)));
@@ -2267,7 +2381,12 @@
         const area = (element) => element.getBoundingClientRect().width * element.getBoundingClientRect().height;
         return area(b) - area(a);
       });
-    const button = manual || starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || null;
+    const fields = assistant ? scanForAssist() : scanForm();
+    const hasApplicationFields = fields.some((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account
+      && !unrelatedBox(findField(field.id) || document.body));
+    const button = !hasApplicationFields
+      ? starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || manual || null
+      : null;
     if (button) {
       button.scrollIntoView({ block: 'center' });
       button.click();
@@ -2275,12 +2394,30 @@
       const away = (element) => element?.tagName === 'A' && /^https?:/i.test(element.href || '')
         && element.href.split('#')[0] !== location.href.split('#')[0];
       const href = [button, button.closest('a[href]'), ...starts].find(away)?.href || null;
-      return { ok: true, text: startText(button), ...(href ? { href } : {}) };
+      return { ok: true, action: 'application', text: startText(button), ...(href ? { href } : {}) };
     }
-    if (starts.length) return { ok: false, email: true };
+    if (starts.length && !hasApplicationFields) return { ok: false, email: true };
+    if (!hasApplicationFields) {
+      const continuations = candidates.filter((element) => NEXT_TEXT.test(startText(element)));
+      if (continuations.length === 1) {
+        const continuation = continuations[0];
+        continuation.scrollIntoView({ block: 'center' });
+        continuation.click();
+        return { ok: true, action: 'application', text: startText(continuation) };
+      }
+    }
     const frame = allElements().find((element) => element.tagName === 'IFRAME' && isShown(element)
       && /^https?:/i.test(element.src || '') && FORM_FRAME.test(element.src));
-    return frame ? { ok: true, frameUrl: frame.src } : { ok: false };
+    if (frame) return { ok: true, action: 'application', frameUrl: frame.src };
+    const account = candidates.find((element) => ACCOUNT_ACTION_TEXT.test(startText(element)));
+    if (account) {
+      account.scrollIntoView({ block: 'center' });
+      account.click();
+      const href = account.tagName === 'A' && /^https?:/i.test(account.href || '')
+        && account.href.split('#')[0] !== location.href.split('#')[0] ? account.href : null;
+      return { ok: true, action: 'account', text: startText(account), ...(href ? { href } : {}) };
+    }
+    return { ok: false };
   }
 
   function clickButton(kind) {
@@ -2405,6 +2542,8 @@
     buttons,
     clickButton,
     clickStart,
+    fillAccountForm,
+    clickAccountAction,
     declineCookies,
     jobClosed,
     pageOutcome,
@@ -2611,7 +2750,7 @@
       .filter((element) => (element.tagName === 'BUTTON' || element.tagName === 'A' || (element.tagName === 'INPUT' && ['submit', 'button'].includes(element.type))
         || element.getAttribute('role') === 'button') && isShown(element) && !insideQtsUi(element))
       .map((element) => {
-        const text = buttonText(element).slice(0, 60);
+        const text = startText(element).slice(0, 60);
         const kind = kinds.find(([, pattern]) => pattern.test(text));
         if (!kind || seen.has(`${kind[0]}:${text}`)) return null;
         seen.add(`${kind[0]}:${text}`);
@@ -2638,8 +2777,8 @@
    * authentication_required, registration_required, verification_required, captcha_required,
    * application_closed, application_submitted, unsupported_page, unknown.
    */
-  function classifyPage(fields = scanForm()) {
-    const shown = fields.filter((field) => !field.hidden && !field.disabled);
+  function classifyPage(fields = scanForAssist()) {
+    const shown = fields.filter((field) => !field.hidden && !field.disabled && !field.unrelated);
     const blockers = detectBlockers();
     const text = cleanText(document.body?.innerText || '').slice(0, 20000);
     const isEmail = (field) => field.kind === 'email' || /e-?mail/i.test(field.label);
@@ -2728,7 +2867,7 @@
       root.dataset.qtsFormSignature = signature;
       root.dataset.qtsFormRevision = String(Number(root.dataset.qtsFormRevision || 0) + 1);
     }
-    const page = classifyPage(fields);
+    const page = classifyPage(scanForAssist());
     const required = records.filter((record) => record.required);
     return {
       schemaVersion: FORM_SCHEMA_VERSION,
@@ -2811,7 +2950,7 @@
     const control = target?.closest?.('button, input[type="submit"], input[type="button"], [role="button"], a');
     if (!control || control.closest('[data-qts-apply-review]')) return false;
     if (control.tagName === 'INPUT' && control.type === 'submit') return true;
-    return SUBMIT_TEXT.test(buttonText(control));
+    return SUBMIT_TEXT.test(startText(control));
   }
 
   /**

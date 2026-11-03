@@ -52,5 +52,6 @@ test("save failure is explicit and retryable, never returned as success", async 
   fixture.fail = true;
   const response = await POST(request());
   assert.equal(response.status, 500);
-  const body = await response.json(); assert.equal(body.success, false); assert.match(body.message, /Click Check to retry/);
+  const body = await response.json(); assert.equal(body.success, false); assert.match(body.message, /Some changes may not have saved/);
+  assert.doesNotMatch(body.message, /Click Check to retry/);
 });

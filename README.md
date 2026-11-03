@@ -127,11 +127,12 @@ invalidated by an auth-version change are rejected. The extension keeps the
 token in its own IndexedDB, which content scripts on web pages cannot read;
 extension local storage holds only the expiry and session user. Sign Out
 deletes the token, and the server-issued token expires after 24 hours. Server
-URLs must use HTTPS, except `http://localhost` for development. The extension
+URLs must use HTTPS, except for loopback development servers. The extension
 source is in `extension/` and defaults to `https://qts-job-system.vercel.app`
-for sign-in and API requests. For local extension testing, set `qtsServerUrl`
-in Chrome extension local storage. Popup and background requests share that
-value through the runtime configuration module.
+for sign-in and API requests. The Manager sign-in form lets you choose
+**Hosting** or **Local**; Local targets `http://127.0.0.1:3000`. That choice is
+saved for subsequent extension API requests. Sign out before switching servers
+so the next sign-in uses an account from the selected environment.
 
 To load the unpacked extension in Chrome, open `chrome://extensions`, enable
 Developer mode, select **Load unpacked**, and choose the repository's

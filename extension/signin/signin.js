@@ -3,6 +3,7 @@
 // which the page launcher watches to close this frame.
 
 const form = document.querySelector('form');
+const environmentInput = document.getElementById('server-environment');
 const userInput = document.getElementById('login-user');
 const passwordInput = document.getElementById('login-password');
 const errorMessage = document.querySelector('.error');
@@ -19,6 +20,7 @@ function showError(message) {
 }
 
 function setLoading(loading) {
+  environmentInput.disabled = loading;
   userInput.disabled = loading;
   passwordInput.disabled = loading;
   revealButton.disabled = loading;
@@ -38,6 +40,7 @@ async function submitSignIn() {
     const response = await chrome.runtime.sendMessage({
       type: 'QTS_PAGE_ACTION',
       action: 'sign_in',
+      serverEnvironment: environmentInput.value,
       loginName,
       password,
     });
@@ -51,6 +54,14 @@ async function submitSignIn() {
     if (!errorMessage.hidden) passwordInput.select();
   }
 }
+
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    environmentInput.value = await globalThis.__qtsRuntimeConfig.getServerEnvironment();
+  } catch (error) {
+    showError(error?.message || 'Could not load the server selection.');
+  }
+});
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();

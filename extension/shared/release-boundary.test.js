@@ -831,10 +831,13 @@ test('page Sign In collects credentials only inside the extension-origin frame',
   assert.ok(launcher.includes("chrome.runtime.getURL('signin/signin.html')"));
   assert.equal(launcher.includes("type = 'password'"), false);
   assert.equal(launcher.includes("action: 'sign_in'"), false);
+  assert.ok(signInPage.includes('<label for="server-environment">Server</label>'));
   assert.ok(signInPage.includes('<label for="login-user">User Name</label>'));
   assert.ok(signInPage.includes('<label for="login-password">Password</label>'));
   assert.ok(signInScript.includes("passwordInput.addEventListener('change', submitSignIn)"));
+  assert.ok(signInScript.includes('serverEnvironment: environmentInput.value'));
   assert.ok(signInBranch.includes("sender.url !== chrome.runtime.getURL('signin/signin.html')"));
+  assert.ok(signInBranch.includes('getServerUrlForEnvironment(environment)'));
   assert.ok(manifest.web_accessible_resources.some((entry) => (
     entry.resources || []
   ).includes('signin/signin.html')));

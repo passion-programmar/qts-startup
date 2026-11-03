@@ -35,13 +35,11 @@ const STATE = {
   candidate: 'Ana Pop',
   job: { title: 'Data Engineer', company: 'Acme', location: 'Remote', workType: 'Full-time · Remote', salary: null, url: 'https://jobs.example/1', description: 'We need Spark and Airflow.' },
   resumeText: 'ANA POP\nData engineer with 7 years of Spark.',
-  resumeFolder: 'QTS/Ana Pop/Acme',
+  resumeFolder: 'QTS_Resume/MSK/Ana Pop/Acme',
   profile: { firstName: 'Ana', lastName: 'Pop', email: 'ana@example.com', phone: '+40 711 222 333', city: 'Cluj-Napoca', country: 'Romania', linkedinUrl: 'https://linkedin.com/in/ana', yearsOfExperience: 7, gender: 'prefer_not_to_say' },
   experiences: [{ jobTitle: 'Senior Data Engineer', companyName: 'Initech', location: 'Cluj', workMode: 'remote', startDate: '2021-03-01', endDate: null, isCurrent: true, description: 'Built Spark pipelines.' }],
   educations: [{ institution: 'UBB', degree: 'BSc', fieldOfStudy: 'Computer Science', startDate: '2012-10-01', endDate: '2015-07-01', isCurrent: false, description: null }],
   reusable: [{ question: 'Notice period', answer: 'Immediately', note: null }],
-  filled: 3,
-  filling: false,
   problems: [],
 };
 
@@ -89,9 +87,12 @@ test('the panel shows the account, the job, two copy buttons, the profile cards,
   await withPanel(FORM, STATE, async (page, panel) => {
     const text = await panel.text();
     for (const shown of ['Ana Pop', 'Chrome 2', 'ACCOUNT', 'Data Engineer', 'Acme', 'Remote · Full-time · Remote', 'jobs.example', 'Copy résumé + JD', 'Copy résumé + JD + profile',
-      'PROFILE', 'EXPERIENCE', 'EDUCATION', 'REUSABLE ANSWERS', 'ana@example.com', 'QTS filled 3 answers', 'Submitted', 'Cancel']) {
+      'Ana Pop\\Acme', 'RESUME FOLDER AFTER MSK', 'PROFILE', 'EXPERIENCE', 'EDUCATION', 'REUSABLE ANSWERS', 'ana@example.com',
+      'QTS fills only saved documents, profile facts, and reusable answers on visible application forms.', 'Submitted', 'Cancel']) {
       assert.ok(text.includes(shown), `shows "${shown}"`);
     }
+    assert.ok(!text.includes('QTS filled'));
+    assert.ok(!text.includes('Fill again'));
     // Experience, education and reusable answers start closed; the page moves aside for the panel.
     assert.ok(!text.includes('Initech'));
     assert.equal(await page.evaluate(() => document.documentElement.dataset.qtsApplyDocked), 'true');
@@ -107,7 +108,7 @@ test('the panel shows the account, the job, two copy buttons, the profile cards,
   });
 });
 
-test('the copy buttons copy the résumé and the job description, and with the profile; each item copies its value', { skip }, async () => {
+test('the copy buttons copy the résumé and job, and each card item copies its own value', { skip }, async () => {
   await withPanel(FORM, STATE, async (page, panel) => {
     await panel.click('.copy-all', 'Copy résumé + JD');
     await panel.click('.copy-all', '+ profile');
@@ -124,6 +125,37 @@ test('the copy buttons copy the résumé and the job description, and with the p
     assert.equal(phone, '+40 711 222 333');
     assert.equal(company, 'Initech');
     assert.deepEqual(await panel.sent(), []);
+  });
+});
+
+test('experience and education values share rows but remain independently copyable', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    await panel.click('.card-head', 'Experience');
+    await panel.click('[data-card="experience"] .item-row .item', 'Company');
+    await panel.click('[data-card="experience"] .item-row .item', 'Location');
+    await panel.click('[data-card="experience"] .item-row .item', 'From');
+    await panel.click('[data-card="experience"] .item-row .item', 'To');
+    await panel.click('.card-head', 'Education');
+    await panel.click('[data-card="education"] .item-row .item', 'From');
+    await panel.click('[data-card="education"] .item-row .item', 'To');
+    assert.deepEqual(await panel.copied(), ['Initech', 'Cluj', 'Mar 2021', 'Present', 'Oct 2012', 'Jul 2015']);
+    const rows = await page.evaluate(() => {
+      const shadow = document.querySelector('[data-qts-apply-assist]').shadowRoot;
+      return [...shadow.querySelectorAll('[data-card="experience"] .item-row, [data-card="education"] .item-row')]
+        .map((row) => [...row.querySelectorAll('.item .label')].map((label) => label.textContent));
+    });
+    assert.deepEqual(rows, [['Company', 'Location'], ['From', 'To'], ['From', 'To']]);
+  });
+});
+
+test('the résumé path copies only the suffix after the MSK folder', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    await panel.click('.path-copy', 'Ana Pop');
+    assert.deepEqual(await panel.copied(), ['Ana Pop\\Acme']);
+    assert.ok(!(await panel.sent()).some((message) => message.action === 'open_folder'));
+  });
+  await withPanel(FORM, { ...STATE, resumeFolder: 'QTS_Resume/Other Candidate/Acme' }, async (page, panel) => {
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.path-copy')), null);
   });
 });
 
@@ -216,15 +248,18 @@ test('new boxes on the page (a pop-up, the next step, a section shown) tell the 
   });
 });
 
-test('the panel lists the required questions still empty as the Manager fills them, and hides to a tab', { skip }, async () => {
+test('the panel alone leaves fields untouched and can hide and reopen', { skip }, async () => {
   await withPanel(FORM, STATE, async (page, panel) => {
     await new Promise((resolve) => setTimeout(resolve, 2300));
-    assert.match(await panel.text(), /Still empty \(1 required\)\s+First name/);
-    await page.type('#fn', 'Ana');
-    await new Promise((resolve) => setTimeout(resolve, 2300));
     assert.ok(!(await panel.text()).includes('Still empty'));
-    // Typing on the page is what the worker waits for before filling.
-    assert.ok(await page.evaluate(() => Date.now() - globalThis.__qtsApplyAssist.lastKeyAt() < 5000));
+    assert.deepEqual(await page.evaluate(() => ({
+      firstName: document.querySelector('#fn').value,
+      email: document.querySelector('#em').value,
+    })), { firstName: '', email: 'ana@example.com' });
+    assert.deepEqual((await panel.sent()).filter((message) => message.action !== 'ping'), []);
+    await page.type('#fn', 'Ana');
+    assert.equal(await page.$eval('#fn', (input) => input.value), 'Ana');
+    assert.ok(!(await panel.text()).includes('QTS filled'));
     await panel.click('.hide');
     assert.equal(await page.evaluate(() => document.documentElement.dataset.qtsApplyDocked), 'false');
     await panel.click('.tab');
@@ -253,18 +288,6 @@ test('an opened card moves to the top of the panel, and a redraw keeps where the
     await panel.click('.card-head', 'Profile');
     const after = await where();
     assert.ok(after.scrollTop > 0);
-  });
-});
-
-test('"Fill again" asks the worker to fill the page as if the job were new; with nothing filled the panel says so', { skip }, async () => {
-  await withPanel(FORM, { ...STATE, filled: 0 }, async (page, panel) => {
-    assert.ok((await panel.text()).includes('Nothing filled on this page yet.'));
-    await panel.click('.refill', 'Fill again');
-    assert.deepEqual((await panel.sent()).filter((message) => message.action !== 'fields_changed').map((message) => message.action), ['refill']);
-  });
-  await withPanel(FORM, { ...STATE, filling: true }, async (page, panel) => {
-    // While QTS fills, no second request.
-    assert.ok(!(await panel.text()).includes('Fill again'));
   });
 });
 

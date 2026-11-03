@@ -95,7 +95,7 @@ async function workerBrowserHeaders() {
 }
 
 // options.timeoutMs: give up after that long (a request that never answers would otherwise wait
-// forever); left out, a request waits as long as the browser lets it.
+// forever); options.signal: cancel an in-flight request when its owning workflow stops.
 async function workerApiRequest(method, path, body, options = {}) {
   if (!workerSupportedApiPath(path) && !workerExperimentalApisEnabled()) {
     return workerUnavailableResponse();
@@ -105,6 +105,10 @@ async function workerApiRequest(method, path, body, options = {}) {
 
   const url = `${serverUrl}${path.startsWith('/') ? path : `/${path}`}`;
   try {
+    const signals = [
+      options.signal,
+      options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : null,
+    ].filter(Boolean);
     const response = await fetch(url, {
       method,
       headers: {
@@ -113,7 +117,7 @@ async function workerApiRequest(method, path, body, options = {}) {
         ...await workerBrowserHeaders(),
       },
       body: body != null ? JSON.stringify(body) : undefined,
-      ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
+      ...(signals.length ? { signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) } : {}),
     });
     let data;
     try {

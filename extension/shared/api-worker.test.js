@@ -4,12 +4,12 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function loadApiWorker(fetchImpl) {
+function loadApiWorker(fetchImpl, { applicationAutomation = false } = {}) {
   const runtime = {
     __qtsRuntimeConfig: {
       features: {
         scanner: false,
-        applicationAutomation: false,
+        applicationAutomation,
       },
       getServerUrl: async () => 'https://qts.example.test',
     },
@@ -26,6 +26,7 @@ function loadApiWorker(fetchImpl) {
     },
     URL,
     URLSearchParams,
+    AbortSignal,
     Uint8Array,
     Blob,
     btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
@@ -80,6 +81,35 @@ test('worker permits the authenticated Get JD duplicate check', async () => {
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, 'https://qts.example.test/api/extension/get-jd/check');
   assert.equal(requests[0].options.headers.Authorization, 'Bearer worker-token');
+});
+
+test('worker cancels a timed request when its workflow is stopped', async () => {
+  let observedSignal;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  const worker = loadApiWorker((_url, options) => {
+    observedSignal = options.signal;
+    markFetchStarted();
+    return new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+    });
+  }, { applicationAutomation: true });
+  const controller = new AbortController();
+  const request = worker.workerApiRequest(
+    'POST',
+    '/api/extension/apply/answers',
+    { attemptId: 'attempt-id', turns: [] },
+    { timeoutMs: 5000, signal: controller.signal },
+  );
+
+  await fetchStarted;
+  assert.ok(observedSignal);
+  controller.abort();
+
+  const result = await request;
+  assert.equal(result.success, false);
+  assert.equal(result.message, 'Cannot connect to the server.');
+  assert.equal(observedSignal.aborted, true);
 });
 
 test('worker permits loading the signed-in manager candidate accounts', async () => {

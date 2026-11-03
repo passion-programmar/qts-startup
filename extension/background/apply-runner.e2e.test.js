@@ -121,6 +121,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/form') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(FORM); }
     if (url.pathname === '/page-loaded') { log.pageLoads += 1; return json({}); }
     if (url.pathname === '/page-submitted') { log.pageSubmitted = true; return json({}); }
+    if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { autoApplyParallelLimit: 2 } });
     if (url.pathname === '/api/extension/apply/claim') {
       log.claims += 1;
       return json({ success: true, application: log.claims === 1 ? application : null });

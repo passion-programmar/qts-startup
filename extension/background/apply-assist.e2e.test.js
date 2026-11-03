@@ -1,11 +1,9 @@
 // End-to-end test of the REAL extension in Chrome as the Manager's assistant: its service worker, the
 // Apply queue, the form engine, and the panel, against a local mock QTS server on 127.0.0.1. Two job
-// pages open at once (the first in front). On every page of a job's journey (the job page, a tab it
-// opens, a form's steps, a pop-up) QTS fills, as soon as boxes show, only the résumé, the cover
-// letter, profile facts, and reusable answers; never what the Manager typed, never a search or
-// newsletter box, never a sign-in or create-account form (the Manager types those, copying the site
-// account password from the panel). The site's buttons are never
-// watched: only Submitted on the panel saves a bid; Cancel or a closed page records nothing.
+// pages open at once. QTS follows safe application Start/Continue actions and fills only saved
+// documents, profile facts, and reusable answers on visible application forms; the Manager handles
+// employer accounts and submits everything. QTS never asks
+// ChatGPT or clicks final Submit.
 // Nothing leaves this machine. Run with: npm run test:apply-e2e (skipped when Chrome is not
 // installed; QTS_CHROME sets it).
 const assert = require('node:assert/strict');
@@ -22,11 +20,11 @@ const CHROME = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].find((candidate) => candidate && fs.existsSync(candidate));
 
-const PORT = 47124;
-const BASE = `http://127.0.0.1:${PORT}`;
+const PORT = 0;
+let BASE = '';
 const PASSWORD = 'S1te-Acc0unt!';
 const pdf = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF').toString('base64');
-const log = { claims: [], submitted: [], results: [], released: [], reviews: 0, documents: 0 };
+const log = { claims: [], submitted: [], results: [], released: [], reviews: 0, documents: 0, accountLogins: [], accountRegistrations: [] };
 
 const page = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
 
@@ -35,6 +33,10 @@ const JOB_PAGE = page('Data Engineer at Acme', `
 <header><form role="search" onsubmit="event.preventDefault()"><label for="sq">City</label><input id="sq"><button>Search jobs</button></form></header>
 <main><h1>Data Engineer</h1><p>About the job: Spark, Airflow.</p><a href="/form/1" class="button" target="_blank">Apply now</a></main>
 <footer><form class="newsletter" onsubmit="event.preventDefault()"><label for="nl">Email</label><input id="nl" type="email"><button>Subscribe</button></form></footer>`);
+
+const MANUAL_JOB_PAGE = page('Data Engineer at Acme', `
+<main><h1>Data Engineer</h1><p>Continue on the employer portal.</p>
+<a id="open-portal" href="/login/4" target="_blank">Open employer portal</a></main>`);
 
 const form = (number) => page(`Apply ${number}`, `
 <form id="app" onsubmit="event.preventDefault(); window.submitted = true;">
@@ -54,13 +56,13 @@ const form = (number) => page(`Apply ${number}`, `
 
 // An employer's site: sign in, create an account, then a form in steps with a pop-up.
 const LOGIN = page('Sign in', `
-<form id="login" onsubmit="event.preventDefault(); location.href = '/register/4';">
+<form id="login" onsubmit="event.preventDefault(); fetch('/account-login?email=' + encodeURIComponent(lu.value) + '&password=' + encodeURIComponent(lp.value)).then(() => { location.href = '/register/4'; });">
   <label for="lu">Email or username</label><input id="lu" type="text">
   <label for="lp">Password</label><input id="lp" type="password">
   <button type="submit">Sign in</button>
 </form>`);
 const REGISTER = page('Create account', `
-<form id="reg" onsubmit="event.preventDefault(); location.href = '/steps/4';">
+<form id="reg" onsubmit="event.preventDefault(); fetch('/account-register?firstName=' + encodeURIComponent(rf.value) + '&lastName=' + encodeURIComponent(rl.value) + '&email=' + encodeURIComponent(re.value) + '&password=' + encodeURIComponent(rp.value) + '&confirmation=' + encodeURIComponent(rc.value)).then(() => { location.href = '/steps/4'; });">
   <label for="rf">First name</label><input id="rf"><label for="rl">Last name</label><input id="rl">
   <label for="re">Email</label><input id="re" type="email">
   <label for="rp">Password</label><input id="rp" type="password"><label for="rc">Confirm password</label><input id="rc" type="password">
@@ -74,7 +76,8 @@ const STEPS = page('Application', `
 <script>
 document.getElementById('next').onclick = () => {
   document.getElementById('step').innerHTML = '<label for="e2">Email *</label><input id="e2" type="email" required>'
-    + '<label for="p2">Phone *</label><input id="p2" type="tel" value="+48 600 000 000">'
+    + '<label for="p2">Phone *</label><input id="p2" type="tel" required>'
+    + '<label for="co">Country *</label><select id="co" required><option value="">Select…</option><option>Poland</option><option>Romania</option></select>'
     + '<button type="button" id="more">Add address</button><button type="submit">Submit application</button>';
   document.getElementById('more').onclick = () => {
     const dialog = document.createElement('div');
@@ -111,7 +114,7 @@ const OLA = {
   candidateId: '00000000-0000-4000-8000-00000000c002', firstName: 'Ola', lastName: 'Nowak', email: 'ola.test@example.com',
   phone: '+48600111222', city: 'Krakow', country: 'Poland', yearsOfExperience: 5,
 };
-const jobs = [job(1, `${BASE}/job/1`, RADU), job(2, `${BASE}/form/2`, RADU), job(3, `${BASE}/slow/3`, RADU), job(4, `${BASE}/login/4`, OLA)];
+let jobs = [];
 
 const server = http.createServer((req, res) => {
   let body = '';
@@ -125,9 +128,27 @@ const server = http.createServer((req, res) => {
     if (url.pathname.startsWith('/form/')) return html(form(url.pathname.slice(6)));
     // A site that takes long to answer: the Manager closes it while it loads.
     if (url.pathname === '/slow/3') return setTimeout(() => html(form(3)), 60000).unref();
+    if (url.pathname === '/manual/4') return html(MANUAL_JOB_PAGE);
     if (url.pathname === '/login/4') return html(LOGIN);
     if (url.pathname === '/register/4') return html(REGISTER);
     if (url.pathname === '/steps/4') return html(STEPS);
+    if (url.pathname === '/account-login') {
+      log.accountLogins.push({ email: url.searchParams.get('email'), password: url.searchParams.get('password') });
+      return json({});
+    }
+    if (url.pathname === '/account-register') {
+      log.accountRegistrations.push({
+        firstName: url.searchParams.get('firstName'),
+        lastName: url.searchParams.get('lastName'),
+        email: url.searchParams.get('email'),
+        password: url.searchParams.get('password'),
+        confirmation: url.searchParams.get('confirmation'),
+      });
+      return json({});
+    }
+    if (url.pathname === '/api/extension/features/me') {
+      return json({ success: true, features: { autoApplyParallelLimit: 2 } });
+    }
     if (url.pathname === '/api/extension/apply/claim') {
       log.claims.push(data.skipJobIds || []);
       return json({ success: true, application: jobs[log.claims.length - 1] || null });
@@ -161,180 +182,164 @@ const until = async (what, check, ms = 60000) => {
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test('the assistant fills every page of each job\'s journey, and only Submitted on the panel saves a bid', {
+test('normal Apply navigates safely, fills saved values, and pauses for manual account steps', {
   skip: CHROME ? false : 'Chrome is not installed (set QTS_CHROME to run this test).',
   timeout: 420000,
 }, async () => {
   const puppeteer = require('puppeteer-core');
   await new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve));
+  BASE = `http://127.0.0.1:${server.address().port}`;
+  jobs = [job(1, `${BASE}/job/1`, RADU), job(4, `${BASE}/manual/4`, OLA)];
   const browser = await puppeteer.launch({
     executablePath: CHROME, headless: true, pipe: true, protocolTimeout: 600000,
     enableExtensions: [path.join(root, 'extension')], args: ['--no-first-run'],
   });
   try {
-    const target = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().includes('service-worker.js'), { timeout: 30000 });
-    const worker = await target.worker();
-    await worker.evaluate(async (base) => {
+    const workerEval = async (func, ...args) => {
+      const target = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().includes('service-worker.js'), { timeout: 30000 });
+      const worker = await target.worker();
+      if (!worker) throw new Error('The extension service worker is not running.');
+      return worker.evaluate(func, ...args);
+    };
+    await workerEval(async (base) => {
       await chrome.storage.local.set({
         qtsServerUrl: base, authToken: 'e2e-test-token', authExpiresAt: Date.now() + 3600 * 1000,
         qtsSessionUser: { id: 'e2e', role: 'manager', displayName: 'E2E' },
         qtsApplyDryRun: false, qtsExtensionStatus: 'apply', qtsBrowserName: 'E2E Chrome',
       });
     }, BASE);
-    await worker.evaluate(() => { self.__qtsApplyRunner.processApplyQueue(); });
-    const tabs = () => worker.evaluate(async () => (await chrome.tabs.query({})).map((tab) => ({ id: tab.id, url: tab.url || tab.pendingUrl || '', active: tab.active })));
+    await workerEval(() => { self.__qtsApplyRunner.processApplyQueue(); });
+    const tabs = () => workerEval(async () => (await chrome.tabs.query({})).map((tab) => ({ id: tab.id, url: tab.url || tab.pendingUrl || '', active: tab.active })));
     const tabFor = async (part) => (await tabs()).find((tab) => tab.url.includes(part));
-    const pageFor = async (part) => (await browser.pages()).find((entry) => entry.url().includes(part));
-    const panelSays = (part, message) => tabFor(part).then((tab) => worker.evaluate((tabId, msg) => chrome.scripting.executeScript({
-      target: { tabId }, func: (m) => chrome.runtime.sendMessage(m), args: [msg],
-    }), tab.id, message));
-    // What a page's boxes hold, read through the extension (a page handle can hang while its tab navigates).
-    const read = async (part, ids) => {
+    const pageFor = async (part) => (await browser.pages()).find((page) => page.url().includes(part));
+    const execute = async (part, func, args = []) => {
+      const page = await pageFor(part);
+      return page ? (await page.evaluate(func, ...args) ?? null) : null;
+    };
+    const panelSays = async (part, message) => {
       const tab = await tabFor(part);
-      if (!tab) return null;
-      const [frame] = await worker.evaluate((tabId, wanted) => chrome.scripting.executeScript({ target: { tabId }, args: [wanted], func: (list) => {
+      if (!tab) throw new Error(`Could not find the application tab for ${part}.`);
+      return workerEval((tabId, value) => chrome.scripting.executeScript({
+        target: { tabId }, func: (payload) => chrome.runtime.sendMessage(payload), args: [value],
+      }), tab.id, message);
+    };
+    const read = async (part, ids) => {
+      return execute(part, (wanted) => {
         const out = {};
-        for (const id of list) {
+        for (const id of wanted) {
           const box = document.getElementById(id);
           out[id] = !box ? null : box.type === 'file' ? box.files.length : box.type === 'checkbox' ? box.checked : box.value;
         }
         return out;
-      } }).catch(() => [{ result: null }]), tab.id, ids);
-      return frame?.result || null;
+      }, [ids]);
     };
     const FORM_IDS = ['fn', 'ln', 'em', 'ph', 'co', 'np', 'hear', 'why', 'cl', 'cv', 'ok'];
-
-    // Two pages open, only the first in front; the third waits.
-    await until('two job pages', async () => (await tabs()).filter((tab) => tab.url.startsWith(BASE)).length === 2);
-    const open = (await tabs()).filter((tab) => tab.url.startsWith(BASE));
-    assert.deepEqual(open.map((tab) => [new URL(tab.url).pathname, tab.active]), [['/job/1', true], ['/form/2', false]]);
-    await pause(2000);
-    assert.equal(log.claims.length, 2);
-    assert.equal(log.reviews, 2);
-
-    // A page behind the Manager's is filled with what QTS knows, and only that.
-    await until('the second page filled', async () => (await read('/form/2', ['cv', 'np']))?.cv === 1);
-    assert.deepEqual(await read('/form/2', FORM_IDS), {
+    const knownFormValues = {
       fn: 'Radu', ln: 'Star', em: 'radu.test@example.com', ph: '+40264484948', co: 'Romania', np: 'Immediately',
       hear: '', why: '', cl: 'Dear Hiring Manager,\nI would like to join Acme.', cv: 1, ok: false,
-    });
+    };
+
+    try {
+      await until('the application form and manual sign-in page', async () => {
+      const paths = (await tabs()).filter((tab) => tab.url.startsWith(BASE)).map((tab) => new URL(tab.url).pathname);
+      return paths.includes('/form/1') && paths.includes('/manual/4');
+      });
+    } catch (error) {
+      console.error('Initial Apply state:', JSON.stringify({ claims: log.claims, reviews: log.reviews, tabs: await tabs() }));
+      throw error;
+    }
+    await until('both review panels', () => log.reviews === 2);
+    try {
+      await until('application form controls', async () => await read('/form/1', FORM_IDS) !== null, 15000);
+    } catch (error) {
+      console.error('Form tab after navigation:', JSON.stringify(await tabs()));
+      throw error;
+    }
+    await until('manual job page controls', async () => await execute('/manual/4', () => Boolean(document.querySelector('#open-portal'))));
+    try {
+      await until('saved normal Apply values', async () => {
+        const values = await read('/form/1', FORM_IDS);
+        return values?.fn === knownFormValues.fn && values?.cv === knownFormValues.cv && values?.np === knownFormValues.np;
+      });
+    } catch (error) {
+      console.error('Normal Apply form state:', JSON.stringify({
+        values: await read('/form/1', FORM_IDS),
+        status: await execute('/form/1', () => document.querySelector('[data-qts-apply-assist]')?.shadowRoot?.querySelector('.status')?.textContent || null),
+        documents: log.documents,
+      }));
+      throw error;
+    }
+    assert.deepEqual(await read('/form/1', FORM_IDS), knownFormValues);
+    assert.equal(log.documents, 1);
     assert.equal(log.aiAsked, undefined);
+    assert.deepEqual(log.accountLogins, []);
+    assert.deepEqual(log.accountRegistrations, []);
 
-    // The job page's search and newsletter are not the application: left empty.
-    await pause(1500);
-    assert.deepEqual(await read('/job/1', ['sq', 'nl']), { sq: '', nl: '' });
-
-    // Its Apply button opens the form in a new tab, which joins the application and is filled.
-    const first = await pageFor('/job/1');
-    await first.click('a.button');
-    await until('the first form filled', async () => {
-      const values = await read('/form/1', ['fn', 'cv']);
-      return values?.fn === 'Radu' && values.cv === 1;
-    });
-    // Closing the job page leaves the application open in the form's tab.
-    await worker.evaluate(async (tabId) => chrome.tabs.remove(tabId), (await tabFor('/job/1')).id);
-    await pause(1500);
-    assert.equal(log.released.length, 0);
-    assert.ok(await tabFor('/form/1'));
-
-    // What the Manager types stays: QTS never fills a box twice.
-    const second = await pageFor('/form/2');
-    await second.bringToFront();
-    await second.evaluate(() => { document.getElementById('fn').value = ''; });
-    await second.type('#fn', 'Rado');
-    await second.select('#hear', 'Friend');
-    await second.type('#why', 'I like Spark.');
-    await second.click('#ok');
-    await pause(5000);
-    assert.equal((await read('/form/2', ['fn'])).fn, 'Rado');
-    // "Fill again": an answer QTS filled and the Manager emptied is filled again; what the Manager wrote stays.
-    await second.evaluate(() => { const box = document.getElementById('np'); box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true })); });
-    await panelSays('/form/2', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[1].attemptId, action: 'refill' });
-    await until('filled again', async () => (await read('/form/2', ['np']))?.np === 'Immediately', 20000);
-    assert.deepEqual(await read('/form/2', ['fn', 'why', 'cv']), { fn: 'Rado', why: 'I like Spark.', cv: 1 });
-
-    // The site's own Submit is never watched: nothing is recorded.
-    await second.click('button[type=submit]');
-    await pause(2000);
-    assert.deepEqual([log.submitted.length, log.results.length, log.released.length], [0, 0, 0]);
-    assert.ok(await tabFor('/form/2'));
-    // Submitted on the panel: one bid (with the form's answers) and the job row deleted.
-    await panelSays('/form/2', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[1].attemptId, action: 'submitted' });
-    await until('the bid saved', () => log.results.length === 1);
-    assert.equal(log.submitted[0].attemptId, jobs[1].attemptId);
-    assert.ok(log.submitted[0].appliedAnswers.some((answer) => /First name/.test(answer.question) && answer.answer === 'Rado'));
-    assert.deepEqual([log.results[0].attemptId, log.results[0].submitted, log.results[0].removeJob], [jobs[1].attemptId, true, true]);
-    await until('the second page closed', async () => !(await tabFor('/form/2')));
-
-    // The third job's site is slow; the Manager closes it while it loads: nothing is recorded, its
-    // place frees at once (not after the page would have loaded), and the fourth job opens.
-    await until('the third page', async () => Boolean(await tabFor('/slow/3')));
-    const closedAt = Date.now();
-    await worker.evaluate(async (tabId) => chrome.tabs.remove(tabId), (await tabFor('/slow/3')).id);
-    await until('the closed page released', () => log.released.length === 1, 20000);
-    assert.deepEqual([log.released[0].attemptId, log.released[0].mode], [jobs[2].attemptId, 'drop']);
-    assert.ok(log.released[0].at - closedAt < 10000, `released ${log.released[0].at - closedAt} ms after the close`);
-    await until('the fourth page', async () => Boolean(await tabFor('/login/4')));
-    assert.deepEqual(log.claims[3], [jobs[2].job.id]);
-
-    // The fourth job (another candidate) starts on a sign-in page: the Manager's to type (QTS fills
-    // nothing there); the panel holds the site account password to copy, as dots.
-    await until('the sign-in panel', async () => {
-      const tab = await tabFor('/login/4');
-      const [frame] = await worker.evaluate((tabId) => chrome.scripting.executeScript({
-        target: { tabId }, func: () => globalThis.__qtsApplyAssist ? document.querySelector('[data-qts-apply-assist]') !== null : false,
-      }), tab.id);
-      return frame?.result;
-    });
-    await pause(3000);
+    await execute('/manual/4', () => document.querySelector('#open-portal').click());
+    await until('the new sign-in tab opened from the Manager click', async () => Boolean(await tabFor('/login/4')));
+    await until('the sign-in page panel', async () => await execute('/login/4', () => Boolean(document.querySelector('[data-qts-apply-assist]'))));
     assert.deepEqual(await read('/login/4', ['lu', 'lp']), { lu: '', lp: '' });
-    const fourth = await pageFor('/login/4');
-    await fourth.bringToFront();
-    await fourth.type('#lu', 'ola.test@example.com');
-    await fourth.type('#lp', PASSWORD);
-    await fourth.click('#login button');
-    // Create account: also the Manager's; QTS leaves it empty.
-    await until('the account page', async () => Boolean(await read('/register/4', ['rf'])));
-    await pause(3000);
+    await execute('/login/4', (email, password) => {
+      document.querySelector('#lu').value = email;
+      document.querySelector('#lp').value = password;
+      document.querySelector('#login button').click();
+      return true;
+    }, ['ola.test@example.com', PASSWORD]);
+    await until('the sign-in page to advance', async () => Boolean(await tabFor('/register/4')));
+    await until('registration controls', async () => await read('/register/4', ['rf', 'rl', 're', 'rp', 'rc']) !== null);
+    assert.deepEqual(log.accountLogins, [{ email: 'ola.test@example.com', password: PASSWORD }]);
     assert.deepEqual(await read('/register/4', ['rf', 'rl', 're', 'rp', 'rc']), { rf: '', rl: '', re: '', rp: '', rc: '' });
-    const steps = await pageFor('/register/4');
-    for (const [id, text] of [['#rf', 'Ola'], ['#rl', 'Nowak'], ['#re', 'ola.test@example.com'], ['#rp', PASSWORD], ['#rc', PASSWORD]]) await steps.type(id, text);
-    // The first job's form keeps its own candidate.
-    assert.equal((await read('/form/1', ['em'])).em, 'radu.test@example.com');
 
-    // The application in steps, on one address: each step's new boxes are filled, the Manager's
-    // phone stays, and a pop-up's box is filled when it opens.
-    await steps.click('#reg button');
-    await until('step 1 filled', async () => (await read('/steps/4', ['e1']))?.e1 === 'ola.test@example.com');
-    const onSteps = await pageFor('/steps/4');
-    await onSteps.click('#next');
-    await until('step 2 filled', async () => (await read('/steps/4', ['e2']))?.e2 === 'ola.test@example.com', 15000);
-    assert.equal((await read('/steps/4', ['p2'])).p2, '+48 600 000 000');
-    await onSteps.click('#more');
-    await until('the pop-up filled', async () => (await read('/steps/4', ['city']))?.city === 'Krakow', 15000);
-    // The site's Submit on the last step: still nothing recorded until Submitted.
-    await onSteps.click('button[type=submit]');
-    await pause(1500);
-    assert.deepEqual([log.submitted.length, log.results.length], [1, 1]);
-    await panelSays('/steps/4', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[3].attemptId, action: 'submitted' });
-    await until('the fourth bid', () => log.results.length === 2);
-    assert.deepEqual([log.results[1].attemptId, log.results[1].removeJob], [jobs[3].attemptId, true]);
-    await until('the fourth page closed', async () => !(await tabFor('/steps/4')));
-
-    // The first job: Submitted at the bottom of the panel, one bid.
-    await panelSays('/form/1', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[0].attemptId, action: 'submitted', answers: [] });
-    await until('the first bid', () => log.results.length === 3);
-    assert.deepEqual(log.results.map((result) => result.attemptId), [jobs[1].attemptId, jobs[3].attemptId, jobs[0].attemptId]);
-    assert.deepEqual(log.submitted.map((entry) => entry.attemptId), [jobs[1].attemptId, jobs[3].attemptId, jobs[0].attemptId]);
-    await until('the first page closed', async () => !(await tabFor('/form/1')));
-    // The résumé was prepared once per job that uploads it (jobs 1 and 2), not on every page.
-    assert.equal(log.documents, 2);
+    await execute('/register/4', (password) => {
+      document.querySelector('#rf').value = 'Ola';
+      document.querySelector('#rl').value = 'Nowak';
+      document.querySelector('#re').value = 'ola.test@example.com';
+      document.querySelector('#rp').value = password;
+      document.querySelector('#rc').value = password;
+      document.querySelector('#reg button').click();
+      return true;
+    }, [PASSWORD]);
+    await until('the application form after manual account steps', async () => Boolean(await tabFor('/steps/4')));
+    await until('application step controls', async () => await read('/steps/4', ['e1']) !== null);
+    await until('the form panel to finish navigation', () => log.reviews === 2);
+    assert.equal((await read('/steps/4', ['e1'])).e1, '');
+    assert.deepEqual(log.accountRegistrations, [{
+      firstName: 'Ola', lastName: 'Nowak', email: 'ola.test@example.com',
+      password: PASSWORD, confirmation: PASSWORD,
+    }]);
+    assert.equal(log.documents, 1);
     assert.equal(log.aiAsked, undefined);
 
-    // Apply turned off with nothing open: nothing more is recorded.
-    await worker.evaluate(() => chrome.storage.local.set({ qtsExtensionStatus: null }));
-    await pause(1500);
-    assert.equal(log.released.length, 1);
+    // The Manager can mark Submitted at any time; this saves the bid, removes the row and closes
+    // the application's tabs without QTS clicking the employer's Submit.
+    await panelSays('/form/1', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[0].attemptId, action: 'submitted', answers: [] });
+    await until('the first job saved and its tabs closed', async () => log.results.length === 1 && !(await tabFor('/form/1')));
+    assert.deepEqual([log.results[0].attemptId, log.results[0].submitted, log.results[0].removeJob], [jobs[0].attemptId, true, true]);
+    assert.equal(await execute('/steps/4', () => window.submitted), null);
+    await execute('/steps/4', (email) => {
+      document.querySelector('#e1').value = email;
+      document.querySelector('#next').click();
+    }, ['ola.test@example.com']);
+    await until('profile and reusable values on the visible next form step', async () => {
+      const values = await read('/steps/4', ['e2', 'p2', 'co']);
+      return values?.e2 === 'ola.test@example.com' && values.p2 === '+48600111222' && values.co === 'Poland';
+    });
+    assert.deepEqual(await read('/steps/4', ['e2', 'p2', 'co']), {
+      e2: 'ola.test@example.com', p2: '+48600111222', co: 'Poland',
+    });
+    await execute('/steps/4', () => document.querySelector('#more').click());
+    await until('profile city on the new form control', async () => (await read('/steps/4', ['city']))?.city === 'Krakow');
+    // The Manager's click on the employer's Submit does not itself save in QTS.
+    await execute('/steps/4', () => document.querySelector('button[type=submit]').click());
+    await pause(500);
+    assert.equal(await execute('/steps/4', () => window.submitted), true);
+    assert.equal(log.results.length, 1);
+    await panelSays('/steps/4', { type: 'QTS_APPLY_PANEL', assist: true, attemptId: jobs[1].attemptId, action: 'submitted', answers: [] });
+    await until('the second bid saved', () => log.results.length === 2);
+    assert.deepEqual([log.results[1].attemptId, log.results[1].submitted, log.results[1].removeJob], [jobs[1].attemptId, true, true]);
+    assert.equal(log.submitted.length, 2);
+    assert.equal(log.documents, 1);
+    assert.equal(log.aiAsked, undefined);
   } finally {
     await browser.close();
     server.closeAllConnections?.();

@@ -5,7 +5,7 @@ queue alarms retry cleanup if the server is temporarily unavailable. No launcher
 edit, or manual release is required. Chrome must be open, the extension enabled, and authentication
 valid; this does not run while Chrome is fully closed or bypass a required sign-in.
 
-- **Cancel:** stops the work slot intentionally. The selected account's visible job list, checked
+- **Cancel:** stops the work slot and any in-flight AI answer request. The selected account's visible job list, checked
   jobs, and scroll position remain available. Cleanup retries automatically, including after a
   restart. Starting another batch waits for cleanup; Cancel never restarts the cancelled batch.
 - **Generation ChatGPT tab closed:** the existing recovery attempt opens a fresh tab and sends the
@@ -14,6 +14,9 @@ valid; this does not run while Chrome is fully closed or bypass a required sign-
 - **Unfinished Auto Apply tab closed:** the current attempt is released and the job can be claimed
   again automatically within the saved account/job selection. Failed release requests are saved
   before sending and retried before the queue claims more jobs.
+- **Auto Apply claim lost:** QTS stops work in the tab, gives the job back, and keeps the last
+  completed checkpoint for a later claim. It does not continue or submit under a claim another
+  Chrome no longer owns.
 - **Worker restart with the same Chrome session:** Auto Apply can resume the same application tab
   and saved step. Generation releases its interrupted hold and restarts eligible unfinished work.
 - **Full Chrome restart:** saved tab IDs are not trusted across browser sessions. Unfinished Auto
@@ -24,8 +27,8 @@ valid; this does not run while Chrome is fully closed or bypass a required sign-
   The Manager still answers that business confirmation; it is not a manual recovery operation.
 
 Existing form review, Next/Submit controls, ownership/security checks, JSON validation, PDF page
-limits, download completion checks, and generation finalization guards remain active. Recovery
-does not bypass CAPTCHA, account login, missing answers, or Manager review.
+limits, download completion checks, and generation finalization guards remain active. Recovery does
+not bypass CAPTCHA, account credentials, verification codes, missing answers, or Manager review.
 
 Local verification uses synthetic accounts, a mock HTTP server, mock AI, and real Chrome. The
 startup regression closes and relaunches Chrome with a persistent test profile, simulates failed
