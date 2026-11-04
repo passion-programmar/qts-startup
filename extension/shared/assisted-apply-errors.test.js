@@ -75,7 +75,7 @@ test('missing paths, missing files, absent folder and revoked read access retain
     [{ failure: { success: false, _httpStatus: 404, message: 'Run Generation again.' } }, /saved PDF paths.*QTS administrator/i],
     [{ missing: true }, /saved file.*missing.*Apply PDFs folder/i],
     [{ permission: 'prompt' }, /permission is unavailable.*Apply PDFs folder/i],
-    [{ noFolder: true }, /Choose the Downloads folder.*Apply PDFs folder/i],
+    [{ noFolder: true }, /Choose the QTS_Resume folder.*Apply PDFs folder/i],
     [{ failure: { success: false, _httpStatus: 403, message: 'Apply was turned off for your account.' } }, /Apply was turned off for your account/],
   ]) {
     const f = fixture(options);

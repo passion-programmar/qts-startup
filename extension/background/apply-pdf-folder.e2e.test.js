@@ -144,7 +144,7 @@ test('authorized Managers configure one persistent read-only folder and both App
       window.showDirectoryPicker = async (options) => {
         window.pickerOptions = options;
         window.pickerUserGesture = navigator.userActivation.isActive;
-        return downloads;
+        return downloads.getDirectoryHandle('QTS_Resume');
       };
     }, paths, resume, cover);
     await settings.click('#choose-folder');
@@ -175,12 +175,24 @@ test('authorized Managers configure one persistent read-only folder and both App
     // Simulate a revoked grant on UI reopen; no unsolicited permission request is permitted.
     await settings.evaluate(() => {
       window.originalQuery = FileSystemDirectoryHandle.prototype.queryPermission;
+      const originalRequest = FileSystemDirectoryHandle.prototype.requestPermission;
       FileSystemDirectoryHandle.prototype.queryPermission = async () => 'prompt';
+      FileSystemDirectoryHandle.prototype.requestPermission = async function(options) {
+        window.restoreUserGesture = navigator.userActivation.isActive;
+        window.restoreOptions = options;
+        const permission = await originalRequest.call(this, options);
+        FileSystemDirectoryHandle.prototype.queryPermission = window.originalQuery;
+        return permission;
+      };
       window.dispatchEvent(new Event('focus'));
     });
     await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'revoked');
-    assert.match(await settings.$eval('#folder-status', (s) => s.textContent), /Choose the folder again before Apply/);
+    assert.match(await settings.$eval('#folder-status', (s) => s.textContent), /Allow saved folder access/);
     assert.equal(await settings.$eval('#choose-folder', (b) => b.disabled), false);
+    await settings.click('#restore-access');
+    await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready');
+    assert.equal(await settings.evaluate(() => window.restoreUserGesture), true);
+    assert.deepEqual(await settings.evaluate(() => window.restoreOptions), { mode: 'read' });
     await settings.reload();
     await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready');
 

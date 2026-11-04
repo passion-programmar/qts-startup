@@ -1,5 +1,14 @@
 # QTS development handoff
 
+## Folder picker correction - 4 November 2026
+
+Current setup: choose **Downloads/QTS_Resume itself**, not Downloads. The previous instructions were wrong: Chromium blocks broad directory grants to the Downloads root while allowing eligible subfolders. Source: https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/browser/file_system_access/chrome_file_system_access_permission_context.cc (Downloads uses kDontBlockChildren, which blocks the specified directory/parents).
+
+The picker now validates the explicitly selected QTS_Resume folder, keeps the existing applyPdfDownloadsDirectoryV1 handle store, and offers Allow saved folder access when a stored grant needs a new read prompt. No automatic permission prompt or file selection occurs. Both local PDF upload and relink readers resolve canonical QTS_Resume/... metadata relative to a direct QTS_Resume handle, without duplicating that segment. Existing parent-folder handles remain supported. All saved server paths/filenames and original bytes stay unchanged; no server/schema/production data change or rendering is needed. Folder-name validation rejects Downloads/job subfolders without replacing the old grant. Fresh Manager checks and session invalidation remain in both selection/reauthorization paths.
+
+Validation: 37/37 folder/local-reader/relink/recovery/Assisted Apply Node tests passed; the corrected folder integration passed with a real structured-cloned QTS_Resume handle persisted through a full Chrome restart, explicit user-gesture read reauthorization, and original-byte uploads in Apply and Auto Apply. The normal Apply recovery E2E also passed with a direct QTS_Resume handle. The first folder run reached restart/byte checks but failed its obsolete permission-guidance text assertion; updated it to require the new explicit reauthorization instruction/button, then reran successfully. Changed-source lint and diff checks passed. These browser tests still substitute the OS picker with an origin-private directory; native OS selection/consent is not claimed automated. The previously untested real Downloads restriction is now documented and the UI no longer asks for that blocked scope. Backend and TypeScript sources are unchanged, so no server build/migration is required for this extension-only fix.
+
+
 ## Current migration request: 3 November 2026
 
 The user requested the remaining project migration, superseding the earlier lack of migration approval below. Migration 0088 is now applied and verified on the user-identified Production branch. No commit, push or deployment was requested or performed. Older migration-readiness statements below describe historical task results; this section and the Task 7 status are current.

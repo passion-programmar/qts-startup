@@ -1055,7 +1055,7 @@ async function fetchApplyDocuments(attemptId) {
 
   try {
     const savedFolder = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY);
-    if (!savedFolder?.value) throw new Error('Choose the Downloads folder in the extension before running Apply.');
+    if (!savedFolder?.value) throw new Error('Choose the QTS_Resume folder inside Downloads in the extension before running Apply.');
     const reused = await self.__qtsApplyLocalPdfs.readApplyDocuments(savedFolder.value, response.documents);
     return {
       folder: response.documents.resumePath.slice(0, response.documents.resumePath.lastIndexOf('/')),

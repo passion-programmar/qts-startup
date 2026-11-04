@@ -1,5 +1,7 @@
 # Legacy PDF recovery design
 
+4 November correction: grant the QTS_Resume subfolder directly, because Chromium restricts selecting Downloads itself. Readers preserve the same canonical QTS_Resume/... server paths and remain compatible with existing parent-directory grants; the recovery authorization/write design is unchanged. See CODEX_HANDOFF.md for follow-up validation.
+
 Status: design approved; normal Apply implementation validated, 3 November 2026. Auto Apply-specific work is deferred at the user's request. Approval covers the limited recovery implementation and guarded metadata update. Production-data execution, eligibility changes and deployments remain unauthorized in this task. User separately confirms migration 0088 is complete and authorizes local commits. Implementation evidence is recorded in CODEX_HANDOFF.md.
 
 ## Verified problem and existing boundaries

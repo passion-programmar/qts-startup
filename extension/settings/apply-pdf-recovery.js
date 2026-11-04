@@ -33,7 +33,7 @@
   async function requireRoot() {
     const stored = await globalThis.__qtsScannerDocumentStore.getSetting(globalThis.__qtsApplyLocalPdfs.SETTING_KEY);
     const directory = stored?.value;
-    if (!directory || await directory.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('Read access is unavailable. Choose Downloads folder again, then Reload recovery.');
+    if (!directory || await directory.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('Read access is unavailable. Choose QTS_Resume folder again, then Reload recovery.');
     return directory;
   }
   async function reload() {

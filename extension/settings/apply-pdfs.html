@@ -27,8 +27,9 @@
 <body>
   <main>
     <h1>Apply PDFs folder</h1>
-    <p>Choose the Downloads folder containing <strong>QTS_Resume</strong>. Apply and Auto Apply will read the existing résumé and cover-letter PDFs saved by Generation.</p>
-    <button id="choose-folder" type="button" disabled>Choose Downloads folder</button>
+    <p>Open Downloads and choose the <strong>QTS_Resume</strong> subfolder itself. Chrome blocks selecting the entire Downloads folder. Apply and Auto Apply will read the existing résumé and cover-letter PDFs saved by Generation.</p>
+    <button id="choose-folder" type="button" disabled>Choose QTS_Resume folder</button>
+    <button id="restore-access" type="button" hidden disabled>Allow saved folder access</button>
     <p id="folder-status" role="status" aria-live="polite">Checking Manager access…</p>
     <p>Folder access is saved for this Chrome profile. Choose the folder again if access is revoked. Then return to the job page and choose Apply or Auto Apply.</p>
     <section id="recovery" hidden aria-labelledby="recovery-title">

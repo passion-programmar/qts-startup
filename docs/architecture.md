@@ -126,8 +126,9 @@ use the built-in `pdf-lib` renderer, which enforces the same limits. The Resume
 page also prints in extension Chrome first and uses the server route as fallback.
 Apply and Auto Apply require the exact résumé and cover-letter PDFs saved by
 Generation. Their completed local paths are persisted with the delivered job
-metadata and read from a user-authorized Downloads folder in this Chrome
-profile. If either file is missing, invalid, or inaccessible, Apply stops with
+metadata and read from the user-authorized QTS_Resume subfolder inside Downloads
+in this Chrome profile. Saved parent-folder grants remain compatible.
+If either file is missing, invalid, or inaccessible, Apply stops with
 an actionable error; it never invokes Chrome or server PDF rendering.
 A Generation run opens one pinned ChatGPT tab at the Manager's configured ChatGPT
 Project URL (default `https://chatgpt.com/`; only HTTPS ChatGPT URLs are allowed).

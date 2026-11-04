@@ -14,7 +14,7 @@
   }
 
   async function readPdf(directoryHandle, path) {
-    const segments = safePathSegments(path);
+    const segments = relativePathSegments(directoryHandle, path);
     const filename = segments.pop();
     if (/[\\/\u0000-\u001f]/.test(filename)) throw new Error('The Apply PDF filename is invalid.');
     let targetDirectory = directoryHandle;
@@ -33,6 +33,12 @@
       mimeType: 'application/pdf',
       base64: global.__qtsApplyPdf.toBase64(bytes),
     };
+  }
+
+  function relativePathSegments(directoryHandle, path) {
+    const segments = safePathSegments(path);
+    // Metadata remains Downloads-relative. A direct grant to QTS_Resume already covers that segment.
+    return directoryHandle?.name === 'QTS_Resume' ? segments.slice(1) : segments;
   }
 
   async function readApplyDocuments(directoryHandle, documents) {
@@ -58,6 +64,7 @@
   global.__qtsApplyLocalPdfs = Object.freeze({
     SETTING_KEY,
     safePathSegments,
+    relativePathSegments,
     readApplyDocuments,
   });
   if (typeof module !== 'undefined' && module.exports) module.exports = global.__qtsApplyLocalPdfs;

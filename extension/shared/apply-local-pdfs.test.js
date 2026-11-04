@@ -82,6 +82,19 @@ test('rejects unsafe paths and never approximates missing filenames', async () =
   );
 });
 
+test('a direct QTS_Resume grant reads exact saved Downloads-relative paths without a second QTS_Resume segment', async () => {
+  const { root, reads } = directoryTree(applyFiles());
+  const qts = await root.getDirectoryHandle('QTS_Resume');
+  qts.name = 'QTS_Resume';
+  reads.length = 0;
+  const reused = await localPdfs.readApplyDocuments(qts, metadata);
+  assert.deepEqual(Buffer.from(reused.resume.base64, 'base64'), pdf);
+  assert.deepEqual(Buffer.from(reused.coverLetter.base64, 'base64'), pdf);
+  assert.equal(reads.includes('dir:QTS_Resume'), false);
+  assert.equal(reused.resume.filename, 'Candidate (1).pdf');
+  await assert.rejects(localPdfs.readApplyDocuments(qts, { ...metadata, resumePath: 'QTS_Resume/../outside.pdf' }), /invalid/);
+});
+
 test('rejects missing résumé or cover letter, empty files, and invalid PDF headers', async () => {
   const noResume = applyFiles();
   noResume.delete(`/${resumePath}`);

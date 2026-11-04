@@ -117,7 +117,7 @@ test('normal Apply explicitly relinks exact original PDFs, handles conflicts, st
         const stream = await (await folder.getFileHandle(name, { create: true })).createWritable();
         await stream.write(new Uint8Array(bytes)); await stream.close();
       }
-      await self.__qtsScannerDocumentStore.putSetting(self.__qtsApplyLocalPdfs.SETTING_KEY, downloads);
+      await self.__qtsScannerDocumentStore.putSetting(self.__qtsApplyLocalPdfs.SETTING_KEY, await downloads.getDirectoryHandle('QTS_Resume'));
     }, paths, originalResume, originalCover);
     console.log('[relink] original local files ready');
     const action = (name) => control.evaluate((action) => chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action }), name);

@@ -7,9 +7,12 @@
     return parts.slice(0, -1).join('/');
   }
   async function folder(root, context) {
-    if (!root || await root.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('Read access is unavailable. Choose Downloads folder again, then reload the file list.');
+    parent(context.resumePath);
+    if (!root || await root.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('Read access is unavailable. Choose QTS_Resume folder again, then reload the file list.');
     let directory = root;
-    for (const part of parent(context.resumePath).split('/')) directory = await directory.getDirectoryHandle(part);
+    const parts = global.__qtsApplyLocalPdfs.relativePathSegments(root, context.resumePath);
+    parts.pop();
+    for (const part of parts) directory = await directory.getDirectoryHandle(part);
     return directory;
   }
   async function list(root, context) {

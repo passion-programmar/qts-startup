@@ -1,5 +1,7 @@
 # QTS task status
 
+Folder follow-up, 4 November 2026: select **Downloads/QTS_Resume itself**, not Downloads. Corrected the blocked parent-folder setup and both client readers; added explicit saved-handle read reauthorization. Existing parent grants and exact server paths remain supported. 37/37 targeted Node tests plus folder/recovery browser integrations passed. No server/schema change is needed. See the latest handoff section.
+
 Work one task at a time. Finish validation, review its diff, update this file and CODEX_HANDOFF.md, and report results before proceeding. Tasks 1 and 2 are accepted. The Task 3 design is approved; implement only Task 3 and stop after reporting its results.
 
 | Task | Status | Required outcome / approval boundary |

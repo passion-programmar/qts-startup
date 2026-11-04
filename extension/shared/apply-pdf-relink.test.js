@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+require('./apply-local-pdfs.js');
 const api = require('./apply-pdf-relink.js');
 
 function fixture() {
@@ -39,9 +40,19 @@ test('explicit selections preserve names/bytes and local-only fingerprints detec
   assert.deepEqual(state.creates, []);
 });
 
+test('recovery lists and reads within a direct QTS_Resume grant without changing canonical paths', async () => {
+  const { root, state, context } = fixture();
+  root.name = 'QTS_Resume';
+  await api.list(root, context);
+  assert.deepEqual(state.walked, ['Manager', 'Run']);
+  const selected = await api.read(root, context, 'Name (1).pdf', 'Letter (2).pdf');
+  assert.equal(selected[0].name, 'Name (1).pdf');
+  assert.equal(context.resumePath, 'QTS_Resume/Manager/Run/Name.pdf');
+});
+
 test('missing/revoked access, missing files and invalid PDFs never trigger alternative selection', async () => {
   const { root, state, context } = fixture();
-  await assert.rejects(api.list(null, context), /Choose Downloads folder again/);
+  await assert.rejects(api.list(null, context), /Choose QTS_Resume folder again/);
   state.permission = 'prompt'; await assert.rejects(api.read(root, context, 'Name.pdf', 'Letter (2).pdf'), /Read access/);
   assert.deepEqual(state.reads, []);
   state.permission = 'granted';
