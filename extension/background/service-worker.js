@@ -10,6 +10,7 @@ importScripts(
   '../shared/job-detect.js',
   '../shared/job-detection-url-rules.js',
   '../shared/get-jd-save-payload.js',
+  '../shared/get-jd-notifications.js',
   '../shared/api-prefetch.js',
   '../shared/custom-gpt.js',
   '../shared/chatgpt-url.js',
@@ -80,6 +81,7 @@ async function isWorkflowTab(tabId, tab = null) {
   return Boolean(await tabOwnership.ownerOf(tabId, windowId));
 }
 const GET_JD_RESULTS_KEY = 'qtsGetJdResults';
+const GET_JD_NOTIFICATION_STATE_KEY = 'qtsGetJdNotificationState';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
 const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
 const GENERATION_BROWSER_STATE_KEY = 'qtsGenerationBrowserState';
@@ -1248,7 +1250,46 @@ async function writeGetJdResult(tabId, result, notifyPage = true) {
       type: 'QTS_GET_JD_RESULT_UPDATED',
       result,
     }).catch(() => {});
+    publishGetJdResultNotification(tabId, result).catch((error) => {
+      console.warn('[QTS Get JD] Could not update notification history:', error);
+    });
   }
+}
+
+let getJdNotificationWrites = Promise.resolve();
+function publishGetJdResultNotification(tabId, result) {
+  const work = getJdNotificationWrites.catch(() => {}).then(async () => {
+    const auth = await chrome.storage.local.get(['authExpiresAt']);
+    if (!(Number(auth.authExpiresAt) > Date.now())) return;
+    const stored = await chrome.storage.local.get([GET_JD_NOTIFICATION_STATE_KEY]);
+    const update = self.__qtsGetJdNotifications.recordResult(
+      stored[GET_JD_NOTIFICATION_STATE_KEY],
+      result,
+      tabId,
+    );
+    if (!update.changed) return;
+    await chrome.storage.local.set({ [GET_JD_NOTIFICATION_STATE_KEY]: update.state });
+    await deliverGetJdNotificationBatch(update.state.batch);
+  });
+  getJdNotificationWrites = work;
+  return work;
+}
+
+async function deliverGetJdNotificationBatch(batch) {
+  if (!Number.isFinite(batch?.dismissAt) || Date.now() >= batch.dismissAt) return;
+  const auth = await chrome.storage.local.get(['authExpiresAt']);
+  if (!(Number(auth.authExpiresAt) > Date.now())) return;
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab?.id || !(await launcherFocus.isActive(tab.id))) return;
+  await chrome.tabs.sendMessage(tab.id, {
+    type: 'QTS_GET_JD_NOTIFICATION_SUMMARY',
+    summary: batch,
+  }, { frameId: 0 }).catch(() => {});
+}
+
+async function deliverCurrentGetJdNotificationBatch() {
+  const stored = await chrome.storage.local.get([GET_JD_NOTIFICATION_STATE_KEY]);
+  return deliverGetJdNotificationBatch(stored[GET_JD_NOTIFICATION_STATE_KEY]?.batch);
 }
 
 async function readGetJdResultForTab(tabId) {
@@ -1510,6 +1551,14 @@ async function canAutoCloseGetJdTab(tabId, url) {
 // Manager, so the tab closes after a countdown when that is allowed; a 'notice' keeps it open with
 // a badge and the actions that can resolve it.
 async function showGetJdOutcome(tabId, url, outcome) {
+  if (outcome.kind !== 'clear') {
+    readGetJdResultForTab(tabId).then((result) => {
+      if (result) return publishGetJdResultNotification(tabId, result);
+      return undefined;
+    }).catch((error) => {
+      console.warn('[QTS Get JD] Could not publish the completed notification:', error);
+    });
+  }
   const autoClose = await isGetJdAutoCloseOn();
   const closable = outcome.kind === 'done' && autoClose && await canAutoCloseGetJdTab(tabId, url);
   await cancelGetJdClose(tabId);
@@ -6912,6 +6961,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
       chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false }).catch(() => {});
       // Reviews contain the previous Manager's candidates and must not survive a session change.
       chrome.storage.local.remove(GET_JD_RESULTS_KEY).catch(() => {});
+      chrome.storage.local.remove(GET_JD_NOTIFICATION_STATE_KEY).catch(() => {});
       getJdInFlightTabs.clear();
       getJdLastPageByTab.clear();
     }
@@ -7204,7 +7254,7 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  launcherFocus.sync().catch(() => {});
+  launcherFocus.sync().then(deliverCurrentGetJdNotificationBatch).catch(() => {});
   const tab = await getTab(activeInfo.tabId);
   const onPinnedGpt = await isPinnedGptTab(activeInfo.tabId);
   if (tab?.url && !onPinnedGpt && (await isAutoApplyArmed())) {
@@ -7225,7 +7275,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url;
   if (!url || !isExtractablePageUrl(url)) return;
   if (changeInfo.status === 'complete') {
-    if (tab.active) launcherFocus.sync().catch(() => {});
+    if (tab.active) launcherFocus.sync().then(deliverCurrentGetJdNotificationBatch).catch(() => {});
     (async () => {
       if (await isAutoApplyArmed()) maybeDetectApplyMethodOnOpen(tabId, url);
       maybeTrackAutoOpen(tabId, url);
@@ -7295,6 +7345,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 // On worker restart only restore UI ownership. No Get JD scan is scheduled.
 launcherFocus.sync().catch(() => {});
+deliverCurrentGetJdNotificationBatch().catch((error) => {
+  console.warn('[QTS Get JD] Could not restore the live notification summary:', error);
+});
 getJdNavigation.restore().catch(() => {});
 
 // Where each tab's page was opened from, for the job's source site (Bids): the tab whose link

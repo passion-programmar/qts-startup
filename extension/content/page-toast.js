@@ -17,6 +17,9 @@
 
   let host = null;
   let stack = null;
+  let getJdSummaryToast = null;
+  let getJdSummarySnapshotKey = '';
+  let getJdSummaryTimer = null;
 
   function normalizeType(type) {
     const value = String(type || 'info').toLowerCase();
@@ -58,7 +61,7 @@
         background: var(--tint); color: var(--accent); font: 800 15px/1 system-ui, sans-serif;
         box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
       }
-      .text { padding-top: 6px; overflow-wrap: anywhere; }
+      .text { padding-top: 6px; overflow-wrap: anywhere; white-space: pre-line; }
       .close {
         display: grid; place-items: center; width: 24px; height: 24px; margin-top: 4px; padding: 0;
         border: 0; border-radius: 8px; background: transparent; color: #64748b;
@@ -99,7 +102,7 @@
     if (!toast.isConnected || toast.classList.contains('leaving')) return;
     clearTimeout(toast.__qtsHideTimer);
     toast.classList.add('leaving');
-    setTimeout(() => toast.remove(), EXIT_MS);
+    toast.__qtsExitTimer = setTimeout(() => toast.remove(), EXIT_MS);
   }
 
   function scheduleHide(toast, remainingMs) {
@@ -156,14 +159,142 @@
 
     container.prepend(toast);
     const active = [...container.children].filter((node) => !node.classList.contains('leaving'));
-    for (const stale of active.slice(MAX_VISIBLE)) dismiss(stale);
+    for (const stale of active.slice(MAX_VISIBLE)) {
+      if (stale !== getJdSummaryToast) dismiss(stale);
+    }
     scheduleHide(toast, durationMs);
   }
 
+  function getJdSummaryText(batch) {
+    const items = Array.isArray(batch?.items) ? batch.items : [];
+    const counts = globalThis.__qtsGetJdNotifications?.summarizeBatch(batch)
+      || { success: 0, failed: 0, skipped: 0, processing: 0, cancelled: 0 };
+    const latest = items[items.length - 1];
+    const details = [];
+    if (items.length > 1) details.push(`Get JD · ${items.length} results`);
+    else details.push(`Get JD · ${latest?.status || 'Processing'}`);
+    details.push(`Success ${counts.success} · Failed ${counts.failed} · Skipped ${counts.skipped} · Processing ${counts.processing} · Cancelled ${counts.cancelled}`);
+    if (latest?.pageTitle) details.push(latest.pageTitle.slice(0, 100));
+    else {
+      try { details.push(new URL(latest?.pageUrl || '').hostname); } catch { /* No source site is available. */ }
+    }
+    if (latest?.message && items.length === 1) {
+      details.push(latest.message.length > 180 ? `${latest.message.slice(0, 177)}...` : latest.message);
+    }
+    const timestamp = Number(latest?.updatedAt);
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      details.push(new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+    }
+    return details.join('\n');
+  }
+
+  function showGetJdSummary(batch) {
+    const items = Array.isArray(batch?.items) ? batch.items : [];
+    if (!items.length || !batch?.id) return;
+    const dismissAt = Number(batch.dismissAt);
+    if (Number.isFinite(dismissAt) && dismissAt <= Date.now()) return;
+    const snapshotKey = `${batch.id}:${batch.updatedAt || ''}`;
+    if (snapshotKey === getJdSummarySnapshotKey) return;
+    getJdSummarySnapshotKey = snapshotKey;
+    const counts = globalThis.__qtsGetJdNotifications?.summarizeBatch(batch)
+      || { success: 0, failed: 0, skipped: 0, processing: 0, cancelled: 0 };
+    const type = counts.failed ? 'error'
+      : counts.processing ? 'warn'
+        : (counts.skipped || counts.cancelled) && !counts.success ? 'info' : 'success';
+    const container = ensureStack();
+    host.setAttribute('data-qts-get-jd-summary-id', batch.id);
+    const toast = getJdSummaryToast || document.createElement('div');
+    getJdSummaryToast = toast;
+    if (toast.__qtsExitTimer) clearTimeout(toast.__qtsExitTimer);
+    toast.classList.remove('leaving');
+    toast.className = `toast ${type}`;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    toast.replaceChildren();
+
+    const icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = ICONS[type];
+    const body = document.createElement('div');
+    body.className = 'text';
+    body.textContent = getJdSummaryText(batch);
+    const close = document.createElement('button');
+    close.className = 'close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Dismiss Get JD notification');
+    close.textContent = '×';
+    close.addEventListener('click', () => dismissGetJdSummary());
+    const progress = document.createElement('span');
+    progress.className = 'progress';
+    progress.style.setProperty('--duration', '5000ms');
+    toast.append(icon, body, close, progress);
+
+    if (!toast.parentNode) container.prepend(toast);
+    if (!toast.__qtsGetJdListenersAttached) {
+      toast.addEventListener('mouseenter', () => {
+        toast.__qtsHovering = true;
+        if (getJdSummaryTimer) clearTimeout(getJdSummaryTimer);
+        toast.__qtsRemainingMs = Math.max(0, toast.__qtsRemainingMs - (Date.now() - toast.__qtsHideStartedAt));
+      });
+      toast.addEventListener('mouseleave', () => {
+        toast.__qtsHovering = false;
+        scheduleGetJdSummaryHide(Math.max(toast.__qtsRemainingMs, 1200));
+      });
+      toast.__qtsGetJdListenersAttached = true;
+    }
+    if (getJdSummaryTimer) clearTimeout(getJdSummaryTimer);
+    toast.__qtsRemainingMs = Number.isFinite(dismissAt)
+      ? Math.min(5000, dismissAt - Date.now())
+      : 5000;
+    if (!toast.__qtsHovering) scheduleGetJdSummaryHide(toast.__qtsRemainingMs);
+  }
+
+  function scheduleGetJdSummaryHide(durationMs) {
+    const toast = getJdSummaryToast;
+    if (!toast) return;
+    clearTimeout(getJdSummaryTimer);
+    toast.__qtsHideStartedAt = Date.now();
+    toast.__qtsRemainingMs = durationMs;
+    getJdSummaryTimer = setTimeout(() => dismissGetJdSummary(), durationMs);
+  }
+
+  function dismissGetJdSummary() {
+    if (getJdSummaryTimer) clearTimeout(getJdSummaryTimer);
+    getJdSummaryTimer = null;
+    const toast = getJdSummaryToast;
+    if (toast) {
+      clearTimeout(toast.__qtsExitTimer);
+      toast.remove();
+    }
+    host?.removeAttribute('data-qts-get-jd-summary-id');
+    getJdSummaryToast = null;
+  }
+
+  function onRuntimeMessage(message) {
+    if (message?.type === 'QTS_GET_JD_NOTIFICATION_SUMMARY') showGetJdSummary(message.summary);
+  }
+
   function clear() {
-    if (stack) stack.replaceChildren();
+    if (getJdSummaryTimer) clearTimeout(getJdSummaryTimer);
+    getJdSummaryTimer = null;
+    getJdSummaryToast = null;
+    getJdSummarySnapshotKey = '';
+    if (stack) {
+      for (const toast of stack.children) {
+        clearTimeout(toast.__qtsHideTimer);
+        clearTimeout(toast.__qtsExitTimer);
+      }
+      stack.replaceChildren();
+    }
+    host?.removeAttribute('data-qts-get-jd-summary-id');
     recentKeys.clear();
   }
 
-  globalThis.__qtsPageToast = { show, clear };
+  chrome.runtime?.onMessage?.addListener(onRuntimeMessage);
+  window.addEventListener('pagehide', () => {
+    clear();
+    chrome.runtime?.onMessage?.removeListener(onRuntimeMessage);
+  }, { once: true });
+
+  globalThis.__qtsPageToast = { show, clear, showGetJdSummary };
 })();

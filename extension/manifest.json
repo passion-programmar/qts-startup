@@ -16,6 +16,7 @@
       "js": [
         "shared/page-exclusions.js",
         "shared/text-highlighting.js",
+        "shared/get-jd-notifications.js",
         "content/text-highlighter.js",
         "content/page-toast.js",
         "content/page-launcher.js"

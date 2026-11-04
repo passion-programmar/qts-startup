@@ -92,6 +92,16 @@ The supported browser-extension workflow is deliberately narrow:
     cannot be restored, so the retry reopens it and reuses saved answers.
 7. Sign Out clears persisted extension authentication and Get JD status.
 
+Get JD notifications consume the worker's individual result snapshots and
+deduplicate updates by tab and `runId`. The worker keeps the latest 20 operation
+records in local extension storage and persists the current two-second
+aggregation batch alongside that history. It sends the live batch to the
+focused, eligible page without replaying expired batches after a reload or
+worker restart. The shared Shadow DOM toast stays at the page's top-left,
+updates in place, and resets its five-second dismissal timer when a result
+changes. Sign Out clears notification history along with the stored Get JD
+results.
+
 The extension enables the Get JD Gemini capability, but the server selects
 General mode by default and uses Gemini only when Super Admin assigns Gemini
 matching to that Manager. The in-page preview is local extraction; General mode
