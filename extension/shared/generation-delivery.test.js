@@ -15,8 +15,10 @@ const failureTab = source.slice(source.indexOf('  async function handleQueuedGen
 
 function pipeline({ printError = false, technicalFailure = false, interrupted = false } = {}) {
   const events = [];
+  const completedDownloads = new Map();
+  let nextDownloadId = 0;
   const files = ['resume', 'cover-letter', 'jd'].map((document) => ({
-    downloadPath: `QTS_Resume/Manager/Candidate/${document}.${document === 'jd' ? 'txt' : 'pdf'}`,
+    downloadPath: `QTS_Resume/Manager/Candidate/${document === 'resume' ? 'Radu' : document === 'cover-letter' ? 'Radu_Cover_Letter' : 'job-description'}.${document === 'jd' ? 'txt' : 'pdf'}`,
     mimeType: document === 'jd' ? 'text/plain;charset=utf-8' : 'application/pdf',
     ...(document === 'jd' ? { base64: 'SkQ=' } : { printDocument: document }),
   }));
@@ -30,18 +32,32 @@ function pipeline({ printError = false, technicalFailure = false, interrupted = 
         return technicalFailure ? null : { resume: 'UERG', 'cover-letter': 'UERG' };
       } },
     },
-    chrome: { runtime: {}, downloads: { download: (options, done) => {
-      events.push(`download:${options.filename}`);
-      done(events.length);
-    } } },
+    chrome: { runtime: {}, downloads: {
+      download: (options, done) => {
+        events.push(`download:${options.filename}`);
+        const id = ++nextDownloadId;
+        const uniquified = options.filename.endsWith('Radu.pdf')
+          ? options.filename.replace('Radu.pdf', 'Radu (1).pdf')
+          : options.filename.endsWith('Radu_Cover_Letter.pdf')
+            ? options.filename.replace('Radu_Cover_Letter.pdf', 'Radu_Cover_Letter (2).pdf')
+            : options.filename;
+        completedDownloads.set(id, {
+          id,
+          state: 'complete',
+          filename: `C:\\Users\\E2E\\Downloads\\${uniquified.replaceAll('/', '\\')}`,
+        });
+        done(id);
+      },
+      search: (query, done) => done([completedDownloads.get(query.id)]),
+    } },
     ensureQueuedGenerationIsActive: async () => {},
     showGenerationChatGptStep: async (_tabId, step, message) => events.push(`step:${step}:${message}`),
     waitForQueuedDownload: async () => {
       events.push('download-complete');
       if (interrupted) throw new Error('Chrome interrupted a file download.');
     },
-    workerApiRequest: async (_method, url) => {
-      if (url.endsWith('/finalize')) { events.push('finalize'); return { success: true }; }
+    workerApiRequest: async (_method, url, body) => {
+      if (url.endsWith('/finalize')) { events.push('finalize'); context.finalizedBody = body; return { success: true }; }
       if (url.endsWith('&print=chrome')) return { success: true, print: { template: 'minimal', data: {} }, files };
       events.push('server-print');
       return { success: true, files: files.map((file) => ({ ...file, base64: 'UERG' })) };
@@ -72,6 +88,8 @@ test('Generation accepts all three downloads before finalizing and reporting del
     assert.ok(events.some((event) => event.includes('Downloading files')));
     assert.ok(events.lastIndexOf('download-complete') < events.indexOf('finalize'));
     assert.equal(events.at(-1), 'delivered');
+    assert.match(context.finalizedBody.downloadedPdfPaths.resume, /Radu \(1\)\.pdf$/);
+    assert.match(context.finalizedBody.downloadedPdfPaths.coverLetter, /Radu_Cover_Letter \(2\)\.pdf$/);
     assert.equal(events.includes('server-print'), technicalFailure);
   }
 });

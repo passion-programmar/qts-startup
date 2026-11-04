@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Apply PDFs folder — QTS</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.6 system-ui, sans-serif; color: #e2e8f0; background: #0a0f1c; }
+    body { max-width: 620px; margin: 64px auto; padding: 0 24px; }
+    main { padding: 28px; border: 1px solid #243047; border-radius: 16px; background: #0d1526; }
+    h1 { margin: 0; font-size: 24px; }
+    p { color: #cbd5e1; }
+    button { padding: 12px 18px; border: 1px solid #6366f1; border-radius: 10px; background: #4f46e5; color: white; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+    #folder-status { min-height: 3.2em; overflow-wrap: anywhere; }
+    [data-state="ready"] { color: #6ee7b7; }
+    [data-state="revoked"], [data-state="error"], [data-state="denied"] { color: #fca5a5; }
+    #recovery { border-top: 1px solid #243047; margin-top: 28px; padding-top: 20px; }
+    select { display: block; width: 100%; margin: 8px 0 16px; padding: 10px; font: inherit; }
+    #recovery-details, #recovery-status { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #recovery a { display: block; color: #93c5fd; margin: 8px 0; }
+    #recovery label { display: block; margin: 16px 0; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Apply PDFs folder</h1>
+    <p>Choose the Downloads folder containing <strong>QTS_Resume</strong>. Apply and Auto Apply will read the existing résumé and cover-letter PDFs saved by Generation.</p>
+    <button id="choose-folder" type="button" disabled>Choose Downloads folder</button>
+    <p id="folder-status" role="status" aria-live="polite">Checking Manager access…</p>
+    <p>Folder access is saved for this Chrome profile. Choose the folder again if access is revoked. Then return to the job page and choose Apply or Auto Apply.</p>
+    <section id="recovery" hidden aria-labelledby="recovery-title">
+      <h2 id="recovery-title">Link original PDFs</h2>
+      <p>Select both original files for this job. QTS will save their exact paths and keep Apply paused. File contents stay on this computer.</p>
+      <p id="recovery-details"></p>
+      <button id="reload-recovery" type="button">Reload recovery</button>
+      <fieldset id="recovery-fields" disabled>
+        <legend>Existing PDFs in the recorded folder</legend>
+        <label>Résumé PDF <select id="resume-file"><option value="">Select the original résumé PDF</option></select></label>
+        <label>Cover-letter PDF <select id="cover-file"><option value="">Select the original cover-letter PDF</option></select></label>
+        <a id="preview-resume" hidden target="_blank" rel="noopener">Open selected résumé PDF</a>
+        <a id="preview-cover" hidden target="_blank" rel="noopener">Open selected cover-letter PDF</a>
+        <p id="selected-files"></p>
+        <label><input id="confirm-originals" type="checkbox" disabled> I reviewed both files and confirm they are the original résumé and cover letter for this candidate and job.</label>
+        <button id="save-links" type="button" disabled>Save links</button>
+      </fieldset>
+      <p id="recovery-status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="../shared/scanner-document-store.js"></script>
+  <script src="../shared/apply-local-pdfs.js"></script>
+  <script src="apply-pdfs.js"></script>
+  <script src="../shared/apply-pdf-relink.js"></script>
+  <script src="apply-pdf-recovery.js"></script>
+</body>
+</html>

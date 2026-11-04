@@ -108,6 +108,25 @@ test('the panel shows the account, the job, two copy buttons, the profile cards,
   });
 });
 
+test('a paused PDF error stays actionable and offers an explicit Retry autofill without removing manual controls', { skip }, async () => {
+  const reason = 'The saved PDF paths are unavailable. Cancel and ask your QTS administrator to check the existing PDF paths.';
+  await withPanel(FORM, { ...STATE, retryFill: true, status: 'Autofill paused. Resolve the issue below, then choose Retry autofill.', problems: [{ message: reason, fieldId: null }] }, async (page, panel) => {
+    assert.ok((await panel.text()).includes(reason));
+    assert.match(await panel.text(), /Autofill paused.*Retry autofill/s);
+    await panel.click('.retry-fill');
+    const actions = (await panel.sent()).filter((m) => m.action !== 'fields_changed');
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].action, 'retry_fill');
+    assert.equal(actions[0].assist, true);
+    assert.equal(actions[0].attemptId, STATE.attemptId);
+    await panel.click('.retry-fill');
+    assert.equal((await panel.sent()).filter((m) => m.action === 'retry_fill').length, 1, 'double click cannot queue another retry');
+    await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), STATE);
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.retry-fill')), null);
+    assert.match(await panel.text(), /Submitted.*Cancel/s);
+  });
+});
+
 test('the copy buttons copy the résumé and job, and each card item copies its own value', { skip }, async () => {
   await withPanel(FORM, STATE, async (page, panel) => {
     await panel.click('.copy-all', 'Copy résumé + JD');
@@ -245,6 +264,16 @@ test('new boxes on the page (a pop-up, the next step, a section shown) tell the 
     const hiddenAdded = await settled();
     await page.evaluate(() => { document.querySelector('#lk').parentElement.hidden = false; });
     assert.equal(await settled(), hiddenAdded + 1);
+  });
+});
+
+test('opening PDF recovery preserves a usable paused panel and explicit Retry', { skip }, async () => {
+  await withPanel(FORM, { ...STATE, retryFill: true, relinkPdfs: true }, async (page, panel) => {
+    await panel.click('.link-pdfs');
+    assert.equal((await panel.sent()).at(-1).action, 'link_pdfs');
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.retry-fill').disabled), false);
+    await panel.click('.retry-fill');
+    assert.equal((await panel.sent()).at(-1).action, 'retry_fill');
   });
 });
 

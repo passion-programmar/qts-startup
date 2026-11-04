@@ -659,6 +659,8 @@
               <button class="btn btn-primary btn-sm" id="btn-apply" type="button">Apply</button>
               <button class="btn btn-ghost btn-sm hidden" id="btn-connect-account-mailbox" type="button">Connect Account Gmail</button>
             </div>
+            <button class="btn btn-ghost btn-sm hidden" id="btn-apply-pdf-folder" type="button">Choose Downloads folder for Apply PDFs</button>
+            <p class="site-discovery-status hidden" id="apply-pdf-folder-status" role="status" aria-live="polite"></p>
             <p class="site-discovery-status" id="site-discovery-status" role="status" aria-live="polite">Scanner has not scanned this step yet.</p>
             <p class="site-discovery-status hidden" id="account-mailbox-status" role="status" aria-live="polite"></p>
           </section>
@@ -957,6 +959,7 @@
   <script src="../shared/account-auth-storage.js"></script>
   <script src="../shared/apply-session-store.js"></script>
   <script src="../shared/scanner-document-store.js"></script>
+  <script src="../shared/apply-local-pdfs.js"></script>
   <script src="../shared/scanner-job-context.js"></script>
   <script src="../shared/scanner-output-paths.js"></script>
   <script src="api-client.js"></script>

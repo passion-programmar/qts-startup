@@ -157,7 +157,10 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/extension/apply/review') { log.reviews += 1; return json({ success: true }); }
     if (url.pathname === '/api/extension/apply/documents') {
       log.documents += 1;
-      return json({ success: true, documents: { folder: 'C:\\test-folder', resume: { filename: 'CV.pdf', base64: pdf }, coverLetter: { filename: 'Cover.pdf', base64: pdf } } });
+      return json({ success: true, documents: {
+        resumePath: 'QTS_Resume/Manager/Candidate/Run/CV.pdf',
+        coverLetterPath: 'QTS_Resume/Manager/Candidate/Run/Cover.pdf',
+      } });
     }
     if (url.pathname === '/api/extension/apply/submitted') { log.submitted.push(data); return json({ success: true }); }
     if (url.pathname === '/api/extension/apply/result') { log.results.push(data); return json({ success: true, result: 'confirmed' }); }
@@ -208,6 +211,22 @@ test('normal Apply navigates safely, fills saved values, and pauses for manual a
         qtsApplyDryRun: false, qtsExtensionStatus: 'apply', qtsBrowserName: 'E2E Chrome',
       });
     }, BASE);
+    await workerEval((documentPdf) => {
+      Object.defineProperty(self, '__qtsScannerDocumentStore', {
+        configurable: true,
+        value: { getSetting: async () => ({ value: {} }) },
+      });
+      Object.defineProperty(self, '__qtsApplyLocalPdfs', {
+        configurable: true,
+        value: {
+          SETTING_KEY: 'applyPdfDownloadsDirectoryV1',
+          readApplyDocuments: async () => ({
+            resume: { filename: 'CV.pdf', base64: documentPdf, mimeType: 'application/pdf' },
+            coverLetter: { filename: 'Cover.pdf', base64: documentPdf, mimeType: 'application/pdf' },
+          }),
+        },
+      });
+    }, pdf);
     await workerEval(() => { self.__qtsApplyRunner.processApplyQueue(); });
     const tabs = () => workerEval(async () => (await chrome.tabs.query({})).map((tab) => ({ id: tab.id, url: tab.url || tab.pendingUrl || '', active: tab.active })));
     const tabFor = async (part) => (await tabs()).find((tab) => tab.url.includes(part));

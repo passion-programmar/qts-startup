@@ -1700,6 +1700,7 @@ async function reviewScannerDocument(documentFile, documentType, account, fieldQ
 }
 
 const SCANNER_OUTPUT_DIRECTORY_SETTING = 'scannerOutputDirectoryV2';
+const APPLY_PDF_DOWNLOADS_DIRECTORY_SETTING = window.__qtsApplyLocalPdfs.SETTING_KEY;
 
 async function getScannerOutputDirectoryHandle() {
   const store = window.__qtsScannerDocumentStore;
@@ -1735,6 +1736,37 @@ function updateScannerOutputFolderStatus(handle) {
 async function restoreScannerOutputFolderStatus() {
   const handle = await getScannerOutputDirectoryHandle();
   updateScannerOutputFolderStatus(handle);
+}
+
+async function selectApplyPdfDownloadsDirectory() {
+  if (typeof window.showDirectoryPicker !== 'function') {
+    throw new Error('This Chrome version does not support choosing a Downloads folder.');
+  }
+  const directory = await window.showDirectoryPicker({ mode: 'read', startIn: 'downloads' });
+  let permission = await directory.queryPermission({ mode: 'read' });
+  if (permission !== 'granted') permission = await directory.requestPermission({ mode: 'read' });
+  if (permission !== 'granted') throw new Error('Read access was not granted for the selected Downloads folder.');
+  await window.__qtsScannerDocumentStore.putSetting(APPLY_PDF_DOWNLOADS_DIRECTORY_SETTING, directory);
+  await restoreApplyPdfDownloadsDirectoryStatus();
+}
+
+async function restoreApplyPdfDownloadsDirectoryStatus() {
+  const status = document.getElementById('apply-pdf-folder-status');
+  const button = document.getElementById('btn-apply-pdf-folder');
+  if (!status || !button) return;
+  status.classList.remove('hidden');
+  const saved = await window.__qtsScannerDocumentStore.getSetting(APPLY_PDF_DOWNLOADS_DIRECTORY_SETTING);
+  const directory = saved?.value;
+  if (!directory) {
+    button.textContent = 'Choose Downloads folder for Apply PDFs';
+    status.textContent = 'Choose the shared Downloads folder once to reuse Generation PDFs during Apply.';
+    return;
+  }
+  button.textContent = 'Change Downloads folder for Apply PDFs';
+  const permission = await directory.queryPermission({ mode: 'read' });
+  status.textContent = permission === 'granted'
+    ? `Local PDF reuse is ready from ${directory.name}.`
+    : `Access to ${directory.name} is unavailable. Choose the folder again before Apply; PDFs are never regenerated during Apply.`;
 }
 
 async function assertScannerOutputDirectoryReady() {
@@ -3492,6 +3524,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (status) {
         status.classList.remove('hidden');
         status.textContent = error?.message || 'Could not select the generated-files folder.';
+      }
+    });
+  });
+  document.getElementById('btn-apply-pdf-folder')?.addEventListener('click', () => {
+    selectApplyPdfDownloadsDirectory().catch((error) => {
+      if (error?.name === 'AbortError') return;
+      const status = document.getElementById('apply-pdf-folder-status');
+      if (status) {
+        status.classList.remove('hidden');
+        status.textContent = error?.message || 'Could not select the Downloads folder for Apply.';
       }
     });
   });
@@ -7063,6 +7105,16 @@ function updateFeatureGatedControls(user) {
     });
   } else {
     document.getElementById('scanner-output-folder-status')?.classList.add('hidden');
+  }
+  const applyPdfFolderButton = document.getElementById('btn-apply-pdf-folder');
+  const canConfigureApplyPdfFolder = managerMode && applicationEnabled && managerExtensionFeatures.canUseApply;
+  applyPdfFolderButton?.classList.toggle('hidden', !canConfigureApplyPdfFolder);
+  if (canConfigureApplyPdfFolder) {
+    restoreApplyPdfDownloadsDirectoryStatus().catch((error) => {
+      console.warn('Could not restore the Apply PDF folder setting:', error);
+    });
+  } else {
+    document.getElementById('apply-pdf-folder-status')?.classList.add('hidden');
   }
   const canManageHighlights = highlightsEnabled
     && managerMode

@@ -296,6 +296,7 @@ async function initializeQtsPageLauncher() {
     ['text_highlights', 'Highlight', '✎', 'text-highlights'],
     ['page_exclusions', 'Site Setting', '⊘', 'page-exclusions'],
     ['auto_apply_custom_urls', 'Custom URLs', '↗', 'custom-urls'],
+    ['apply_pdf_folder', 'Apply PDFs folder', '▤', 'apply-pdf-folder'],
     ['session', 'Sign In', '↪', 'logout'],
   ];
   // Today's counts, above the actions: new job URLs (each job once), job rows added, applications.
@@ -333,6 +334,7 @@ async function initializeQtsPageLauncher() {
     button.className = `action ${className}`;
     button.type = 'button';
     button.dataset.action = action;
+    if (action === 'apply_pdf_folder') button.hidden = true;
     button.setAttribute('aria-label', label);
     const iconElement = document.createElement('span');
     iconElement.className = 'action-icon';
@@ -861,12 +863,14 @@ async function initializeQtsPageLauncher() {
     const highlightButton = menu.querySelector('[data-action="text_highlights"]');
     const exclusionsButton = menu.querySelector('[data-action="page_exclusions"]');
     const customUrlsButton = menu.querySelector('[data-action="auto_apply_custom_urls"]');
-    if (!highlightButton && !exclusionsButton && !customUrlsButton) return;
+    const applyPdfFolderButton = menu.querySelector('[data-action="apply_pdf_folder"]');
+    if (!highlightButton && !exclusionsButton && !customUrlsButton && !applyPdfFolderButton) return;
     const signedIn = await syncSessionAction();
     if (!signedIn) {
       if (highlightButton) highlightButton.hidden = true;
       if (exclusionsButton) exclusionsButton.hidden = true;
       if (customUrlsButton) customUrlsButton.hidden = true;
+      if (applyPdfFolderButton) applyPdfFolderButton.hidden = true;
       toolsHeading.hidden = true;
       return;
     }
@@ -884,10 +888,14 @@ async function initializeQtsPageLauncher() {
       customUrlsButton.hidden = response?.ok !== true || response.canManageJobDetectionUrlRules !== true;
       customUrlsButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
     }
+    if (applyPdfFolderButton) {
+      applyPdfFolderButton.hidden = response?.ok !== true || response.canUseApply !== true;
+    }
     toolsHeading.hidden = Boolean(
       highlightButton?.hidden !== false
       && exclusionsButton?.hidden !== false
       && customUrlsButton?.hidden !== false
+      && applyPdfFolderButton?.hidden !== false
     );
   }
 

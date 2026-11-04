@@ -29,6 +29,8 @@ importScripts(
   '../shared/apply-answers.js',
   '../shared/apply-recipes.js',
   '../shared/apply-pdf.js',
+  '../shared/apply-local-pdfs.js',
+  '../shared/scanner-document-store.js',
   '../shared/idle-pacing.js',
   '../vendor/pdf-lib/pdf-lib.min.js',
   '../shared/chrome-pdf.js',
@@ -3994,6 +3996,27 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
+  async function getCompletedDownloadPath(downloadId, requestedPath) {
+    const item = await new Promise((resolve, reject) => {
+      chrome.downloads.search({ id: downloadId }, (items) => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(`Could not read the completed download path: ${error.message}`));
+        else resolve(items?.[0] || null);
+      });
+    });
+    if (item?.state !== 'complete' || typeof item.filename !== 'string') {
+      throw new Error('Chrome did not report the completed PDF download path.');
+    }
+
+    const normalizedFilename = item.filename.replaceAll('\\', '/');
+    const normalizedRequested = requestedPath.replaceAll('\\', '/');
+    const requestedFolder = normalizedRequested.slice(0, normalizedRequested.lastIndexOf('/'));
+    const marker = `/${requestedFolder}/`;
+    const folderIndex = normalizedFilename.toLowerCase().lastIndexOf(marker.toLowerCase());
+    if (folderIndex < 0) throw new Error('The completed PDF was not saved in its expected Generation folder.');
+    return `${requestedFolder}/${normalizedFilename.slice(folderIndex + marker.length)}`;
+  }
+
   /**
    * The three download files, with the two PDFs printed in this Chrome (shared/chrome-pdf.js).
    * An older server sends them printed already; when printing here fails, QTS prints them as before.
@@ -4029,6 +4052,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       throw new Error(artifactResult.message || 'QTS could not prepare the three download files.');
     }
     const files = validateApplicationDownloadFiles(artifactResult.files);
+    const downloadedPdfPaths = {};
     for (const [index, file] of files.entries()) {
       await ensureQueuedGenerationIsActive(jobId);
       const fileName = file.downloadPath.split('/').at(-1) || 'file';
@@ -4040,6 +4064,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       const downloadId = await startApplicationFileDownload(file);
       downloadIds.push(downloadId);
       await waitForQueuedDownload(downloadId, jobId);
+      if (file.mimeType === 'application/pdf') {
+        const actualPath = await getCompletedDownloadPath(downloadId, file.downloadPath);
+        if (file.downloadPath.endsWith('_Cover_Letter.pdf')) downloadedPdfPaths.coverLetter = actualPath;
+        else downloadedPdfPaths.resume = actualPath;
+      }
       await showGenerationChatGptStep(
         chatTabId,
         '6/6 · Downloading files',
@@ -4048,6 +4077,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       );
     }
     await ensureQueuedGenerationIsActive(jobId);
+    if (!downloadedPdfPaths.resume || !downloadedPdfPaths.coverLetter) {
+      throw new Error('Chrome did not report both completed Generation PDF paths.');
+    }
+    return downloadedPdfPaths;
   }
 
   async function handleQueuedGenerationFailureTab(chatTab, answerSaved, reason) {
@@ -4341,7 +4374,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           await updateGenerationBrowserState({ phase: 'downloading' });
           // The PDFs are printed in a hidden tab of the ChatGPT window, out of the Manager's way.
           const printWindowId = (await getTab(chatTab.id))?.windowId;
-          await downloadQueuedGenerationFiles(
+          const downloadedPdfPaths = await downloadQueuedGenerationFiles(
             result.generationId,
             queuedJob.id,
             downloadIds,
@@ -4352,7 +4385,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           const finalized = await workerApiRequest(
             'POST',
             '/api/extension/generation/finalize',
-            { jobId: queuedJob.id, generationId: result.generationId },
+            { jobId: queuedJob.id, generationId: result.generationId, downloadedPdfPaths },
           );
           if (!finalized.success) {
             throw new Error(finalized.message || 'QTS could not finish the queued job.');
@@ -5550,6 +5583,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true, message: 'Signed out.' });
         return;
       }
+      if (action === 'apply_pdf_folder') {
+        const access = await getManagerExtensionFeatures(true);
+        if (access.success !== true || access.features?.canUseApply !== true) {
+          sendResponse({ ok: false, error: access.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+          return;
+        }
+        await chrome.tabs.create({ url: chrome.runtime.getURL('settings/apply-pdfs.html') });
+        sendResponse({ ok: true });
+        return;
+      }
       // Get JD's switch is separate from the work slot, so it has its own Cancel.
       if (action === 'cancel_get_jd') {
         await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
@@ -6293,6 +6336,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     getManagerExtensionFeatures(msg.refresh === true, msg.localOnly === true)
       .then((result) => sendResponse({
         ok: result.success === true,
+        canUseApply: result.success === true && result.features?.canUseApply === true,
         canManageTextHighlights: result.features?.canManageTextHighlights === true,
         canManagePageExclusions: result.features?.canManagePageExclusions === true,
         canManageJobDetectionUrlRules: result.features?.canManageJobDetectionUrlRules === true,
@@ -6304,6 +6348,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((error) => sendResponse({
         ok: false,
         canManageTextHighlights: false,
+        canUseApply: false,
         canManagePageExclusions: false,
         canManageJobDetectionUrlRules: false,
         error: error instanceof Error ? error.message : 'Could not verify text highlight permissions.',

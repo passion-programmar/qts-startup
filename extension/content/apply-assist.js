@@ -357,6 +357,11 @@
       busy = true;
       render();
       const reply = await send(action, typeof extra === 'function' ? extra() : extra);
+      // Opening recovery leaves this paused review in place; no new worker state will reset busy.
+      if (reply?.ok === true && action === 'link_pdfs') {
+        busy = false;
+        render();
+      }
       if (reply && reply.ok === false) {
         busy = false;
         state = { ...state, message: reply.error || 'That did not work.' };
@@ -541,6 +546,12 @@
     const foot = element('div', 'foot');
     if (state.message) foot.append(element('div', 'message', state.message));
     const actions = element('div', 'actions');
+    if (state.relinkPdfs) {
+      actions.append(actionButton('Link existing PDFs', 'link-pdfs', 'link_pdfs'));
+    }
+    if (state.retryFill) {
+      actions.append(actionButton('Retry autofill', 'retry-fill', 'retry_fill'));
+    }
     foot.append(element('div', 'note', 'Review QTS-filled values, complete the rest, click the site\'s Submit, then mark Submitted here.'));
     actions.append(
       actionButton('Submitted', 'submitted', 'submitted', () => ({ answers: currentAnswers() })),

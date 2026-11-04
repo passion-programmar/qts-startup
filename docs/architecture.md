@@ -109,11 +109,16 @@ Chrome renders the résumé and cover letter from the HTML templates in
 `public/resume-templates`, using the candidate's saved template and bundled
 fonts. Vercel supplies the print-job data and template assets but does not spend
 serverless CPU rendering those PDFs. The server-side `/api/pdf/print` Chromium
-renderer is the fallback for older extensions or local-print failure, and it
-is the only function that bundles Chromium. Both renderers enforce a three-page
+renderer is the fallback for Generation downloads from older extensions or
+local-print failure, and it is the only function that bundles Chromium. Both renderers enforce a three-page
 résumé and one-page cover-letter limit; technical server Chromium failures can
 use the built-in `pdf-lib` renderer, which enforces the same limits. The Resume
 page also prints in extension Chrome first and uses the server route as fallback.
+Apply and Auto Apply require the exact résumé and cover-letter PDFs saved by
+Generation. Their completed local paths are persisted with the delivered job
+metadata and read from a user-authorized Downloads folder in this Chrome
+profile. If either file is missing, invalid, or inaccessible, Apply stops with
+an actionable error; it never invokes Chrome or server PDF rendering.
 A Generation run opens one pinned ChatGPT tab at the Manager's configured ChatGPT
 Project URL (default `https://chatgpt.com/`; only HTTPS ChatGPT URLs are allowed).
 It starts a fresh chat from that URL for each job and replaces the tab after ten

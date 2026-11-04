@@ -1031,37 +1031,44 @@ async function waitForSiteFill(tabId) {
 }
 
 /**
- * The résumé and cover letter to upload, printed in a hidden tab of this application's window
- * (shared/chrome-pdf.js). An older server sends them printed already; when printing here fails,
- * QTS prints them, as before.
+ * The résumé and cover letter to upload, read from the exact files saved by Generation.
  */
-async function fetchApplyDocuments(attemptId, tabId) {
-  const path = `/api/extension/apply/documents?attemptId=${encodeURIComponent(attemptId)}`;
-  const forChrome = await workerApiRequest('GET', `${path}&print=chrome`);
-  if (forChrome.success === true && !forChrome.documents?.print) return forChrome.documents;
-  if (forChrome.success === true) {
-    const { print, ...documents } = forChrome.documents;
-    const printed = await self.__qtsChromePdf.printDocuments(print, {
-      serverUrl: await self.__qtsRuntimeConfig.getServerUrl(),
-      windowId: (await getTab(tabId))?.windowId,
-    });
-    if (printed) {
-      return {
-        ...documents,
-        resume: { ...documents.resume, base64: printed.resume },
-        coverLetter: { ...documents.coverLetter, base64: printed['cover-letter'] },
-      };
-    }
-  } else if (forChrome.retry !== true) {
-    throw new ApplyStop(forChrome.message || 'The résumé could not be prepared.', { skip: false });
+async function fetchApplyDocuments(attemptId) {
+  const missingPaths = 'The saved PDF paths are missing or unavailable for this application. Cancel and ask your QTS administrator to check the existing PDF paths and application access. Apply will not generate replacement PDFs.';
+  const response = await workerApiRequest(
+    'GET',
+    `/api/extension/apply/documents?attemptId=${encodeURIComponent(attemptId)}`,
+  );
+  if (response.success !== true || !response.documents) {
+    const stop = new ApplyStop(
+      response.code === 'PDF_RELINK_REQUIRED' ? response.message : response._httpStatus === 404
+        ? `${missingPaths} For a legacy generated job, stop Auto Apply and open the job in normal Apply to link its original PDFs.`
+        : response.message || 'The saved Generation PDFs could not be found. Retry Apply or contact your QTS administrator.',
+      { skip: false },
+    );
+    stop.relinkRequired = response.code === 'PDF_RELINK_REQUIRED';
+    throw stop;
   }
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await workerApiRequest('GET', path);
-    if (response.success === true) return response.documents;
-    if (response.retry !== true) throw new ApplyStop(response.message || 'The résumé could not be prepared.', { skip: false });
-    await sleep(5000);
+  if (![response.documents.resumePath, response.documents.coverLetterPath].every((path) => typeof path === 'string' && path.trim())) {
+    throw new ApplyStop(missingPaths, { skip: false });
   }
-  throw new ApplyStop('The résumé could not be printed right now; the job goes back to the list.', { skip: false });
+
+  try {
+    const savedFolder = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY);
+    if (!savedFolder?.value) throw new Error('Choose the Downloads folder in the extension before running Apply.');
+    const reused = await self.__qtsApplyLocalPdfs.readApplyDocuments(savedFolder.value, response.documents);
+    return {
+      folder: response.documents.resumePath.slice(0, response.documents.resumePath.lastIndexOf('/')),
+      resume: reused.resume,
+      coverLetter: reused.coverLetter,
+    };
+  } catch (error) {
+    const reason = typeof error?.message === 'string' && error.message ? error.message : 'The saved PDFs could not be read.';
+    throw new ApplyStop(
+      `Apply needs the existing Generation PDFs and will not regenerate them. ${reason} Open QTS > Tools > Apply PDFs folder to restore read access. Confirm both exact saved files are still in their Generation folder.`,
+      { skip: false },
+    );
+  }
 }
 
 /**
@@ -1179,9 +1186,11 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   let canAskAgain = false;
   const seen = new Set();
   const uploaded = new Set();
-  let documents = assist ? application.assistDocuments || null : null;
+  let documents = application.applyDocuments || (assist ? application.assistDocuments || null : null);
   const keepDocuments = (ready) => {
-    if (assist && ready?.resume?.base64) application.assistDocuments = ready;
+    if (!ready?.resume?.base64) return;
+    application.applyDocuments = ready;
+    if (assist) application.assistDocuments = ready;
   };
   let rechecked = false;
   // The step's report: every question met, how long each stage took, how many AI requests.
@@ -1369,16 +1378,13 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     // Apply") gets it before anything else, once per application. The form is then read again.
     const autofill = !application.resumeAutofillTried && fresh.find((field) => helpers.isAutofillUpload(field));
     if (autofill) {
-      application.resumeAutofillTried = true;
       if (!documents) {
-        try {
-          documents = await fetchApplyDocuments(application.attemptId, tabId);
-          application.documentsFolder = documents.folder;
-          keepDocuments(documents);
-        } catch {
-          documents = {};
-        }
+        documents = await fetchApplyDocuments(application.attemptId);
+        application.documentsFolder = documents.folder;
+        keepDocuments(documents);
       }
+      if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
+      application.resumeAutofillTried = true;
       if (documents?.resume?.base64) {
         const outcome = await fillAndCheck(tabId, autofill, { file: 'resume', source: 'documents' }, { ...documents.resume, mimeType: 'application/pdf' }, seen);
         if (outcome.ok) {
@@ -1435,15 +1441,11 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       return false;
     });
     if (!documents && Object.values(answers).some((answer) => answer.file)) {
-      try {
-        documents = await fetchApplyDocuments(application.attemptId, tabId);
-        application.documentsFolder = documents.folder;
-        keepDocuments(documents);
-      } catch (error) {
-        problem(`The résumé could not be prepared (${error instanceof Error ? error.message : 'unknown error'}); upload it by hand from the folder above.`, null, 'upload');
-        documents = {};
-      }
+      documents = await fetchApplyDocuments(application.attemptId);
+      application.documentsFolder = documents.folder;
+      keepDocuments(documents);
     }
+    if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
 
     // 1. The profile's answers, in page order; one the site does not take goes to ChatGPT.
     const rejected = [];
@@ -1944,6 +1946,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // New pages or safe navigation controls on an assistant's page.
     if (msg.action === 'fields_changed') {
       activeReviews.get(msg.attemptId)?.assistant?.poke(sender.tab?.id);
+      return { ok: true };
+    }
+    if (msg.action === 'retry_fill') {
+      return retryAssistedAutofill(msg.attemptId, sender.tab?.id);
+    }
+    if (msg.action === 'link_pdfs') {
+      const review = activeReviews.get(msg.attemptId);
+      if (sender.id !== chrome.runtime.id || !review?.assist || !tabsOf(review).has(sender.tab?.id)
+        || !review.assistant?.relinkRequired || !review.assistant.fillError || review.assistant.stopped
+        || !(await isApplyOn()) || await self.__qtsAutoApply?.isOn?.() === true) return { ok: false, error: 'This page no longer owns a recoverable application.' };
+      await chrome.tabs.create({ url: chrome.runtime.getURL(`settings/apply-pdfs.html?attemptId=${encodeURIComponent(msg.attemptId)}`) });
       return { ok: true };
     }
     if (['recheck', 'reuse_answer'].includes(msg.action)) {
@@ -2831,6 +2844,7 @@ async function resumeSubmittedApplication(record) {
 // only Submitted on the panel records the bid.
 const ASSIST_SOURCES = new Set(['documents', 'profile', 'reusable', 'consent']);
 const NORMAL_APPLY_SOURCES = new Set(['documents', 'profile', 'reusable']);
+const ASSIST_FILL_PAUSED_STATUS = 'Autofill paused. Resolve the issue below, then choose Retry autofill, or Cancel this application.';
 // Jobs cancelled in this Chrome since Apply was turned on: not opened again until Apply restarts.
 const APPLY_CANCELLED_KEY = 'qtsApplyCancelledJobs';
 
@@ -2859,7 +2873,11 @@ function rememberApplySession(review) {
   const tabIds = [...tabsOf(review)];
   if (!review.assist || !tabIds.length) return Promise.resolve();
   return changeApplySessions((sessions) => {
-    sessions[review.attemptId] = { jobId: review.job.id, company: review.job.company, title: review.job.title, tabIds };
+    sessions[review.attemptId] = {
+      jobId: review.job.id, company: review.job.company, title: review.job.title, tabIds,
+      ...(review.assistant?.fillError ? { fillError: review.assistant.fillError } : {}),
+      ...(review.assistant?.relinkRequired ? { relinkRequired: true } : {}),
+    };
   });
 }
 
@@ -2885,7 +2903,7 @@ async function resumeApplySessions(limit) {
       ? await workerApiRequest('POST', '/api/extension/apply/resume', { attemptId, jobId: saved.jobId })
       : null;
     if (reply?.success === true && reply.application) {
-      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds }));
+      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds, fillError: saved.fillError, relinkRequired: saved.relinkRequired }));
       continue;
     }
     for (const tabId of tabIds) await removeStalePanel(tabId);
@@ -2930,13 +2948,38 @@ chrome.storage.onChanged.addListener((changes, area) => {
   chrome.storage.session.remove(APPLY_CANCELLED_KEY).catch(() => {});
 });
 
+async function retryAssistedAutofill(attemptId, tabId) {
+  const review = activeReviews.get(attemptId);
+  const assistant = review?.assistant;
+  if (!review?.assist || !tabsOf(review).has(tabId) || !assistant || assistant.stopped || !(await isApplyOn())) {
+    return { ok: false, error: 'This page no longer owns an active Assisted Apply application. Turn Apply on again if needed.' };
+  }
+  if (!assistant.fillError) return { ok: false, error: 'Autofill is not paused.' };
+  if (assistant.navigationRuns.size || assistant.fillingTabs.size) {
+    return { ok: false, error: 'Autofill is still stopping. Choose Retry autofill again in a moment.' };
+  }
+  assistant.fillError = null;
+  assistant.relinkRequired = false;
+  assistant.problems = [];
+  assistant.formSignatures.clear();
+  assistant.navigationAttempts.clear();
+  await rememberApplySession(review);
+  if (assistant.stopped || activeReviews.get(attemptId) !== review || !(await isApplyOn())) {
+    return { ok: false, error: 'Apply stopped. Autofill was not restarted.' };
+  }
+  assistant.poke(tabId);
+  return { ok: true };
+}
+
 async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
+  const active = () => !assistant.stopped && activeReviews.get(application.attemptId)?.assistant === assistant;
+  if (!active() || assistant.fillError) return;
   const signature = await inForm(tabId, () => {
     const api = globalThis.__qtsApplyForm;
     const fields = api.scanForAssist().filter((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account);
     return fields.map((field) => `${field.id}:${field.label}:${field.kind}:${field.filled ? 1 : 0}`).join('|');
   }).catch(() => null);
-  if (signature == null || assistant.formSignatures.get(tabId) === signature) return;
+  if (!active() || assistant.fillError || signature == null || assistant.formSignatures.get(tabId) === signature) return;
   assistant.formSignatures.set(tabId, signature);
   const filledFields = assistant.filledFields.get(tabId) || new Set();
   assistant.filledFields.set(tabId, filledFields);
@@ -2947,8 +2990,9 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
     const filled = await fillFormPage(tabId, application, keepAlive, 1, {
       assist: true,
       skip: (field) => filledFields.has(field.id),
-      stop: async () => assistant.stopped || !activeReviews.has(application.attemptId),
+      stop: async () => !active() || Boolean(assistant.fillError),
     });
+    if (!active() || assistant.fillError) return;
     for (const answer of Object.values(filled.used || {})) if (answer.fieldId) filledFields.add(answer.fieldId);
     assistant.problems = filled.problems || [];
     const count = Object.keys(filled.used || {}).length;
@@ -2956,9 +3000,19 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
       ? `Filled ${count} saved answer${count === 1 ? '' : 's'}. Review them, complete the rest, then submit on the employer site.`
       : 'Form ready. QTS found no additional saved values to fill; complete the form and submit on the employer site.';
   } catch (error) {
+    if (!active() || assistant.fillError) return;
     assistant.formSignatures.delete(tabId);
-    assistant.status = 'Application form detected. Complete any fields QTS could not fill, then submit on the employer site.';
-    if (!(error instanceof ApplyStop)) {
+    if (error instanceof ApplyStop) {
+      // A lifecycle stop must not resurrect the panel or offer a retry after Cancel/lost ownership.
+      if (error.keepTab === false) return;
+      assistant.fillError = error.message;
+      assistant.relinkRequired = error.relinkRequired === true;
+      assistant.status = ASSIST_FILL_PAUSED_STATUS;
+      assistant.problems = [{ message: error.message, fieldId: null }];
+      assistant.pendingNavigation.clear();
+      await rememberApplySession(activeReviews.get(application.attemptId));
+    } else {
+      assistant.status = 'Application form detected. Complete any fields QTS could not fill, then submit on the employer site.';
       assistant.problems = [{
         message: `Could not fill saved values on the application form: ${error instanceof Error ? error.message : String(error)}`,
         fieldId: null,
@@ -2967,7 +3021,7 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
     }
   } finally {
     assistant.fillingTabs.delete(tabId);
-    await assistant.show();
+    if (active()) await assistant.show();
   }
 }
 
@@ -2977,7 +3031,7 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
  */
 async function assistFillPass(tabId, application, assistant, keepAlive) {
   const tab = await getTab(tabId);
-  if (!tab || assistant.stopped) return;
+  if (!tab || assistant.stopped || assistant.fillError) return;
   const pageInfo = await inForm(tabId, () => {
     const api = globalThis.__qtsApplyForm;
     const page = api.classifyPage();
@@ -3000,10 +3054,11 @@ async function assistFillPass(tabId, application, assistant, keepAlive) {
   assistant.navigationAttempts.set(tabId, pageInfo.key);
   try {
     const formTab = await reachApplicationForm(tab, (opened) => assistant.onTab(opened), application, { handleAccountSteps: false });
-    if (assistant.stopped) return;
+    if (assistant.stopped || assistant.fillError) return;
     assistant.onTab(formTab);
     await fillVisibleAssistForm(formTab.id, application, assistant, keepAlive);
   } catch (error) {
+    if (assistant.stopped || assistant.fillError || activeReviews.get(application.attemptId)?.assistant !== assistant) return;
     assistant.problems = [{
       message: error instanceof ApplyStop
         ? error.message
@@ -3028,7 +3083,7 @@ function panelProfile(candidate) {
  * deleted. Cancel, closing all its tabs, Apply turned off, or an error record nothing: the job stays
  * as it was (not opened again in this Chrome until Apply restarts). No goes back to the form.
  */
-async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null } = {}) {
+async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null, fillError = null, relinkRequired = false } = {}) {
   const { attemptId } = application;
   let renewedAt = Date.now();
   let leaseSeconds = 0;
@@ -3058,8 +3113,11 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   activeReviews.set(attemptId, review);
   publishApplyState();
   const assistant = {
-    problems: [], message: null, show: null, stopped: false,
-    status: 'QTS follows safe Start/Continue steps; on visible forms it fills only saved documents, profile facts, and reusable answers. You handle everything else and submit.',
+    problems: typeof fillError === 'string' && fillError ? [{ message: fillError, fieldId: null }] : [],
+    fillError: typeof fillError === 'string' && fillError ? fillError : null,
+    relinkRequired: Boolean(fillError) && relinkRequired === true,
+    message: null, show: null, stopped: false,
+    status: fillError ? ASSIST_FILL_PAUSED_STATUS : 'QTS follows safe Start/Continue steps; on visible forms it fills only saved documents, profile facts, and reusable answers. You handle everything else and submit.',
     navigationAttempts: new Map(),
     navigationRuns: new Map(),
     pendingNavigation: new Set(),
@@ -3072,7 +3130,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     },
     // Follow safe navigation actions when a page loads or its controls change.
     poke(tabId) {
-      if (tabId == null || assistant.stopped || !tabsOf(review).has(tabId)) return;
+      if (tabId == null || assistant.stopped || assistant.fillError || !tabsOf(review).has(tabId)) return;
       if (assistant.navigationRuns.has(tabId)) {
         assistant.pendingNavigation.add(tabId);
         return;
@@ -3084,7 +3142,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
         .finally(() => {
           if (assistant.navigationRuns.get(tabId) !== run) return;
           assistant.navigationRuns.delete(tabId);
-          if (assistant.pendingNavigation.delete(tabId) && !assistant.stopped) assistant.poke(tabId);
+          if (assistant.pendingNavigation.delete(tabId) && !assistant.stopped && !assistant.fillError) assistant.poke(tabId);
         });
       assistant.navigationRuns.set(tabId, run);
     },
@@ -3117,6 +3175,8 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     message: assistant.message,
     status: assistant.status,
     filling: assistant.fillingTabs.size > 0,
+    retryFill: Boolean(assistant.fillError) && !assistant.stopped && !assistant.fillingTabs.size,
+    relinkPdfs: Boolean(assistant.fillError) && assistant.relinkRequired === true && !assistant.stopped,
     problems: assistant.problems,
     ...extra,
   });
@@ -3335,6 +3395,39 @@ async function processApplyQueue() {
     await self.__qtsFinishWorkCancellation?.();
   }
 }
+
+// Only the extension-origin recovery page can request metadata for its still-owned paused review.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== 'QTS_APPLY_PDF_RECOVERY') return false;
+  (async () => {
+    const page = new URL(chrome.runtime.getURL('settings/apply-pdfs.html'));
+    let source;
+    try { source = new URL(sender.url); } catch { return { ok: false, error: 'Open recovery from the application panel.' }; }
+    const review = activeReviews.get(msg.attemptId);
+    const owns = async () => review?.assist && activeReviews.get(msg.attemptId) === review
+      && review.assistant?.fillError && review.assistant.relinkRequired && !review.assistant.stopped
+      && await isApplyOn() && await self.__qtsAutoApply?.isOn?.() !== true;
+    if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || source.protocol !== page.protocol || source.host !== page.host
+      || source.pathname !== page.pathname || source.searchParams.get('attemptId') !== msg.attemptId
+      || !(await owns())) return { ok: false, error: 'This Chrome no longer owns a paused normal Apply review. Stop Auto Apply and open the job in normal Apply first.' };
+    if (msg.action === 'check') return { ok: true };
+    let response;
+    if (msg.action === 'context') {
+      response = await workerApiRequest('GET', `/api/extension/apply/documents?attemptId=${encodeURIComponent(msg.attemptId)}&recovery=1`, null, { timeoutMs: 20000 });
+    } else if (msg.action === 'save') {
+      const keys = ['attemptId', 'generationId', 'expectedResumePath', 'expectedCoverLetterPath', 'resumePath', 'coverLetterPath'];
+      const input = msg.input;
+      if (!input || input.attemptId !== msg.attemptId || Object.keys(input).length !== keys.length
+        || keys.some((key) => !Object.hasOwn(input, key) || !(input[key] === null || typeof input[key] === 'string' && input[key].length <= 500))) {
+        return { ok: false, error: 'Only the confirmed relative PDF paths and recovery identifiers can be saved.' };
+      }
+      response = await workerApiRequest('POST', '/api/extension/apply/documents/relink', input, { timeoutMs: 20000 });
+    } else return { ok: false, error: 'Unknown recovery action.' };
+    if (!(await owns())) return { ok: false, error: 'Apply stopped while recovery was pending. Links may have saved; autofill was not restarted.' };
+    return { ok: response.success === true, recovery: response.recovery, error: response.message, status: response._httpStatus };
+  })().then(sendResponse, (error) => sendResponse({ ok: false, error: error.message || 'PDF recovery failed. Keep Apply paused.' }));
+  return true;
+});
 
 // "Apply this page": the launcher on a job page asks which of the Manager's accounts have this job
 // (generated, no bid), then starts the one chosen in that very tab. Only while Apply is on; a job

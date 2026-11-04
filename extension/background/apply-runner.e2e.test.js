@@ -134,7 +134,10 @@ const server = http.createServer((req, res) => {
       return json({ success: true, reply: aiReply(prompt) });
     }
     if (url.pathname === '/api/extension/apply/documents') {
-      return json({ success: true, documents: { folder: 'C:\\test-folder', resume: { filename: 'Radu_Star_CV.pdf', base64: pdf }, coverLetter: { filename: 'Radu_Star_Cover.pdf', base64: pdf } } });
+      return json({ success: true, documents: {
+        resumePath: 'QTS_Resume/Manager/Candidate/Run/Radu_Star_CV (1).pdf',
+        coverLetterPath: 'QTS_Resume/Manager/Candidate/Run/Radu_Star_Cover (2).pdf',
+      } });
     }
     if (url.pathname === '/api/extension/apply/release') { log.released = JSON.parse(body || '{}'); return json({ success: true }); }
     return json({ success: true });
@@ -167,6 +170,28 @@ test('the real runner applies to a two-step form: profile, documents, dependent 
         qtsApplyDryRun: true, qtsApplyDebug: true, qtsExtensionStatus: 'apply', qtsBrowserName: 'E2E Chrome',
       });
     }, BASE);
+    await worker.evaluate((documentPdf) => {
+      Object.defineProperty(self, '__qtsScannerDocumentStore', {
+        configurable: true,
+        value: { getSetting: async () => ({ value: {} }) },
+      });
+      Object.defineProperty(self, '__qtsApplyLocalPdfs', {
+        configurable: true,
+        value: {
+          SETTING_KEY: 'applyPdfDownloadsDirectoryV1',
+          readApplyDocuments: async (_folder, paths) => {
+            if (!paths.resumePath.endsWith('Radu_Star_CV (1).pdf')
+              || !paths.coverLetterPath.endsWith('Radu_Star_Cover (2).pdf')) {
+              throw new Error('Apply did not use the exact saved PDF paths.');
+            }
+            return {
+              resume: { filename: 'Radu_Star_CV (1).pdf', base64: documentPdf, mimeType: 'application/pdf' },
+              coverLetter: { filename: 'Radu_Star_Cover (2).pdf', base64: documentPdf, mimeType: 'application/pdf' },
+            };
+          },
+        },
+      });
+    }, pdf);
     await worker.evaluate(() => { self.__qtsApplyRunner.processApplyQueue(); });
     for (let waited = 0; waited < 180000 && !log.released; waited += 1000) await new Promise((resolve) => setTimeout(resolve, 1000));
     await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -206,6 +231,7 @@ test('the real runner applies to a two-step form: profile, documents, dependent 
     assert.equal(state.lvl, 'Expert');
     // One AI request per batch of open questions (two rounds on step 1, one on step 2), no repeats.
     assert.equal(log.aiPrompts.length, 3);
+    assert.equal(log.requests.some((request) => request.includes('/api/pdf/print')), false);
     // The step reports: what was verified, what needs the Manager, and why.
     const [first, second] = reports;
     assert.equal(first.step, 1);

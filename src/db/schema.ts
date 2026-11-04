@@ -518,6 +518,7 @@ export const jobs = pgTable(
     status: jobStatus("status").default("todo").notNull(),
     failureReason: text("failure_reason"),
     resumeLocalPath: text("resume_local_path"),
+    coverLetterLocalPath: text("cover_letter_local_path"),
     // Where the generated PDFs are saved on Google Drive, when they are uploaded.
     googleDrivePath: text("google_drive_path"),
     // The prompt version and template of the delivered Generation, shown on Jobs and Bids.

@@ -29,8 +29,31 @@ test('launcher follows tab switches and window moves and restores old tabs witho
     const worker = await (await browser.waitForTarget(t => t.type() === 'service_worker')).worker();
     await worker.evaluate(base => chrome.storage.local.set({ qtsServerUrl: base, authToken: 'synthetic', authExpiresAt: Date.now() + 3600000, qtsSessionUser: { id: 'synthetic-manager', role: 'manager' }, qtsGetJdOn: false }), base);
     const mounted = page => page.evaluate(() => Boolean(document.querySelector('[data-qts-page-launcher]')));
+    const summaryId = page => page.evaluate(() => document.querySelector('[data-qts-page-toast]')?.getAttribute('data-qts-get-jd-summary-id') || '');
     const oneLauncher = async index => { const states = await Promise.all(pages.map(mounted)); return states[index] && states.filter(Boolean).length === 1; };
     for (const index of [0, 1, 0, 1]) { await pages[index].bringToFront(); await wait('launcher must follow old tab without toolbar click', () => oneLauncher(index)); }
+    const batch = await worker.evaluate(() => ({
+      id: 'cross-tab-get-jd-test',
+      startedAt: Date.now() - 3000,
+      expiresAt: Date.now() - 1000,
+      dismissAt: Date.now() + 5000,
+      updatedAt: Date.now(),
+      items: [{ operationId: 'test-run', status: 'success', pageTitle: 'Synthetic result', updatedAt: Date.now() }],
+    }));
+    await worker.evaluate(async batch => chrome.storage.local.set({ qtsGetJdNotificationState: { history: [], batch } }), batch);
+    await pages[0].bringToFront();
+    await wait('live Get JD summary follows the active eligible tab', async () => (await summaryId(pages[0])) === batch.id);
+    assert.equal(await summaryId(pages[1]), '', 'background tabs do not receive active-page summaries');
+    await worker.evaluate(async () => chrome.storage.local.set({
+      qtsGetJdNotificationState: {
+        history: [],
+        batch: { id: 'expired-get-jd-test', dismissAt: Date.now() - 1, items: [] },
+      },
+    }));
+    await pages[1].bringToFront();
+    await wait('launcher follows the tab after the live summary expires', () => oneLauncher(1));
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(await summaryId(pages[1]), '', 'expired summaries are not replayed on tab changes');
     const fresh = await browser.newPage(); pages.push(fresh);
     await fresh.goto(base + '/slow-page', { waitUntil: 'domcontentloaded' });
     await wait('launcher visible before the image finishes', () => oneLauncher(2));

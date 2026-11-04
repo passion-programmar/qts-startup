@@ -34,6 +34,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!uuidPattern.test(jobId) || !uuidPattern.test(generationId)) {
     return NextResponse.json({ success: false, message: "Valid Generation IDs are required." }, { status: 400 });
   }
+  if (!isRecord(body.downloadedPdfPaths)) {
+    return NextResponse.json({ success: false, message: "The completed résumé and cover-letter download paths are required." }, { status: 400 });
+  }
 
   try {
     const [run] = await db
@@ -73,13 +76,19 @@ export async function POST(request: Request): Promise<NextResponse> {
       company: run.company,
       createdAt: run.createdAt,
     });
+    const resumeLocalPath = validateDownloadedPdfPath(body.downloadedPdfPaths.resume, downloadPaths.resume);
+    const coverLetterLocalPath = validateDownloadedPdfPath(body.downloadedPdfPaths.coverLetter, downloadPaths.coverLetter);
+    if (!resumeLocalPath || !coverLetterLocalPath) {
+      return NextResponse.json({ success: false, message: "Chrome did not report the expected completed PDF files." }, { status: 400 });
+    }
     const [, delivered] = await db.batch([
       db.update(jobs)
         .set({
           generationStatus: "completed",
           generationError: null,
           generationLeaseExpiresAt: null,
-          resumeLocalPath: downloadPaths.resume,
+          resumeLocalPath,
+          coverLetterLocalPath,
           // The prompt version and template this Generation used, shown on Jobs and Bids.
           promptId: run.promptId,
           pdfTemplate: run.pdfTemplate,
@@ -112,7 +121,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             eq(jobs.id, jobId),
             eq(jobs.managerId, manager.id),
             eq(jobs.generationStatus, "completed"),
-            eq(jobs.resumeLocalPath, downloadPaths.resume),
+            eq(jobs.resumeLocalPath, resumeLocalPath),
           ))),
         ))
         .returning({ id: generationRuns.id }),
@@ -122,6 +131,33 @@ export async function POST(request: Request): Promise<NextResponse> {
         { success: false, message: "The queued job is no longer processing." },
         { status: 409 },
       );
+    }
+
+    function validateDownloadedPdfPath(value: unknown, expectedPath: string): string | null {
+      if (typeof value !== "string" || value.length > 500 || value.includes("\\")) return null;
+      const parts = value.split("/");
+      if (
+        !value.startsWith("QTS_Resume/")
+        || parts.some((part) => !part || part === "." || part === ".." || /[\u0000-\u001f]/.test(part))
+      ) return null;
+
+      const expectedParts = expectedPath.split("/");
+      const folder = expectedParts.slice(0, -1).join("/");
+      if (parts.slice(0, -1).join("/") !== folder) return null;
+
+      const expectedFilename = expectedParts.at(-1)!;
+      const extensionIndex = expectedFilename.lastIndexOf(".");
+      const stem = expectedFilename.slice(0, extensionIndex);
+      const extension = expectedFilename.slice(extensionIndex);
+      const actualFilename = parts.at(-1)!;
+      return actualFilename === expectedFilename
+        || new RegExp(`^${escapeRegExp(stem)} \\(\\d+\\)${escapeRegExp(extension)}$`, "i").test(actualFilename)
+        ? value
+        : null;
+    }
+
+    function escapeRegExp(value: string): string {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
     return NextResponse.json({ success: true, jobId, generationId });
   } catch (error) {

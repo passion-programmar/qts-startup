@@ -265,7 +265,10 @@ const server = http.createServer((req, res) => {
       return;
     }
     if (url.pathname === '/api/extension/apply/documents') {
-      return json({ success: true, documents: { folder: 'C:\\test-folder', resume: { filename: 'Ana_Test_CV.pdf', base64: pdf }, coverLetter: { filename: 'Ana_Test_Cover.pdf', base64: pdf } } });
+      return json({ success: true, documents: {
+        resumePath: 'QTS_Resume/Manager/Candidate/Run/Ana_Test_CV.pdf',
+        coverLetterPath: 'QTS_Resume/Manager/Candidate/Run/Ana_Test_Cover.pdf',
+      } });
     }
     if (url.pathname === '/api/extension/apply/check-answers') {
       mock.checks.push(data);
@@ -339,6 +342,23 @@ async function launch({ ai = 'off' } = {}) {
       qtsSessionUser: { id: 'e2e', role: 'manager', displayName: 'E2E' }, qtsApplyDebug: true, qtsBrowserName: 'E2E Chrome', qtsAutoApplyAi: choice,
     });
   }, BASE, ai);
+  ctx.installApplyPdfs = () => ctx.worker.evaluate((documentPdf) => {
+    Object.defineProperty(self, '__qtsScannerDocumentStore', {
+      configurable: true,
+      value: { getSetting: async () => ({ value: {} }) },
+    });
+    Object.defineProperty(self, '__qtsApplyLocalPdfs', {
+      configurable: true,
+      value: {
+        SETTING_KEY: 'applyPdfDownloadsDirectoryV1',
+        readApplyDocuments: async () => ({
+          resume: { filename: 'Ana_Test_CV.pdf', base64: documentPdf, mimeType: 'application/pdf' },
+          coverLetter: { filename: 'Ana_Test_Cover.pdf', base64: documentPdf, mimeType: 'application/pdf' },
+        }),
+      },
+    });
+  }, pdf);
+  await ctx.installApplyPdfs();
   ctx.installAiMock = () => ctx.worker.evaluate(() => {
     // Keep browser tests offline while exercising Auto Apply's ChatGPT path and serialization.
     applyChatTab = async () => -1;
@@ -349,6 +369,7 @@ async function launch({ ai = 'off' } = {}) {
     };
   });
   await ctx.installAiMock();
+  await ctx.installApplyPdfs();
   if (process.env.QTS_E2E_TRACE) console.log('[trace] storage set');
   // An extension page to send the panel's actions from, as the launcher does.
   const control = await browser.newPage();
@@ -395,26 +416,31 @@ async function panelNodes(page) {
   return { client, doc };
 }
 async function clickPanelButton(page, label) {
-  const { client, doc } = await panelNodes(page);
-  try {
-    const found = [];
-    const walk = (node) => {
-      if (node.nodeName === 'BUTTON') found.push(node);
-      for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) walk(child);
-    };
-    walk(doc);
-    for (const node of found) {
-      const { outerHTML } = await client.send('DOM.getOuterHTML', { nodeId: node.nodeId });
-      if (outerHTML.replace(/<[^>]+>/g, '').trim() !== label) continue;
-      const { model } = await client.send('DOM.getBoxModel', { nodeId: node.nodeId });
-      const [x1, y1, , , x3, y3] = model.content;
-      await page.mouse.click((x1 + x3) / 2, (y1 + y3) / 2);
-      return true;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { client, doc } = await panelNodes(page);
+    try {
+      const found = [];
+      const walk = (node) => {
+        if (node.nodeName === 'BUTTON') found.push(node);
+        for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) walk(child);
+      };
+      walk(doc);
+      for (const node of found) {
+        const { outerHTML } = await client.send('DOM.getOuterHTML', { nodeId: node.nodeId });
+        if (outerHTML.replace(/<[^>]+>/g, '').trim() !== label) continue;
+        const { model } = await client.send('DOM.getBoxModel', { nodeId: node.nodeId });
+        const [x1, y1, , , x3, y3] = model.content;
+        await page.mouse.click((x1 + x3) / 2, (y1 + y3) / 2);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      if (attempt === 2 || !/Could not find node with given id/i.test(error?.message || '')) throw error;
+    } finally {
+      await client.detach().catch(() => {});
     }
-    return false;
-  } finally {
-    await client.detach().catch(() => {});
   }
+  return false;
 }
 /** Auto Apply's run waiting for the Manager on this step (it never clicks Next itself). */
 async function waitForAutoStep(storage, step, phases = ['needs_you', 'final'], ms = 120000) {
@@ -683,6 +709,16 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     assert.equal(mock.answers, 0, 'no AI with Auto Apply\'s AI off');
     assert.ok(mock.heartbeats >= 2, `heartbeats: ${mock.heartbeats}`);
     assert.equal(mock.released.length, 0);
+    assert.equal(
+      mock.log.filter((entry) => entry.path === '/api/extension/apply/documents').length,
+      1,
+      'Auto Apply retrieves the saved document paths once for this application',
+    );
+    assert.equal(
+      mock.log.some((entry) => entry.path === '/api/pdf/print'),
+      false,
+      'Auto Apply never requests server-rendered PDFs',
+    );
     const sources = Object.fromEntries((mock.results[0].appliedAnswers || []).map((entry) => [entry.question, entry.source]));
     assert.equal(sources['How did you hear about us? *'], 'reusable');
     assert.equal(sources['First name *'], 'profile');

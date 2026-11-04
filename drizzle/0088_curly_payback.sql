@@ -1,0 +1,1 @@
+ALTER TABLE "jobs" ADD COLUMN "cover_letter_local_path" text;
