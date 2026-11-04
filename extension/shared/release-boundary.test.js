@@ -52,7 +52,8 @@ test('the page launcher is the only user entry point', () => {
   );
   assert.ok(launcher.includes('initializeQtsPageLauncherOnce().catch'));
   assert.ok(launcher.includes('hasValidExtensionContext'));
-  assert.ok(launcher.includes("window.addEventListener('load', initializePageLauncherAfterLoad, { once: true })"));
+  assert.ok(launcher.includes("if (document.readyState !== 'loading') initializePageLauncherAfterLoad();"));
+  assert.ok(launcher.includes("else document.addEventListener('DOMContentLoaded', initializePageLauncherAfterLoad, { once: true })"));
   assert.ok(review.includes("window.addEventListener('load', initializeGetJdReviewAfterLoad, { once: true })"));
   assert.ok(highlighter.includes("window.addEventListener('load', startPageTextHighlighterAfterLoad, { once: true })"));
   // The launcher waits as a tab on the right edge, without endless animations; its actions open as a docked panel.

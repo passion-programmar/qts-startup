@@ -12,17 +12,25 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => {
       const attach = Element.prototype.attachShadow;
       Element.prototype.attachShadow = function(options) { const root = attach.call(this, options); if(this.hasAttribute('data-qts-page-launcher')) window.testRoot = root; return root; };
-      window.calls = []; window.accountResolvers = {}; window.store = { authToken: 'synthetic', authExpiresAt: Date.now() + 3600000, qtsSessionUser: { id: 'manager', role: 'manager' } };
+      window.calls = []; window.accountResolvers = {}; window.accountListResponses = {}; window.accountFetchCounts = {}; window.clockOffset = 0;
+      window.logs = []; window.failStatusRead = false; window.failDailyCounts = false;
+      const originalWarn = console.warn.bind(console);
+      console.warn = (...args) => { window.logs.push(args.map(String).join(' ')); originalWarn(...args); };
+      window.realNow = Date.now.bind(Date); Date.now = () => window.realNow() + window.clockOffset;
+      window.store = { authToken: 'synthetic', authExpiresAt: Date.now() + 3600000, qtsSessionUser: { id: 'manager', role: 'manager' } };
       window.chrome = { runtime: { id: 'local-fixture', getURL: p => 'https://extension.test/' + p, onMessage: { addListener() {}, removeListener() {} }, sendMessage: async message => {
         window.calls.push(message);
         if(message.type === 'QTS_GET_LAUNCHER_STATE') return { active: true };
         if(message.type === 'CHECK_EXTENSION_PAGE_ALLOWED') return { ok: true, excluded: false };
         if(message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, features: {} };
+        if(message.type === 'QTS_DAILY_COUNTS' && window.failDailyCounts) return { ok: false, error: 'Synthetic count refresh failure.' };
+        if(message.type === 'QTS_DAILY_COUNTS') return { ok: true, urls: 1, jobs: 2, applied: 3 };
         if(message.action === 'cancel_status' && window.failCancellation) return { ok: false, error: 'Local cancellation failure. Retry.' };
         if(message.action === 'cancel_status') { window.store.qtsExtensionStatus = 'cancel'; return { ok: true }; }
         if(message.type === 'QTS_WORK_ITEMS') {
           if(!message.candidateId) return new Promise(resolve => {
-            window.accountResolvers[message.mode] = () => resolve({ ok: true, accounts: [
+            window.accountFetchCounts[message.mode] = (window.accountFetchCounts[message.mode] || 0) + 1;
+            window.accountResolvers[message.mode] = () => resolve({ ok: true, accounts: window.accountListResponses[message.mode] || [
               { id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform', categoryColor: '#2563eb', eligibleJobCount: 8 },
               { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '', eligibleJobCount: 3 },
               { id: '33333333-3333-4333-8333-333333333333', name: 'Morgan Lee', category: 'Design', eligibleJobCount: 0 },
@@ -37,7 +45,17 @@ test('account job pickers show compact links, full URL tooltips, independent sel
             {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://djinni.co/jobs/838846-senior-devops-engineer-contractor/'}] };
         }
         return { ok: true };
-      } }, storage: { local: { get: async keys => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, window.store[k]])), set: async values => Object.assign(window.store, values) }, onChanged: { addListener() {}, removeListener() {} } } };
+      } }, storage: { local: {
+        get: async keys => {
+          const requested = Array.isArray(keys) ? keys : [keys];
+          if (window.failStatusRead && requested.includes('qtsExtensionStatus')) throw new Error('Synthetic status storage failure.');
+          return Object.fromEntries(requested.map(k => [k, window.store[k]]));
+        },
+        set: async values => Object.assign(window.store, values),
+      }, onChanged: {
+        addListener: listener => { window.storageChangeListener = listener; },
+        removeListener() {},
+      } } };
     });
     const errors=[]; page.on('pageerror', e => errors.push(e.message));
     await page.addScriptTag({ path: path.resolve('extension/content/page-launcher.js') });
@@ -63,6 +81,28 @@ test('account job pickers show compact links, full URL tooltips, independent sel
       return { selectBackground: select.style.backgroundColor, selectColor: select.style.color, categoryText: category.textContent, categoryColor: category.style.color };
     }), { selectBackground: '', selectColor: '', categoryText: 'Platform', categoryColor: 'rgb(37, 99, 235)' });
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length===2);
+    const accountFetches = await page.evaluate(() => window.accountFetchCounts.generation);
+    await page.evaluate(() => {
+      window.accountListResponses.generation = [
+        { id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform', categoryColor: '#2563eb', eligibleJobCount: 6 },
+        { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '', eligibleJobCount: 3 },
+        { id: '33333333-3333-4333-8333-333333333333', name: 'Morgan Lee', category: 'Design', eligibleJobCount: 0 },
+      ];
+      window.clockOffset = 31000;
+      const select = window.testRoot.querySelector('[data-work-account="generation"]');
+      select.blur(); select.focus();
+    });
+    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options[0].textContent === 'Loading accounts…');
+    await page.evaluate(() => {
+      const select = window.testRoot.querySelector('[data-work-account="generation"]');
+      select.blur(); select.focus();
+    });
+    assert.equal(await page.evaluate(() => window.accountFetchCounts.generation), accountFetches + 1, 'expired cache triggers one coalesced refresh');
+    await page.evaluate(() => window.accountResolvers.generation());
+    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1]?.textContent === 'Jordan Taylor (6)');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').value), '11111111-1111-4111-8111-111111111111', 'refresh preserves a still-eligible account');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length), 2, 'refresh keeps the selected account job list');
+    await page.evaluate(() => { window.clockOffset = 0; });
     const link = await page.evaluate(() => { const a=window.testRoot.querySelector('.work-link'); return {text:a.textContent,title:a.title,href:a.href,target:a.target,rel:a.rel,heading:a.querySelector('.work-title').title,domain:a.querySelector('.work-domain').title}; });
     assert.match(link.text,/remoterocketship\.com/); assert.doesNotMatch(link.text,/publicjobs|tracking=/);
     assert.equal(link.title,link.href); assert.equal(link.heading,link.href); assert.equal(link.domain,link.href);
@@ -156,6 +196,52 @@ test('account job pickers show compact links, full URL tooltips, independent sel
       await page.evaluate(async()=>{window.store.qtsExtensionStatus=null;await window.__qtsPageLauncher.syncModeActions();});
       assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-start`).disabled,mode),false,'new selection can start after cleanup');
     }
+    for (const mode of ['generation', 'apply', 'auto_apply']) {
+      await page.evaluate(async mode => {
+        window.store.qtsExtensionStatus = mode === 'generation' ? 'generation' : 'apply';
+        window.store.qtsApplyKind = mode === 'auto_apply' ? 'auto' : null;
+        await window.__qtsPageLauncher.syncModeActions();
+        window.testRoot.querySelector(`[data-action="${mode}"]`).click();
+      }, mode);
+      await page.waitForFunction(mode => window.calls.some(message =>
+        message.type === 'QTS_PAGE_ACTION' && message.action === 'cancel_status' && message.expectedAction === mode,
+      ), {}, mode);
+      await page.evaluate(async () => {
+        window.store.qtsExtensionStatus = null;
+        window.store.qtsApplyKind = null;
+        await window.__qtsPageLauncher.syncModeActions();
+      });
+    }
+    await page.evaluate(() => {
+      window.failStatusRead = true;
+      window.storageChangeListener({ qtsExtensionStatus: { newValue: 'generation' } }, 'local');
+    });
+    await page.waitForFunction(() => window.logs.some(message => message.includes('Could not refresh workflow status')));
+    await page.evaluate(() => {
+      window.failStatusRead = false;
+      window.failDailyCounts = true;
+      window.__qtsPageLauncher.setOpen(false);
+      window.testRoot.querySelector('.main').click();
+    });
+    await page.waitForFunction(() => window.logs.some(message => message.includes('Could not refresh daily counts')));
+    await page.evaluate(() => { window.failDailyCounts = false; });
+    const dailyCountRequestsBefore = await page.evaluate(() => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length);
+    await page.evaluate(() => {
+      window.__qtsPageLauncher.setOpen(false);
+      window.testRoot.querySelector('.main').click();
+    });
+    await page.waitForFunction(previous => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length > previous, {}, dailyCountRequestsBefore);
+    const firstOpenCountRequests = await page.evaluate(() => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length);
+    assert.equal(firstOpenCountRequests, dailyCountRequestsBefore + 1, 'opening refreshes daily counts once');
+    await page.evaluate(() => {
+      window.__qtsPageLauncher.setOpen(false);
+      window.testRoot.querySelector('.main').click();
+    });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(await page.evaluate(() => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length), firstOpenCountRequests, 'rapid reopen stays within the five-second refresh limit');
+    await page.evaluate(() => window.__qtsPageLauncher.setOpen(false));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(await page.evaluate(() => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length), firstOpenCountRequests, 'closing cancels a delayed count refresh');
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); }
 });

@@ -9,7 +9,8 @@ The supported browser-extension workflow is deliberately narrow:
 2. The launcher expands to Get JD, Generation, Apply, and a session action that
    displays Sign In or Sign Out from the stored Manager session.
 3. Sign In opens an embedded login panel; successful authentication closes it.
-   The browser toolbar icon intentionally has no click behavior.
+   The browser toolbar icon forwards clicks to the in-page launcher, opening
+   the sign-in form or toggling the actions panel on the current web page.
 4. Text Highlight and URL Settings render directly in the same docked in-page
    panel as the candidate profile list. The panel reserves right-side page
    space, does not open a popup/iframe, and returns to profiles with Back.

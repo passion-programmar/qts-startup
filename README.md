@@ -145,14 +145,14 @@ removes older zips and build folders from `dist/`. Bump `version` in
 `extension/manifest.json` before each build you share so Managers can tell
 releases apart. Minification makes the code harder to read, not secret.
 
-The extension content scripts start at `document_start`, so the floating QTS
-icon and page features can initialize while the page is still loading. The
-extension renders the icon directly on every supported web page, including
-before sign-in. Clicking it opens a radial menu with **Get
-JD**, **Generation**, **Apply**, and **Sign In** or **Sign Out**. The browser
-toolbar icon has no click behavior. Sign In opens the Manager login form in an
-extension-origin frame on the current page, so the page cannot observe the
-credentials, and the frame closes after a successful login.
+The extension content script starts at `document_start`; the floating launcher
+is mounted after DOM readiness on the active, supported web page and restored
+when tab or window focus changes. It is available before sign-in. Opening it
+shows a docked panel with **Get JD**, **Generation**, **Apply**, and **Sign In**
+or **Sign Out**. The browser toolbar icon forwards clicks to this in-page
+launcher; it does not open a separate popup. Sign In opens the Manager login
+form in an extension-origin frame on the current page, so the page cannot
+observe the credentials, and the frame closes after a successful login.
 The floating Get JD action enables persistent `get_jd` monitoring, which starts
 when a page's HTML is ready. A matching Manager-owned blocked URL fragment
 blocks QTS on that page.

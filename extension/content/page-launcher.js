@@ -319,6 +319,7 @@ async function initializeQtsPageLauncher() {
 
   const workPickers = new Map();
   const accountsRequests = new Map();
+  const WORK_ACCOUNTS_CACHE_TTL_MS = 30_000;
   let accountsVersion = 0;
   for (const [action, label, icon, className] of actions) {
     if (!label) {
@@ -386,12 +387,14 @@ async function initializeQtsPageLauncher() {
   const toolsHeading = [...menuList.querySelectorAll('.label-top')].find((heading) => heading.textContent === 'Tools');
 
   async function loadWorkAccounts(action) {
-    if (accountsRequests.has(action)) return accountsRequests.get(action);
+    const cached = accountsRequests.get(action);
+    if (cached && (cached.expiresAt === Infinity || cached.expiresAt > Date.now())) return cached.promise;
     const version = accountsVersion;
     const picker = workPickers.get(action);
     const previous = picker.select.value;
     picker.select.replaceChildren(new Option('Loading accounts…', ''));
     picker.select.options[0].disabled = true;
+    const entry = { promise: null, expiresAt: Infinity };
     const request = (async () => {
       const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: action });
       if (version !== accountsVersion) return;
@@ -420,15 +423,17 @@ async function initializeQtsPageLauncher() {
         picker.error = '';
         renderWorkPicker(action);
       }
+      entry.expiresAt = Date.now() + WORK_ACCOUNTS_CACHE_TTL_MS;
     })().catch(error => {
       if (version !== accountsVersion) return;
-      accountsRequests.delete(action);
+      if (accountsRequests.get(action) === entry) accountsRequests.delete(action);
       picker.select.replaceChildren(new Option('Could not load accounts — focus to retry', ''));
       picker.select.options[0].disabled = true;
       showToast(error.message, 'error');
       throw error;
     });
-    accountsRequests.set(action, request);
+    entry.promise = request;
+    accountsRequests.set(action, entry);
     return request;
   }
 
@@ -699,6 +704,7 @@ async function initializeQtsPageLauncher() {
   (document.documentElement || document.body).appendChild(host);
 
   function setOpen(open) {
+    if (!open) clearTimeout(countsTimer);
     launcher.classList.toggle('open', open);
     menu.hidden = !open;
     host.toggleAttribute('data-menu-open', open);
@@ -973,7 +979,7 @@ async function initializeQtsPageLauncher() {
     clearOutcomeTimers();
     currentOutcome = null;
     outcomeCard.hidden = true;
-    syncModeActions().catch(() => {});
+    refreshModeActions();
   }
 
   const OUTCOME_ACTIONS = {
@@ -1041,7 +1047,7 @@ async function initializeQtsPageLauncher() {
         outcomeActions.appendChild(button);
       });
     outcomeCard.hidden = false;
-    syncModeActions().catch(() => {});
+    refreshModeActions();
     const seconds = outcome.closeDeadline
       ? Math.max(0, Math.ceil((outcome.closeDeadline - Date.now()) / 1000))
       : Number(outcome.closeInSeconds) || 0;
@@ -1227,16 +1233,20 @@ async function initializeQtsPageLauncher() {
   // after a job is saved or an application changes.
   let countsAskedAt = 0;
   let countsTimer = null;
-  function refreshDailyCounts(now = false) {
+  function refreshDailyCounts() {
     if (!active) return;
     if (!launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
     clearTimeout(countsTimer);
-    const wait = now ? 0 : Math.max(0, countsAskedAt + 5000 - Date.now());
+    const wait = Math.max(0, countsAskedAt + 5000 - Date.now());
     countsTimer = setTimeout(async () => {
-      if (!active) return;
+      if (!active || !launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
       countsAskedAt = Date.now();
-      const reply = await chrome.runtime.sendMessage({ type: 'QTS_DAILY_COUNTS' }).catch(() => null);
-      if (!reply?.ok) return;
+      const reply = await chrome.runtime.sendMessage({ type: 'QTS_DAILY_COUNTS' })
+        .catch((error) => ({ ok: false, error }));
+      if (!reply?.ok) {
+        console.warn('[QTS launcher] Could not refresh daily counts:', reply?.error || reply?.message || 'Unknown error.');
+        return;
+      }
       for (const key of ['urls', 'jobs', 'applied']) {
         stats.querySelector(`.stat.${key} .stat-value`).textContent = String(Number(reply[key]) || 0);
       }
@@ -1409,6 +1419,12 @@ async function initializeQtsPageLauncher() {
     }
   }
 
+  function refreshModeActions() {
+    syncModeActions().catch((error) => {
+      console.warn('[QTS launcher] Could not refresh workflow status:', error);
+    });
+  }
+
   async function runAction(action, button) {
     if (action === 'text_highlights') {
       await openHighlightPanel(button);
@@ -1448,6 +1464,7 @@ async function initializeQtsPageLauncher() {
       const response = await chrome.runtime.sendMessage({
         type: 'QTS_PAGE_ACTION',
         action: resolvedAction,
+        ...(resolvedAction === 'cancel_status' ? { expectedAction: action } : {}),
         ...(selection ? { selection } : {}),
       });
       if (!response?.ok) throw new Error(response?.error || 'Could not run this QTS action.');
@@ -1466,7 +1483,7 @@ async function initializeQtsPageLauncher() {
       else showToast(error?.message || 'Could not run this QTS action.', 'error');
     } finally {
       button.disabled = false;
-      if (row) await syncModeActions().catch(() => {});
+      if (row) refreshModeActions();
     }
   }
 
@@ -1479,7 +1496,7 @@ async function initializeQtsPageLauncher() {
     if (opening) chrome.runtime.sendMessage({ type: 'QTS_ACTIVITY' }).catch(() => {});
     // While Apply is on, a page with saved jobs offers its accounts ("Apply this page").
     if (opening) showApplyPick().catch(() => {});
-    if (opening) refreshDailyCounts(true);
+    if (opening) refreshDailyCounts();
     if (opening) loadAllWorkAccounts();
     if (opening) syncTextHighlightAction(true).catch(() => {});
     // A Get JD notice hidden earlier shows again beside the panel (the orange dot stands for it).
@@ -1506,7 +1523,7 @@ async function initializeQtsPageLauncher() {
       }
       syncSessionAction()
         .then(() => syncTextHighlightAction())
-        .catch(() => {});
+        .catch((error) => console.warn('[QTS launcher] Could not sync session after authentication changed:', error));
       // Sign-in always clears the previous session first, so a fresh expiry means a new sign-in.
       // The panel stays open and turns to the actions: that is the confirmation.
       if (changes.authExpiresAt.newValue && !changes.authExpiresAt.oldValue) {
@@ -1515,7 +1532,7 @@ async function initializeQtsPageLauncher() {
       }
     }
     if (changes.qtsExtensionStatus || changes.qtsGetJdOn || changes.qtsGenerationBrowserState
-      || changes.qtsGenerationNotice || changes.qtsApplyState || changes.qtsApplyKind || changes.qtsAutoApplyState) syncModeActions().catch(() => {});
+      || changes.qtsGenerationNotice || changes.qtsApplyState || changes.qtsApplyKind || changes.qtsAutoApplyState) refreshModeActions();
     // An application ended (submitted or not): APPLY may have changed.
     if (changes.qtsApplyState) refreshDailyCounts();
   };
@@ -1537,7 +1554,7 @@ async function initializeQtsPageLauncher() {
     // Get JD found no job on this page: said once, under Get JD in the panel, for this address.
     if (message?.type === 'QTS_NOT_JOB_PAGE') {
       pageNote = { url: location.href, text: 'This page is not a job page.' };
-      syncModeActions().catch(() => {});
+      refreshModeActions();
     }
   };
   const onKeydown = (event) => {
@@ -1561,8 +1578,10 @@ async function initializeQtsPageLauncher() {
   }
   attachListeners();
 
-  syncSessionAction().catch(() => {});
-  syncModeActions().catch(() => {});
+  syncSessionAction().catch((error) => {
+    console.warn('[QTS launcher] Could not refresh session status:', error);
+  });
+  refreshModeActions();
   // Get JD injects its review only after an admitted navigation produces a result.
   // Launcher activation alone must not initialize candidate loading on an old page.
   syncTextHighlightAction().catch((error) => {
@@ -1599,9 +1618,13 @@ async function initializeQtsPageLauncher() {
           attributes: true, attributeFilter: ['data-qts-get-jd-docked'],
         });
         syncGetJdDocking();
-        syncSessionAction().catch(() => {});
-        syncModeActions().catch(() => {});
-        syncTextHighlightAction().catch(() => {});
+        syncSessionAction().catch((error) => {
+          console.warn('[QTS launcher] Could not refresh session status:', error);
+        });
+        refreshModeActions();
+        syncTextHighlightAction().catch((error) => {
+          console.warn('[QTS launcher] Could not refresh Manager tools:', error);
+        });
         const outcome = globalThis.__qtsPendingLauncherOutcome;
         if (outcome) showOutcome(outcome).catch(() => {});
       }

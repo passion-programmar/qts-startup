@@ -6,13 +6,16 @@ const path = require('node:path');
 const http = require('node:http');
 const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe','/usr/bin/google-chrome'].find(p=>fs.existsSync(p));
 const scope={candidateId:'11111111-1111-4111-8111-111111111111',jobIds:['22222222-2222-4222-8222-222222222222']};
-test('real worker passes exact account/job scope to Generation and Auto Apply claims', {skip:!CHROME,timeout:90000}, async()=>{
-  const calls=[];
+test('real worker passes exact account/job scope to Generation and Auto Apply claims', {skip:!CHROME,timeout:120000}, async()=>{
+  const calls=[];let holdWorkItems=false;
   const server=http.createServer(async(req,res)=>{
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     const body=chunks.length?JSON.parse(Buffer.concat(chunks)):null;calls.push({url:req.url,body});
     let reply={success:true,features:{canUseApply:true,autoApplyParallelLimit:2},rules:[],exclusions:[]};
-    if(req.url.startsWith('/api/extension/work-items'))reply={success:true,accounts:[{id:scope.candidateId,name:'Jordan Taylor'}]};
+    if(req.url.startsWith('/api/extension/work-items')){
+      if(holdWorkItems)return;
+      reply={success:true,accounts:[{id:scope.candidateId,name:'Jordan Taylor'}]};
+    }
     if(req.url==='/api/extension/generation/claim')reply={success:true,job:null};
     if(req.url==='/api/extension/apply/claim')reply={success:true,application:null};
     res.setHeader('Content-Type','application/json');res.end(JSON.stringify(reply));
@@ -42,7 +45,9 @@ test('real worker passes exact account/job scope to Generation and Auto Apply cl
         const wrongMode=mode==='generation'?'auto_apply':'generation';
         assert.equal((await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:wrongMode})).ok,false,'a stale Cancel must not stop another mode');
         assert.equal((await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:mode})).ok,true);
-        assert.equal((await worker.evaluate(async()=>chrome.storage.local.get('qtsWorkSelection'))).qtsWorkSelection,undefined);
+        const savedSelection=(await worker.evaluate(async()=>chrome.storage.local.get('qtsWorkSelection'))).qtsWorkSelection;
+        if(mode==='auto_apply')assert.deepEqual(savedSelection,{mode,...scope},'Auto Apply cancellation preserves its selected work');
+        else assert.equal(savedSelection,undefined);
         await wait(async()=>!(await worker.evaluate(async()=>chrome.storage.local.get('qtsExtensionStatus'))).qtsExtensionStatus);
         const nextScope={candidateId:'33333333-3333-4333-8333-333333333333',jobIds:['44444444-4444-4444-8444-444444444444']};
         const nextBefore=calls.length;
@@ -51,7 +56,31 @@ test('real worker passes exact account/job scope to Generation and Auto Apply cl
         assert.deepEqual(calls.slice(nextBefore).find(c=>c.url===endpoint).body.selection,{mode,...nextScope});
         await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:mode});
         assert.equal(calls.some(c=>/generation\/start|apply\/start-job|apply\/submitted/.test(c.url)),false);
+        if(mode==='generation'){
+          await worker.evaluate(async()=>{await chrome.storage.local.set({qtsExtensionStatus:'apply'});await chrome.storage.local.remove('qtsApplyKind');});
+          for(const staleAction of ['generation','auto_apply']){
+            assert.equal((await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:staleAction})).ok,false,`stale ${staleAction} Cancel must not stop assisted Apply`);
+            assert.equal((await worker.evaluate(async()=>chrome.storage.local.get('qtsExtensionStatus'))).qtsExtensionStatus,'apply');
+          }
+          const cancelled=await ask({type:'QTS_PAGE_ACTION',action:'cancel_status',expectedAction:'apply'});
+          assert.equal(cancelled.ok,true);assert.equal(cancelled.cancelledStatus,'apply');
+          await wait(async()=>!(await worker.evaluate(async()=>chrome.storage.local.get('qtsExtensionStatus'))).qtsExtensionStatus);
+        }
       }finally{await browser.close();}
     }
+    holdWorkItems=true;
+    const browser=await require('puppeteer-core').launch({executablePath:CHROME,headless:true,pipe:true,enableExtensions:[path.resolve('extension')],args:['--no-first-run']});
+    try{
+      const worker=await(await browser.waitForTarget(t=>t.type()==='service_worker')).worker();
+      await worker.evaluate(async base=>chrome.storage.local.set({qtsServerUrl:base,authToken:'synthetic',authExpiresAt:Date.now()+3600000,qtsSessionUser:{id:'manager',role:'manager'},qtsGetJdOn:false}),base);
+      const control=await browser.newPage();await control.goto('chrome-extension://'+new URL(worker.url()).host+'/signin/signin.html');
+      const startedAt=Date.now();
+      const result=await control.evaluate(()=>chrome.runtime.sendMessage({type:'QTS_WORK_ITEMS',mode:'generation'}));
+      const elapsed=Date.now()-startedAt;
+      assert.equal(result.ok,false);
+      assert.equal(result.error,'The QTS server did not answer in time.');
+      assert.ok(elapsed>=15000,`request timed out too early after ${elapsed} ms`);
+      assert.ok(elapsed<30000,`request did not honor the timeout promptly (${elapsed} ms)`);
+    }finally{await browser.close();}
   }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });

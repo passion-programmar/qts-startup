@@ -68,6 +68,7 @@ const capturePanelOpenPromisesByTab = new Map();
 // EXTENSION_STATUS_KEY holds the work slot: 'generation', 'apply', 'cancel' while stopping, or null.
 const EXTENSION_STATUS_KEY = 'qtsExtensionStatus';
 const GET_JD_ON_KEY = 'qtsGetJdOn';
+const WORK_ITEMS_REQUEST_TIMEOUT_MS = 20000;
 const GENERATION_IDLE_NOTICE_KEY = 'qtsGenerationIdleNoticeShown';
 // Tabs and windows Generation or Apply opened; Get JD never touches them.
 const tabOwnership = self.__qtsTabOwnership.createTabOwnership(chrome.storage.session);
@@ -5449,7 +5450,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!['generation', 'auto_apply'].includes(msg.mode)) throw new Error('Invalid work mode.');
       const params = new URLSearchParams({ mode: msg.mode });
       if (msg.candidateId !== undefined) params.set('candidateId', String(msg.candidateId));
-      const result = await workerApiRequest('GET', '/api/extension/work-items?' + params);
+      const result = await workerApiRequest('GET', '/api/extension/work-items?' + params, null, {
+        timeoutMs: WORK_ITEMS_REQUEST_TIMEOUT_MS,
+      });
       sendResponse(result.success === true ? { ...result, ok: true } : { ok: false, error: result.message || 'Could not load accounts or jobs.' });
     })().catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -5563,8 +5566,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, self.__qtsAutoApply.KIND_KEY]);
         const cancelledStatus = stored[EXTENSION_STATUS_KEY];
         const cancelledAuto = cancelledStatus === 'apply' && stored[self.__qtsAutoApply.KIND_KEY] === 'auto';
-        if (msg.expectedAction && !((msg.expectedAction === 'generation' && cancelledStatus === 'generation')
-          || (msg.expectedAction === 'auto_apply' && cancelledAuto))) {
+        const expectedActionMatches = msg.expectedAction === 'generation'
+          ? cancelledStatus === 'generation'
+          : msg.expectedAction === 'auto_apply'
+            ? cancelledAuto
+            : msg.expectedAction === 'apply'
+              ? cancelledStatus === 'apply' && !cancelledAuto
+              : false;
+        if (msg.expectedAction && !expectedActionMatches) {
           sendResponse({ ok: false, error: 'That mode is no longer running. The current mode was left unchanged.' });
           return;
         }
