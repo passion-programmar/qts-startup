@@ -345,7 +345,7 @@ async function launch({ ai = 'off' } = {}) {
   ctx.installApplyPdfs = () => ctx.worker.evaluate((documentPdf) => {
     Object.defineProperty(self, '__qtsScannerDocumentStore', {
       configurable: true,
-      value: { getSetting: async () => ({ value: {} }) },
+      value: { getSetting: async (key) => ({ value: key === 'applyPdfDownloadsDirectoryV1' ? {} : null }) },
     });
     Object.defineProperty(self, '__qtsApplyLocalPdfs', {
       configurable: true,

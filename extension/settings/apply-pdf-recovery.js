@@ -31,6 +31,8 @@
     if (!reply?.ok) throw new Error(reply?.error || 'This Chrome no longer owns the application. Reopen normal Apply.');
   }
   async function requireRoot() {
+    const direct = await globalThis.__qtsScannerDocumentStore.getSetting('applyPdfFileAccessV1');
+    if (direct?.value != null) throw new Error('For legacy PDF linking, choose Use folder picker instead above, authorize QTS_Resume, then Reload recovery. Apply must retry using the same folder whose files you review.');
     const stored = await globalThis.__qtsScannerDocumentStore.getSetting(globalThis.__qtsApplyLocalPdfs.SETTING_KEY);
     const directory = stored?.value;
     if (!directory || await directory.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('Read access is unavailable. Choose QTS_Resume folder again, then Reload recovery.');

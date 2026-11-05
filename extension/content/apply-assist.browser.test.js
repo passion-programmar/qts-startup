@@ -43,6 +43,35 @@ const STATE = {
   problems: [],
 };
 
+test('a site rebuilding the document restores the existing panel without losing hidden state or resurrecting it after Cancel', { skip }, async () => {
+  await withPanel('<main><label>Name<input></label></main>', STATE, async (page) => {
+    page.on('pageerror', (error) => console.error('[panel restoration]', error.message));
+    await page.evaluate(() => {
+      window.originalPanel = document.querySelector('[data-qts-apply-assist]');
+      document.querySelector('[data-qts-apply-assist]').remove();
+      document.querySelector('[data-qts-apply-dock]').remove();
+    });
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]') === window.originalPanel && document.querySelector('[data-qts-apply-dock]'), { timeout: 10000 }).catch(async (error) => {
+      console.error('[panel restoration]', await page.evaluate(() => ({ panelConnected: window.originalPanel.isConnected, panels: document.querySelectorAll('[data-qts-apply-assist]').length, docks: document.querySelectorAll('[data-qts-apply-dock]').length, api: typeof globalThis.__qtsApplyAssist, sent: window.__sent })));
+      throw error;
+    });
+    await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.hide').click());
+    await page.evaluate(() => {
+      document.documentElement.innerHTML = '<head></head><body><main>Next application step<input></main></body>';
+    });
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]') === window.originalPanel && document.querySelector('[data-qts-apply-dock]'), { timeout: 10000 });
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.panel').hidden), true);
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.tab').hidden), false);
+    await page.evaluate(() => {
+      globalThis.__qtsApplyAssist.remove();
+      document.body.appendChild(document.createElement('input'));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    assert.equal(await page.$('[data-qts-apply-assist]'), null);
+    assert.equal(await page.$('[data-qts-apply-dock]'), null);
+  });
+});
+
 /** A page with html, the form engine and the panel (shown with state); returns helpers to look at it. */
 async function withPanel(html, state, run) {
   const page = await browser.newPage();
@@ -82,6 +111,88 @@ const FORM = `<form onsubmit="event.preventDefault(); window.siteSubmitted = tru
   <label for="fn">First name *</label><input id="fn" required>
   <label for="em">Email *</label><input id="em" type="email" required value="ana@example.com">
   <button type="submit">Submit application</button></form>`;
+
+test('normal Apply exposes Pause and Resume, explains stopping, and keeps Cancel available', { skip }, async () => {
+  await withPanel(FORM, { ...STATE, filling: true }, async (page, panel) => {
+    await panel.click('.pause-fill');
+    assert.equal((await panel.sent()).some((message) => message.action === 'pause_fill'), true);
+    await page.evaluate((state) => globalThis.__qtsApplyAssist.render(state), { ...STATE, manualPaused: true, pauseStopping: true });
+    assert.match(await panel.text(), /Pausing autofill/);
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.pause-fill').disabled), true);
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.cancel').disabled), false);
+    await page.evaluate((state) => globalThis.__qtsApplyAssist.render(state), { ...STATE, manualPaused: true, pauseStopping: false });
+    assert.match(await panel.text(), /Review and edit the form freely/);
+    await panel.click('.pause-fill');
+    assert.equal((await panel.sent()).some((message) => message.action === 'resume_fill'), true);
+  });
+});
+
+test('answer editor saves and deletes explicitly while preserving the employer form and Manager pause', { skip }, async () => {
+  await withPanel(FORM, { ...STATE, manualPaused: true }, async (page, panel) => {
+    await page.evaluate(() => {
+      document.querySelector('#fn').value = 'Manager edit';
+      window.editorRows = [];
+      window.chrome.runtime.sendMessage = async (message) => {
+        window.__sent.push(message);
+        if (message.action === 'save_answer') window.editorRows = [{ id: 'saved', version: '123.000001', questionText: message.input.question, answer: message.input.answer, scope: 'candidate' }];
+        if (message.action === 'delete_answer') window.editorRows = [];
+        return { ok: true, answers: window.editorRows, fields: [{ id: 'name-field', label: 'First name', value: 'Manager edit', kind: 'text', options: [] }] };
+      };
+    });
+    await panel.click('[data-card="reusable"] .card-head');
+    await panel.click('.answer-editor-open');
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-select')?.options.length === 3);
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-qts-apply-assist]').shadowRoot;
+      const select = root.querySelector('.answer-editor-select'); select.value = 'field:name-field'; select.dispatchEvent(new Event('change'));
+      const input = root.querySelector('.answer-editor-value'); input.value = 'Saved name'; input.dispatchEvent(new Event('input'));
+    });
+    assert.equal((await panel.sent()).some((message) => message.action === 'save_answer'), false, 'typing never saves');
+    await panel.click('.answer-editor-save');
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-message')?.textContent.includes('Saved explicitly'));
+    const save = (await panel.sent()).find((message) => message.action === 'save_answer');
+    assert.equal(save.input.answer, 'Saved name'); assert.equal(save.input.fieldId, 'name-field');
+    assert.equal(await page.$eval('#fn', (node) => node.value), 'Manager edit');
+    await page.evaluate(() => { const select = document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-select'); select.value = 'saved:saved'; select.dispatchEvent(new Event('change')); });
+    await panel.click('.answer-editor-delete');
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-message')?.textContent.includes('Deleted from the library'));
+    const removed = (await panel.sent()).find((message) => message.action === 'delete_answer');
+    assert.equal(removed.input.version, '123.000001');
+    assert.equal(await page.$eval('#fn', (node) => node.value), 'Manager edit');
+    assert.equal((await panel.sent()).some((message) => ['resume_fill', 'retry_fill', 'submitted'].includes(message.action)), false);
+  });
+});
+
+test('answer conflicts retain the draft and editor mutations stay disabled until Manager pause', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    await page.evaluate(() => { window.chrome.runtime.sendMessage = async (message) => {
+      window.__sent.push(message);
+      return message.action === 'load_answers' ? { ok: true, answers: [], fields: [] } : { ok: false, error: 'Answer changed. Reload answers.' };
+    }; });
+    await panel.click('[data-card="reusable"] .card-head'); await panel.click('.answer-editor-open');
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-select'));
+    await page.evaluate(() => { const root = document.querySelector('[data-qts-apply-assist]').shadowRoot;
+      const select = root.querySelector('.answer-editor-select'); select.value = 'new'; select.dispatchEvent(new Event('change'));
+      for (const [selector, value] of [['.answer-editor-question', 'Additional details'], ['.answer-editor-value', 'My draft']]) { const input = root.querySelector(selector); input.value = value; input.dispatchEvent(new Event('input')); }
+    });
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-save').disabled), true);
+    await page.evaluate((state) => globalThis.__qtsApplyAssist.render(state), { ...STATE, manualPaused: true });
+    await panel.click('.answer-editor-save');
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-message')?.textContent.includes('Reload answers'));
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-value').value), 'My draft');
+    assert.equal((await panel.sent()).filter((message) => message.action === 'save_answer').length, 1, 'a conflict never retries itself');
+  });
+});
+
+test('an explicit toolbar reveal reopens a hidden Apply panel without sending an autofill or submission action', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    await panel.click('.hide');
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.panel').hidden), true);
+    assert.equal(await page.evaluate(() => globalThis.__qtsApplyAssist.reveal()), true);
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.panel').hidden), false);
+    assert.deepEqual(await panel.sent(), []);
+  });
+});
 
 test('the panel shows the account, the job, two copy buttons, the profile cards, and Submitted / Cancel', { skip }, async () => {
   await withPanel(FORM, STATE, async (page, panel) => {

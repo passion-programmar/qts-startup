@@ -174,6 +174,7 @@
     if (items.length > 1) details.push(`Get JD · ${items.length} results`);
     else details.push(`Get JD · ${latest?.status || 'Processing'}`);
     details.push(`Success ${counts.success} · Failed ${counts.failed} · Skipped ${counts.skipped} · Processing ${counts.processing} · Cancelled ${counts.cancelled}`);
+    if (counts.review || counts.partial) details.push(`Review needed ${counts.review || 0} · Partial failure ${counts.partial || 0}`);
     if (latest?.pageTitle) details.push(latest.pageTitle.slice(0, 100));
     else {
       try { details.push(new URL(latest?.pageUrl || '').hostname); } catch { /* No source site is available. */ }
@@ -198,8 +199,8 @@
     getJdSummarySnapshotKey = snapshotKey;
     const counts = globalThis.__qtsGetJdNotifications?.summarizeBatch(batch)
       || { success: 0, failed: 0, skipped: 0, processing: 0, cancelled: 0 };
-    const type = counts.failed ? 'error'
-      : counts.processing ? 'warn'
+    const type = counts.failed || counts.partial ? 'error'
+      : counts.processing || counts.review ? 'warn'
         : (counts.skipped || counts.cancelled) && !counts.success ? 'info' : 'success';
     const container = ensureStack();
     host.setAttribute('data-qts-get-jd-summary-id', batch.id);

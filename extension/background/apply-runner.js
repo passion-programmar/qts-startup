@@ -193,9 +193,10 @@ async function applicationFormShown(tabId) {
  * following "Apply manually"), follow a new tab or page, or open an embedded job-site form.
  * onTab hears about a new tab so the caller keeps the right one. Returns the tab with the form.
  */
-async function reachApplicationForm(tab, onTab, application, { handleAccountSteps = true } = {}) {
+async function reachApplicationForm(tab, onTab, application, { handleAccountSteps = true, stop = null } = {}) {
   const clicked = [];
   for (let step = 0; step < APPLY_START_STEPS; step += 1) {
+    if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
     await inForm(tab.id, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
     // Pages often build their content after loading; give the form a few seconds to appear.
     let page = null;
@@ -264,6 +265,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       continue;
     }
     const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
+    if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
     const start = await inForm(tab.id, (skip, assistant) => globalThis.__qtsApplyForm.clickStart(skip, { assistant }), [clicked, !handleAccountSteps]).catch(() => null);
     if (start?.email) throw new ApplyStop('This job takes applications by email; apply by hand.');
     if (!start?.ok) break;
@@ -279,13 +281,14 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     // The button may open a new tab, load another page, or show the form on this one.
     for (let waited = 0; waited < APPLY_START_WAIT_MS; waited += 1000) {
       await sleep(1000);
+      if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
       const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && entry.openerTabId === tab.id);
       if (opened) {
         const jobPage = tab;
         tab = opened;
         onTab(tab);
         await tabOwnership.markTab(tab.id, 'apply');
-        chrome.tabs.remove(jobPage.id).catch(() => {});
+        if (handleAccountSteps) chrome.tabs.remove(jobPage.id).catch(() => {});
         await waitForTabComplete(tab.id, 45 * 1000);
         movedOn = true;
         break;
@@ -503,7 +506,7 @@ async function checkWithRealClick(tabId, field, value) {
  * click; 3. only when nothing shows, sample searches typed into a search list (collected, never
  * picked; only some of its choices, so the AI may still give its own wording).
  */
-async function readComboboxOptions(tabId, fields) {
+async function readComboboxOptions(tabId, fields, stop = null) {
   // Fields whose box looking at the choices changed (a tag a site created): checked by the Manager.
   const changed = [];
   const keepChoices = (field, read, source) => {
@@ -518,16 +521,22 @@ async function readComboboxOptions(tabId, fields) {
     return true;
   };
   for (const field of fields) {
+    if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
     if (field.hidden || field.disabled || field.options?.length) continue;
     if (field.kind === 'combobox') {
       if (keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.discoverComboboxChoices(id), [field.id]).catch(() => null), 'click')) continue;
+      if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       // A list that ignores simulated events (React Select) opens for a real click.
       if (keepChoices(field, await readChoicesWithRealClick(tabId, field), 'click')) continue;
+      if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       if (!keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.searchComboboxChoices(id), [field.id]).catch(() => null), 'search')) field.options = [];
     } else if (field.kind === 'menu' && field.lazy) {
       field.options = await inForm(tabId, (id) => globalThis.__qtsApplyForm.readMenuOptions(id), [field.id]).catch(() => []);
       if (field.options?.length) field.optionsSource = 'click';
-      else keepChoices(field, await readChoicesWithRealClick(tabId, field), 'click');
+      else {
+        if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
+        keepChoices(field, await readChoicesWithRealClick(tabId, field), 'click');
+      }
       field.options ||= [];
       // An optional menu that shows no choices even then is left alone. A required one stays, so a
       // choice it cannot take stops the application rather than sending what it already shows.
@@ -1054,9 +1063,16 @@ async function fetchApplyDocuments(attemptId) {
   }
 
   try {
-    const savedFolder = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY);
-    if (!savedFolder?.value) throw new Error('Choose the QTS_Resume folder inside Downloads in the extension before running Apply.');
-    const reused = await self.__qtsApplyLocalPdfs.readApplyDocuments(savedFolder.value, response.documents);
+    const directAccess = await self.__qtsScannerDocumentStore.getSetting('applyPdfFileAccessV1');
+    let reused;
+    if (directAccess?.value != null) {
+      // A configured direct-file mode fails closed: never silently switch readers or request a grant.
+      reused = await self.__qtsApplyFileAccess.readDocuments(directAccess.value, response.documents);
+    } else {
+      const savedFolder = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY);
+      if (!savedFolder?.value) throw new Error('Choose the QTS_Resume folder inside Downloads in the extension before running Apply.');
+      reused = await self.__qtsApplyLocalPdfs.readApplyDocuments(savedFolder.value, response.documents);
+    }
     return {
       folder: response.documents.resumePath.slice(0, response.documents.resumePath.lastIndexOf('/')),
       resume: reused.resume,
@@ -1065,7 +1081,7 @@ async function fetchApplyDocuments(attemptId) {
   } catch (error) {
     const reason = typeof error?.message === 'string' && error.message ? error.message : 'The saved PDFs could not be read.';
     throw new ApplyStop(
-      `Apply needs the existing Generation PDFs and will not regenerate them. ${reason} Open QTS > Tools > Apply PDFs folder to restore read access. Confirm both exact saved files are still in their Generation folder.`,
+      `Apply needs the existing Generation PDFs and will not regenerate them. ${reason} Open QTS > Tools > Apply PDFs folder to check local PDF access. Confirm both exact saved files are still in their Generation folder.`,
       { skip: false },
     );
   }
@@ -1131,7 +1147,7 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
     const real = await checkWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
   }
-  if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [] };
+  if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [], ...(result?.manualUpload ? { manualUpload: true } : {}) };
   const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
   // "This field is required" left from before the pick, under a field that now holds its answer, is
   // not the site rejecting it: the answer matched, and the field is not filled again.
@@ -1388,6 +1404,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       if (documents?.resume?.base64) {
         const outcome = await fillAndCheck(tabId, autofill, { file: 'resume', source: 'documents' }, { ...documents.resume, mimeType: 'application/pdf' }, seen);
         if (outcome.ok) {
+          uploaded.add('resume');
           application.siteFilledFromResume = true;
           await waitForSiteFill(tabId);
           for (const field of fresh) if (field.id !== autofill.id) seen.delete(field.id);
@@ -1404,7 +1421,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText, autoApply: Boolean(application.factSources),
       }).answers[field.id]?.source))
       : fresh;
-    const changedByLooking = await readComboboxOptions(tabId, toDiscover);
+    const changedByLooking = await readComboboxOptions(tabId, toDiscover, options.stop);
     timings.discovery += Date.now() - discoveryStarted;
     for (const field of changedByLooking) {
       problem(`Check "${field.label}": looking at its choices changed it; set it as it should be.`, field);
@@ -1453,9 +1470,11 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     // The last choice question filled in this round, in page order: lists below it may have changed.
     let lastFilledChoice = -1;
     const noteFilled = (field) => {
+      if (field.kind !== 'file') options.onFilled?.(field);
       if (CHOICE_KINDS.has(field.kind)) lastFilledChoice = Math.max(lastFilledChoice, position.get(field.id) ?? -1);
     };
     for (const field of fresh) {
+      if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       const answer = answers[field.id];
       if (!answer) {
         // Filled by the site from the résumé: kept, and listed so the Manager can check it.
@@ -1475,12 +1494,11 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         if (field.required) problem(`Upload the ${answer.file === 'coverLetter' ? 'cover letter' : 'résumé'} by hand: "${field.label}".`, field, 'upload');
         continue;
       }
-      // Each document goes up once per step; a site may redraw its upload field after taking it. A
-      // page that reloaded (a language switch) has lost it: then it goes up again.
-      if (answer.file && uploaded.has(answer.file)) {
+      // Check every pass, including the first one after a form mutation or Retry. Uploads are
+      // intentionally absent from the reusable typed-answer list; the page owns their lifetime.
+      if (answer.file) {
         const holds = await inForm(tabId, (id) => globalThis.__qtsApplyForm.uploadHolds(id), [field.id]).catch(() => true);
-        if (holds) continue;
-        uploaded.delete(answer.file);
+        if (holds || uploaded.has(answer.file)) continue;
       }
       const outcome = await fillAndCheck(tabId, field, answer, file, seen);
       if (outcome.gone) continue;
@@ -1492,7 +1510,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         // A cover letter that could not be attached is typed instead where the site offers it.
         const typed = answer.file === 'coverLetter' && application.job.coverLetterText
           && await inForm(tabId, (id) => globalThis.__qtsApplyForm.enterManually(id), [field.id]).catch(() => false);
-        if (!typed && field.required) problem(`The ${answer.file === 'coverLetter' ? 'cover letter' : 'résumé'} upload failed: add it by hand ("${field.label}") from the folder above.`, field, 'upload');
+        if (!typed && (field.required || outcome.manualUpload)) problem(outcome.manualUpload ? outcome.error : `The ${answer.file === 'coverLetter' ? 'cover letter' : 'résumé'} upload failed: add it by hand ("${field.label}") from the folder above.`, field, 'upload');
       } else if (answer.source === 'documents') {
         if (field.required) problem(`"${field.label}" did not take the cover letter text; paste it by hand.`, field);
       } else {
@@ -1501,6 +1519,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         const meant = answer.intended ?? answerText(answer.saved ?? answer.value);
         const same = answer.fact && outcome.choices?.length ? helpers.sameFactOption(answer.fact, meant, outcome.choices) : null;
         if (same) {
+          if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
           const converted = { ...answer, value: same, intended: meant };
           const again = await fillAndCheck(tabId, field, converted, null, seen);
           if (again.gone) continue;
@@ -1855,13 +1874,17 @@ function answerManager(attemptId, decision) {
 }
 
 // The assistant's panel (state.assist: the job page with the profile) or the review panel.
-async function showReviewPanel(tabId, state) {
+async function showReviewPanel(tabId, state, { reveal = false } = {}) {
   const panel = state?.assist ? 'content/apply-assist.js' : 'content/apply-review.js';
   await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/apply-form.js', panel] });
   await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
-    func: (next) => (next?.assist ? globalThis.__qtsApplyAssist : globalThis.__qtsApplyReview)?.render(next),
-    args: [state],
+    func: (next, open) => {
+      const panel = next?.assist ? globalThis.__qtsApplyAssist : globalThis.__qtsApplyReview;
+      panel?.render(next);
+      if (open && next?.assist) panel?.reveal?.();
+    },
+    args: [state, reveal],
   });
 }
 
@@ -1951,6 +1974,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'retry_fill') {
       return retryAssistedAutofill(msg.attemptId, sender.tab?.id);
     }
+    if (msg.action === 'pause_fill' || msg.action === 'resume_fill') {
+      return setAssistedAutofillPaused(msg, sender);
+    }
+    if (['load_answers', 'save_answer', 'delete_answer'].includes(msg.action)) return editAssistedAnswer(msg, sender);
     if (msg.action === 'link_pdfs') {
       const review = activeReviews.get(msg.attemptId);
       if (sender.id !== chrome.runtime.id || !review?.assist || !tabsOf(review).has(sender.tab?.id)
@@ -2084,9 +2111,89 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 /** The tabs an application lives in: the assistant's job page and the tabs opened from it. */
 const tabsOf = (review) => review.tabIds || new Set(review.tabId != null ? [review.tabId] : []);
+const assistTabContinued = (review, tabId) => [...(review.continuationParents?.values() || [])].includes(tabId);
 
-chrome.tabs.onUpdated.addListener((tabId, change) => {
+function adoptAssistContinuation(tab) {
+  if (tab?.openerTabId == null || tab.id == null) return false;
+  for (const review of activeReviews.values()) {
+    if (!review.assist || review.assistant?.stopped || !review.tabIds?.has(tab.openerTabId)) continue;
+    if (review.tabIds.has(tab.id)) return true;
+    review.tabIds.add(tab.id);
+    review.tabId = tab.id;
+    review.continuationParents ||= new Map();
+    review.continuationParents.set(tab.id, tab.openerTabId);
+    review.assistant?.pendingNavigation?.delete(tab.openerTabId);
+    tabOwnership.markTab(tab.id, 'apply').catch(() => {});
+    rememberApplySession(review).catch(() => {});
+    restoreOwnedAssistPanel(review, tab.id).catch(() => {});
+    finishAssistTabHandoff(review, tab.id).catch(() => {});
+    return true;
+  }
+  return false;
+}
+
+async function finishAssistTabHandoff(review, tabId) {
+  const parentId = review.continuationParents?.get(tabId);
+  const owned = () => parentId != null && review.assist && activeReviews.get(review.attemptId) === review
+    && !review.assistant?.stopped && tabsOf(review).has(tabId) && tabsOf(review).has(parentId);
+  if (!owned()) return;
+  review.handoffTabs ||= new Set();
+  if (review.handoffTabs.has(tabId)) return;
+  review.handoffTabs.add(tabId);
+  try {
+    const tab = await getTab(tabId);
+    if (tab?.status !== 'complete' || !/^https?:\/\//i.test(tab.url || '')) return;
+    const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+    if (!['application_form', 'partial_application_form', 'email_first_application', 'authentication_required',
+      'registration_required', 'verification_required', 'captcha_required'].includes(page?.type)) return;
+    if (!(await restoreOwnedAssistPanel(review, tabId)) || !owned()) return;
+    // Persist the child before removing its parent. The same review/run continues to occupy its
+    // queue slot; onRemoved sees the child still owned and must not resolve the application.
+    review.tabId = tabId;
+    await rememberApplySession(review);
+    if (!owned()) return;
+    await chrome.tabs.remove(parentId).catch(() => {});
+  } finally { review.handoffTabs.delete(tabId); }
+}
+
+async function restoreOwnedAssistPanel(review, tabId, { reveal = false } = {}) {
+  const owned = () => review.assist === true && activeReviews.get(review.attemptId) === review
+    && tabsOf(review).has(tabId) && Boolean(review.panel) && !review.assistant?.stopped;
+  if (!owned()) return false;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      func: (open) => {
+        const panel = globalThis.__qtsApplyAssist;
+        const mounted = panel && document.querySelector('[data-qts-apply-assist]')?.parentNode === document.documentElement
+          && document.querySelector('[data-qts-apply-dock]')?.isConnected;
+        return Boolean(mounted && (!open || panel.reveal?.() === true));
+      },
+      args: [reveal],
+    });
+    if (!owned()) return false;
+    if (results?.[0]?.result === true) return true;
+    await showReviewPanel(tabId, review.panel, { reveal });
+    // A tab can close or Cancel can finish while Chrome is injecting the panel.
+    if (!owned()) {
+      const replacement = [...activeReviews.values()].find((entry) => entry !== review && tabsOf(entry).has(tabId));
+      if (replacement?.panel) await showReviewPanel(tabId, replacement.panel);
+      else if (!replacement) await removeReviewPanel(tabId);
+    }
+    return owned();
+  } catch { return false; /* Protected/loading documents are retried on completion or activation. */ }
+}
+
+async function openOwnedAssistPanel(tabId) {
+  if (!(await isApplyOn())) return false;
+  const review = [...activeReviews.values()].find((entry) => entry.assist && tabsOf(entry).has(tabId));
+  return review ? restoreOwnedAssistPanel(review, tabId, { reveal: true }) : false;
+}
+
+chrome.tabs.onUpdated.addListener(async (tabId, change) => {
   if (change.status !== 'complete' && change.status !== 'loading') return;
+  // Chrome can populate openerTabId after onCreated, especially for initially blank tabs.
+  adoptAssistContinuation(await getTab(tabId));
   for (const review of activeReviews.values()) {
     if (!tabsOf(review).has(tabId) || !review.panel) continue;
     if (change.status === 'complete' && review.panel.mode === 'review') {
@@ -2096,6 +2203,7 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
     }
     // Inject at document start when possible; the complete event retries if the page was not ready.
     showReviewPanel(tabId, review.panel).catch(() => {});
+    if (change.status === 'complete') finishAssistTabHandoff(review, tabId).catch(() => {});
     // A new document or visible form (a redirect, sign-in, or next step): resume the flow immediately.
     review.assistant?.poke(tabId);
   }
@@ -2121,6 +2229,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       continue;
     }
     if (!review.tabIds.delete(tabId)) continue;
+    review.continuationParents?.delete(tabId);
     if (!review.tabIds.size) answerManager(review.attemptId, { action: 'closed' });
     else {
       if (review.tabId === tabId) review.tabId = [...review.tabIds].pop();
@@ -2132,6 +2241,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // A tab the job page opens ("Apply on the employer's site", a next step) joins its application: the
 // panel shows there, QTS fills there, and its Submit counts.
 chrome.tabs.onCreated.addListener((tab) => {
+  if (adoptAssistContinuation(tab)) return;
   for (const review of activeReviews.values()) {
     if (tab.openerTabId == null) continue;
     if (review.tabIds?.has(tab.openerTabId)) {
@@ -2139,6 +2249,8 @@ chrome.tabs.onCreated.addListener((tab) => {
       review.tabId = tab.id;
       tabOwnership.markTab(tab.id, 'apply').catch(() => {});
       rememberApplySession(review).catch(() => {});
+      restoreOwnedAssistPanel(review, tab.id).catch(() => {});
+      finishAssistTabHandoff(review, tab.id).catch(() => {});
       continue;
     }
     if (review.auto && review.followChildTabs && review.tabId === tab.openerTabId) {
@@ -2153,8 +2265,12 @@ chrome.tabs.onCreated.addListener((tab) => {
 
 // The tab the Manager looks at is the one QTS fills.
 chrome.tabs.onActivated.addListener(({ tabId }) => {
+  getTab(tabId).then(adoptAssistContinuation).catch(() => {});
   for (const review of activeReviews.values()) {
-    if (review.tabIds?.has(tabId)) review.tabId = tabId;
+    if (review.tabIds?.has(tabId)) {
+      review.tabId = tabId;
+      restoreOwnedAssistPanel(review, tabId).catch(() => {});
+    }
   }
 });
 
@@ -2875,8 +2991,10 @@ function rememberApplySession(review) {
   return changeApplySessions((sessions) => {
     sessions[review.attemptId] = {
       jobId: review.job.id, company: review.job.company, title: review.job.title, tabIds,
+      ...(review.continuationParents?.size ? { continuationParents: [...review.continuationParents] } : {}),
       ...(review.assistant?.fillError ? { fillError: review.assistant.fillError } : {}),
       ...(review.assistant?.relinkRequired ? { relinkRequired: true } : {}),
+      ...(review.assistant?.manualPaused ? { manualPaused: true } : {}),
     };
   });
 }
@@ -2903,7 +3021,7 @@ async function resumeApplySessions(limit) {
       ? await workerApiRequest('POST', '/api/extension/apply/resume', { attemptId, jobId: saved.jobId })
       : null;
     if (reply?.success === true && reply.application) {
-      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds, fillError: saved.fillError, relinkRequired: saved.relinkRequired }));
+      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds, continuationParents: saved.continuationParents, manualPaused: saved.manualPaused, fillError: saved.fillError, relinkRequired: saved.relinkRequired }));
       continue;
     }
     for (const tabId of tabIds) await removeStalePanel(tabId);
@@ -2955,6 +3073,7 @@ async function retryAssistedAutofill(attemptId, tabId) {
     return { ok: false, error: 'This page no longer owns an active Assisted Apply application. Turn Apply on again if needed.' };
   }
   if (!assistant.fillError) return { ok: false, error: 'Autofill is not paused.' };
+  if (assistant.manualPaused) return { ok: false, error: 'Choose Resume autofill first, then Retry autofill to retry the PDF error.' };
   if (assistant.navigationRuns.size || assistant.fillingTabs.size) {
     return { ok: false, error: 'Autofill is still stopping. Choose Retry autofill again in a moment.' };
   }
@@ -2971,15 +3090,90 @@ async function retryAssistedAutofill(attemptId, tabId) {
   return { ok: true };
 }
 
+async function setAssistedAutofillPaused(msg, sender) {
+  const review = activeReviews.get(msg.attemptId), assistant = review?.assistant;
+  const owned = () => review?.assist && assistant && !assistant.stopped
+    && activeReviews.get(msg.attemptId) === review && tabsOf(review).has(sender.tab?.id);
+  if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || !owned()
+    || !(await isApplyOn()) || await self.__qtsAutoApply?.isOn?.() === true || !owned()) return { ok: false, error: 'This page no longer owns an active normal Apply application.' };
+  const paused = msg.action === 'pause_fill';
+  if (!paused && !assistant.manualPaused) return { ok: false, error: 'Autofill is not paused by you.' };
+  if (!paused && (assistant.navigationRuns.size || assistant.fillingTabs.size)) return { ok: false, error: 'Autofill is still stopping. Resume when the current action finishes.' };
+  assistant.manualPaused = paused;
+  assistant.pendingNavigation.clear();
+  if (!paused) { assistant.formSignatures.clear(); assistant.navigationAttempts.clear(); }
+  await rememberApplySession(review);
+  if (!owned() || !(await isApplyOn())) return { ok: false, error: 'Apply stopped. Autofill was not restarted.' };
+  await assistant.show();
+  if (!paused && !assistant.fillError) assistant.poke(sender.tab.id);
+  return { ok: true };
+}
+
+async function editAssistedAnswer(msg, sender) {
+  const review = activeReviews.get(msg.attemptId), assistant = review?.assistant;
+  const owned = () => review?.assist && assistant && !assistant.stopped && activeReviews.get(msg.attemptId) === review
+    && tabsOf(review).has(sender.tab?.id);
+  if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || !owned()
+    || !(await isApplyOn()) || await self.__qtsAutoApply?.isOn?.() === true || !owned()) return { ok: false, error: 'This page no longer owns an active normal Apply application.' };
+  const action = msg.action === 'load_answers' ? 'load' : msg.action === 'save_answer' ? 'save' : 'delete';
+  if (assistant.answerEditBusy) return { ok: false, error: 'An answer request is already running.' };
+  if (action !== 'load' && (!assistant.manualPaused || assistant.navigationRuns.size || assistant.fillingTabs.size)) return { ok: false, error: 'Pause autofill and wait for the current action to finish before saving or deleting answers.' };
+  assistant.answerEditBusy = true;
+  try {
+    const fields = await inForm(sender.tab.id, () => {
+      const api = globalThis.__qtsApplyForm;
+      const allowed = new Set(api.scanForAssist().filter((field) => !field.hidden && !field.disabled && !field.account && !field.unrelated && field.kind !== 'file' && field.kind !== 'password').map((field) => field.id));
+      return api.currentAnswers().filter((field) => allowed.has(field.id) && !/password|passcode|captcha|verification code|one.time code|\bOTP\b/i.test(field.label));
+    }).catch(() => []);
+    let answer = msg.input;
+    if (action === 'save' && answer?.fieldId) {
+      const field = fields.find((entry) => entry.id === answer.fieldId);
+      if (!field || self.__qtsApplyAnswers.correctionKey(field.label) !== self.__qtsApplyAnswers.correctionKey(answer.question)) return { ok: false, error: 'This form question changed. Reload answers and select it again.' };
+      answer = { ...answer, kind: field.kind, options: field.options || [] };
+    }
+    if (!owned() || !(await isApplyOn())) return { ok: false, error: 'Apply stopped. No answer request was sent.' };
+    const response = await workerApiRequest('POST', '/api/extension/apply/answer-library', { attemptId: msg.attemptId, action, ...(action !== 'load' ? { answer } : {}) });
+    if (!owned() || !(await isApplyOn())) return { ok: false, error: 'Apply stopped. If a save was already sent, reload your Profile library to check it.' };
+    if (!response.success) return { ok: false, error: response.message || 'Could not confirm the answer change. Reload answers.' };
+    const application = review.application;
+    if (application) {
+      const shared = (response.savedAnswers || []).filter((row) => row.scope === 'manager');
+      for (const other of activeReviews.values()) {
+        if (!other.assist || !other.application || other.assistant?.stopped) continue;
+        const sameCandidate = other === review || (application.candidate?.candidateId && other.application.candidate?.candidateId === application.candidate.candidateId);
+        if (other === review) other.application.savedAnswers = response.savedAnswers || [];
+        else {
+          other.application.savedAnswers = [...(other.application.savedAnswers || []).filter((row) => row.scope !== 'manager' && !(sameCandidate && row.scope === 'candidate')),
+            ...(sameCandidate ? (response.savedAnswers || []).filter((row) => row.scope === 'candidate') : []), ...shared];
+        }
+        if (sameCandidate && response.candidateProfile) for (const key of ['firstName', 'lastName', 'email', 'phone', 'city', 'linkedinUrl']) {
+          if (Object.hasOwn(response.candidateProfile, key)) other.application.candidate[key] = response.candidateProfile[key];
+        }
+        if (response.profileUpdate && sameCandidate) {
+          const keys = { candidateEmail: 'email', firstName: 'firstName', lastName: 'lastName', phone: 'phone', city: 'city', linkedinUrl: 'linkedinUrl' };
+          const key = keys[response.profileUpdate.field];
+          if (key) other.application.candidate[key] = response.profileUpdate.value;
+        }
+        // Refresh only the displayed library; never poke or clear fields after a library edit.
+        await other.assistant?.show();
+      }
+    }
+    return { ok: true, answers: response.editableAnswers || [], fields: fields.map((field) => ({ ...field,
+      saved: (response.editableAnswers || []).find((row) => self.__qtsApplyAnswers.correctionKey(row.questionText) === self.__qtsApplyAnswers.correctionKey(field.label)) || null,
+    })) };
+  } finally { assistant.answerEditBusy = false; }
+}
+
 async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
-  const active = () => !assistant.stopped && activeReviews.get(application.attemptId)?.assistant === assistant;
-  if (!active() || assistant.fillError) return;
+  const active = () => !assistant.stopped && activeReviews.get(application.attemptId)?.assistant === assistant
+    && !assistTabContinued(activeReviews.get(application.attemptId), tabId);
+  if (!active() || assistant.fillError || assistant.manualPaused) return;
   const signature = await inForm(tabId, () => {
     const api = globalThis.__qtsApplyForm;
     const fields = api.scanForAssist().filter((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account);
     return fields.map((field) => `${field.id}:${field.label}:${field.kind}:${field.filled ? 1 : 0}`).join('|');
   }).catch(() => null);
-  if (!active() || assistant.fillError || signature == null || assistant.formSignatures.get(tabId) === signature) return;
+  if (!active() || assistant.fillError || assistant.manualPaused || signature == null || assistant.formSignatures.get(tabId) === signature) return;
   assistant.formSignatures.set(tabId, signature);
   const filledFields = assistant.filledFields.get(tabId) || new Set();
   assistant.filledFields.set(tabId, filledFields);
@@ -2990,9 +3184,10 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
     const filled = await fillFormPage(tabId, application, keepAlive, 1, {
       assist: true,
       skip: (field) => filledFields.has(field.id),
-      stop: async () => !active() || Boolean(assistant.fillError),
+      stop: async () => !active() || Boolean(assistant.fillError) || assistant.manualPaused,
+      onFilled: (field) => filledFields.add(field.id),
     });
-    if (!active() || assistant.fillError) return;
+    if (!active() || assistant.fillError || assistant.manualPaused) return;
     for (const answer of Object.values(filled.used || {})) if (answer.fieldId) filledFields.add(answer.fieldId);
     assistant.problems = filled.problems || [];
     const count = Object.keys(filled.used || {}).length;
@@ -3000,7 +3195,7 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
       ? `Filled ${count} saved answer${count === 1 ? '' : 's'}. Review them, complete the rest, then submit on the employer site.`
       : 'Form ready. QTS found no additional saved values to fill; complete the form and submit on the employer site.';
   } catch (error) {
-    if (!active() || assistant.fillError) return;
+    if (!active() || assistant.fillError || assistant.manualPaused) return;
     assistant.formSignatures.delete(tabId);
     if (error instanceof ApplyStop) {
       // A lifecycle stop must not resurrect the panel or offer a retry after Cancel/lost ownership.
@@ -3031,7 +3226,8 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
  */
 async function assistFillPass(tabId, application, assistant, keepAlive) {
   const tab = await getTab(tabId);
-  if (!tab || assistant.stopped || assistant.fillError) return;
+  const currentReview = activeReviews.get(application.attemptId);
+  if (!tab || assistant.stopped || assistant.fillError || assistant.manualPaused || (currentReview && assistTabContinued(currentReview, tabId))) return;
   const pageInfo = await inForm(tabId, () => {
     const api = globalThis.__qtsApplyForm;
     const page = api.classifyPage();
@@ -3053,12 +3249,17 @@ async function assistFillPass(tabId, application, assistant, keepAlive) {
   if (assistant.navigationAttempts.get(tabId) === pageInfo.key) return;
   assistant.navigationAttempts.set(tabId, pageInfo.key);
   try {
-    const formTab = await reachApplicationForm(tab, (opened) => assistant.onTab(opened), application, { handleAccountSteps: false });
-    if (assistant.stopped || assistant.fillError) return;
+    const review = activeReviews.get(application.attemptId);
+    const formTab = await reachApplicationForm(tab, (opened) => assistant.onTab(opened), application, {
+      handleAccountSteps: false,
+      stop: () => assistant.stopped || assistant.manualPaused || !review || !tabsOf(review).has(tabId) || assistTabContinued(review, tabId),
+    });
+    if (assistant.stopped || assistant.fillError || assistant.manualPaused || assistTabContinued(review, tabId) || !tabsOf(review).has(formTab.id)) return;
     assistant.onTab(formTab);
     await fillVisibleAssistForm(formTab.id, application, assistant, keepAlive);
   } catch (error) {
-    if (assistant.stopped || assistant.fillError || activeReviews.get(application.attemptId)?.assistant !== assistant) return;
+    if (assistant.stopped || assistant.fillError || assistant.manualPaused || activeReviews.get(application.attemptId)?.assistant !== assistant) return;
+    if (error instanceof ApplyStop && error.keepTab === false) return;
     assistant.problems = [{
       message: error instanceof ApplyStop
         ? error.message
@@ -3083,7 +3284,7 @@ function panelProfile(candidate) {
  * deleted. Cancel, closing all its tabs, Apply turned off, or an error record nothing: the job stays
  * as it was (not opened again in this Chrome until Apply restarts). No goes back to the form.
  */
-async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null, fillError = null, relinkRequired = false } = {}) {
+async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null, continuationParents = null, manualPaused = false, fillError = null, relinkRequired = false } = {}) {
   const { attemptId } = application;
   let renewedAt = Date.now();
   let leaseSeconds = 0;
@@ -3104,6 +3305,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     attemptId,
     tabId: null,
     assist: true,
+    application,
     chromeName: await browserName(),
     candidate,
     job: application.job,
@@ -3113,6 +3315,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   activeReviews.set(attemptId, review);
   publishApplyState();
   const assistant = {
+    manualPaused: manualPaused === true,
     problems: typeof fillError === 'string' && fillError ? [{ message: fillError, fieldId: null }] : [],
     fillError: typeof fillError === 'string' && fillError ? fillError : null,
     relinkRequired: Boolean(fillError) && relinkRequired === true,
@@ -3130,7 +3333,8 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     },
     // Follow safe navigation actions when a page loads or its controls change.
     poke(tabId) {
-      if (tabId == null || assistant.stopped || assistant.fillError || !tabsOf(review).has(tabId)) return;
+      if (tabId == null || assistant.stopped || assistant.fillError || assistant.manualPaused || !tabsOf(review).has(tabId)) return;
+      if (assistTabContinued(review, tabId)) return;
       if (assistant.navigationRuns.has(tabId)) {
         assistant.pendingNavigation.add(tabId);
         return;
@@ -3142,6 +3346,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
         .finally(() => {
           if (assistant.navigationRuns.get(tabId) !== run) return;
           assistant.navigationRuns.delete(tabId);
+          if (assistant.manualPaused && !assistant.stopped) assistant.show().catch(() => {});
           if (assistant.pendingNavigation.delete(tabId) && !assistant.stopped && !assistant.fillError) assistant.poke(tabId);
         });
       assistant.navigationRuns.set(tabId, run);
@@ -3175,6 +3380,8 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     message: assistant.message,
     status: assistant.status,
     filling: assistant.fillingTabs.size > 0,
+    manualPaused: assistant.manualPaused,
+    pauseStopping: assistant.manualPaused && (assistant.navigationRuns.size > 0 || assistant.fillingTabs.size > 0),
     retryFill: Boolean(assistant.fillError) && !assistant.stopped && !assistant.fillingTabs.size,
     relinkPdfs: Boolean(assistant.fillError) && assistant.relinkRequired === true && !assistant.stopped,
     problems: assistant.problems,
@@ -3199,7 +3406,8 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   let marked = false;
   const readAnswers = async (given) => {
     const current = (given?.length ? given : null) || await inForm(review.tabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) || [];
-    return { answers: submittedAnswers({}, current), learned: learnedAnswers({}, current) };
+    // Normal Apply records submitted values, but answer learning requires the editor's Save.
+    return { answers: submittedAnswers({}, current), learned: [] };
   };
   // Submitted when the application record is gone (its hold ran out while the Chrome was away):
   // the bid is saved from the job itself.
@@ -3217,6 +3425,8 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
       // The extension restarted with this job's pages open: keep them available for the Manager.
       review.tabIds = new Set(resumeTabIds);
       review.tabId = resumeTabIds[resumeTabIds.length - 1];
+      review.continuationParents = new Map((Array.isArray(continuationParents) ? continuationParents : [])
+        .filter((pair) => Array.isArray(pair) && pair.length === 2 && review.tabIds.has(pair[0]) && review.tabIds.has(pair[1])));
     } else {
       const othersOpen = [...activeReviews.values()].some((entry) => entry !== review && entry.assist && entry.tabId != null);
       tab = await openApplyTab(application.job.url, { active: !othersOpen });
@@ -3227,6 +3437,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     }
     await rememberApplySession(review);
     await showPanel('assist');
+    for (const tabId of tabsOf(review)) await finishAssistTabHandoff(review, tabId);
     for (const tabId of tabsOf(review)) assistant.poke(tabId);
     for (;;) {
       const decision = await waitForManager(attemptId);
@@ -3469,4 +3680,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // An application being filled or waiting for the Manager: never paced down or turned off.
 const isBusy = () => activeReviews.size > 0;
 
-self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY };
+self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY };

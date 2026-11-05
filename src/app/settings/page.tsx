@@ -300,10 +300,10 @@ export default async function SettingsPage() {
 
         <SettingsCard
           summary={`${reusableAnswerRows.length} answers${draftRows.length ? ` · ${draftRows.length} drafts to review` : ""}${questionSuggestions.length ? ` · ${questionSuggestions.length} suggestions` : ""}`}
-          title="Reusable answers"
+          title="Legacy global answers"
         >
           <p className="mb-4 text-xs leading-5 text-slate-500">
-            Answers to application questions, the same for every candidate. Salary, notice, sponsorship, relocation, right to work, job preferences, and diversity questions (gender, ethnicity, veteran, disability) come from here; without a diversity answer Apply declines. The candidate&apos;s static profile facts (name, contacts, nationality, languages) come first for everything else. An answer that does not fit a field goes to ChatGPT as a hint. Apply uses approved answers only.
+            This legacy global library is retained for reference. Apply and Auto Apply no longer load these answers. Managers manage their own answers in Profile; existing global records are not copied into Manager libraries.
           </p>
           <div className="space-y-3">
             {reusableAnswerRows.map((answer) => {

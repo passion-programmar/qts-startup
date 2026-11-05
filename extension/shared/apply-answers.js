@@ -931,9 +931,9 @@
   function controlledAnswer(field, rows = []) {
     const key = correctionKey(field.label);
     const matches = rows.filter((row) => correctionKey(row.questionText) === key);
-    const local = matches.find((row) => row.scope === 'application' || row.scope === 'candidate');
+    const local = matches.find((row) => row.scope === 'application') || matches.find((row) => row.scope === 'candidate');
     const shared = matches.find((row) => row.scope === 'everyone' || !row.scope);
-    const row = local || shared || matches.find((entry) => entry.scope === 'manager');
+    const row = local || matches.find((entry) => entry.scope === 'manager') || shared;
     if (!row || (!local && shared && !matches.some((entry) => entry.scope === 'manager'))) return null;
     if (row.scope === 'everyone' || !row.scope) return reusableAnswer(field, row);
     const variants = row.variants || [];

@@ -140,6 +140,7 @@
 
   let state = null;
   let busy = false;
+  const answerEditor = { open: false, busy: false, rows: [], fields: [], selected: null, draft: '', question: '', message: '' };
   let hidden = false;
   // Which cards are open; the profile is open first.
   const openCards = new Set(['profile']);
@@ -371,6 +372,75 @@
     return node;
   }
 
+  async function answerRequest(action) {
+    if (answerEditor.busy) return;
+    const attempt = state?.attemptId;
+    const selected = answerEditor.selected;
+    if (action === 'delete' && !selected?.id) return;
+    answerEditor.busy = true;
+    answerEditor.message = '';
+    render();
+    const input = { ...(selected || {}), question: answerEditor.question, answer: answerEditor.draft };
+    try {
+      const result = await send(action === 'load' ? 'load_answers' : action === 'save' ? 'save_answer' : 'delete_answer', { input });
+      if (!state || state.attemptId !== attempt) return;
+      if (!result?.ok) { answerEditor.message = result?.error || 'Could not confirm the answer request. Reload answers.'; return; }
+      answerEditor.rows = result.answers || [];
+      answerEditor.fields = result.fields || [];
+      answerEditor.selected = null; answerEditor.question = ''; answerEditor.draft = '';
+      answerEditor.message = action === 'load' ? 'Choose a current form question or a saved answer.' : action === 'save'
+        ? 'Saved explicitly. The form was not changed and autofill was not resumed.'
+        : 'Deleted from the library. Form values and candidate profile facts were not erased.';
+    } finally {
+      if (state?.attemptId === attempt) { answerEditor.busy = false; render(); }
+    }
+  }
+
+  function renderAnswerEditor(body) {
+    const open = element('button', 'answer-editor-open', answerEditor.open ? 'Reload answers' : 'Manage answers');
+    open.type = 'button'; open.disabled = answerEditor.busy;
+    open.addEventListener('click', () => { answerEditor.open = true; answerRequest('load'); });
+    body.append(open);
+    if (!answerEditor.open) return;
+    body.append(element('p', 'none', 'Pause autofill before saving or deleting. Eligible shared answers apply to all your candidates; personal facts stay with the candidate and job-specific answers stay with this application.'));
+    const select = element('select', 'answer-editor-select');
+    select.setAttribute('aria-label', 'Choose a form question or saved answer');
+    select.append(new Option('Choose a question or saved answer', ''), new Option('Add a new question', 'new'));
+    for (const field of answerEditor.fields) select.append(new Option(`Form: ${field.label}`, `field:${field.id}`));
+    for (const row of answerEditor.rows) select.append(new Option(`Saved (${row.scope}): ${row.questionText}`, `saved:${row.id}`));
+    select.value = answerEditor.selected?.key || '';
+    select.disabled = answerEditor.busy;
+    select.addEventListener('change', () => {
+      const field = answerEditor.fields.find((entry) => `field:${entry.id}` === select.value);
+      const row = field?.saved || answerEditor.rows.find((entry) => `saved:${entry.id}` === select.value);
+      answerEditor.selected = select.value ? { key: select.value, id: row?.id || null, version: row?.version || null,
+        ...(field ? { fieldId: field.id } : {}), kind: field?.kind || 'text', options: field?.options || [] } : null;
+      answerEditor.question = row?.questionText || field?.label || '';
+      const value = field ? field.value : row?.answer;
+      answerEditor.draft = value == null ? '' : Array.isArray(value) ? value.join(' | ') : String(value);
+      answerEditor.message = '';
+      render();
+    });
+    const question = element('input', 'answer-editor-question');
+    question.setAttribute('aria-label', 'Answer question'); question.placeholder = 'Question'; question.maxLength = 300;
+    question.value = answerEditor.question; question.readOnly = answerEditor.selected?.key !== 'new';
+    question.addEventListener('input', () => { answerEditor.question = question.value; });
+    const answer = element('textarea', 'answer-editor-value');
+    answer.setAttribute('aria-label', 'Saved answer'); answer.placeholder = 'Answer (use the exact dropdown choice; separate checkbox-group choices with |)';
+    answer.maxLength = 4000; answer.value = answerEditor.draft;
+    answer.addEventListener('input', () => { answerEditor.draft = answer.value; });
+    for (const control of [select, question, answer]) control.style.cssText = 'display:block;box-sizing:border-box;width:100%;margin:8px 0;padding:8px;background:#0d1526;color:#e2e8f0;border:1px solid #334155;border-radius:6px;';
+    answer.disabled = question.disabled = answerEditor.busy;
+    const save = element('button', 'answer-editor-save', 'Save answer'); save.type = 'button';
+    const remove = element('button', 'answer-editor-delete', 'Delete saved answer'); remove.type = 'button';
+    save.disabled = answerEditor.busy || !answerEditor.selected || !state.manualPaused || state.pauseStopping;
+    remove.disabled = save.disabled || !answerEditor.selected?.id;
+    save.addEventListener('click', () => answerRequest('save'));
+    remove.addEventListener('click', () => answerRequest('delete'));
+    body.append(select, question, answer, save, remove);
+    if (answerEditor.message) body.append(element('p', 'answer-editor-message', answerEditor.message));
+  }
+
   // Deletes the job row from the Jobs table (asked first) and closes the job's tabs.
   function removeButton() {
     const node = actionButton('🗑', 'remove', 'remove');
@@ -409,6 +479,7 @@
   }
 
   function render() {
+    ensureMounted();
     const previous = panel.querySelector('.scroll');
     if (previous) scrollTop = previous.scrollTop;
     panel.replaceChildren();
@@ -474,7 +545,9 @@
     }
     scroll.append(job);
 
-    const status = state.filling
+    const status = state.manualPaused
+      ? state.pauseStopping ? 'Pausing autofill. The current action is finishing; QTS will not start another field.' : 'Autofill paused. Review and edit the form freely. Choose Resume autofill when you are ready.'
+      : state.filling
       ? 'Filling saved résumé, cover letter, profile facts, and reusable answers on the visible form…'
       : state.status || 'QTS fills only saved documents, profile facts, and reusable answers on visible application forms. You handle everything else and submit.';
     scroll.append(element('div', `status${state.filling ? ' working' : ' idle'}`, status));
@@ -540,12 +613,18 @@
     }));
     scroll.append(card('reusable', 'Reusable answers', state.reusable?.length || 0, (body) => {
       for (const entry of state.reusable || []) body.append(item(entry.question, entry.answer));
-      if (!state.reusable?.length) body.append(element('div', 'none', 'Super Admin has no reusable answers yet.'));
+      if (!state.reusable?.length) body.append(element('div', 'none', 'No saved answers are available for this application yet. Manage your answers in QTS Profile.'));
+      if (state.mode === 'assist') renderAnswerEditor(body);
     }));
 
     const foot = element('div', 'foot');
     if (state.message) foot.append(element('div', 'message', state.message));
     const actions = element('div', 'actions');
+    if (state.mode === 'assist') {
+      const pause = actionButton(state.manualPaused ? 'Resume autofill' : 'Pause autofill', 'pause-fill', state.manualPaused ? 'resume_fill' : 'pause_fill');
+      pause.disabled = busy || Boolean(state.pauseStopping);
+      actions.append(pause);
+    }
     if (state.relinkPdfs) {
       actions.append(actionButton('Link existing PDFs', 'link-pdfs', 'link_pdfs'));
     }
@@ -587,6 +666,15 @@
   const BOX_SELECTOR = 'input:not([type="hidden"]), select, textarea, [role="combobox"], [role="radiogroup"], [role="checkbox"], [contenteditable="true"], iframe';
   let boxesSeen = '';
   let changeTimer = null;
+  let repairsLeft = 3;
+  function ensureMounted() {
+    if (!state || !document.documentElement || global.__qtsApplyAssist !== controller) return;
+    const current = document.querySelector('[data-qts-apply-assist]');
+    if (current && current !== host) return;
+    if (host.parentNode !== document.documentElement) document.documentElement.appendChild(host);
+    if (!dock.isConnected) (document.head || document.documentElement).appendChild(dock);
+    setDocked(!hidden);
+  }
   // Each box by its own number (QTS's marks on the boxes change when it reads them; this does not).
   const boxNumbers = new WeakMap();
   let nextBoxNumber = 1;
@@ -602,37 +690,60 @@
   function pageChanged() {
     clearTimeout(changeTimer);
     changeTimer = setTimeout(() => {
-      if (!state || state.mode !== 'assist') return;
+      if (!state || global.__qtsApplyAssist !== controller) return;
+      // Sites may replace their root or remove extension nodes while rendering a form.
+      // Keep the same panel/state; bound repairs so a hostile cleaner cannot cause a busy loop.
+      if ((host.parentNode !== document.documentElement || !dock.isConnected) && repairsLeft > 0) {
+        repairsLeft--;
+        ensureMounted();
+      }
+      if (state.mode !== 'assist') return;
       const now = `${location.href}|${shownBoxes()}`;
       if (now === boxesSeen) return;
       boxesSeen = now;
       send('fields_changed');
     }, 500);
   }
-  new MutationObserver((records) => {
+  const pageObserver = new MutationObserver((records) => {
     if (records.every((record) => record.target === host || host.contains(record.target))) return;
     pageChanged();
-  }).observe(document.documentElement, {
+  });
+  pageObserver.observe(document, {
     childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'aria-hidden', 'open', 'disabled'],
   });
   global.addEventListener('popstate', pageChanged);
   global.addEventListener('hashchange', pageChanged);
   // The worker sleeps when idle; the panel keeps it awake while the page is open.
-  setInterval(() => { if (state) send('ping'); }, 20000);
+  const heartbeatTimer = setInterval(() => { if (state) send('ping'); }, 20000);
 
-  global.__qtsApplyAssist = {
+  const controller = {
+    reveal() {
+      if (!state || global.__qtsApplyAssist !== controller) return false;
+      hidden = false;
+      render();
+      return true;
+    },
     render(nextState) {
+      if (global.__qtsApplyAssist !== controller) return false;
+      if (state && state.attemptId !== nextState.attemptId) Object.assign(answerEditor, { open: false, busy: false, rows: [], fields: [], selected: null, draft: '', question: '', message: '' });
       state = nextState;
       busy = false;
+      repairsLeft = 3;
       render();
       return true;
     },
     remove() {
       state = null;
+      pageObserver.disconnect();
+      clearTimeout(changeTimer);
+      clearInterval(heartbeatTimer);
+      global.removeEventListener('popstate', pageChanged);
+      global.removeEventListener('hashchange', pageChanged);
       setDocked(false);
       host.remove();
       dock.remove();
-      delete global.__qtsApplyAssist;
+      if (global.__qtsApplyAssist === controller) delete global.__qtsApplyAssist;
     },
   };
+  global.__qtsApplyAssist = controller;
 })(globalThis);

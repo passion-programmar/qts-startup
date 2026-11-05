@@ -126,6 +126,7 @@ async function initializeQtsPageLauncher() {
     .action-sub.failed { border-left-color: rgb(239 68 68 / .45); }
     .sub-status { display: flex; align-items: center; gap: 7px; margin-top: 3px; color: #a7f3d0; font: 600 11px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
     .sub-status.error { color: #fca5a5; }
+    [data-sub-for="get_jd"] .sub-status > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
     .sub-bar { flex: 0 0 46px; height: 4px; overflow: hidden; border-radius: 4px; background: #243047; }
     .sub-fill { display: block; height: 100%; border-radius: 4px; background: #10b981; transition: width .3s ease; }
     .sub-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border: 1px solid #243047; border-radius: 10px; background: #0d1526; color: #e2e8f0; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
@@ -1277,7 +1278,7 @@ async function initializeQtsPageLauncher() {
   async function syncModeActions() {
     const stored = await chrome.storage.local.get([
       'qtsExtensionStatus', 'qtsGetJdOn', 'qtsGenerationBrowserState', 'qtsGenerationNotice', 'qtsApplyState',
-      'qtsApplyKind', 'qtsAutoApplyState',
+      'qtsApplyKind', 'qtsAutoApplyState', 'qtsGetJdNotificationState', 'authExpiresAt', 'qtsSessionUser',
     ]);
     const workStatus = stored.qtsExtensionStatus;
     const getJdOn = stored.qtsGetJdOn === true;
@@ -1296,6 +1297,21 @@ async function initializeQtsPageLauncher() {
         ? ['This page needs you: see the card beside the panel.', 'warn']
         : pageNote?.url === location.href ? [pageNote.text, ''] : ['Checking each job page you open.', ''];
     }
+    const results = getJdOn && Number(stored.authExpiresAt) > Date.now()
+      ? globalThis.__qtsGetJdNotifications?.recentResults(stored.qtsGetJdNotificationState, stored) || [] : [];
+    renderSub('get_jd', results.map((entry) => {
+      let site = ''; try { site = new URL(entry.pageUrl).hostname; } catch { /* Historical entries can lack a URL. */ }
+      const time = Number(entry.updatedAt) > 0 ? new Date(entry.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+      return {
+        name: entry.title || entry.pageTitle || site || 'Job result', company: entry.company || site,
+        title: entry.label || (entry.status === 'success' ? 'Completed' : entry.status),
+        avatar: ({ saved: '✓', updated: '✓', review: '!', partial: '!', failed: '×', skipped: '↷', cancelled: '–' })[entry.outcome] || '•',
+        status: [entry.message, time].filter(Boolean).join(' · '),
+        statusType: ['failed', 'partial'].includes(entry.outcome) ? 'error' : '',
+        openTitle: 'Show the existing job tab, or reopen its page if it has closed',
+        goLabel: 'Open page ›', open: { type: 'QTS_OPEN_GET_JD_RESULT', operationId: entry.operationId },
+      };
+    }));
     // Generation's latest step (with its job) or notice, whichever is newer.
     const state = stored.qtsGenerationBrowserState || {};
     const notice = stored.qtsGenerationNotice || {};
@@ -1540,7 +1556,8 @@ async function initializeQtsPageLauncher() {
       }
     }
     if (changes.qtsExtensionStatus || changes.qtsGetJdOn || changes.qtsGenerationBrowserState
-      || changes.qtsGenerationNotice || changes.qtsApplyState || changes.qtsApplyKind || changes.qtsAutoApplyState) refreshModeActions();
+      || changes.qtsGenerationNotice || changes.qtsApplyState || changes.qtsApplyKind || changes.qtsAutoApplyState
+      || changes.qtsGetJdNotificationState || changes.authExpiresAt || changes.qtsSessionUser) refreshModeActions();
     // An application ended (submitted or not): APPLY may have changed.
     if (changes.qtsApplyState) refreshDailyCounts();
   };

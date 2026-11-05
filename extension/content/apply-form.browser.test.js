@@ -37,6 +37,42 @@ async function onPage(html, code) {
   }
 }
 
+test('repeated PDF fills and a redrawn empty input do not duplicate an accepted attachment', { skip }, async () => {
+  const result = await onPage(`<form><section id="cv"><div><label for="resume">Resume *</label><input id="resume" type="file" required></div><ul id="attachments"></ul></section><section><label for="letter">Cover letter</label><input id="letter" type="file"></section></form>
+    <script>window.uploads = 0; document.querySelector('#resume').addEventListener('change', (event) => { window.uploads++; const row = document.createElement('li'); row.textContent = event.target.files[0].name; document.querySelector('#attachments').append(row); event.target.value = ''; });</script>`,
+  `const file = { filename: 'Original Resume (2).pdf', base64: btoa('%PDF-original'), mimeType: 'application/pdf' };
+   let field = api.scanForm().find(f => f.label.includes('Resume'));
+   const first = await api.fillField(field.id, null, file);
+   await api.fillField(field.id, null, file); await api.fillField(field.id, null, file);
+   document.querySelector('#resume').replaceWith(Object.assign(document.createElement('input'), { id: 'resume', type: 'file' }));
+   document.querySelector('#resume').addEventListener('change', () => window.uploads++);
+   field = api.scanForm().find(f => f.label.includes('Resume'));
+   const holds = api.uploadHolds(field.id); await api.fillField(field.id, null, file);
+   const letter = api.scanForm().find(f => f.label.includes('Cover'));
+   const other = await api.fillField(letter.id, null, { ...file, filename: 'Original Letter.pdf' });
+   return { uploads: window.uploads, first: first.ok, holds, other: other.ok, attachments: document.querySelectorAll('#attachments li').length };`);
+  assert.deepEqual(result, { uploads: 1, first: true, holds: true, other: true, attachments: 1 });
+});
+
+test('an asynchronously cleared upload without acceptance evidence is not dispatched repeatedly', { skip }, async () => {
+  const result = await onPage(`<form><label for="resume">Resume *</label><input id="resume" type="file"></form><script>window.uploads = 0; document.querySelector('input').addEventListener('change', (e) => { window.uploads++; e.target.value = ''; });</script>`,
+  `const field = api.scanForm()[0], file = { filename: 'Resume.pdf', base64: btoa('%PDF-original') };
+   await api.fillField(field.id, null, file);
+   eval(${JSON.stringify(fs.readFileSync(FORM_FILE, 'utf8'))});
+   const retry = await globalThis.__qtsApplyForm.fillField(field.id, null, file);
+   return { uploads: window.uploads, ok: retry.ok, error: retry.error };`);
+  assert.equal(result.uploads, 1);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /already sent.*attach it manually/);
+});
+
+test('a fresh document can upload the original PDF again', { skip }, async () => {
+  for (let index = 0; index < 2; index++) {
+    assert.equal(await onPage('<form><label for="cv">Resume</label><input id="cv" type="file"></form>',
+      `const field = api.scanForm()[0]; return (await api.fillField(field.id, null, { filename: 'Resume.pdf', base64: btoa('%PDF-original') })).ok;`), true);
+  }
+});
+
 test('a text answer never clicks another field\'s open list; its own suggestion is picked', { skip }, async () => {
   const other = await onPage(`<form><label for="yr">Years *</label><input id="yr"><ul role="listbox"><li role="option" id="o1">5-8 years</li></ul></form>
     <script>document.getElementById('o1').addEventListener('click', () => { window.wrong = true; });</script>`,

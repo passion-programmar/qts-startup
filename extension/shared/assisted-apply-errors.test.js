@@ -31,7 +31,7 @@ function fixture({ permission = 'granted', missing = false, documents = paths, f
     },
     self: {
       __qtsApplyLocalPdfs: localPdfs,
-      __qtsScannerDocumentStore: { getSetting: async () => ({ value: state.noFolder ? null : directory }) },
+      __qtsScannerDocumentStore: { getSetting: async (key) => ({ value: key === localPdfs.SETTING_KEY && !state.noFolder ? directory : null }) },
       __qtsChromePdf: { printDocuments: async () => { throw new Error('Must never render'); } },
     },
     workerApiRequest: async (method, url, body) => {

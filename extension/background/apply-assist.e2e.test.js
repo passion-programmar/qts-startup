@@ -214,7 +214,7 @@ test('normal Apply navigates safely, fills saved values, and pauses for manual a
     await workerEval((documentPdf) => {
       Object.defineProperty(self, '__qtsScannerDocumentStore', {
         configurable: true,
-        value: { getSetting: async () => ({ value: {} }) },
+        value: { getSetting: async (key) => ({ value: key === 'applyPdfDownloadsDirectoryV1' ? {} : null }) },
       });
       Object.defineProperty(self, '__qtsApplyLocalPdfs', {
         configurable: true,

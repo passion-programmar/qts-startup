@@ -11,6 +11,7 @@
     h1 { margin: 0; font-size: 24px; }
     p { color: #cbd5e1; }
     button { padding: 12px 18px; border: 1px solid #6366f1; border-radius: 10px; background: #4f46e5; color: white; font: inherit; cursor: pointer; }
+    input[type="text"] { box-sizing: border-box; width: 100%; padding: 10px; margin: 8px 0 16px; font: inherit; }
     button:disabled { opacity: .5; cursor: default; }
     button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
     #folder-status { min-height: 3.2em; overflow-wrap: anywhere; }
@@ -27,11 +28,25 @@
 <body>
   <main>
     <h1>Apply PDFs folder</h1>
+    <section aria-labelledby="file-access-title">
+      <h2 id="file-access-title">Use PDFs with settings closed</h2>
+      <p>In <strong>chrome://extensions → QTS → Details</strong>, enable <strong>Allow access to file URLs</strong>. This gives QTS broader local-file permission; QTS reads only the configured folder and exact job PDF paths after checking application access.</p>
+      <label for="file-folder-path">Full Windows path to QTS_Resume</label>
+      <input id="file-folder-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\Users\YourName\Downloads\QTS_Resume" disabled>
+      <button id="save-file-access" type="button" disabled>Save local PDF access</button>
+      <button id="use-picker-access" type="button" disabled>Use folder picker instead</button>
+      <p id="file-access-status" role="status" aria-live="polite">Checking local PDF access…</p>
+      <p>Save once per Chrome profile. When configured and file access is enabled, you can close this page. Apply and Auto Apply read the original PDFs without regenerating them. Folder and file existence are checked when Apply reads each job.</p>
+    </section>
+    <section id="folder-picker-settings">
+    <h2>Folder picker and legacy PDF linking</h2>
+    <p>This alternative uses Chrome's folder permission, which may need approval again. To use it for Apply or link a legacy job's original PDFs, choose <strong>Use folder picker instead</strong> above. This ensures Retry reads from the same folder whose files you review.</p>
     <p>Open Downloads and choose the <strong>QTS_Resume</strong> subfolder itself. Chrome blocks selecting the entire Downloads folder. Apply and Auto Apply will read the existing résumé and cover-letter PDFs saved by Generation.</p>
     <button id="choose-folder" type="button" disabled>Choose QTS_Resume folder</button>
     <button id="restore-access" type="button" hidden disabled>Allow saved folder access</button>
     <p id="folder-status" role="status" aria-live="polite">Checking Manager access…</p>
     <p>Folder access is saved for this Chrome profile. Choose the folder again if access is revoked. Then return to the job page and choose Apply or Auto Apply.</p>
+    </section>
     <section id="recovery" hidden aria-labelledby="recovery-title">
       <h2 id="recovery-title">Link original PDFs</h2>
       <p>Select both original files for this job. QTS will save their exact paths and keep Apply paused. File contents stay on this computer.</p>
@@ -51,8 +66,10 @@
     </section>
   </main>
   <script src="../shared/scanner-document-store.js"></script>
+  <script src="../shared/apply-file-access.js"></script>
   <script src="../shared/apply-local-pdfs.js"></script>
   <script src="apply-pdfs.js"></script>
+  <script src="apply-pdf-file-access.js"></script>
   <script src="../shared/apply-pdf-relink.js"></script>
   <script src="apply-pdf-recovery.js"></script>
 </body>

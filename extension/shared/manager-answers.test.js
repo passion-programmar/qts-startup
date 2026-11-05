@@ -31,10 +31,12 @@ test('saved wording adapts between text and dropdown without confusing recruiter
   assert.equal(controlledAnswer({ label: 'LinkedIn profile URL', kind: 'url' }, [saved]), null);
 });
 
-test('global shared answers beat Manager answers; candidate corrections and current application exceptions stay local', () => {
+test('Manager shared answers beat legacy global payloads; application and candidate answers stay more specific', () => {
   const question = 'How did you hear about us?';
   const shared = row('everyone', question, 'Indeed'), manager = row('manager', question, 'LinkedIn');
-  assert.equal(controlledAnswer({ label: question, kind: 'text' }, [manager, shared]).value, 'Indeed');
+  assert.equal(controlledAnswer({ label: question, kind: 'text' }, [manager, shared]).value, 'LinkedIn');
+  assert.equal(controlledAnswer({ label: question, kind: 'text' }, [shared, manager]).value, 'LinkedIn');
+  assert.equal(controlledAnswer({ label: question, kind: 'text' }, [row('candidate', question, 'Candidate source'), row('application', question, 'Application source'), manager]).value, 'Application source');
   assert.equal(controlledAnswer({ label: question, kind: 'text' }, [manager]).value, 'LinkedIn', 'global removal restores Manager fallback');
   assert.equal(controlledAnswer({ label: question, kind: 'text' }, [row('application', question, 'Referral'), shared, manager]).value, 'Referral');
   assert.equal(resolveField({ label: 'City', kind: 'text' }, { city: 'Old City' }, [row('candidate', 'City', 'New City')], { autoApply: true }).value, 'New City');

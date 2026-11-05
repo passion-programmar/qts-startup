@@ -12,6 +12,9 @@
   const MENU_ATTRIBUTE = 'data-qts-apply-menu';
   const SEEN_ATTRIBUTE = 'data-qts-apply-seen';
   const RADIO_GROUP_ATTRIBUTE = 'data-qts-apply-radiogroup';
+  // Lives with this document, across worker autofill passes. A cleared input is not proof that
+  // an asynchronous upload failed; never send the same bytes twice to that unchanged control.
+  const sentUploads = global.__qtsApplySentUploads ||= new WeakMap();
   // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
@@ -1254,7 +1257,14 @@
   async function fillField(id, value, file = null) {
     const element = findField(id);
     if (!element) return { ok: false, error: 'The field is no longer on the page.' };
-    if (element.hasAttribute(DROP_ATTRIBUTE)) return dropFile(element, file);
+    if (element.hasAttribute(DROP_ATTRIBUTE)) {
+      if (!file) return { ok: false, error: 'No file to attach.' };
+      if (uploadHolds(id)) return { ok: true, value: file.filename };
+      const previous = sentUploads.get(element);
+      if (previous?.filename === file.filename && previous.base64 === file.base64) return { ok: false, manualUpload: true, error: 'This PDF was already sent to this upload. Check the site’s attachments; if it was removed or rejected, attach it manually to avoid a duplicate.' };
+      sentUploads.set(element, { filename: file.filename, base64: file.base64 });
+      return dropFile(element, file);
+    }
     if (element.hasAttribute(MENU_ATTRIBUTE)) return pickMenuChoice(element, value);
     if (isEditorHost(element)) return fillEditor(element, value);
     if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
@@ -1274,12 +1284,16 @@
     if (type === 'file') {
       if (!file) return { ok: false, error: 'No file to attach.' };
       if (!acceptsFile(element, file)) return { ok: false, error: `This upload does not take ${file.filename.split('.').pop()?.toUpperCase() || 'this'} files (it takes ${element.accept}).` };
+      if (uploadHolds(id)) return { ok: true, value: element.files?.[0]?.name || file.filename };
+      const previous = sentUploads.get(element);
+      if (previous?.filename === file.filename && previous.base64 === file.base64) return { ok: false, manualUpload: true, error: 'This PDF was already sent to this upload. Check the site’s attachments; if it was removed or rejected, attach it manually to avoid a duplicate.' };
       const transfer = new DataTransfer();
       transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
       element.files = transfer.files;
+      sentUploads.set(element, { filename: file.filename, base64: file.base64 });
       element.dispatchEvent(new Event('input', { bubbles: true }));
       element.dispatchEvent(new Event('change', { bubbles: true }));
-      return { ok: element.files?.length === 1, value: element.files?.[0]?.name || '' };
+      return { ok: uploadHolds(id), value: element.files?.[0]?.name || file.filename };
     }
     if (type === 'radio' || (type === 'checkbox' && element.name && controlsOfGroup(element).length > 1)) {
       const wanted = [].concat(value).map((entry) => cleanText(entry).toLowerCase());
@@ -1536,7 +1550,15 @@
     if (!element) return false;
     if (element.files?.length) return true;
     const { block } = blockQuestion(element);
-    return SHOWN_FILE_NAME.test(textOf(block));
+    if (SHOWN_FILE_NAME.test(textOf(block))) return true;
+    // Some widgets put the attachment list beside the input's labelled block. Look only within
+    // its own upload section: another file control or drop target is a hard boundary.
+    for (let node = element.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth++) {
+      if (node === document.body || node === document.documentElement) break;
+      if (node.querySelectorAll(`input[type="file"], [${DROP_ATTRIBUTE}]`).length > 1) break;
+      if (SHOWN_FILE_NAME.test(textOf(node))) return true;
+    }
+    return false;
   }
 
   /**

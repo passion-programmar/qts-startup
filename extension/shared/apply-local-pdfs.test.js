@@ -166,7 +166,7 @@ test('Apply reads local PDFs without Chrome or server rendering and fails when u
       self: {
         __qtsApplyLocalPdfs: localPdfs,
         __qtsApplyPdf: globalThis.__qtsApplyPdf,
-        __qtsScannerDocumentStore: { getSetting: async () => ({ value: folder }) },
+        __qtsScannerDocumentStore: { getSetting: async (key) => ({ value: key === localPdfs.SETTING_KEY ? folder : null }) },
         __qtsChromePdf: { printDocuments: async () => {
           events.push('chrome-print');
           return null;

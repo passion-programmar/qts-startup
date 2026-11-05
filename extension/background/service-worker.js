@@ -30,6 +30,7 @@ importScripts(
   '../shared/apply-answers.js',
   '../shared/apply-recipes.js',
   '../shared/apply-pdf.js',
+  '../shared/apply-file-access.js',
   '../shared/apply-local-pdfs.js',
   '../shared/scanner-document-store.js',
   '../shared/idle-pacing.js',
@@ -93,7 +94,7 @@ const getJdInFlightJobKeys = new Set();
 const getJdLastPageByTab = new Map();
 const launcherFocus = self.__qtsPageActivity.createLauncherFocus({
   chrome,
-  mount: (tabId) => chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/page-toast.js', 'content/page-launcher.js'] }),
+  mount: (tabId) => chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['shared/get-jd-notifications.js', 'content/page-toast.js', 'content/page-launcher.js'] }),
   eligible: async (tab) => isExtractablePageUrl(tab.url)
     && !getJdHelperTabs.has(tab.id)
     && !self.__qtsChromePdf.isPrintTab(tab.id)
@@ -1259,15 +1260,21 @@ async function writeGetJdResult(tabId, result, notifyPage = true) {
 let getJdNotificationWrites = Promise.resolve();
 function publishGetJdResultNotification(tabId, result) {
   const work = getJdNotificationWrites.catch(() => {}).then(async () => {
-    const auth = await chrome.storage.local.get(['authExpiresAt']);
+    const auth = await chrome.storage.local.get(['authExpiresAt', 'qtsSessionUser']);
     if (!(Number(auth.authExpiresAt) > Date.now())) return;
+    const ownerKey = self.__qtsGetJdNotifications.sessionKey(auth);
+    if (!ownerKey || (result.sessionOwner && result.sessionOwner !== ownerKey)) return;
     const stored = await chrome.storage.local.get([GET_JD_NOTIFICATION_STATE_KEY]);
+    const previous = stored[GET_JD_NOTIFICATION_STATE_KEY];
     const update = self.__qtsGetJdNotifications.recordResult(
-      stored[GET_JD_NOTIFICATION_STATE_KEY],
+      previous?.ownerKey && previous.ownerKey !== ownerKey ? undefined : previous,
       result,
       tabId,
     );
     if (!update.changed) return;
+    const currentAuth = await chrome.storage.local.get(['authExpiresAt', 'qtsSessionUser']);
+    if (!(Number(currentAuth.authExpiresAt) > Date.now()) || self.__qtsGetJdNotifications.sessionKey(currentAuth) !== ownerKey) return;
+    update.state.ownerKey = ownerKey;
     await chrome.storage.local.set({ [GET_JD_NOTIFICATION_STATE_KEY]: update.state });
     await deliverGetJdNotificationBatch(update.state.batch);
   });
@@ -1298,6 +1305,36 @@ async function readGetJdResultForTab(tabId) {
   const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
   const result = stored[GET_JD_RESULTS_KEY]?.[String(tabId)];
   return result?.pageUrl === tab.url ? result : null;
+}
+
+async function finishAbandonedGetJdResult(tabId, initial) {
+  const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY, 'authExpiresAt', 'qtsSessionUser']);
+  const current = stored[GET_JD_RESULTS_KEY]?.[String(tabId)];
+  if (current?.runId !== initial.runId || current.status !== 'processing'
+    || initial.sessionOwner !== self.__qtsGetJdNotifications.sessionKey(stored)) return;
+  await saveGetJdResult(tabId, {
+    ...initial, status: 'cancelled', message: 'Checking stopped before completion: Get JD was stopped or the page changed.', updatedAt: Date.now(),
+  });
+}
+
+async function openGetJdHistoryResult(operationId, sender) {
+  if (sender?.id !== chrome.runtime.id || sender.frameId !== 0 || sender.tab?.id == null) return { ok: false, error: 'Open results from the QTS launcher.' };
+  const stored = await chrome.storage.local.get([GET_JD_NOTIFICATION_STATE_KEY, 'authExpiresAt', 'qtsSessionUser']);
+  if (!(Number(stored.authExpiresAt) > Date.now()) || stored.qtsSessionUser?.role !== 'manager') return { ok: false, error: 'Sign in as a Manager to open Get JD results.' };
+  const state = stored[GET_JD_NOTIFICATION_STATE_KEY];
+  if (state?.ownerKey && state.ownerKey !== self.__qtsGetJdNotifications.sessionKey(stored)) return { ok: false, error: 'This result belongs to a previous session.' };
+  const entry = state?.history?.find((item) => item.operationId === operationId && item.status !== 'processing');
+  let url; try { url = new URL(entry?.pageUrl); } catch { return { ok: false, error: 'This job page is no longer available.' }; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return { ok: false, error: 'Only job web pages can be opened.' };
+  const tab = await getTab(entry.tabId);
+  const currentAuth = await chrome.storage.local.get(['authExpiresAt', 'qtsSessionUser']);
+  if (!(Number(currentAuth.authExpiresAt) > Date.now()) || currentAuth.qtsSessionUser?.role !== 'manager'
+    || self.__qtsGetJdNotifications.sessionKey(currentAuth) !== self.__qtsGetJdNotifications.sessionKey(stored)) return { ok: false, error: 'Your Manager session changed. Reopen the launcher.' };
+  if (tab?.url === entry.pageUrl) {
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tab.id, { active: true });
+  } else await chrome.tabs.create({ url: url.href, active: true });
+  return { ok: true };
 }
 
 // Mirrors the server's per-account states; older stored results fall back to duplicateKind.
@@ -1425,7 +1462,9 @@ async function saveGetJdSelection(tabId, profileIds) {
         : {}),
     });
     if (response.success !== true) {
-      return { ok: false, error: response.message || 'Could not save selected candidates.' };
+      const message = response.message || 'Could not save selected candidates.';
+      await saveGetJdResult(tabId, { ...result, status: 'complete', saveError: message, saveResponse: { savedCount: 0, failedCount: additions.length }, updatedAt: Date.now() });
+      return { ok: false, error: message };
     }
     results.push(...(response.results || []));
   }
@@ -1664,7 +1703,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     tabId,
     pageUrl: url,
     runId: `${Date.now()}:${documentId}`,
-    pageTitle: '',
+    pageTitle: tab.title || '',
+    sessionOwner: self.__qtsGetJdNotifications.sessionKey(await chrome.storage.local.get(['authExpiresAt', 'qtsSessionUser'])),
     status: 'processing',
     message: 'Reading this page and checking Jobs and Bids…',
     updatedAt: Date.now(),
@@ -1690,6 +1730,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     claimedJobKey = self.__qtsJobPageDetection.normalizeIdentityUrl(url);
     if (getJdInFlightJobKeys.has(claimedJobKey)) {
       claimedJobKey = null;
+      await saveGetJdResult(tabId, { ...initialResult, status: 'duplicate', message: 'Another tab is already checking this job.', updatedAt: Date.now() });
       await showGetJdDone(tabId, url, 'Another tab is already checking this job.', 'info');
       return;
     }
@@ -2011,6 +2052,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     });
     await showGetJdNotice(tabId, url, `Get JD couldn't finish: ${message}`, ['try_again'], { tone: 'error' });
   } finally {
+    await finishAbandonedGetJdResult(tabId, initialResult).catch((error) => console.warn('[QTS Get JD] Could not finalize stopped result:', error));
     getJdInFlightTabs.delete(tabId);
     if (claimedJobKey) getJdInFlightJobKeys.delete(claimedJobKey);
     // Only the navigation monitor admits subsequent pages; never scan a tab as a side effect.
@@ -5347,6 +5389,10 @@ function checkedWorkSelection(selection) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'QTS_OPEN_GET_JD_RESULT') {
+    openGetJdHistoryResult(msg.operationId, sender).then(sendResponse, (error) => sendResponse({ ok: false, error: error.message || 'Could not open this job page.' }));
+    return true;
+  }
   const disabledFeature = disabledFeatureForMessage(msg?.type);
   if (disabledFeature) {
     sendResponse({
@@ -7212,9 +7258,10 @@ self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
 
 // The launcher's page scripts, added to a tab that has none: one opened before the extension was
 // installed or reloaded, which Chrome leaves without the manifest's content scripts.
-const TOOLBAR_LAUNCHER_FILES = ['content/page-toast.js', 'content/page-launcher.js'];
+const TOOLBAR_LAUNCHER_FILES = ['shared/get-jd-notifications.js', 'content/page-toast.js', 'content/page-launcher.js'];
 
 async function sendToolbarClick(tab) {
+  if (await self.__qtsApplyRunner?.openOwnedPanel?.(tab.id)) return { ok: true };
   const message = { type: 'QTS_TOOLBAR_ICON_CLICKED' };
   try {
     return await chrome.tabs.sendMessage(tab.id, message, { frameId: 0 });
@@ -7225,7 +7272,7 @@ async function sendToolbarClick(tab) {
   }
 }
 
-// The toolbar icon toggles the page Sign In form while signed out and the launcher actions after sign-in.
+// On owned Apply tabs reveal their panel; elsewhere toggle Sign In or the launcher actions.
 chrome.action.onClicked.addListener((tab) => {
   if (tab?.id == null) return;
   sendToolbarClick(tab)

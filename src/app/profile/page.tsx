@@ -9,10 +9,8 @@ import { SiteAccountPasswordForm } from "@/app/profile/site-account-password-for
 import { users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
-import { loadApprovedReusableAnswers } from "@/server/apply/reusable-answers";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
-import { displayReusableAnswer } from "@/lib/checkbox-answer";
 
 export const instant = false;
 
@@ -23,14 +21,12 @@ export const metadata: Metadata = {
 export default async function ProfilePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const [[siteAccount], library, managerAnswers] = user.role === "manager"
+  const [[siteAccount], managerAnswers] = user.role === "manager"
     ? await Promise.all([
       db.select({ password: users.siteAccountPassword }).from(users).where(eq(users.id, user.id)).limit(1),
-      loadApprovedReusableAnswers(),
       listManagerAnswers(user.id),
     ])
-    : [[], [], []];
-  const approvedAnswers = library;
+    : [[], []];
 
   return (
     <WorkspaceShell activeHref="/profile" user={user}>
@@ -85,24 +81,11 @@ export default async function ProfilePage() {
                 <h2 className="text-sm font-semibold text-slate-800">Reusable answers</h2>
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                Your saved corrections are available immediately. Super Admin manages global answers separately.
+                Manage answers for your applications and candidates. Your shared answers are available to your candidates without approval. Apply does not use global answers.
               </p>
             </div>
             <ManagerAnswers rows={managerAnswers} />
 
-            <details className="mt-6">
-              <summary className="cursor-pointer text-xs font-semibold text-slate-700">
-                Global answers Apply uses ({approvedAnswers.length})
-              </summary>
-              <ul className="mt-2 space-y-2">
-                {approvedAnswers.map((row) => (
-                  <li className="rounded-lg bg-slate-50 px-3 py-2" key={row.questionKey}>
-                    <p className="text-xs font-semibold text-slate-800">{row.questionText}</p>
-                    <p className="mt-0.5 whitespace-pre-wrap text-xs text-slate-600">{displayReusableAnswer(row.answer)}</p>
-                  </li>
-                ))}
-              </ul>
-            </details>
           </section>
         )}
       </div>

@@ -8,13 +8,13 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 const job = { attemptId: 'attempt', jobId: 'job', generationId: 'run', candidateName: 'Candidate', title: 'Engineer', company: 'Company',
   resumePath: 'QTS_Resume/Run/Old.pdf', coverLetterPath: null };
 
-function fixture() {
+function fixture({ direct = null } = {}) {
   const nodes = {}, calls = [], events = {};
   let storageListener;
   const get = (id) => nodes[id] ||= { value: '', checked: false, disabled: false, hidden: false, handlers: {},
     addEventListener(event, handler) { this.handlers[event] = handler; },
     replaceChildren(...options) { this.options = options; }, removeAttribute(key) { delete this[key]; } };
-  const state = { owner: true, permission: 'granted', digest: 'original', reads: 0, response: { ok: true }, context: job };
+  const state = { owner: true, permission: 'granted', digest: 'original', reads: 0, response: { ok: true }, context: job, direct };
   const root = { queryPermission: async () => state.permission, isSameEntry: async (other) => other === root };
   const context = { URL, Blob, location: { href: 'chrome-extension://fixture/settings/apply-pdfs.html?attemptId=attempt' },
     Option: function Option(label, value) { this.label = label; this.value = value; },
@@ -26,7 +26,7 @@ function fixture() {
       return state.response;
     } }, storage: { onChanged: { addListener: (fn) => { storageListener = fn; } } } },
     __qtsApplyLocalPdfs: { SETTING_KEY: 'folder' },
-    __qtsScannerDocumentStore: { getSetting: async () => ({ value: root }) },
+    __qtsScannerDocumentStore: { getSetting: async (key) => ({ value: key === 'applyPdfFileAccessV1' ? state.direct : root }) },
     __qtsApplyPdfRelink: { parent: () => 'QTS_Resume/Run', list: async () => ['Old.pdf', 'Original (1).pdf', 'Letter (2).pdf'],
       read: async (_root, _context, resume, cover) => {
         state.reads++;
@@ -87,4 +87,17 @@ test('session changes invalidate pending local reads and focus detects lost owne
   f.state.owner = false; await f.focus(); assert.match(f.get('recovery-status').textContent, /stopped/);
   assert.equal(f.calls.filter((call) => call.action === 'context').length, 1);
   assert.equal(f.calls.some((call) => call.action === 'save'), false);
+});
+
+test('legacy recovery refuses mixed direct/picker roots on load and before Save, requiring an explicit mode switch', async () => {
+  const direct = { mode: 'file-url', rootPath: 'C:\\Other\\QTS_Resume' };
+  const f = fixture({ direct }); await settle();
+  assert.match(f.get('recovery-status').textContent, /Use folder picker instead.*same folder/);
+  assert.equal(f.get('recovery-fields').disabled, true); assert.equal(f.state.reads, 0);
+  assert.equal(f.calls.some((call) => call.action === 'save'), false);
+  f.state.direct = null; await f.reload(); await f.select(); f.confirm();
+  f.state.direct = direct; await f.save();
+  assert.equal(f.calls.some((call) => call.action === 'save'), false);
+  assert.match(f.get('recovery-status').textContent, /Use folder picker instead/);
+  assert.equal(f.get('confirm-originals').checked, false);
 });

@@ -18,13 +18,13 @@ async function until(label, check, timeout = 30000) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-async function retryButton(page) {
+async function retryButton(page, buttonClass = 'retry-fill', text = null) {
   const client = await page.createCDPSession();
   try {
     const { root } = await client.send('DOM.getDocument', { depth: -1, pierce: true });
     const find = (node) => {
       const index = node.attributes?.indexOf('class');
-      if (node.nodeName === 'BUTTON' && index >= 0 && node.attributes[index + 1].split(' ').includes('retry-fill')) return node;
+      if (node.nodeName === 'BUTTON' && index >= 0 && node.attributes[index + 1].split(' ').includes(buttonClass) && (!text || JSON.stringify(node.children).includes(text))) return node;
       for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) {
         const hit = find(child);
         if (hit) return hit;
@@ -32,7 +32,7 @@ async function retryButton(page) {
       return null;
     };
     const node = find(root);
-    assert.ok(node, 'the actual panel shows Retry autofill');
+    assert.ok(node, `the actual panel shows ${buttonClass}`);
     await client.send('DOM.scrollIntoViewIfNeeded', { nodeId: node.nodeId });
     const { model } = await client.send('DOM.getBoxModel', { nodeId: node.nodeId });
     const [x1, y1, , , x3, y3] = model.content;
@@ -40,6 +40,22 @@ async function retryButton(page) {
   } finally {
     await client.detach();
   }
+}
+
+async function setPanelValue(page, className, value) {
+  const client = await page.createCDPSession();
+  try {
+    const { root } = await client.send('DOM.getDocument', { depth: -1, pierce: true });
+    const find = (node) => {
+      const index = node.attributes?.indexOf('class');
+      if (index >= 0 && node.attributes[index + 1].split(' ').includes(className)) return node;
+      for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) { const found = find(child); if (found) return found; }
+      return null;
+    };
+    const node = find(root); assert.ok(node, `panel control ${className} exists`);
+    const { object } = await client.send('DOM.resolveNode', { nodeId: node.nodeId });
+    await client.send('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: 'function(value) { this.value = value; this.dispatchEvent(new Event("change", { bubbles: true })); this.dispatchEvent(new Event("input", { bubbles: true })); }', arguments: [{ value }] });
+  } finally { await client.detach(); }
 }
 
 async function connectWorker(target) {
@@ -56,6 +72,7 @@ async function connectWorker(target) {
 
 test('Assisted Apply pauses on exact-path/file/permission errors, retries only on request, survives restart, and cannot refill after Cancel', { skip: !CHROME, timeout: 240000 }, async () => {
   const requests = [], queue = [], held = new Map();
+  let answerRows = [];
   let pathsAvailable = true, documentsGate = null;
   const server = http.createServer(async (req, res) => {
     const chunks = [];
@@ -81,6 +98,12 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
       reply = { success: true, application };
     }
     if (url.pathname === '/api/extension/apply/resume') reply = { success: true, application: held.get(body.attemptId) };
+    if (url.pathname === '/api/extension/apply/answer-library') {
+      assert.ok(held.has(body.attemptId));
+      if (body.action === 'save') answerRows = [{ id: '77777777-7777-4777-8777-777777777777', version: '123.000001', scope: 'manager', questionText: body.answer.question, answer: body.answer.answer, variants: [] }];
+      if (body.action === 'delete') { assert.equal(body.answer.version, answerRows[0].version); answerRows = []; }
+      reply = { success: true, savedAnswers: answerRows, editableAnswers: answerRows };
+    }
     if (url.pathname === '/api/extension/apply/documents') {
       if (documentsGate) await documentsGate;
       if (pathsAvailable) reply = { success: true, documents: paths };
@@ -129,11 +152,12 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
         candidate: { firstName: 'Casey', lastName: 'Example', email: 'casey@example.test' }, profileDetails: { experiences: [], educations: [] },
         savedAnswers: [], rememberedChoices: [], exchangeRates: null, answerPrompt: null, siteAccountPassword: null,
       });
-      assert.equal((await action('apply')).ok, true);
+      const started = await action('apply');
+      assert.equal(started.ok, true, JSON.stringify(started));
       const form = await until('the application tab', async () => (await browser.pages()).find((p) => p.url() === `${base}/form?case=${index}`));
       return { id, form };
     };
-    const paused = (id) => until('the actionable paused panel', async () => { const state = await info(id); return state?.panel.retryFill && !state.busy ? state.panel : null; });
+    const paused = (id) => until('the actionable paused panel', async () => { const state = await info(id); return state?.panel?.retryFill && !state.busy ? state.panel : null; });
     const stop = async (id) => {
       assert.equal((await action('cancel_status')).ok, true);
       await until('cancel cleanup', async () => !(await info(id)) && (await worker.evaluate(() => chrome.storage.local.get('qtsExtensionStatus'))).qtsExtensionStatus == null);
@@ -147,7 +171,7 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
         FileSystemDirectoryHandle.prototype.queryPermission = async () => 'prompt';
       });
       const before = docsCount();
-      const { id, form } = await begin(index);
+      let { id, form } = await begin(index);
       const panel = await paused(id);
       console.log(`[Assisted Apply PDF] ${failure}: actionable error displayed`);
       assert.match(panel.status, /Autofill paused.*Retry autofill/);
@@ -164,6 +188,30 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
       }, id);
       assert.equal(docsCount(), before + 1, 'ordinary page events never retry a paused read');
       if (failure === 'paths') {
+        // The toolbar must reveal this application, not toggle the launcher hidden behind it.
+        await worker.evaluate(async (id) => {
+          const tabId = activeReviews.get(id).tabId;
+          await chrome.scripting.executeScript({ target: { tabId }, func: () => {
+            globalThis.__qtsApplyAssist.remove();
+          } });
+          const reply = await sendToolbarClick(await chrome.tabs.get(tabId));
+          if (reply?.ok !== true) throw new Error('Toolbar did not restore the owned Apply panel.');
+        }, id);
+        await form.waitForSelector('[data-qts-apply-assist]');
+        assert.equal(docsCount(), before + 1, 'toolbar restoration does not retry paused PDFs');
+        await retryButton(form, 'pause-fill');
+        await until('Manager pause', async () => (await info(id))?.panel?.manualPaused === true);
+        const claimsBeforeHandoff = requests.filter((request) => request.path === '/api/extension/apply/claim').length;
+        const child = await worker.evaluate(async (id, url) => chrome.tabs.create({ openerTabId: activeReviews.get(id).tabId, url }), id, `${base}/form?child=1`);
+        const childPage = await until('owned child tab', async () => (await browser.pages()).find((page) => page.url() === `${base}/form?child=1`));
+        await childPage.waitForSelector('[data-qts-apply-assist]');
+        assert.equal(docsCount(), before + 1, 'child panel does not retry paused PDFs');
+        await until('original tab closes after continuation panel is ready', () => form.isClosed());
+        assert.deepEqual(await worker.evaluate((id) => [...activeReviews.get(id).tabIds], id), [child.id]);
+        assert.equal(requests.filter((request) => request.path === '/api/extension/apply/claim').length, claimsBeforeHandoff, 'closing the parent does not claim a replacement job');
+        form = childPage;
+        await form.type('#first', 'Manager edit');
+        console.log('[Assisted Apply panel] continuation replaced the original without retrying PDFs or ending the attempt');
         // Stop just the worker; retain the same form/tab and saved pause.
         await worker.evaluate(() => { self.__task2BeforeStop = true; });
         const cdp = await browser.target().createCDPSession();
@@ -184,6 +232,10 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
         await worker.evaluate(() => { self.__qtsApplyRunner.processApplyQueue(); });
         const restored = await paused(id);
         assert.equal(restored.problems[0].message, panel.problems[0].message);
+        assert.equal(restored.manualPaused, true, 'Manager pause survives continuation and worker restart');
+        await retryButton(form, 'pause-fill');
+        await until('explicit Resume clears only Manager pause', async () => (await info(id))?.panel?.manualPaused === false);
+        assert.equal((await info(id)).panel.retryFill, true, 'Resume cannot bypass the separate PDF error');
         assert.equal(docsCount(), before + 1, 'restart preserves the pause without retrying documents');
         console.log('[Assisted Apply PDF] pause restored after worker restart');
       }
@@ -204,6 +256,29 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
       }));
       assert.deepEqual(uploaded, { first: 'Manager edit', resume: pdf, cover: pdf });
       await until('the cleared error', async () => { const state = await info(id); return state && !state.panel.retryFill && !state.panel.filling && !state.panel.problems.length; });
+      if (failure === 'paths') {
+        await retryButton(form, 'pause-fill');
+        await until('Manager pause before explicit answer edits', async () => (await info(id))?.panel?.manualPaused === true);
+        await retryButton(form, 'card-head', 'Reusable answers');
+        await retryButton(form, 'answer-editor-open');
+        await until('answer library loaded', () => requests.some((r) => r.path.endsWith('/answer-library') && r.body.action === 'load'));
+        await until('answer editor load finished', () => worker.evaluate((id) => !activeReviews.get(id).assistant.answerEditBusy, id));
+        await setPanelValue(form, 'answer-editor-select', 'new');
+        await setPanelValue(form, 'answer-editor-question', 'Additional details');
+        await setPanelValue(form, 'answer-editor-value', 'Explicit Manager answer');
+        assert.equal(requests.filter((r) => r.path.endsWith('/answer-library') && r.body.action === 'save').length, 0);
+        await retryButton(form, 'answer-editor-save');
+        await until('explicit answer saved', () => answerRows.length === 1);
+        await until('answer save finished', () => worker.evaluate((id) => !activeReviews.get(id).assistant.answerEditBusy, id));
+        assert.equal((await info(id)).panel.manualPaused, true);
+        assert.equal(await form.$eval('#first', (node) => node.value), 'Manager edit');
+        await setPanelValue(form, 'answer-editor-select', `saved:${answerRows[0].id}`);
+        await retryButton(form, 'answer-editor-delete');
+        await until('explicit answer deleted', () => answerRows.length === 0);
+        assert.equal((await info(id)).panel.manualPaused, true);
+        assert.equal(await form.$eval('#first', (node) => node.value), 'Manager edit');
+        console.log('[Assisted Apply answers] explicit Save/Delete preserved Manager edits and pause');
+      }
       await stop(id);
       const release = requests.filter((r) => r.path === '/api/extension/apply/release').at(-1);
       assert.equal(release.body.mode, 'drop');
