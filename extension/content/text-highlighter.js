@@ -21,6 +21,7 @@ async function startPageTextHighlighter() {
   let disposed = false;
   let bodyObserver = null;
   let finishBodyWait = null;
+  let sharedRulesRequestUrl = '';
   const excluded = 'script,style,noscript,textarea,option,[contenteditable="true"],[data-qts-text-highlight]';
 
   function contextAvailable() {
@@ -227,7 +228,7 @@ async function startPageTextHighlighter() {
     ]);
     if (!contextAvailable()) { dispose(); return; }
     currentRules = highlighting.normalizeRules(stored[currentStorageKey] || []);
-    if ((Number(stored.authExpiresAt) || 0) <= Date.now() || !currentRules.length) {
+    if ((Number(stored.authExpiresAt) || 0) <= Date.now()) {
       applyRules([]);
       return;
     }
@@ -240,16 +241,20 @@ async function startPageTextHighlighter() {
       return;
     }
     applyRules(currentRules);
-    if (sharedRulesUrl === url) return;
-    sharedRulesUrl = url;
+    if (sharedRulesUrl === url || sharedRulesRequestUrl === url) return;
+    sharedRulesRequestUrl = url;
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_GLOBAL_TEXT_HIGHLIGHTS' });
       if (!response?.success) {
         console.warn('[QTS text highlights] Shared rules are unavailable:', response?.message || 'Unknown error.');
+      } else {
+        sharedRulesUrl = url;
       }
     } catch (error) {
       if (!contextAvailable() || /extension context invalidated/i.test(String(error?.message || error))) { dispose(); return; }
       console.warn('[QTS text highlights] Could not request shared rules:', error);
+    } finally {
+      if (sharedRulesRequestUrl === url) sharedRulesRequestUrl = '';
     }
   }
 
@@ -292,5 +297,4 @@ function startPageTextHighlighterAfterLoad() {
   });
 }
 
-if (document.readyState === 'complete') startPageTextHighlighterAfterLoad();
-else window.addEventListener('load', startPageTextHighlighterAfterLoad, { once: true });
+startPageTextHighlighterAfterLoad();
