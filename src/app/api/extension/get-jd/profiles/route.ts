@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { profiles, users } from "@/db/schema";
+import { categories, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 
@@ -24,9 +24,14 @@ export async function GET(request: Request): Promise<NextResponse> {
         firstName: profiles.firstName,
         lastName: profiles.lastName,
         category: profiles.managerCategory,
+        categoryId: profiles.categoryId,
+        categoryName: categories.name,
+        label: profiles.managerCategory,
+        labelColor: profiles.managerCategoryColor,
       })
       .from(users)
       .innerJoin(profiles, eq(profiles.userId, users.id))
+      .innerJoin(categories, eq(categories.id, profiles.categoryId))
       .where(and(
         eq(users.parentUserId, manager.id),
         eq(users.role, "account"),
@@ -50,6 +55,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         id: profile.id,
         name: [profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Candidate",
         category: profile.category || null,
+        ...(!requireMatchingNote ? { categoryId: profile.categoryId, categoryName: profile.categoryName, label: profile.label, labelColor: profile.labelColor } : {}),
       })),
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

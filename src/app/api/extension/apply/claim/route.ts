@@ -19,9 +19,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     let selection;
     try { selection = readWorkSelection(body?.selection); }
     catch (error) { return NextResponse.json({ success: false, message: (error as Error).message }, { status: 400 }); }
-    if (selection && mode !== "auto_apply") {
-      return NextResponse.json({ success: false, message: "This job selection is only valid for Auto Apply." }, { status: 400 });
-    }
+    // Apply and Auto Apply both take the panel's candidate and checked jobs; none means every account.
     const skipJobIds = Array.isArray(body?.skipJobIds) ? body.skipJobIds.filter(isUuid).slice(0, 200) : [];
     const requireMatchingNote = mode === "auto_apply" && await getGetJdMatchingMode(auth.manager.id) === "gemini";
     const application = await claimNextApplication(auth.manager.id, auth.browser, skipJobIds, selection, {

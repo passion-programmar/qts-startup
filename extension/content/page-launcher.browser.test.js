@@ -18,6 +18,8 @@ const until = async (label, check) => {
 
 
 const ID='11111111-1111-4111-8111-111111111111';
+const APPLIED_ID='22222222-2222-4222-8222-222222222222';
+const NEW_ID='33333333-3333-4333-8333-333333333333';
 const ORIGINAL=['Responsibilities: Build Python services using FastAPI and PostgreSQL. Preserve deployment automation, testing, technical requirements and benefits.',
 'Qualifications: Production engineering experience. Unicode locations: S\u00e3o Paulo and Wroc\u0142aw. Full-time remote work. Salary and employment conditions remain as written.',
 'Technical detail repeated on purpose: preserve this complete source sentence without removal.',
@@ -37,12 +39,19 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=chunks.length?JSON.parse(Buffer.concat(chunks)):null;
     requests.push({path:req.url,body});let result={success:true,managerId:'test-manager',rules:[],exclusions:[],features:{}};
     if(req.url==='/api/extension/get-jd/check'){
-      if(body.scope!=='global')throw Error('Unexpected second/per-candidate precheck');
-      if(body.job.jobUrl.includes('precheck-error')){res.statusCode=503;result={success:false,message:'Local precheck failure. Refresh to retry.'};}
-      else result={success:true,skip:/duplicate-(jobs|bids)-(url|title)/.test(body.job.jobUrl)||saved.has(body.job.jobUrl),precheckToken:'local-fixture-ticket'};
+      if(body.scope==='global'){
+        if(body.job.jobUrl.includes('precheck-error')){res.statusCode=503;result={success:false,message:'Local precheck failure. Refresh to retry.'};}
+        else result={success:true,skip:/duplicate-(jobs|bids)-(url|title)/.test(body.job.jobUrl)||saved.has(body.job.jobUrl),precheckToken:'local-fixture-ticket'};
+      }else if(body.scope==='manual'){
+        result={success:true,exists:true,inJobs:true,inBids:false,toastKind:'added',toastMessage:'Already saved for a candidate.',summary:{text:'1 already saved'},profiles:[
+          {id:ID,name:'Saved Candidate',state:'has_job',available:false,rowId:'saved-row',categoryId:'engineering',categoryName:'Engineering',label:'Senior',labelColor:'#0f172a'},
+          {id:APPLIED_ID,name:'Applied Candidate',state:'applied',available:false,rowId:'applied-row',categoryId:'engineering',categoryName:'Engineering',label:'Applied',labelColor:'#fef08a'},
+          {id:NEW_ID,name:'Available Candidate',state:'available',available:true,categoryId:'design',categoryName:'Design',label:'New',labelColor:'#10b981'}
+        ]};
+      }else throw Error('Unexpected Get JD check scope');
     }else if(req.url==='/api/extension/get-jd/mode')result={success:true,mode};
     else if(req.url==='/api/extension/get-jd/profiles')result={success:true,profiles:[{id:ID,name:'Test Candidate'}]};
-    else if(req.url==='/api/extension/get-jd/save')result={success:true,results:[{profileId:ID,status:'saved',jobId:'fixture-job'}],savedCount:1};
+    else if(req.url==='/api/extension/get-jd/save')result={success:true,results:body.profileIds.map(profileId=>({profileId,status:'saved',jobId:'fixture-job'})),savedCount:body.profileIds.length};
     else if(req.url==='/api/extension/get-jd'){
       saved.add(body.pageUrl);result={success:true,classification:{isJobPage:true,isRemote:true,matchingProfileIds:[ID],job:{title:'Software Engineer',company:'Example',description:body.originalDescription,jobUrl:body.pageUrl}},
       profiles:[{id:ID,name:'Test Candidate',state:'has_job',autoSaved:true,available:false}],autoSavedProfileIds:[ID],autoSavedJobs:[{profileId:ID,jobId:'fixture-job'}],autoSaveFailureCount:0,jobDescription:body.originalDescription};
@@ -58,7 +67,7 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     const visible=page=>page.evaluate(()=>Boolean(document.querySelector('[data-qts-page-launcher]')));
     const tabId=page=>worker.evaluate(async url=>(await chrome.tabs.query({})).find(t=>t.url===url)?.id,page.url());
     const ask=async(page,msg)=>worker.evaluate(async(id,msg)=>(await chrome.scripting.executeScript({target:{tabId:id},func:m=>chrome.runtime.sendMessage(m),args:[msg]}))[0].result,await tabId(page),msg);
-    const prechecks=()=>requests.filter(r=>r.path==='/api/extension/get-jd/check');const gemini=()=>requests.filter(r=>r.path==='/api/extension/get-jd');
+    const prechecks=()=>requests.filter(r=>r.path==='/api/extension/get-jd/check'&&r.body.scope==='global');const manualChecks=()=>requests.filter(r=>r.path==='/api/extension/get-jd/check'&&r.body.scope==='manual');const gemini=()=>requests.filter(r=>r.path==='/api/extension/get-jd');
     const result=async id=>worker.evaluate(async id=>(await chrome.storage.local.get('qtsGetJdResults')).qtsGetJdResults?.[id],id);
     const uiRequestsBefore=requests.filter(r=>r.path!=='/api/extension/browsers/heartbeat').length;
     for(const index of [0,4,2,0]){await pages[index].bringToFront();await until('one launcher',async()=>{const states=await Promise.all(pages.map(visible));return states[index]&&states.filter(Boolean).length===1;});}
@@ -66,10 +75,18 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     assert.equal((await ask(pages[0],{type:'QTS_PAGE_ACTION',action:'get_jd'})).ok,true);
     await pages[1].bringToFront();await pages[0].bringToFront();await new Promise(r=>setTimeout(r,500));assert.equal(prechecks().length,0);
     await pages[0].goto(base+'/jobs/ordinary');await pages[0].evaluate(()=>history.pushState({},'','/jobs/spa'));await new Promise(r=>setTimeout(r,800));assert.equal(prechecks().length,0,'ordinary and SPA navigations ignored');
-    await pages[0].reload();await until('explicit old-tab refresh',()=>prechecks().length===1);
+    await pages[0].reload();await until('explicit old-tab manual duplicate check',()=>manualChecks().length===1);
     await until('manual review ready',async()=>(await result(await tabId(pages[0])))?.status==='complete');
-    assert.equal((await ask(pages[0],{type:'SAVE_GET_JD_SELECTION',profileIds:[ID]})).ok,true);
-    assert.equal(requests.filter(r=>r.path==='/api/extension/get-jd/save').length,1,'Manual still requires explicit Save');
+    await until('manual panel opens automatically', () => pages[0].evaluate(() => document.documentElement.getAttribute('data-qts-get-jd-docked') === 'true'));
+    assert.equal(await pages[0].evaluate(() => {
+      const launcher = document.querySelector('[data-qts-page-launcher]');
+      return getComputedStyle(launcher).display === 'none'
+        && document.documentElement.getAttribute('data-qts-manual-get-jd-review') === 'true';
+    }), true, 'manual candidate review hides the QTS launcher while it is open');
+    assert.equal(prechecks().length,0,'manual duplicate detection must be per candidate, not a global skip');
+    const manualResult=await result(await tabId(pages[0]));
+    assert.deepEqual(manualResult.selectedProfileIds.sort(),[ID,APPLIED_ID].sort());
+    assert.equal(manualResult.profiles.find(profile=>profile.id===NEW_ID).available,true,'a candidate without this job remains available to select');
     mode='gemini';const before=prechecks().length;
     await pages[0].keyboard.down(process.platform==='darwin'?'Meta':'Control');await pages[0].click('#open-job');await pages[0].keyboard.up(process.platform==='darwin'?'Meta':'Control');
     await until('Ctrl-click background job evaluated',()=>gemini().length===1);

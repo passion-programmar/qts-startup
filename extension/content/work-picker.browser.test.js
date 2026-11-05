@@ -30,10 +30,10 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         if(message.type === 'QTS_WORK_ITEMS') {
           if(!message.candidateId) return new Promise(resolve => {
             window.accountFetchCounts[message.mode] = (window.accountFetchCounts[message.mode] || 0) + 1;
-            window.accountResolvers[message.mode] = () => resolve({ ok: true, accounts: window.accountListResponses[message.mode] || [
-              { id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform', categoryColor: '#2563eb', eligibleJobCount: 8 },
-              { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '', eligibleJobCount: 3 },
-              { id: '33333333-3333-4333-8333-333333333333', name: 'Morgan Lee', category: 'Design', eligibleJobCount: 0 },
+            window.accountResolvers[message.mode] = () => resolve({ ok: true, accounts: [
+              { id: '11111111-1111-4111-8111-111111111111', categoryName: 'Engineering', name: 'Jordan Taylor', category: 'Platform', categoryColor: '#2563eb', counts: window.nextCounts || { generation: 8, apply: 2, auto_apply: 2 } },
+              { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '', counts: { generation: 3, apply: 0, auto_apply: 1 } },
+              { id: '33333333-3333-4333-8333-333333333333', name: 'Morgan Lee', category: 'Design', counts: { generation: 0, apply: 0, auto_apply: 0 } },
             ] });
           });
           if(message.candidateId.startsWith('2222') && !window.allowSecondAccount) return { ok: false, error: 'Local loading failure. Retry.' };
@@ -65,43 +65,48 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('.menu').getBoundingClientRect().width), 384, 'launcher width is four fifths of 480px');
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('.menu').scrollWidth <= window.testRoot.querySelector('.menu').clientWidth), true, 'narrower panel has no horizontal overflow');
     assert.equal(await page.evaluate(() => window.calls.filter(m=>m.type==='QTS_WORK_ITEMS').length), 0, 'passive initialization does not fetch accounts');
-    await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').focus());
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[0].textContent), 'Loading accounts…');
-    await page.evaluate(() => window.accountResolvers.generation());
-    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options.length === 4);
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].textContent), 'Jordan Taylor (8+)');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.backgroundColor), '');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1].style.color), '');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[2].textContent), 'Casey Smith (3)');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').options[3].disabled), true);
-    await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="generation"]'); s.value=s.options[1].value; s.dispatchEvent(new Event('change')); });
-    assert.deepEqual(await page.evaluate(() => {
-      const select = window.testRoot.querySelector('[data-work-account="generation"]');
-      const category = window.testRoot.querySelector('[data-work-account-category="generation"]');
-      return { selectBackground: select.style.backgroundColor, selectColor: select.style.color, categoryText: category.textContent, categoryColor: category.style.color };
-    }), { selectBackground: '', selectColor: '', categoryText: 'Platform', categoryColor: 'rgb(37, 99, 235)' });
-    await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length===2);
-    const accountFetches = await page.evaluate(() => window.accountFetchCounts.generation);
-    await page.evaluate(() => {
-      window.accountListResponses.generation = [
-        { id: '11111111-1111-4111-8111-111111111111', name: 'Jordan Taylor', category: 'Platform', categoryColor: '#2563eb', eligibleJobCount: 6 },
-        { id: '22222222-2222-4222-8222-222222222222', name: 'Casey Smith', category: '', eligibleJobCount: 3 },
-        { id: '33333333-3333-4333-8333-333333333333', name: 'Morgan Lee', category: 'Design', eligibleJobCount: 0 },
-      ];
+    const C = '[data-work-candidate]';
+    const ONE = '11111111-1111-4111-8111-111111111111';
+    const readyTexts = () => page.evaluate(() => ['generation', 'apply', 'auto_apply'].map(mode => window.testRoot.querySelector(`[data-action="${mode}"] .ready`).textContent));
+    const choose = (index, allow = false) => page.evaluate((C, index, allow) => { window.allowSecondAccount = allow; const s = window.testRoot.querySelector(C); s.value = s.options[index].value; s.dispatchEvent(new Event('change')); }, C, index, allow);
+    const openJobs = mode => page.evaluate(mode => window.testRoot.querySelector(`[data-work-toggle="${mode}"]`).click(), mode);
+    await page.evaluate(C => window.testRoot.querySelector(C).focus(), C);
+    assert.equal(await page.evaluate(C => window.testRoot.querySelector(C).options[0].textContent, C), 'Loading accounts…');
+    await page.evaluate(() => window.accountResolvers.all());
+    await page.waitForFunction(C => window.testRoot.querySelector(C).options.length === 4, {}, C);
+    assert.deepEqual(await page.evaluate(C => [...window.testRoot.querySelector(C).options].map(o => [o.textContent, o.disabled]), C), [
+      ['All accounts', false],
+      ['Engineering · Jordan Taylor · Platform', false],
+      ['Casey Smith', false],
+      ['Morgan Lee · Design — nothing ready', true],
+    ], 'one list: Category · Name · Label, accounts with nothing ready are disabled');
+    assert.equal(await page.evaluate(() => window.calls.filter(m => m.type === 'QTS_WORK_ITEMS').map(m => m.mode).join()), 'all', 'one account request for all three modes');
+    assert.deepEqual(await readyTexts(), ['11 ready', '2 ready', '3 ready'], 'All accounts shows the totals');
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('.candidate-summary').textContent), /Every account: 11 to generate · 2 to apply · 3 for Auto Apply/);
+    assert.equal(await page.evaluate(() => [...window.testRoot.querySelectorAll('.work-jobs-toggle')].every(n => n.hidden)), true, 'no job lists for All accounts');
+    await choose(1);
+    assert.deepEqual(await page.evaluate(C => {
+      const select = window.testRoot.querySelector(C);
+      return { selectBackground: select.style.backgroundColor, selectColor: select.style.color, accent: select.style.borderLeftColor, labelled: select.classList.contains('labelled'), stored: window.store.qtsWorkCandidate };
+    }, C), { selectBackground: '', selectColor: '', accent: 'rgb(37, 99, 235)', labelled: true, stored: ONE });
+    assert.deepEqual(await readyTexts(), ['8 ready', '2 ready', '2 ready']);
+    assert.equal(await page.evaluate(() => window.calls.filter(m => m.type === 'QTS_WORK_ITEMS' && m.candidateId).length), 0, 'job lists load only when needed');
+    await openJobs('generation');
+    await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length === 2);
+    const accountFetches = await page.evaluate(() => window.accountFetchCounts.all);
+    await page.evaluate(C => {
+      window.nextCounts = { generation: 6, apply: 2, auto_apply: 2 };
       window.clockOffset = 31000;
-      const select = window.testRoot.querySelector('[data-work-account="generation"]');
+      const select = window.testRoot.querySelector(C);
       select.blur(); select.focus();
-    });
-    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options[0].textContent === 'Loading accounts…');
-    await page.evaluate(() => {
-      const select = window.testRoot.querySelector('[data-work-account="generation"]');
-      select.blur(); select.focus();
-    });
-    assert.equal(await page.evaluate(() => window.accountFetchCounts.generation), accountFetches + 1, 'expired cache triggers one coalesced refresh');
-    await page.evaluate(() => window.accountResolvers.generation());
-    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="generation"]').options[1]?.textContent === 'Jordan Taylor (6)');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="generation"]').value), '11111111-1111-4111-8111-111111111111', 'refresh preserves a still-eligible account');
-    assert.equal(await page.evaluate(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length), 2, 'refresh keeps the selected account job list');
+    }, C);
+    await page.waitForFunction(C => window.testRoot.querySelector(C).options[0].textContent === 'Loading accounts…', {}, C);
+    await page.evaluate(C => { const select = window.testRoot.querySelector(C); select.blur(); select.focus(); }, C);
+    assert.equal(await page.evaluate(() => window.accountFetchCounts.all), accountFetches + 1, 'expired cache triggers one coalesced refresh');
+    await page.evaluate(() => window.accountResolvers.all());
+    await page.waitForFunction(() => window.testRoot.querySelector('[data-action="generation"] .ready').textContent === '6 ready');
+    assert.equal(await page.evaluate(C => window.testRoot.querySelector(C).value, C), ONE, 'refresh preserves a still-eligible account');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job').length), 2, 'refresh keeps the open job list');
     await page.evaluate(() => { window.clockOffset = 0; });
     const link = await page.evaluate(() => { const a=window.testRoot.querySelector('.work-link'); return {text:a.textContent,title:a.title,href:a.href,target:a.target,rel:a.rel,heading:a.querySelector('.work-title').title,domain:a.querySelector('.work-domain').title}; });
     assert.match(link.text,/remoterocketship\.com/); assert.doesNotMatch(link.text,/publicjobs|tracking=/);
@@ -118,21 +123,17 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => { const input = window.testRoot.querySelector('[data-work-picker="generation"] .work-search'); input.value = ''; input.dispatchEvent(new Event('input')); });
     assert.equal(await page.evaluate(() => window.calls.length), requestsBeforeSearch, 'filtering makes no server requests');
     await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"] .work-job input').click());
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-toggle="generation"]').textContent), /Choose jobs \(1 of 2\)/);
     await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"] .work-start').click());
     await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='generation'));
     const started = await page.evaluate(() => window.calls.find(m=>m.type==='QTS_PAGE_ACTION' && m.action==='generation'));
-    assert.deepEqual(started.selection,{candidateId:'11111111-1111-4111-8111-111111111111',jobIds:['44444444-4444-4444-8444-444444444444']});
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').value),'');
-    await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').focus());
-    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').options[0].textContent), 'Loading accounts…');
-    await page.evaluate(() => window.accountResolvers.auto_apply());
-    await page.waitForFunction(() => window.testRoot.querySelector('[data-work-account="auto_apply"]').options.length === 4);
-    await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="auto_apply"]');s.value=s.options[1].value;s.dispatchEvent(new Event('change')); });
-    assert.deepEqual(await page.evaluate(() => {
-      const select = window.testRoot.querySelector('[data-work-account="auto_apply"]');
-      const category = window.testRoot.querySelector('[data-work-account-category="auto_apply"]');
-      return { selectBackground: select.style.backgroundColor, selectColor: select.style.color, categoryText: category.textContent, categoryColor: category.style.color };
-    }), { selectBackground: '', selectColor: '', categoryText: 'Platform', categoryColor: 'rgb(37, 99, 235)' });
+    assert.deepEqual(started.selection,{candidateId:ONE,jobIds:['44444444-4444-4444-8444-444444444444']});
+    // Apply uses the same candidate; its list was never opened, so Start loads it and sends every ready job.
+    await page.evaluate(() => window.testRoot.querySelector('[data-action="apply"]').click());
+    await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='apply'));
+    assert.deepEqual(await page.evaluate(() => window.calls.find(m=>m.action==='apply').selection), { candidateId: ONE, jobIds: ['33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444'] });
+    assert.equal(await page.evaluate(() => window.calls.find(m=>m.type==='QTS_WORK_ITEMS' && m.mode==='apply').candidateId), ONE);
+    await openJobs('auto_apply');
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length===2);
     assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job input')].map(input => ({ checked: input.checked, disabled: input.disabled }))), [
       { checked: false, disabled: true }, { checked: true, disabled: false },
@@ -142,7 +143,11 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').click());
     await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='auto_apply'));
     assert.deepEqual(await page.evaluate(() => window.calls.find(m=>m.action==='auto_apply').selection.jobIds), ['44444444-4444-4444-8444-444444444444']);
-    await page.evaluate(() => { const s=window.testRoot.querySelector('[data-work-account="auto_apply"]');s.value=s.options[2].value;s.dispatchEvent(new Event('change')); });
+    // Another candidate resets every mode's list; a failed load fails closed.
+    await choose(2);
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"]').hidden), true, 'changing candidate closes the old lists');
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-toggle="apply"]').hidden), true, 'nothing to apply for this candidate');
+    await openJobs('auto_apply');
     await page.waitForFunction(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .error'));
     assert.equal(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').disabled),true);
     assert.equal(await page.evaluate(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length),0);
@@ -153,10 +158,13 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.waitForFunction(()=>!window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-cancel').disabled);
     assert.equal(await page.evaluate(()=>window.testRoot.querySelector('[data-work-picker="auto_apply"]').hidden),false);
     assert.equal(await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length),cancelsBefore);
-    // Both running modes use the existing stop action, with an expected-mode guard.
+    assert.equal(await page.evaluate(C=>window.testRoot.querySelector(C).disabled,C),true,'the candidate is fixed while a run uses it');
+    await page.evaluate(async()=>{window.store.qtsExtensionStatus=null;await window.__qtsPageLauncher.syncModeActions();});
+    // Running modes use the existing stop action, with an expected-mode guard.
     for(const mode of ['generation','auto_apply']){
+      await choose(1);
+      await openJobs(mode);
       await page.evaluate(async mode=>{
-        const s=window.testRoot.querySelector(`[data-work-account="${mode}"]`);s.value=s.options[1].value;s.dispatchEvent(new Event('change'));
         window.store.qtsExtensionStatus=mode==='generation'?'generation':'apply';window.store.qtsApplyKind=mode==='auto_apply'?'auto':null;
         window.store.qtsAutoApplyState=mode==='auto_apply'?{runs:[{phase:'needs_you',step:1}]}:null;
         await window.__qtsPageLauncher.syncModeActions();
@@ -164,7 +172,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
       assert.equal(await page.evaluate(mode=>{
         const button=window.testRoot.querySelector(`[data-action="${mode}"]`), tag=button.querySelector('.action-tag');
         return tag.getBoundingClientRect().right <= button.getBoundingClientRect().right;
-      },mode),true,'running status stays inside the narrower action button');
+      },mode),true,'running status stays inside the action button');
       await page.waitForFunction(mode=>window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job`).length===2,{},mode);
       await page.evaluate(mode=>{
         const style=document.createElement('style');style.textContent='.work-jobs { max-height:36px !important; }';window.testRoot.append(style);
@@ -172,7 +180,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
       },mode);
       await page.evaluate(mode=>{window.failCancellation=true;window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-cancel`).click();},mode);
       await page.waitForFunction(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .error`)?.textContent.includes('cancellation failure'),{},mode);
-      assert.notEqual(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).value,mode),'','failed cancellation retains selection');
+      assert.equal(await page.evaluate(C=>window.testRoot.querySelector(C).value,C),ONE,'failed cancellation retains the candidate');
       await page.evaluate(()=>{window.failCancellation=false;});
       const before=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status').length);
       const selectedBefore=await page.evaluate(mode=>[...window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job input:checked`)].map(n=>n.dataset.jobId),mode);
@@ -182,15 +190,13 @@ test('account job pickers show compact links, full URL tooltips, independent sel
       const calls=await page.evaluate(()=>window.calls.filter(m=>m.action==='cancel_status'));
       assert.equal(calls.length,before+1);assert.equal(calls.at(-1).expectedAction,mode);
       assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"]`).hidden,mode),false,'Cancel keeps the job list open');
-      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).value,mode),'11111111-1111-4111-8111-111111111111');
+      assert.equal(await page.evaluate(C=>window.testRoot.querySelector(C).value,C),ONE);
       assert.deepEqual(await page.evaluate(mode=>[...window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job input:checked`)].map(n=>n.dataset.jobId),mode),selectedBefore,'Cancel preserves checked jobs');
       assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-jobs`).scrollTop,mode),20,'Cancel preserves the list scroll position');
       assert.equal(await page.evaluate(()=>window.calls.filter(m=>m.type==='QTS_WORK_ITEMS').length),requestsBefore,'Cancel does not refetch or clear the list');
-      assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-account="${mode}"]`).disabled,mode),false,'another account can be chosen while cancellation finishes');
-      await page.evaluate(mode=>{
-        window.allowSecondAccount=true;
-        const s=window.testRoot.querySelector(`[data-work-account="${mode}"]`);s.value=s.options[2].value;s.dispatchEvent(new Event('change'));
-      },mode);
+      assert.equal(await page.evaluate(C=>window.testRoot.querySelector(C).disabled,C),false,'another candidate can be chosen while cancellation finishes');
+      await choose(2, true);
+      await openJobs(mode);
       await page.waitForFunction(mode=>window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job`).length===2,{},mode);
       assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-start`).disabled,mode),true,'starting waits for old run cleanup');
       await page.evaluate(async()=>{window.store.qtsExtensionStatus=null;await window.__qtsPageLauncher.syncModeActions();});

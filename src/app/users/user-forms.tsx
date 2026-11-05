@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type CSSProperties,
   useActionState,
   useCallback,
   useEffect,
@@ -33,7 +34,7 @@ import { PasswordField } from "@/app/components/password-field";
 import { minimumPasswordLength } from "@/lib/password-policy";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
 import { formatProfileMonth } from "@/server/users/profile-values";
-import { managerCategoryColors } from "@/server/users/manager-category-color";
+import { labelTextColor, managerCategoryColors } from "@/server/users/manager-category-color";
 import {
   createUserAction,
   deleteCandidateAccountAction,
@@ -46,12 +47,15 @@ import {
 
 const initialState: UserActionState = { error: null, success: null };
 
+type CategoryOption = { id: string; name: string };
+
 type CreateUserFormProps = {
+  categories?: CategoryOption[];
   role: "admin" | "manager" | "account";
 };
 
 
-export function CreateUserForm({ role, showJdMatchingNote = false }: CreateUserFormProps & { showJdMatchingNote?: boolean }) {
+export function CreateUserForm({ role, categories = [], showJdMatchingNote = false }: CreateUserFormProps & { showJdMatchingNote?: boolean }) {
   const [educationRows, setEducationRows] = useState([0]);
   const [experienceRows, setExperienceRows] = useState([0]);
   const [managerCategoryColor, setManagerCategoryColor] = useState("");
@@ -206,7 +210,8 @@ export function CreateUserForm({ role, showJdMatchingNote = false }: CreateUserF
               maxLength={32}
               name="postalCode"
             />
-            <TextField autoComplete="off" id="managerCategory" label="Category (optional)" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
+            <CandidateCategoryField categories={categories} />
+            <TextField style={{ backgroundColor: managerCategoryColor || "#e2e8f0", color: labelTextColor(managerCategoryColor) }} autoComplete="off" id="managerCategory" label="Label" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
             <ManagerCategoryColorField onChange={setManagerCategoryColor} value={managerCategoryColor} />
           </div>
           </FormCard>
@@ -444,6 +449,8 @@ export type CandidateProfileValues = {
   addressLine1: string | null;
   postalCode: string | null;
   jdMatching: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
   managerCategory: string;
   managerCategoryColor: string | null;
   workAuthorization: string | null;
@@ -494,10 +501,12 @@ export type CandidateProfileValues = {
 
 export function EditCandidateProfileForm({
   candidate,
+  categories = [],
   readOnly = false,
   showJdMatchingNote = false,
 }: {
   candidate: CandidateProfileValues;
+  categories?: CategoryOption[];
   // A deleted candidate: everything can be read, nothing changed.
   readOnly?: boolean;
   showJdMatchingNote?: boolean;
@@ -686,7 +695,8 @@ export function EditCandidateProfileForm({
             maxLength={32}
             name="postalCode"
           />
-          <TextField autoComplete="off" defaultValue={candidate.managerCategory || ""} id={fieldId("managerCategory")} label="Category (optional)" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
+          <CandidateCategoryField categories={categories} value={candidate.categoryId} name={candidate.categoryName} />
+          <TextField style={{ backgroundColor: managerCategoryColor || "#e2e8f0", color: labelTextColor(managerCategoryColor) }} autoComplete="off" defaultValue={candidate.managerCategory || ""} id={fieldId("managerCategory")} label="Label" name="managerCategory" maxLength={80} placeholder="Your own label, e.g. AI / ML" />
           <ManagerCategoryColorField
             id={fieldId("managerCategoryColor")}
             onChange={setManagerCategoryColor}
@@ -814,12 +824,12 @@ function ManagerCategoryColorField({
   onChange: (value: string) => void;
 }) {
   const labelId = `${id}-label`;
-  const choices = [{ name: "No color", value: "" }, ...managerCategoryColors];
+  const choices = [{ name: "Default color", value: "" }, ...managerCategoryColors];
 
   return (
     <div className="space-y-2">
       <p className="block text-xs font-semibold text-slate-700" id={labelId}>
-        Category color (optional)
+        Label color
       </p>
       <input name="managerCategoryColor" type="hidden" value={value} />
       <div aria-labelledby={labelId} className="flex flex-wrap gap-1.5" role="group">
@@ -1144,6 +1154,7 @@ function TextField({
   type = "text",
   pattern,
   inputMode,
+  style,
 }: {
   id: string;
   label: string;
@@ -1156,6 +1167,7 @@ function TextField({
   type?: string;
   pattern?: string;
   inputMode?: "numeric";
+  style?: CSSProperties;
 }) {
   return (
     <div>
@@ -1174,6 +1186,7 @@ function TextField({
         name={name}
         pattern={pattern}
         inputMode={inputMode}
+        style={style}
         placeholder={placeholder}
         required={required}
         type={type}
@@ -1638,4 +1651,13 @@ function FormMessage({
       {children}
     </p>
   );
+}
+
+function CandidateCategoryField({ categories, value, name }: { categories: CategoryOption[]; value?: string | null; name?: string | null }) {
+  return <label className="block space-y-2 text-xs font-semibold text-slate-700">Category
+    {categories.length ? <select className="block w-full rounded-md border border-slate-300 bg-white p-2 text-sm" name="candidateCategoryId" defaultValue={value || ""}>
+      <option value="">{value ? name : "Default category"}</option>
+      {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+    </select> : <span className="block text-sm font-normal">{name || "Global"}</span>}
+  </label>;
 }

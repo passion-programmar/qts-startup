@@ -1,3 +1,4 @@
+import { labelTextColor } from "@/server/users/manager-category-color";
 import type { Metadata } from "next";
 import {
   ShieldCheck,
@@ -5,7 +6,7 @@ import {
 } from "lucide-react";
 import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { educations, experiences, users } from "@/db/schema";
+import { categories, educations, experiences, users } from "@/db/schema";
 import {
   CopyableAccountField,
   CopyLinkedInUrl,
@@ -107,6 +108,9 @@ export default async function UsersPage() {
   const managerSettings = actor.role === "manager"
     ? await db.select({ useGeminiMatching: users.useGeminiMatching }).from(users).where(eq(users.id, actor.id)).limit(1).then((rows) => rows[0] ?? null)
     : null;
+  const candidateCategories = actor.role === "manager"
+    ? await db.select({ id: categories.id, name: categories.name }).from(categories).orderBy(asc(categories.name))
+    : [];
   const includeBlocked = actor.role === "super_admin";
   const result = await db.execute<UserRow>(sql`
     with recursive visible_users as (
@@ -294,7 +298,7 @@ export default async function UsersPage() {
 
         <div className="mt-5 space-y-5">
           <section>
-            <CreateUserForm role={createRole} showJdMatchingNote={actor.role === "manager" && Boolean(managerSettings?.useGeminiMatching)} />
+            <CreateUserForm categories={candidateCategories} role={createRole} showJdMatchingNote={actor.role === "manager" && Boolean(managerSettings?.useGeminiMatching)} />
           </section>
           <section className="min-w-0">
             <div className="mb-3 flex items-center justify-between">
@@ -308,6 +312,7 @@ export default async function UsersPage() {
                   { label: "No", className: "w-[4%] text-center" },
                   { label: "Full name", className: "w-[13%]" },
                   { label: "Category", className: "w-[11%]" },
+                  { label: "Label", className: "w-[11%]" },
                   { label: "Contact", className: "w-[17%]" },
                   { label: "Street address", className: "w-[15%]" },
                   { label: "Postal code", className: "w-[9%]" },
@@ -338,18 +343,17 @@ export default async function UsersPage() {
                       >
                         {userName(candidate)}
                       </CopyableAccountField>,
+                      <span key="global-category">{candidate.category_name || "Global"}</span>,
                       <CopyableAccountField
-                        ariaLabel={`Copy category for ${userName(candidate)}`}
+                        ariaLabel={`Copy label for ${userName(candidate)}`}
                         key="category"
-                        value={candidate.manager_category || "Uncategorized"}
+                        value={candidate.manager_category || "No label"}
                       >
                         <span
-                          className="inline-flex max-w-full items-center"
-                          style={candidate.manager_category_color
-                            ? { color: candidate.manager_category_color }
-                            : undefined}
+                          className="inline-flex max-w-full items-center rounded-md px-2 py-1 font-medium"
+                          style={{ backgroundColor: candidate.manager_category_color || "#e2e8f0", color: labelTextColor(candidate.manager_category_color) }}
                         >
-                          {candidate.manager_category || "Uncategorized"}
+                          {candidate.manager_category || "No label"}
                         </span>
                       </CopyableAccountField>,
                       <CopyableAccountField
@@ -387,6 +391,7 @@ export default async function UsersPage() {
                         "—"
                       ),
                       <EditCandidateProfileForm
+                        categories={candidateCategories}
                         showJdMatchingNote={actor.role === "manager" && Boolean(managerSettings?.useGeminiMatching)}
                         candidate={{
                           userId: candidate.id,
@@ -407,6 +412,8 @@ export default async function UsersPage() {
                           addressLine1: candidate.address_line_1,
                           postalCode: candidate.postal_code,
                           jdMatching: candidate.jd_matching,
+                          categoryId: candidate.category_id,
+                          categoryName: candidate.category_name,
                           managerCategory: candidate.manager_category || "",
                           managerCategoryColor: candidate.manager_category_color,
                           workAuthorization: candidate.work_authorization,

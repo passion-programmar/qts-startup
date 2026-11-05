@@ -2,7 +2,7 @@
 
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { users } from "@/db/schema";
+import { categories, users } from "@/db/schema";
 import { db, neonSql } from "@/lib/db";
 import { hashPassword } from "@/lib/password";
 import {
@@ -111,7 +111,7 @@ export async function createUserAction(
     expectedRole === "account" ? normalizeLinkedInProfile(linkedinUrl) : "";
   if (expectedRole === "account") {
     if (!isManagerCategoryColor(managerCategoryColor)) {
-      return { ...emptyState, error: "Select a valid category color." };
+      return { ...emptyState, error: "Select a valid label color." };
     }
     if (!firstName || !lastName) {
       return {
@@ -147,6 +147,7 @@ export async function createUserAction(
 
   try {
     if (expectedRole === "account") {
+      const categoryId = await readCandidateCategory(formData);
       const educationEntries = sortProfileHistoryNewestFirst(educationRows)
         .filter((row) => row.institution)
         .map((row, sortOrder) => ({
@@ -188,7 +189,7 @@ export async function createUserAction(
             postal_code
           )
           select id,
-            (select id from categories where is_default), ${managerCategory}, ${managerCategoryColor || null},
+            coalesce(${categoryId}::uuid, (select id from categories where is_default)), ${managerCategory}, ${managerCategoryColor || null},
             ${firstName}, ${lastName},
             ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
@@ -345,13 +346,15 @@ export async function updateCandidateProfileAction(
   if (
     Object.entries(limits).some(([name, maxLength]) => {
       const value = formData.get(name);
+      // Manual-mode profiles omit the Gemini-only notes field.
+      if (name === "jdMatching" && value === null) return false;
       return typeof value !== "string" || value.length > maxLength;
     })
   ) {
     return { ...emptyState, error: "One or more profile fields are missing or too long." };
   }
   if (!isManagerCategoryColor(values.managerCategoryColor)) {
-    return { ...emptyState, error: "Select a valid category color." };
+    return { ...emptyState, error: "Select a valid label color." };
   }
   if (!educationRows || !experienceRows) {
     return {
@@ -390,6 +393,7 @@ export async function updateCandidateProfileAction(
   if (typeof applicationFacts === "string") return { ...emptyState, error: applicationFacts };
 
   try {
+    const categoryId = await readCandidateCategory(formData);
     const educationEntries = sortProfileHistoryNewestFirst(educationRows)
       .filter((row) => row.institution)
       .map((row, sortOrder) => ({
@@ -420,6 +424,7 @@ export async function updateCandidateProfileAction(
         update profiles
         set manager_category = ${values.managerCategory},
           manager_category_color = ${values.managerCategoryColor || null},
+          category_id = coalesce(${categoryId}::uuid, category_id),
           first_name = ${values.firstName}, last_name = ${values.lastName},
           birthday = ${values.birthday || null}::date,
           pdf_template = ${values.pdfTemplate},
@@ -428,7 +433,7 @@ export async function updateCandidateProfileAction(
           linkedin_url = ${normalizedLinkedInUrl || null}, country = ${values.country || null},
           city = ${values.city || null}, province = ${values.province || null},
           address_line_1 = ${values.addressLine1 || null}, postal_code = ${values.postalCode || null},
-          jd_matching = ${values.jdMatching || null},
+          jd_matching = case when ${formData.has("jdMatching")} then ${values.jdMatching || null} else jd_matching end,
           updated_at = now()
         where profiles.user_id = ${userId}::uuid
           and exists (
@@ -984,4 +989,13 @@ function logUserActionFailure(stage: string, error: unknown): void {
         ? error.name
         : "unknown";
   console.error(`User action failed while ${stage} (code: ${code}).`);
+}
+
+async function readCandidateCategory(formData: FormData): Promise<string | null> {
+  const value = formData.get("candidateCategoryId");
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || !isUuid(value)) throw new Error("Invalid category.");
+  const [category] = await db.select({ id: categories.id }).from(categories).where(eq(categories.id, value)).limit(1);
+  if (!category) throw new Error("Select an existing category.");
+  return category.id;
 }

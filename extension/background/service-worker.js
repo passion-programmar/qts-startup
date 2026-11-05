@@ -1286,6 +1286,8 @@ function publishGetJdResultNotification(tabId, result) {
 }
 
 async function deliverGetJdNotificationBatch(batch) {
+  const launcherBatch = self.__qtsGetJdNotifications.launcherBatch(batch);
+  if (!launcherBatch) return;
   if (!Number.isFinite(batch?.dismissAt) || Date.now() >= batch.dismissAt) return;
   const auth = await chrome.storage.local.get(['authExpiresAt']);
   if (!(Number(auth.authExpiresAt) > Date.now())) return;
@@ -1293,7 +1295,7 @@ async function deliverGetJdNotificationBatch(batch) {
   if (!tab?.id || !(await launcherFocus.isActive(tab.id))) return;
   await chrome.tabs.sendMessage(tab.id, {
     type: 'QTS_GET_JD_NOTIFICATION_SUMMARY',
-    summary: batch,
+    summary: launcherBatch,
   }, { frameId: 0 }).catch(() => {});
 }
 
@@ -1406,10 +1408,24 @@ async function cancelGetJdReview(tabId) {
 
 // Applies the checkbox difference: newly checked accounts are added to the job, and
 // saved accounts the Manager unchecked are removed (the server keeps applied ones).
-async function saveGetJdSelection(tabId, profileIds) {
+async function saveGetJdSelection(tabId, profileIds, manualJob) {
   const selection = await updateGetJdSelection(tabId, profileIds);
   if (!selection.ok) return selection;
   const result = await readGetJdResultForTab(tabId);
+  if (result.evaluationMode !== 'gemini' && manualJob !== undefined) {
+    const limits = { jobUrl: 2048, title: 500, company: 500, description: 100000 };
+    if (!manualJob || Object.entries(limits).some(([key, limit]) =>
+      typeof manualJob[key] !== 'string' || !manualJob[key].trim() || manualJob[key].length > limit)) {
+      return { ok: false, error: 'Enter URL, Title, Company and JD within the supported limits.' };
+    }
+    try {
+      if (!['https:', 'http:'].includes(new URL(manualJob.jobUrl).protocol)) throw new Error();
+    } catch { return { ok: false, error: 'Enter a valid HTTP or HTTPS job URL.' }; }
+    result.classification = { ...result.classification, job: { ...result.classification.job,
+      ...Object.fromEntries(Object.keys(limits).map((key) => [key, manualJob[key].trim()])) } };
+    result.jobDescription = manualJob.description.trim();
+    await saveGetJdResult(tabId, result, false);
+  }
   const checked = new Set(selection.selectedProfileIds);
   const profiles = result.profiles || [];
   const additions = profiles.filter((profile) => getJdProfileState(profile) === 'available' && checked.has(profile.id));
@@ -1466,8 +1482,15 @@ async function saveGetJdSelection(tabId, profileIds) {
     });
     if (response.success !== true) {
       const message = response.message || 'Could not save selected candidates.';
-      await saveGetJdResult(tabId, { ...result, status: 'complete', saveError: message, saveResponse: { savedCount: 0, failedCount: additions.length }, updatedAt: Date.now() });
-      return { ok: false, error: message };
+      const failedResult = {
+        ...result,
+        status: 'complete',
+        saveError: message,
+        saveResponse: { savedCount: 0, failedCount: additions.length },
+        updatedAt: Date.now(),
+      };
+      await saveGetJdResult(tabId, failedResult);
+      return { ok: false, error: message, result: failedResult };
     }
     results.push(...(response.results || []));
   }
@@ -1507,7 +1530,7 @@ async function saveGetJdSelection(tabId, profileIds) {
     const message = saveResponse.failedCount > 0
       ? 'Some candidates could not be saved or removed. Review and retry.'
       : 'Some candidates were kept because they applied or Generation is running.';
-    await saveGetJdResult(tabId, {
+    const partialResult = {
       ...result,
       status: 'complete',
       saveError: message,
@@ -1518,27 +1541,34 @@ async function saveGetJdSelection(tabId, profileIds) {
         .map((profile) => profile.id),
       selectionModified: true,
       updatedAt: Date.now(),
-    });
-    return { ok: false, error: message };
+    };
+    await saveGetJdResult(tabId, partialResult);
+    return { ok: false, error: message, result: partialResult };
   }
-  await saveGetJdResult(tabId, {
+  const savedResult = {
     ...result,
     status: 'saved',
     saveError: null,
     message: 'Save finished.',
     saveResponse,
     profiles: updatedProfiles,
+    closeAfterSeconds: result.evaluationMode === 'gemini'
+      ? 0
+      : (await scheduleGetJdTabClose(tabId, result.pageUrl, 2, { force: true })) ? 2 : 0,
     updatedAt: Date.now(),
-  });
-  const savedProfiles = updatedProfiles.filter((profile) => getJdProfileState(profile) !== 'available').length;
-  await showGetJdDone(
-    tabId,
-    result.pageUrl,
-    savedProfiles > 0
-      ? `Saved for ${savedProfiles} candidate${savedProfiles === 1 ? '' : 's'}.`
-      : 'Removed from every candidate.',
-  );
-  return { ok: true };
+  };
+  await saveGetJdResult(tabId, savedResult);
+  if (result.evaluationMode === 'gemini') {
+    const savedProfiles = updatedProfiles.filter((profile) => getJdProfileState(profile) !== 'available').length;
+    await showGetJdDone(
+      tabId,
+      result.pageUrl,
+      savedProfiles > 0
+        ? `Saved for ${savedProfiles} candidate${savedProfiles === 1 ? '' : 's'}.`
+        : 'Removed from every candidate.',
+    );
+  }
+  return { ok: true, result: savedResult };
 }
 
 const GET_JD_AUTO_CLOSE_KEY = 'qtsGetJdAutoClose';
@@ -1560,9 +1590,21 @@ async function closeFinishedGetJdTab(tabId) {
   const tab = await getTab(tabId);
   const tabs = tab ? await chrome.tabs.query({ windowId: tab.windowId }) : [];
   const allowed = tab?.url === pending.url && !tab.pinned && tabs.length > 1
-    && !pending.listPage && !(await isWorkflowTab(tabId, tab)) && await isGetJdAutoCloseOn();
+    && !pending.listPage && !(await isWorkflowTab(tabId, tab))
+    && (pending.force === true || await isGetJdAutoCloseOn());
   await cancelGetJdClose(tabId);
   if (allowed) await chrome.tabs.remove(tabId).catch(() => {});
+}
+async function scheduleGetJdTabClose(tabId, url, seconds, { force = false } = {}) {
+  await cancelGetJdClose(tabId);
+  const allowed = (force || await isGetJdAutoCloseOn()) && await canAutoCloseGetJdTab(tabId, url);
+  if (!allowed) return 0;
+  const key = `${GET_JD_CLOSE_ALARM}${tabId}`;
+  const deadline = Date.now() + seconds * 1000;
+  await chrome.storage.session.set({ [key]: { url, deadline, listPage: false, force } });
+  await chrome.alarms.create(key, { when: deadline });
+  getJdCloseTimers.set(tabId, setTimeout(() => closeFinishedGetJdTab(tabId).catch(() => {}), seconds * 1000));
+  return deadline;
 }
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name.startsWith(GET_JD_CLOSE_ALARM)) {
@@ -1602,16 +1644,10 @@ async function showGetJdOutcome(tabId, url, outcome) {
     });
   }
   const autoClose = await isGetJdAutoCloseOn();
-  const closable = outcome.kind === 'done' && autoClose && await canAutoCloseGetJdTab(tabId, url);
-  await cancelGetJdClose(tabId);
-  const closeDeadline = closable ? Date.now() + GET_JD_CLOSE_SECONDS * 1000 : 0;
-  if (closable) {
-    const key = `${GET_JD_CLOSE_ALARM}${tabId}`;
-    await chrome.storage.session.set({ [key]: { url, deadline: closeDeadline, listPage: false } });
-    // The timeout preserves the five-second UX; the alarm survives worker suspension.
-    await chrome.alarms.create(key, { when: closeDeadline });
-    getJdCloseTimers.set(tabId, setTimeout(() => closeFinishedGetJdTab(tabId).catch(() => {}), GET_JD_CLOSE_SECONDS * 1000));
-  }
+  const closeDeadline = outcome.kind === 'done'
+    ? await scheduleGetJdTabClose(tabId, url, GET_JD_CLOSE_SECONDS)
+    : (await cancelGetJdClose(tabId), 0);
+  const closable = closeDeadline > 0;
   chrome.tabs.sendMessage(tabId, {
     type: 'QTS_GET_JD_OUTCOME',
     outcome: {
@@ -1739,19 +1775,22 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     }
     getJdInFlightJobKeys.add(claimedJobKey);
     if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
-    const precheck = await workerApiRequest('POST', '/api/extension/get-jd/check', { scope: 'global', job: identity }, { timeoutMs: 20000 });
-    if (precheck.success !== true || typeof precheck.skip !== 'boolean') {
-      throw new Error(precheck.message || 'Could not check Jobs and Bids. Refresh to retry; Gemini was not called.');
-    }
-    if (precheck.skip) {
-      await saveGetJdResult(tabId, { ...initialResult, status: 'duplicate', message: 'This job already exists in QTS Jobs or Bids. Skipped.', updatedAt: Date.now() });
-      await showGetJdDone(tabId, url, 'Already in QTS Jobs or Bids. Skipped.', 'info');
-      return;
-    }
-    if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
     const modeResult = await workerApiRequest('GET', '/api/extension/get-jd/mode');
     if (modeResult.success !== true) {
       throw new Error(modeResult.message || 'Could not load the Get JD matching mode.');
+    }
+    let precheck = null;
+    if (modeResult.mode === 'gemini') {
+      precheck = await workerApiRequest('POST', '/api/extension/get-jd/check', { scope: 'global', job: identity }, { timeoutMs: 20000 });
+      if (precheck.success !== true || typeof precheck.skip !== 'boolean') {
+        throw new Error(precheck.message || 'Could not check Jobs and Bids. Refresh to retry; Gemini was not called.');
+      }
+      if (precheck.skip) {
+        await saveGetJdResult(tabId, { ...initialResult, status: 'duplicate', message: 'This job already exists in QTS Jobs or Bids. Skipped.', updatedAt: Date.now() });
+        await showGetJdDone(tabId, url, 'Already in QTS Jobs or Bids. Skipped.', 'info');
+        return;
+      }
+      if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
     }
     if (modeResult.mode === 'gemini') {
       const jobText = options.force
@@ -1916,7 +1955,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       return;
     }
 
-    const extraction = await extractJobFromTab(tabId, { requireCompany: true });
+    const extraction = await extractJobFromTab(tabId, { requireCompany: false });
     if (!(await isGetJdActive())) return;
     if (extraction.error) {
       await saveGetJdResult(tabId, {
@@ -1933,27 +1972,9 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     if (!(await isGetJdActive())) return;
     const pageUrl = extraction.url || url;
     const extractedJobDetails = normalizeDetectedJobData(extraction.data, pageUrl);
-    const originalJob = await readGetJdJobText(tabId, url);
-    if (originalJob.applyFormOnly || !originalJob.text.trim()) throw new Error('The original job description is unavailable. Refresh the job description page to retry.');
-    if (originalJob.text.length > 100_000) throw new Error('The original JD exceeds the 100,000-character limit. Nothing was truncated or saved.');
-    extractedJobDetails.description = originalJob.text;
-    if (!isValidGetJdCheckJob(extractedJobDetails, pageUrl)) {
-      const hasCompletePosting = isValidDetectedJob(extractedJobDetails, pageUrl);
-      const message = !extractedJobDetails.company
-        ? 'Could not identify the hiring company on this page. Refresh the job page and try again.'
-        : hasCompletePosting
-          ? 'The extracted job details exceed supported limits. Open the job detail page and try again.'
-          : 'This page does not contain a complete job posting. Open a job detail page and try again.';
-      await saveGetJdResult(tabId, {
-        ...initialResult,
-        pageTitle: extraction.title || tab.title || '',
-        status: 'error',
-        message,
-        updatedAt: Date.now(),
-      });
-      await showGetJdNotice(tabId, url, message, ['try_again']);
-      return;
-    }
+    const originalJob = await readGetJdJobText(tabId, url).catch(() => ({ text: '' }));
+    extractedJobDetails.description = originalJob.text || '';
+    if (extractedJobDetails.description.length > 100_000) throw new Error('The original JD exceeds the 100,000-character limit. Nothing was truncated or saved.');
     // Detection already passed; only a blocked-URL rule added meanwhile stops the check here.
     if (await isPageBlockedForManager(url)) {
       await saveGetJdResult(tabId, { ...initialResult, status: 'cancelled', updatedAt: Date.now() });
@@ -1961,9 +1982,16 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     }
     // A job page checked by Get JD: the Manager is browsing, so this Chrome is not idle.
     await self.__qtsIdlePacing.noteActivity();
-    // The one global precheck already passed. Manual mode retains explicit candidate selection.
-    const candidateList = await workerApiRequest('GET', '/api/extension/get-jd/profiles');
-    const result = { ...candidateList, profiles: (candidateList.profiles || []).map((profile) => ({ ...profile, available: true, state: 'available' })) };
+    // Manual mode checks duplicates per candidate so existing Jobs/Bids stay selected,
+    // while other candidates can still be selected for this same job.
+    const result = await workerApiRequest('POST', '/api/extension/get-jd/check', {
+      scope: 'manual',
+      job: {
+        jobUrl: extractedJobDetails.url,
+        jobTitle: extractedJobDetails.title,
+        company: extractedJobDetails.company,
+      },
+    });
     if (result.success !== true) {
       throw new Error(result.message || 'Get JD duplicate check failed.');
     }
@@ -1983,18 +2011,9 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     // The review stays open while any account can still be added or unchecked.
     const actionableProfiles = profiles.filter((profile) => !GET_JD_FIXED_STATES.has(getJdProfileState(profile)));
     if (actionableProfiles.length === 0) {
-      await saveGetJdResult(tabId, {
-        ...initialResult,
-        pageTitle: extraction.title || tab.title || '',
-        status: 'duplicate',
-        message: result.message || 'This job already exists.',
-        toastKind: result.toastKind,
-        toastMessage: result.toastMessage,
-        inJobs: result.inJobs === true,
-        inBids: result.inBids === true,
-        updatedAt: Date.now(),
-      });
-      await showGetJdDone(tabId, url, 'Already saved for every candidate.', 'info');
+      const message = 'No active candidates are available. Check candidate status and profile experience in QTS.';
+      await saveGetJdResult(tabId, { ...initialResult, status: 'error', message, updatedAt: Date.now() });
+      await showGetJdNotice(tabId, url, message, ['try_again']);
       return;
     }
     const currentTab = await getTab(tabId);
@@ -5578,7 +5597,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'QTS_WORK_ITEMS') {
     (async () => {
-      if (!['generation', 'auto_apply'].includes(msg.mode)) throw new Error('Invalid work mode.');
+      if (!['generation', 'apply', 'auto_apply', 'all'].includes(msg.mode)) throw new Error('Invalid work mode.');
       const params = new URLSearchParams({ mode: msg.mode });
       if (msg.candidateId !== undefined) params.set('candidateId', String(msg.candidateId));
       const result = await workerApiRequest('GET', '/api/extension/work-items?' + params, null, {
@@ -5773,6 +5792,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
           return;
         }
+        // The panel's candidate and checked jobs; none means Apply works through every account.
+        const selection = checkedWorkSelection(msg.selection);
+        await chrome.storage.local.set({ qtsWorkSelection: selection ? { mode: 'apply', ...selection } : null });
         await chrome.storage.local.remove(self.__qtsAutoApply.KIND_KEY);
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'apply' });
         const dryRun = (await chrome.storage.local.get(self.__qtsApplyRunner.APPLY_DRY_RUN_KEY))[self.__qtsApplyRunner.APPLY_DRY_RUN_KEY] === true;
@@ -6002,7 +6024,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Saving candidates must come from a web page.' });
       return false;
     }
-    saveGetJdSelection(tabId, msg.profileIds)
+    saveGetJdSelection(tabId, msg.profileIds, msg.manualJob)
       .then(sendResponse)
       .catch((error) => sendResponse({
         ok: false,

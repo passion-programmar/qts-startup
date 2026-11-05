@@ -4,7 +4,7 @@ import { build } from "esbuild";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
-const fixture = { role: "manager", queries: [] as { sql: string; params: unknown[] }[],
+const fixture = { selectRows: [] as unknown[][], role: "manager", queries: [] as { sql: string; params: unknown[] }[],
   statusTarget: null as { blockedAt: Date | null; deletedAt: Date | null } | null,
   statusUpdate: null as Record<string, unknown> | null,
   record(query: Parameters<PgDialect["sqlToQuery"]>[0]) { this.queries.push(new PgDialect().sqlToQuery(query)); } };
@@ -14,7 +14,7 @@ test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "", "next/cache": "export const revalidatePath=()=>{};",
     "@/lib/session": "export const requireUser=async()=>({id:'manager-id',role:globalThis.__qtsCategory.role});",
-    "@/lib/db": `const f=globalThis.__qtsCategory;const selectQuery={from(){return this},where(){return this},limit:async()=>f.statusTarget?[f.statusTarget]:[]};const updateQuery={set(value){f.statusUpdate=value;return this},where(){return this},returning:async()=>[{id:'candidate'}]};export const db={execute:async query=>{f.record(query);return {rows:[]}},select:()=>selectQuery,update:()=>updateQuery};export const neonSql={transaction:async work=>{const list=work((strings,...params)=>{f.queries.push({sql:strings.join('?'),params});return []});return list.map((_,i)=>i===0?[{user_id:'candidate'}]:[])}};`,
+    "@/lib/db": `const f=globalThis.__qtsCategory;const selectQuery={from(){return this},where(){return this},limit:async()=>f.selectRows.length?f.selectRows.shift():f.statusTarget?[f.statusTarget]:[]};const updateQuery={set(value){f.statusUpdate=value;return this},where(){return this},returning:async()=>[{id:'candidate'}]};export const db={execute:async query=>{f.record(query);return {rows:[]}},select:()=>selectQuery,update:()=>updateQuery};export const neonSql={transaction:async work=>{const list=work((strings,...params)=>{f.queries.push({sql:strings.join('?'),params});return []});return list.map((_,i)=>i===0?[{user_id:'candidate'}]:[])}};`,
   };
   const built = await build({ entryPoints: [resolve("src/app/users/actions.ts")], tsconfig: resolve("tsconfig.json"), bundle: true, write: false, platform: "node", format: "cjs", packages: "external",
     plugins: [{ name: "category-fixtures", setup(builder) {
@@ -26,7 +26,7 @@ test.before(async () => {
   new Function("require", "module", "exports", built.outputFiles[0].text)(createRequire(resolve("package.json")), loaded, loaded.exports);
   actions = loaded.exports as typeof actions;
 });
-test.beforeEach(() => { fixture.role = "manager"; fixture.queries = []; fixture.statusTarget = null; fixture.statusUpdate = null; });
+test.beforeEach(() => { fixture.role = "manager"; fixture.selectRows = []; fixture.queries = []; fixture.statusTarget = null; fixture.statusUpdate = null; });
 const form = (category?: string, categoryColor = "") => {
   const data = new FormData();
   for (const field of ["birthday", "phone", "headline", "linkedinUrl", "country", "city", "province", "addressLine1", "postalCode", "jdMatching"]) data.set(field, "");
@@ -47,7 +47,7 @@ test("Manager creates inactive accounts and saves arbitrary category labels and 
 });
 test("Manager cannot save a category color outside the preset palette", async () => {
   const result = await actions.createUserAction({ error: null, success: null }, form("Platform / SRE", "#123456"));
-  assert.match(result.error!, /category color/i);
+  assert.match(result.error!, /label color/i);
   assert.equal(fixture.queries.length, 0);
 });
 test("clicking Inactive reactivates a candidate, but deleted candidates cannot be reactivated", async () => {
@@ -70,4 +70,54 @@ test("Manager edits only their candidate label, leaving the global category unto
   assert.match(query.sql, /parent_user_id/); assert.match(query.sql, /deleted_at is null/); assert.doesNotMatch(query.sql, /blocked_at is null/); assert.ok(query.params.includes("#10b981")); assert.ok(query.params.includes("manager-id"));
   fixture.role = "admin";
   assert.match((await actions.updateCandidateProfileAction({ error: null, success: null }, form("Other"))).error!, /Only Managers/);
+});
+
+test("managers can assign a Super Admin catalog category when creating and editing candidates without a Get JD mode check", async () => {
+  const id = "22222222-2222-4222-8222-222222222222";
+  for (const action of [actions.createUserAction, actions.updateCandidateProfileAction]) {
+    fixture.queries = [];
+    fixture.selectRows = [[{ id }]];
+    const data = form("Remote only"); data.set("candidateCategoryId", id);
+    assert.equal((await action({ error: null, success: null }, data)).error, null);
+    assert.ok(fixture.queries[0].params.includes(id));
+  }
+});
+test("category assignment rejects nonexistent categories and malformed IDs", async () => {
+  for (const [id, rows] of [
+    ["22222222-2222-4222-8222-222222222222", [[]]],
+    ["invalid", []],
+  ] as [string, unknown[][]][]) {
+    fixture.selectRows = rows; fixture.queries = [];
+    const data = form("Remote only"); data.set("candidateCategoryId", id);
+    assert.ok((await actions.updateCandidateProfileAction({ error: null, success: null }, data)).error);
+    assert.equal(fixture.queries.length, 0);
+  }
+});
+
+test("manual profile saves accept omitted Gemini notes and preserve stored notes", async () => {
+  const data = form("Remote only", "#2563eb");
+  data.delete("jdMatching");
+  data.set("candidateCategoryId", "22222222-2222-4222-8222-222222222222");
+  fixture.selectRows = [[{ id: "22222222-2222-4222-8222-222222222222" }]];
+  assert.equal((await actions.updateCandidateProfileAction({ error: null, success: null }, data)).error, null);
+  const query = fixture.queries[0];
+  assert.match(query.sql, /jd_matching = case when \? then \? else jd_matching end/);
+  const condition = query.sql.slice(0, query.sql.indexOf("jd_matching = case when ")).split("?").length - 1;
+  assert.equal(query.params[condition], false);
+});
+
+test("submitted Gemini notes can be updated or cleared and still enforce limits", async () => {
+  for (const notes of ["Backend roles", ""]) {
+    fixture.queries = [];
+    const data = form("Remote only"); data.set("jdMatching", notes);
+    assert.equal((await actions.updateCandidateProfileAction({ error: null, success: null }, data)).error, null);
+    const query = fixture.queries[0];
+    const condition = query.sql.slice(0, query.sql.indexOf("jd_matching = case when ")).split("?").length - 1;
+    assert.equal(query.params[condition], true);
+    assert.equal(query.params[condition + 1], notes || null);
+  }
+  fixture.queries = [];
+  const data = form("Remote only"); data.set("jdMatching", "x".repeat(5001));
+  assert.match((await actions.updateCandidateProfileAction({ error: null, success: null }, data)).error!, /missing or too long/);
+  assert.equal(fixture.queries.length, 0);
 });

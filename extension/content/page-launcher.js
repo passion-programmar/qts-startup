@@ -90,37 +90,70 @@ async function initializeQtsPageLauncher() {
     .subline { color: #66758c; font-size: 7px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; white-space: nowrap; }
     .hide { width: 30px; height: 30px; border: 1px solid #34425a; border-radius: 9px; background: #111a2e; color: #cbd5e1; font-size: 15px; cursor: pointer; }
     .hide:hover { background: #1a2438; }
-    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 6px; }
-    .stat { display: flex; flex-direction: column; gap: 4px; padding: 9px 10px 8px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; }
-    .stat-label { font: 800 10px/1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .08em; }
-    .stat-value { color: #f1f5f9; font: 750 20px/1 Inter, ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
-    .stat.urls .stat-label { color: #fcd34d; }
-    .stat.jobs .stat-label { color: #e2e8f0; }
-    .stat.applied .stat-label { color: #60a5fa; }
-    .menu-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding: 16px; scrollbar-color: #34425a transparent; scrollbar-width: thin; }
-    .label-top { margin-top: 6px; color: #94a3b8; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    /* Today: one strip of three counts, each with its colour dot and a readable label. */
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; border: 1px solid #1f2a40; border-radius: 14px; overflow: hidden; background: linear-gradient(180deg, #111a2d, #0e1627); }
+    .stat { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 11px 12px 12px; }
+    .stat + .stat { border-left: 1px solid #1f2a40; }
+    .stat-label { display: flex; align-items: center; gap: 6px; overflow: hidden; color: #8b9ab3; font: 650 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+    .stat-label::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+    .stat-value { color: #f8fafc; font: 750 22px/1 Inter, ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+    .stat.urls .stat-label::before { background: #fcd34d; }
+    .stat.jobs .stat-label::before { background: #e2e8f0; }
+    .stat.applied .stat-label::before { background: #60a5fa; }
+    .menu-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding: 14px 14px 18px; scrollbar-color: #34425a transparent; scrollbar-width: thin; }
+    .menu-list > * { flex-shrink: 0; }
+    .label-top { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: #7d8ba3; font-size: 10.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+    .label-top::after { content: ""; flex: 1; height: 1px; background: #1a2438; }
     .label-top:first-child { margin-top: 0; }
-    .menu-foot { flex: 0 0 auto; padding: 12px 16px 14px; border-top: 1px solid #243047; background: #0d1526; }
-    .action { --tint: rgb(99 102 241 / .16); --ink: #a5b4fc; display: grid; grid-template-columns: 34px 1fr auto; align-items: center; column-gap: 10px; row-gap: 2px; width: 100%; min-height: 48px; padding: 7px 10px; border: 1px solid #243047; border-radius: 12px; background: #111a2e; color: #e2e8f0; font: 700 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+    .label-top[hidden], .label-top[hidden] + .tools-grid { display: none; }
+    /* Signed in: who is signed in on the left, a small Sign Out on the right. */
+    .menu-foot { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-top: 1px solid #1f2a40; background: #0d1526; }
+    .who { display: flex; min-width: 0; align-items: center; gap: 9px; }
+    .who[hidden] { display: none; }
+    .who-avatar { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #6d5bd0, #3b82f6); color: #fff; font: 750 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .who-text { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+    .who-name { overflow: hidden; color: #e2e8f0; font: 650 12.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+    .who-role { color: #7d8ba3; font: 500 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; text-transform: capitalize; }
+    .menu-foot .action { width: auto; min-height: 34px; flex: none; grid-template-columns: 16px auto; column-gap: 7px; margin-left: auto; padding: 6px 12px; border-color: #2c3a55; border-radius: 10px; background: transparent; color: #fda4af; font-size: 12px; }
+    .menu-foot .action:hover:not(:disabled) { border-color: rgb(244 63 94 / .5); background: rgb(244 63 94 / .08); }
+    .menu-foot .action-icon { width: 16px; height: 16px; background: none; }
+    .menu-foot .action-icon svg { width: 16px; height: 16px; }
+    /* A mode or tool: icon, name, its status chip, then what a click does (Start, Stop, the switch). */
+    .action { --tint: rgb(99 102 241 / .16); --ink: #a5b4fc; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; align-items: center; column-gap: 11px; row-gap: 3px; width: 100%; min-height: 56px; padding: 10px 12px; border: 1px solid #1f2a40; border-radius: 14px; background: #111a2d; color: #e6ebf5; font: 650 13.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
     .action[hidden] { display: none; }
-    .action:hover:not(:disabled) { border-color: #34425a; background: #1a2438; }
+    .action:hover:not(:disabled) { border-color: #2c3a55; background: #16213a; }
     .action:disabled { opacity: .6; cursor: progress; }
-    .action-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--tint); color: var(--ink); font-size: 16px; line-height: 1; }
-    .action-tag { padding: 2px 7px; border: 1px solid #34425a; border-radius: 999px; color: #94a3b8; font-size: 10px; font-weight: 700; white-space: nowrap; }
+    .action-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; background: var(--tint); color: var(--ink); }
+    .action-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .action-tag { grid-column: 3; grid-row: 1; padding: 3px 8px; border: 1px solid #34425a; border-radius: 999px; color: #94a3b8; font-size: 10.5px; font-weight: 700; white-space: nowrap; }
     .action-tag:empty { display: none; }
-    .action-tag.on { border-color: rgb(16 185 129 / .5); color: #6ee7b7; }
-    .action-tag.needs { border-color: rgb(249 115 22 / .55); color: #fdba74; }
-    .action-tag.failed { border-color: rgb(239 68 68 / .55); color: #fca5a5; }
+    .action-tag.on { border-color: rgb(16 185 129 / .45); background: rgb(16 185 129 / .1); color: #6ee7b7; }
+    .action-tag.needs { border-color: rgb(249 115 22 / .5); background: rgb(249 115 22 / .1); color: #fdba74; }
+    .action-tag.failed { border-color: rgb(239 68 68 / .5); background: rgb(239 68 68 / .1); color: #fca5a5; }
+    /* What a click does, so the card never has to put "Cancel" in its name. */
+    .work-mode::after { grid-column: 4; grid-row: 1; padding: 6px 11px; border-radius: 8px; background: var(--tint); color: var(--ink); font: 700 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; white-space: nowrap; content: "Start"; }
+    .work-mode.running::after { content: "Stop"; background: rgb(244 63 94 / .14); color: #fda4af; }
+    .work-mode.busy::after { content: none; }
+    /* Get JD is a switch: on while it checks each job page. */
+    .work-mode.get-jd::after { content: ""; width: 34px; height: 20px; padding: 0; border-radius: 999px; background: radial-gradient(circle at 10px 50%, #cbd5e1 6px, transparent 6.5px), #2c3a55; }
+    .work-mode.get-jd.running::after { background: radial-gradient(circle at 24px 50%, #fff 6px, transparent 6.5px), #10b981; }
+    .action.get-jd .action-tag.on { display: none; }
     /* What the mode is doing now, under its name; it stays until the next change. */
-    .action-detail { grid-column: 2 / -1; color: #94a3b8; font: 500 11.5px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; overflow-wrap: anywhere; }
+    .action-detail { grid-column: 2 / -1; color: #8b9ab3; font: 500 11.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; overflow-wrap: anywhere; }
     .action-detail:empty { display: none; }
     .action-detail.warn { color: #fdba74; }
     .action-detail.error { color: #fca5a5; }
     .action-detail.good { color: #6ee7b7; }
     .action.busy { cursor: not-allowed; opacity: .7; }
+    /* A mode is one card: its button, its account, its job list and its items. */
+    .row { display: flex; flex-direction: column; border: 1px solid #1f2a40; border-radius: 14px; overflow: hidden; background: #111a2d; transition: border-color .2s ease, box-shadow .2s ease; }
+    .row .action, .row .action:hover:not(:disabled) { border: 0; border-radius: 0; }
+    .row .action { background: transparent; }
+    .row:has(.action.running) { border-color: rgb(16 185 129 / .4); box-shadow: inset 3px 0 0 #10b981; background: linear-gradient(90deg, rgb(16 185 129 / .07), #111a2d 70%); }
+    .row:has(.action-tag.needs) { border-color: rgb(249 115 22 / .45); box-shadow: inset 3px 0 0 #f97316; }
+    .row:has(.action-tag.failed) { border-color: rgb(239 68 68 / .45); box-shadow: inset 3px 0 0 #ef4444; }
     /* A row's list (Apply's applications): items under the row, on a guide line. */
-    .row { display: flex; flex-direction: column; }
-    .action-sub { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px 26px; padding-left: 12px; border-left: 2px solid rgb(249 115 22 / .35); }
+    .action-sub { display: flex; flex-direction: column; gap: 6px; margin: 0 12px 12px 30px; padding-left: 12px; border-left: 2px solid rgb(249 115 22 / .35); }
     .action-sub[hidden] { display: none; }
     .action-sub.running { border-left-color: rgb(16 185 129 / .4); }
     .action-sub.failed { border-left-color: rgb(239 68 68 / .45); }
@@ -129,8 +162,8 @@ async function initializeQtsPageLauncher() {
     [data-sub-for="get_jd"] .sub-status > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
     .sub-bar { flex: 0 0 46px; height: 4px; overflow: hidden; border-radius: 4px; background: #243047; }
     .sub-fill { display: block; height: 100%; border-radius: 4px; background: #10b981; transition: width .3s ease; }
-    .sub-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border: 1px solid #243047; border-radius: 10px; background: #0d1526; color: #e2e8f0; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
-    .sub-item:hover { border-color: rgb(249 115 22 / .5); background: #111a2e; }
+    .sub-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border: 1px solid #243047; border-radius: 10px; background: #0b1322; color: #e2e8f0; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+    .sub-item:hover { border-color: rgb(249 115 22 / .5); background: #16213a; }
     .sub-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: rgb(16 185 129 / .14); color: #6ee7b7; font: 800 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; }
     .sub-text { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
     .sub-name, .sub-job { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -140,18 +173,31 @@ async function initializeQtsPageLauncher() {
     .action.get-jd { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
     .action.generation { --tint: rgb(168 85 247 / .16); --ink: #d8b4fe; }
     .action.apply { --tint: rgb(16 185 129 / .16); --ink: #6ee7b7; }
-    .action.auto-apply { --tint: rgb(14 165 233 / .16); --ink: #7dd3fc; }
-    .work-heading { display: flex; align-items: stretch; gap: 7px; }
-    .work-heading > .action { flex: 1; min-width: 0; }
-    .work-account-selection { display: flex; width: 140px; flex-shrink: 0; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
-    .work-account { flex-shrink: 0; width: 100%; min-width: 0; padding: 8px; border: 1px solid #29364b; border-radius: 10px; background: #101a2c; color: #cbd5e1; font: 500 12px/1.4 system-ui, sans-serif; color-scheme: dark; }
-    .work-account-category { max-width: 100%; overflow: hidden; color: #94a3b8; font: 600 11px/1.4 system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
-    @media (max-width: 900px) {
-      .work-heading { flex-wrap: wrap; }
-      .work-account-selection { width: 100%; }
-    }
+    .action.auto-apply { --tint: rgb(59 130 246 / .16); --ink: #93c5fd; }
+    /* Generation, Apply and Auto Apply share one card: the candidate on top, then the three modes. */
+    .work-group { display: flex; flex-direction: column; border: 1px solid #1f2a40; border-radius: 14px; overflow: hidden; background: #111a2d; }
+    .work-group .row { border: 0; border-top: 1px solid #1f2a40; border-radius: 0; background: transparent; }
+    .candidate-block { display: flex; flex-direction: column; gap: 7px; padding: 12px 12px 11px; background: #0e1627; }
+    .candidate-label { color: #7d8ba3; font: 750 10.5px/1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; text-transform: uppercase; }
+    .candidate-summary { color: #8b9ab3; font: 500 11.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .ready { margin-left: 8px; color: #7d8ba3; font: 600 11.5px/1 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .ready:empty { display: none; }
+    .work-jobs-toggle { align-self: flex-start; margin: -6px 12px 10px 59px; padding: 2px 0; border: 0; background: none; color: #a5b4fc; font: 600 12px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .work-jobs-toggle:hover { color: #c4b5fd; }
+    .work-jobs-toggle[hidden] { display: none; }
+    .work-jobs-toggle:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+    .work-account { flex: 1 1 auto; width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid #2c3a55; border-radius: 10px; background: #0b1322; color: #cbd5e1; font: 550 12.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; color-scheme: dark; cursor: pointer; }
+    .work-account:hover:not(:disabled) { border-color: #3b4b69; }
+    /* The chosen account's label colour, as an accent on the left of its dropdown. */
+    .work-account.labelled { border-left-width: 4px; }
     .work-account:focus-visible, .work-start:focus-visible, .work-refresh:focus-visible, .work-link:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
-    .work-picker { margin-top: 8px; padding: 10px; border: 1px solid #263247; border-radius: 12px; background: #0c1423; }
+    /* Tools: compact tiles, two per line, lighter than the work modes. */
+    .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tools-grid .action { grid-template-columns: 30px minmax(0, 1fr); column-gap: 9px; min-height: 48px; padding: 8px 10px; border-radius: 12px; font-size: 12.5px; }
+    .tools-grid .action-icon { width: 30px; height: 30px; border-radius: 9px; }
+    .tools-grid .action-icon svg { width: 16px; height: 16px; }
+    .tools-grid .action-icon + span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .work-picker { margin: 0 12px 12px; padding: 10px; border: 1px solid #263247; border-radius: 12px; background: #0b1322; }
     .work-picker[hidden] { display: none; }
     .work-toolbar, .work-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .work-toolbar { padding-bottom: 8px; color: #94a3b8; font: 500 11px/1.4 system-ui, sans-serif; }
@@ -177,13 +223,16 @@ async function initializeQtsPageLauncher() {
     .work-cancel { padding: 8px 10px; border: 1px solid #704050; border-radius: 8px; background: transparent; color: #fda4af; font: 600 12px/1.4 system-ui, sans-serif; cursor: pointer; }
     .work-cancel:disabled { opacity: .5; cursor: wait; }
     .work-cancel:focus-visible { outline: 2px solid #fda4af; outline-offset: 2px; }
-    .action.custom { --tint: rgb(100 116 139 / .2); --ink: #cbd5e1; }
-    .action.custom:disabled { cursor: not-allowed; }
+    /* Not available yet: a quiet dashed line, not a full card. */
+    .action.custom { --tint: rgb(100 116 139 / .14); --ink: #94a3b8; min-height: 44px; padding: 6px 12px; border-style: dashed; background: transparent; color: #7d8ba3; font-size: 12.5px; }
+    .action.custom .action-icon { width: 28px; height: 28px; border-radius: 8px; }
+    .action.custom .action-icon svg { width: 15px; height: 15px; }
+    .action.custom:disabled { opacity: .75; cursor: not-allowed; }
     .action.text-highlights { --tint: rgb(245 158 11 / .16); --ink: #fcd34d; }
     .action.page-exclusions { --tint: rgb(99 102 241 / .16); --ink: #a5b4fc; }
+    .action.custom-urls { --tint: rgb(20 184 166 / .16); --ink: #5eead4; }
+    .action.apply-pdf-folder { --tint: rgb(236 72 153 / .14); --ink: #f9a8d4; }
     .action.logout { --tint: rgb(244 63 94 / .16); --ink: #fda4af; }
-    /* A running mode: a green edge, and its icon becomes a red × that stops it. */
-    .action.running { --tint: rgb(244 63 94 / .18); --ink: #fda4af; border-color: rgb(16 185 129 / .45); background: rgb(16 185 129 / .06); }
     /* Cards stay clear of the docked actions. */
     :host([data-menu-open]) .preview, :host([data-menu-open]) .outcome { right: calc(${MENU_WIDTH} + 16px); }
     /* Signed out, the panel holds only the sign-in form; signed in, only the actions. */
@@ -212,14 +261,14 @@ async function initializeQtsPageLauncher() {
     .apply-pick .pick-account { display: block; width: 100%; margin-top: 8px; padding: 9px 12px; border: 1px solid #10b981; border-radius: 10px; background: #ecfdf5; color: #065f46; font: 700 13px/1.3 system-ui, sans-serif; text-align: left; cursor: pointer; }
     .apply-pick .pick-account:hover:not(:disabled) { background: #d1fae5; }
     .apply-pick .pick-account:disabled { opacity: .6; cursor: wait; }
-    .launcher.get-jd-active { right: min(400px, 48vw); }
+    .launcher.get-jd-active { right: min(384px, 48vw); }
     /* A Get JD page that needs the Manager keeps an orange badge until the notice is resolved. */
     .outcome { position: fixed; right: 16px; bottom: 100px; z-index: 5; width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; border: 1px solid #e2e8f0; border-left: 4px solid #10b981; border-radius: 14px; background: #fff; color: #0f172a; box-shadow: 0 18px 44px -12px #0f172a59; font: 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; pointer-events: auto; animation: qts-card-in .28s cubic-bezier(.2,.9,.3,1.2) both; }
     .outcome[hidden] { display: none; }
     .outcome.tone-info { border-left-color: #3b82f6; }
     .outcome.tone-warn { border-left-color: #f97316; }
     .outcome.tone-error { border-left-color: #ef4444; }
-    .outcome.get-jd-active { right: calc(min(400px, 48vw) + 16px); }
+    .outcome.get-jd-active { right: calc(min(384px, 48vw) + 16px); }
     .outcome-head { display: flex; align-items: flex-start; gap: 10px; }
     .outcome-message { flex: 1; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
     .outcome .close { flex: none; width: 24px; height: 24px; font-size: 16px; }
@@ -285,28 +334,56 @@ async function initializeQtsPageLauncher() {
   menuFoot.className = 'menu-foot';
   menu.append(menuBrand, menuList, menuFoot);
 
+  // Line icons (24×24, stroked), built as SVG nodes: no markup strings reach the page's DOM.
+  const ICONS = {
+    get_jd: ['M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14z', 'M20 20l-4.2-4.2'],
+    generation: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z', 'M14 3v5h5', 'M9 13h6', 'M9 17h4'],
+    apply: ['M21 3L10 14', 'M21 3l-6.5 18-4.5-7-7-4.5z'],
+    auto_apply: ['M13 2L4 14h8l-1 8 9-12h-8z'],
+    custom: ['M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z', 'M19 16v4', 'M17 18h4'],
+    text_highlights: ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'],
+    page_exclusions: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M5.6 5.6l12.8 12.8'],
+    auto_apply_custom_urls: ['M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7', 'M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7'],
+    apply_pdf_folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+    sign_out: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
+    sign_in: ['M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4', 'M10 17l5-5-5-5', 'M15 12H3'],
+  };
+  function setIcon(element, name) {
+    if (!element || element.dataset.icon === name) return;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of ICONS[name] || []) {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', d);
+      svg.append(path);
+    }
+    element.dataset.icon = name;
+    element.replaceChildren(svg);
+  }
+
   // In this order; tools show only for a Manager assigned them.
   const actions = [
     ['Work'],
-    ['get_jd', 'Get JD', '⌕', 'get-jd'],
-    ['generation', 'Generation', '▤', 'generation'],
-    ['apply', 'Apply', '→', 'apply'],
-    ['auto_apply', 'Auto Apply', '⇉', 'auto-apply'],
-    ['custom', 'Custom', '✦', 'custom'],
+    ['get_jd', 'Get JD', 'get_jd', 'get-jd'],
+    ['generation', 'Generation', 'generation', 'generation'],
+    ['apply', 'Apply', 'apply', 'apply'],
+    ['auto_apply', 'Auto Apply', 'auto_apply', 'auto-apply'],
+    ['custom', 'Custom', 'custom', 'custom'],
     ['Tools'],
-    ['text_highlights', 'Highlight', '✎', 'text-highlights'],
-    ['page_exclusions', 'Site Setting', '⊘', 'page-exclusions'],
-    ['auto_apply_custom_urls', 'Custom URLs', '↗', 'custom-urls'],
-    ['apply_pdf_folder', 'Apply PDFs folder', '▤', 'apply-pdf-folder'],
-    ['session', 'Sign In', '↪', 'logout'],
+    ['text_highlights', 'Highlight', 'text_highlights', 'text-highlights'],
+    ['page_exclusions', 'Site Setting', 'page_exclusions', 'page-exclusions'],
+    ['auto_apply_custom_urls', 'Custom URLs', 'auto_apply_custom_urls', 'custom-urls'],
+    ['apply_pdf_folder', 'Apply PDFs folder', 'apply_pdf_folder', 'apply-pdf-folder'],
+    ['session', 'Sign In', 'sign_in', 'logout'],
   ];
   // Today's counts, above the actions: new job URLs (each job once), job rows added, applications.
   const stats = document.createElement('div');
   stats.className = 'stats';
   for (const [key, label, title] of [
-    ['urls', 'URL', 'New jobs added today: each job once, however many candidates got it'],
-    ['jobs', 'JOB', 'Job rows added today: one per candidate'],
-    ['applied', 'APPLY', 'Applications submitted today'],
+    ['urls', 'New URLs', 'New jobs added today: each job once, however many candidates got it'],
+    ['jobs', 'Job rows', 'Job rows added today: one per candidate'],
+    ['applied', 'Applied', 'Applications submitted today'],
   ]) {
     const tile = document.createElement('div');
     tile.className = `stat ${key}`;
@@ -319,27 +396,57 @@ async function initializeQtsPageLauncher() {
   }
   menuList.append(Object.assign(document.createElement('div'), { className: 'label-top', textContent: 'Today' }), stats);
 
-  const workPickers = new Map();
-  const accountsRequests = new Map();
+  // One candidate for Generation, Apply and Auto Apply; each mode keeps its own job list for it.
+  const WORK_MODES = ['generation', 'apply', 'auto_apply'];
+  const WORK_CANDIDATE_KEY = 'qtsWorkCandidate';
   const WORK_ACCOUNTS_CACHE_TTL_MS = 30_000;
+  const workPickers = new Map();
+  let accountsRequest = null;
   let accountsVersion = 0;
+  const workGroup = Object.assign(document.createElement('div'), { className: 'work-group' });
+  const candidateBlock = Object.assign(document.createElement('div'), { className: 'candidate-block' });
+  const candidateSelect = Object.assign(document.createElement('select'), { className: 'work-account' });
+  candidateSelect.dataset.workCandidate = '';
+  candidateSelect.setAttribute('aria-label', 'Candidate for Generation, Apply and Auto Apply');
+  candidateSelect.add(new Option('All accounts', ''));
+  const candidateSummary = Object.assign(document.createElement('div'), { className: 'candidate-summary' });
+  candidateBlock.append(
+    Object.assign(document.createElement('span'), { className: 'candidate-label', textContent: 'Candidate' }),
+    candidateSelect,
+    candidateSummary,
+  );
+  workGroup.append(candidateBlock);
+  const candidate = { select: candidateSelect, accounts: [], loaded: false };
+  // Tools sit in a two-column grid after their heading; who is signed in sits beside Sign Out.
+  const toolsGrid = Object.assign(document.createElement('div'), { className: 'tools-grid' });
+  const who = Object.assign(document.createElement('div'), { className: 'who', hidden: true });
+  const whoAvatar = Object.assign(document.createElement('span'), { className: 'who-avatar' });
+  const whoName = Object.assign(document.createElement('span'), { className: 'who-name' });
+  const whoRole = Object.assign(document.createElement('span'), { className: 'who-role' });
+  const whoText = Object.assign(document.createElement('span'), { className: 'who-text' });
+  whoText.append(whoName, whoRole);
+  who.append(whoAvatar, whoText);
+  menuFoot.append(who);
+  const TOOL_ACTIONS = ['text_highlights', 'page_exclusions', 'auto_apply_custom_urls', 'apply_pdf_folder'];
   for (const [action, label, icon, className] of actions) {
     if (!label) {
       const heading = document.createElement('div');
       heading.className = 'label-top';
       heading.textContent = action;
       menuList.appendChild(heading);
+      if (action === 'Tools') menuList.appendChild(toolsGrid);
       continue;
     }
     const button = document.createElement('button');
-    button.className = `action ${className}`;
+    button.className = `action ${className}${['get_jd', 'generation', 'apply', 'auto_apply'].includes(action) ? ' work-mode' : ''}`;
+    if (TOOL_ACTIONS.includes(action)) button.title = label;
     button.type = 'button';
     button.dataset.action = action;
     if (action === 'apply_pdf_folder') button.hidden = true;
     button.setAttribute('aria-label', label);
     const iconElement = document.createElement('span');
     iconElement.className = 'action-icon';
-    iconElement.textContent = icon;
+    setIcon(iconElement, icon);
     const labelElement = document.createElement('span');
     labelElement.textContent = label;
     const tag = document.createElement('span');
@@ -360,115 +467,156 @@ async function initializeQtsPageLauncher() {
       sub.dataset.subFor = action;
       sub.hidden = true;
       row.append(button, sub);
-      if (['generation', 'auto_apply'].includes(action)) {
-        const heading = Object.assign(document.createElement('div'), { className: 'work-heading' });
-        const accountSelection = Object.assign(document.createElement('div'), { className: 'work-account-selection' });
-        const select = Object.assign(document.createElement('select'), { className: 'work-account' });
-        const categoryLabel = Object.assign(document.createElement('span'), { className: 'work-account-category' });
-        select.dataset.workAccount = action;
-        categoryLabel.dataset.workAccountCategory = action;
-        select.setAttribute('aria-label', `${label} account`);
-        select.add(new Option('Select account', ''));
-        select.addEventListener('focus', () => loadWorkAccounts(action).catch(() => {}));
-        select.addEventListener('change', () => {
-          setWorkAccountColor(select, workPickers.get(action).accounts, select.value);
-          loadWorkJobs(action);
-        });
+      if (WORK_MODES.includes(action)) {
+        // The mode's ready count for the chosen candidate, beside its name.
+        labelElement.append(Object.assign(document.createElement('span'), { className: 'ready' }));
+        const toggle = Object.assign(document.createElement('button'), { type: 'button', className: 'work-jobs-toggle', hidden: true });
+        toggle.dataset.workToggle = action;
         const panel = Object.assign(document.createElement('div'), { className: 'work-picker', hidden: true });
         panel.dataset.workPicker = action;
-        workPickers.set(action, { select, categoryLabel, panel, accounts: [], jobs: [], selected: new Set(), version: 0, loading: false });
-        accountSelection.append(select, categoryLabel);
-        heading.append(button, accountSelection);
-        row.replaceChildren(heading, panel, sub);
+        workPickers.set(action, { label, toggle, panel, open: false, loaded: false, jobs: [], selected: new Set(), version: 0, loading: false });
+        toggle.addEventListener('click', () => toggleWorkJobs(action));
+        row.replaceChildren(button, toggle, panel, sub);
+        workGroup.append(row);
+        if (action === 'generation') menuList.appendChild(workGroup);
+        continue;
       }
       menuList.appendChild(row);
       continue;
     }
-    (action === 'session' ? menuFoot : menuList).appendChild(button);
+    (action === 'session' ? menuFoot : TOOL_ACTIONS.includes(action) ? toolsGrid : menuList).appendChild(button);
   }
   // The Tools heading shows only when one of its tools does.
   const toolsHeading = [...menuList.querySelectorAll('.label-top')].find((heading) => heading.textContent === 'Tools');
 
-  async function loadWorkAccounts(action) {
-    const cached = accountsRequests.get(action);
+  // The accounts once, with every mode's ready count (one request, cached briefly).
+  async function loadWorkAccounts() {
+    const cached = accountsRequest;
     if (cached && (cached.expiresAt === Infinity || cached.expiresAt > Date.now())) return cached.promise;
     const version = accountsVersion;
-    const picker = workPickers.get(action);
-    const previous = picker.select.value;
-    picker.select.replaceChildren(new Option('Loading accounts…', ''));
-    picker.select.options[0].disabled = true;
+    const select = candidate.select;
+    const previous = select.value;
+    select.replaceChildren(new Option('Loading accounts…', ''));
+    select.options[0].disabled = true;
     const entry = { promise: null, expiresAt: Infinity };
     const request = (async () => {
-      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: action });
+      const [reply, stored] = await Promise.all([
+        chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: 'all' }),
+        chrome.storage.local.get([WORK_CANDIDATE_KEY]).catch(() => ({})),
+      ]);
       if (version !== accountsVersion) return;
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load accounts.');
-      picker.accounts = reply.accounts;
-      picker.select.replaceChildren(new Option(reply.accounts.length ? 'Select account' : 'No eligible accounts', ''));
-      for (const account of reply.accounts) {
-        const eligibleJobCount = Number(account.eligibleJobCount) || 0;
-        const countLabel = eligibleJobCount >= 8 ? '8+' : String(eligibleJobCount);
-        const option = new Option(
-          `${account.name} (${countLabel})`,
-          account.id,
-        );
-        option.disabled = eligibleJobCount === 0;
-        picker.select.add(option);
+      candidate.accounts = Array.isArray(reply.accounts) ? reply.accounts : [];
+      candidate.loaded = true;
+      select.replaceChildren(new Option(candidate.accounts.length ? 'All accounts' : 'No accounts', ''));
+      for (const account of candidate.accounts) {
+        const ready = WORK_MODES.some((mode) => readyCount(account, mode) > 0);
+        // Category · Candidate Name · Label; a missing part is left out.
+        const text = [account.categoryName, account.name, account.category].filter(Boolean).join(' · ');
+        const option = new Option(ready ? text : `${text} — nothing ready`, account.id);
+        option.title = option.text;
+        option.disabled = !ready;
+        select.add(option);
       }
-      picker.select.value = previous;
-      setWorkAccountColor(picker.select, picker.accounts, picker.select.value);
-      if (picker.select.selectedOptions[0]?.disabled) {
-        picker.select.value = '';
-        setWorkAccountColor(picker.select, picker.accounts, '');
-        picker.version += 1;
-        picker.jobs = [];
-        picker.selected.clear();
-        picker.loading = false;
-        picker.error = '';
-        renderWorkPicker(action);
-      }
+      const wanted = previous || (typeof stored?.[WORK_CANDIDATE_KEY] === 'string' ? stored[WORK_CANDIDATE_KEY] : '');
+      select.value = wanted;
+      if (select.value !== wanted || select.selectedOptions[0]?.disabled) select.value = '';
+      if (select.value !== previous) resetWorkPickers();
       entry.expiresAt = Date.now() + WORK_ACCOUNTS_CACHE_TTL_MS;
-    })().catch(error => {
+      renderCandidate();
+    })().catch((error) => {
       if (version !== accountsVersion) return;
-      if (accountsRequests.get(action) === entry) accountsRequests.delete(action);
-      picker.select.replaceChildren(new Option('Could not load accounts — focus to retry', ''));
-      picker.select.options[0].disabled = true;
+      if (accountsRequest === entry) accountsRequest = null;
+      select.replaceChildren(new Option('Could not load accounts — focus to retry', ''));
+      select.options[0].disabled = true;
+      renderCandidate();
       showToast(error.message, 'error');
       throw error;
     });
     entry.promise = request;
-    accountsRequests.set(action, entry);
+    accountsRequest = entry;
     return request;
   }
 
-  function setWorkAccountColor(select, accounts, accountId) {
-    const account = accounts.find(item => item.id === accountId);
-    const color = /^#[0-9a-f]{6}$/i.test(account?.categoryColor || '') ? account.categoryColor : '';
-    const categoryLabel = workPickers.get(select.dataset.workAccount)?.categoryLabel;
-    categoryLabel.textContent = account?.category || '';
-    categoryLabel.style.color = color;
+  function readyCount(account, mode) {
+    return Number(account?.counts?.[mode]) || 0;
   }
+
+  function chosenAccount() {
+    return candidate.accounts.find((account) => account.id === candidate.select.value) || null;
+  }
+
+  // The dropdown's accent (the label colour), the summary line, and each mode's ready count.
+  function renderCandidate() {
+    const account = chosenAccount();
+    const select = candidate.select;
+    const color = /^#[0-9a-f]{6}$/i.test(account?.categoryColor || '') ? account.categoryColor : '';
+    select.classList.toggle('labelled', Boolean(color));
+    select.style.borderLeftColor = color;
+    select.title = account ? select.selectedOptions[0]?.text || '' : 'Every account';
+    const counts = Object.fromEntries(WORK_MODES.map((mode) => [mode, account
+      ? readyCount(account, mode)
+      : candidate.accounts.reduce((sum, item) => sum + readyCount(item, mode), 0)]));
+    candidateSummary.textContent = !candidate.loaded ? 'Choose one candidate for all three modes, or work through every account.'
+      : `${account ? '' : 'Every account: '}${counts.generation} to generate · ${counts.apply} to apply · ${counts.auto_apply} for Auto Apply`;
+    for (const mode of WORK_MODES) {
+      const ready = menu.querySelector(`[data-action="${mode}"] .ready`);
+      if (ready) ready.textContent = candidate.loaded ? `${counts[mode]} ready` : '';
+      renderWorkPicker(mode);
+    }
+  }
+
+  function resetWorkPickers() {
+    for (const picker of workPickers.values()) {
+      picker.version += 1;
+      picker.open = false; picker.loaded = false; picker.loading = false;
+      picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.hasMore = false; picker.search = '';
+    }
+  }
+
+  function chooseCandidate() {
+    resetWorkPickers();
+    for (const mode of WORK_MODES) rowNotes.delete(mode);
+    // Remembered in this Chrome, so every tab's panel starts with the same candidate.
+    chrome.storage.local.set({ [WORK_CANDIDATE_KEY]: candidate.select.value }).catch(() => {});
+    renderCandidate();
+  }
+  candidateSelect.addEventListener('focus', () => loadWorkAccounts().catch(() => {}));
+  candidateSelect.addEventListener('change', chooseCandidate);
+  renderCandidate();
 
   function loadAllWorkAccounts() {
-    for (const action of workPickers.keys()) loadWorkAccounts(action).catch(() => {});
+    loadWorkAccounts().catch(() => {});
   }
 
-  async function loadWorkJobs(action) {
-    const picker = workPickers.get(action), version = ++picker.version;
+  function toggleWorkJobs(mode) {
+    const picker = workPickers.get(mode);
+    picker.open = !picker.open;
+    if (picker.open && !picker.loaded && !picker.loading) loadWorkJobs(mode);
+    else renderWorkPicker(mode);
+  }
+
+  // A mode's jobs for the chosen candidate, all eligible ones checked; loaded when first needed.
+  async function loadWorkJobs(mode) {
+    const picker = workPickers.get(mode), version = ++picker.version;
+    const candidateId = candidate.select.value;
     picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.hasMore = false; picker.search = '';
-    picker.loading = Boolean(picker.select.value);
-    renderWorkPicker(action);
-    if (!picker.select.value) return;
+    picker.loading = Boolean(candidateId);
+    picker.loaded = false;
+    renderWorkPicker(mode);
+    if (!candidateId) return;
     try {
-      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode: action, candidateId: picker.select.value });
+      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode, candidateId });
       if (picker.version !== version) return;
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load jobs.');
       picker.jobs = reply.jobs;
       picker.hasMore = reply.hasMore;
       picker.selected = new Set(reply.jobs.filter(job => job.selectable !== false).map(job => job.id));
+      picker.loaded = true;
     } catch (error) {
       if (picker.version === version) picker.error = error.message;
     } finally {
-      if (picker.version === version) { picker.loading = false; renderWorkPicker(action); }
+      if (picker.version === version) { picker.loading = false; renderWorkPicker(mode); }
     }
   }
 
@@ -477,14 +625,14 @@ async function initializeQtsPageLauncher() {
     if (picker.cancelling) return;
     const scroll = picker.panel.querySelector('.work-jobs')?.scrollTop || 0;
     picker.cancelling = true;
-    picker.select.disabled = true;
+    candidate.select.disabled = true;
     renderWorkPicker(action);
     const cancellingList = picker.panel.querySelector('.work-jobs');
     if (cancellingList) cancellingList.scrollTop = scroll;
     try {
       const stored = await chrome.storage.local.get(['qtsExtensionStatus', 'qtsApplyKind']);
       const running = action === 'generation' ? stored.qtsExtensionStatus === 'generation'
-        : stored.qtsExtensionStatus === 'apply' && stored.qtsApplyKind === 'auto';
+        : stored.qtsExtensionStatus === 'apply' && (stored.qtsApplyKind === 'auto') === (action === 'auto_apply');
       if (running) {
         const reply = await chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: 'cancel_status', expectedAction: action });
         if (!reply?.ok) throw new Error(reply?.error || 'Could not cancel this run.');
@@ -506,7 +654,14 @@ async function initializeQtsPageLauncher() {
 
   function renderWorkPicker(action) {
     const picker = workPickers.get(action), panel = picker.panel;
-    panel.replaceChildren(); panel.hidden = !picker.select.value;
+    const account = chosenAccount();
+    // "Choose jobs" shows for a chosen candidate with something ready (or a list already open).
+    const count = readyCount(account, action);
+    picker.toggle.hidden = !account || (!count && !picker.open);
+    const checked = picker.loaded ? `${picker.selected.size} of ${picker.jobs.length}` : `all ${count}`;
+    picker.toggle.textContent = `${picker.open ? '▾' : '▸'} Choose jobs (${checked})`;
+    picker.toggle.setAttribute('aria-expanded', String(picker.open));
+    panel.replaceChildren(); panel.hidden = !account || !picker.open;
     if (panel.hidden) return;
     const toolbar = Object.assign(document.createElement('div'), { className: 'work-toolbar' });
     const query = String(picker.search || '').trim().toLowerCase();
@@ -555,12 +710,12 @@ async function initializeQtsPageLauncher() {
       panel.append(Object.assign(document.createElement('div'), { className: `work-note${picker.error ? ' error' : ''}`, textContent: picker.loading ? 'Loading jobs…' : picker.error || (picker.hasMore ? 'Showing the first 200 eligible jobs. Refresh after this batch.' : 'No eligible jobs for this account.') }));
     }
     const footer = Object.assign(document.createElement('div'), { className: 'work-footer' });
-    const start = Object.assign(document.createElement('button'), { type: 'button', className: 'work-start', textContent: action === 'generation' ? 'Generate selected' : 'Apply to selected' });
+    const start = Object.assign(document.createElement('button'), { type: 'button', className: 'work-start', textContent: { generation: 'Generate selected', apply: 'Apply to selected', auto_apply: 'Auto Apply selected' }[action] });
     const button = menu.querySelector(`[data-action="${action}"]`);
     start.disabled = picker.cancelling || picker.loading || !picker.selected.size || button.disabled || button.classList.contains('running');
     start.addEventListener('click', () => runAction(action, button));
     const cancel = Object.assign(document.createElement('button'), { type: 'button', className: 'work-cancel', textContent: picker.cancelling ? 'Cancelling…' : 'Cancel', disabled: Boolean(picker.cancelling) });
-    cancel.setAttribute('aria-label', `Cancel ${action === 'generation' ? 'Generation' : 'Auto Apply'} selection or run`);
+    cancel.setAttribute('aria-label', `Cancel ${picker.label} selection or run`);
     cancel.addEventListener('click', () => cancelWorkPicker(action));
     const buttons = Object.assign(document.createElement('div'), { className: 'work-buttons' });
     buttons.append(cancel, start);
@@ -1157,6 +1312,18 @@ async function initializeQtsPageLauncher() {
     preview.hidden = false;
   }
 
+  // The footer names who is signed in (display name and role only; never a token).
+  async function syncWho(signedIn) {
+    const user = signedIn ? (await chrome.storage.local.get(['qtsSessionUser'])).qtsSessionUser : null;
+    const name = String(user?.displayName || user?.name || '').trim();
+    who.hidden = !name;
+    if (!name) return;
+    whoName.textContent = name;
+    whoName.title = name;
+    whoRole.textContent = String(user.role || '').replace(/_/g, ' ');
+    whoAvatar.textContent = name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+  }
+
   async function syncSessionAction() {
     const button = menu.querySelector('[data-action="session"], [data-session-action]');
     if (!button) return launcher.classList.contains('signed-in');
@@ -1168,10 +1335,10 @@ async function initializeQtsPageLauncher() {
     menu.classList.toggle('signed-out', !signedIn);
     button.dataset.sessionAction = signedIn ? 'sign_out' : 'sign_in';
     button.setAttribute('aria-label', signedIn ? 'Sign Out' : 'Sign In');
-    const icon = button.querySelector('.action-icon');
     const label = button.querySelector('.action-icon + span');
-    if (icon) icon.textContent = signedIn ? '↪' : '→';
+    setIcon(button.querySelector('.action-icon'), signedIn ? 'sign_out' : 'sign_in');
     if (label) label.textContent = signedIn ? 'Sign Out' : 'Sign In';
+    syncWho(signedIn).catch(() => {});
     // Signed out, an open Sign In card stays put: sign-in clears the old session first, which lands here mid-login.
     if (signedIn) {
       hideSignInForm(false);
@@ -1285,10 +1452,10 @@ async function initializeQtsPageLauncher() {
     // Apply and Auto Apply share the work slot ('apply'); qtsApplyKind says which holds it.
     const autoApplyOn = workStatus === 'apply' && stored.qtsApplyKind === 'auto';
     const rows = {
-      get_jd: { label: 'Get JD', icon: '⌕', active: getJdOn },
-      generation: { label: 'Generation', icon: '▤', active: workStatus === 'generation' },
-      apply: { label: 'Apply', icon: '→', active: workStatus === 'apply' && !autoApplyOn },
-      auto_apply: { label: 'Auto Apply', icon: '⇉', active: autoApplyOn },
+      get_jd: { label: 'Get JD', active: getJdOn },
+      generation: { label: 'Generation', active: workStatus === 'generation' },
+      apply: { label: 'Apply', active: workStatus === 'apply' && !autoApplyOn },
+      auto_apply: { label: 'Auto Apply', active: autoApplyOn },
     };
 
     if (getJdOn) {
@@ -1299,7 +1466,14 @@ async function initializeQtsPageLauncher() {
     }
     const results = getJdOn && Number(stored.authExpiresAt) > Date.now()
       ? globalThis.__qtsGetJdNotifications?.recentResults(stored.qtsGetJdNotificationState, stored) || [] : [];
-    renderSub('get_jd', results.map((entry) => {
+    // This page's manual review, left with "‹ QTS" or Cancel: one click goes back to it.
+    const review = globalThis.__qtsGetJdReview;
+    const reviewItems = getJdOn && review?.manualReviewAvailable?.() ? [{
+      name: 'Choose candidates for this page', company: document.title || location.hostname,
+      avatar: '✓', goLabel: 'Review ›', openTitle: 'Show the candidates for this job',
+      onOpen: async () => { setOpen(false); review.openReview(); return { ok: true }; },
+    }] : [];
+    renderSub('get_jd', [...reviewItems, ...results.map((entry) => {
       let site = ''; try { site = new URL(entry.pageUrl).hostname; } catch { /* Historical entries can lack a URL. */ }
       const time = Number(entry.updatedAt) > 0 ? new Date(entry.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
       return {
@@ -1311,7 +1485,7 @@ async function initializeQtsPageLauncher() {
         openTitle: 'Show the existing job tab, or reopen its page if it has closed',
         goLabel: 'Open page ›', open: { type: 'QTS_OPEN_GET_JD_RESULT', operationId: entry.operationId },
       };
-    }));
+    })]);
     // Generation's latest step (with its job) or notice, whichever is newer.
     const state = stored.qtsGenerationBrowserState || {};
     const notice = stored.qtsGenerationNotice || {};
@@ -1401,9 +1575,10 @@ async function initializeQtsPageLauncher() {
       button.disabled = Boolean(busy[action]);
       button.dataset.modeAction = active ? (action === 'get_jd' ? 'cancel_get_jd' : 'cancel_status') : action;
       const defaultLabel = row.label;
+      // The name stays; the Stop button (or Get JD's switch) at the end says what a click does.
       button.setAttribute('aria-label', active ? `Cancel ${defaultLabel}` : defaultLabel);
-      button.querySelector('.action-icon').textContent = active ? '×' : row.icon;
-      button.querySelector('.action-icon + span').textContent = active ? `Cancel ${defaultLabel}` : defaultLabel;
+      button.title = active ? `Stop ${defaultLabel}` : `Start ${defaultLabel}`;
+      if (action === 'get_jd') button.setAttribute('aria-pressed', String(active));
       const tag = button.querySelector('.action-tag');
       tag.textContent = chip?.[0] || '';
       tag.className = `action-tag ${chip?.[1] || ''}`.trim();
@@ -1434,8 +1609,10 @@ async function initializeQtsPageLauncher() {
     launcher.classList.toggle('needs', needs);
     launcher.classList.toggle('failed', !needs && failed);
     launcher.classList.toggle('running', !needs && !failed && Object.values(rows).some((row) => row.active));
+    // The candidate stays fixed while a run uses it.
+    candidate.select.disabled = ['generation', 'apply'].includes(workStatus)
+      || [...workPickers.values()].some((picker) => picker.cancelling);
     for (const [action, picker] of workPickers) {
-      picker.select.disabled = ['generation', 'apply'].includes(workStatus) || Boolean(picker.cancelling);
       const scroll = picker.panel.querySelector('.work-jobs')?.scrollTop || 0;
       renderWorkPicker(action);
       const list = picker.panel.querySelector('.work-jobs');
@@ -1479,11 +1656,18 @@ async function initializeQtsPageLauncher() {
         showSignInForm();
         return;
       }
+      // A chosen candidate scopes the run to its checked jobs (all of them if the list was never opened);
+      // "All accounts" sends no selection, so the mode works through every account.
       const picker = workPickers.get(resolvedAction);
       let selection;
-      if (picker?.select.value) {
-        if (picker.loading || picker.error || !picker.selected.size) throw new Error('Select at least one eligible job before starting.');
-        selection = { candidateId: picker.select.value, jobIds: [...picker.selected] };
+      if (picker && candidate.select.value) {
+        if (!picker.loaded && !picker.loading) await loadWorkJobs(resolvedAction);
+        if (picker.loading) throw new Error('The jobs are still loading. Try again in a moment.');
+        if (picker.error) throw new Error(picker.error);
+        if (!picker.selected.size) {
+          throw new Error(picker.jobs.length ? 'Select at least one job before starting.' : `Nothing is ready for ${picker.label} for this candidate.`);
+        }
+        selection = { candidateId: candidate.select.value, jobIds: [...picker.selected] };
       }
       const response = await chrome.runtime.sendMessage({
         type: 'QTS_PAGE_ACTION',
@@ -1511,9 +1695,15 @@ async function initializeQtsPageLauncher() {
     }
   }
 
-  main.addEventListener('click', async () => {
+  async function handleLauncherClick() {
     // The launcher is only visible while signed in; a session that just expired hides it here.
     if (!(await syncSessionAction())) return;
+    const review = globalThis.__qtsGetJdReview;
+    if (review?.manualReviewAvailable?.()) {
+      setOpen(false);
+      review.openReview();
+      return;
+    }
     const opening = !launcher.classList.contains('open');
     setOpen(opening);
     // Opening QTS ends any idle back-off: this Chrome checks for work right away.
@@ -1525,6 +1715,11 @@ async function initializeQtsPageLauncher() {
     if (opening) syncTextHighlightAction(true).catch(() => {});
     // A Get JD notice hidden earlier shows again beside the panel (the orange dot stands for it).
     if (opening && currentOutcome?.kind === 'notice') outcomeCard.hidden = false;
+  }
+  main.addEventListener('click', () => {
+    handleLauncherClick().catch((error) => {
+      console.warn('[QTS launcher] Could not switch panels:', error);
+    });
   });
   menu.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action, button));
@@ -1540,11 +1735,11 @@ async function initializeQtsPageLauncher() {
     if (!active || area !== 'local') return;
     if (changes.authExpiresAt) {
       accountsVersion += 1;
-      accountsRequests.clear();
-      for (const [action, picker] of workPickers) {
-        picker.version += 1; picker.select.replaceChildren(new Option('Select account', ''));
-        picker.jobs = []; picker.selected.clear(); picker.loading = false; renderWorkPicker(action);
-      }
+      accountsRequest = null;
+      candidate.accounts = []; candidate.loaded = false;
+      candidate.select.replaceChildren(new Option('All accounts', ''));
+      resetWorkPickers();
+      renderCandidate();
       syncSessionAction()
         .then(() => syncTextHighlightAction())
         .catch((error) => console.warn('[QTS launcher] Could not sync session after authentication changed:', error));

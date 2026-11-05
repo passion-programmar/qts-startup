@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe','/usr/bin/google-chrome'].find(p=>fs.existsSync(p));
 const scope={candidateId:'11111111-1111-4111-8111-111111111111',jobIds:['22222222-2222-4222-8222-222222222222']};
-test('real worker passes exact account/job scope to Generation and Auto Apply claims', {skip:!CHROME,timeout:120000}, async()=>{
+test('real worker passes exact account/job scope to Generation, Apply and Auto Apply claims', {skip:!CHROME,timeout:120000}, async()=>{
   const calls=[];let holdWorkItems=false;
   const server=http.createServer(async(req,res)=>{
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
@@ -23,7 +23,7 @@ test('real worker passes exact account/job scope to Generation and Auto Apply cl
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
   const wait=async check=>{const end=Date.now()+20000;while(Date.now()<end){if(await check())return;await new Promise(r=>setTimeout(r,100));}throw Error('Scoped claim was not observed');};
   try{
-    for(const mode of ['generation','auto_apply']){
+    for(const mode of ['generation','apply','auto_apply']){
       const browser=await require('puppeteer-core').launch({executablePath:CHROME,headless:true,pipe:true,enableExtensions:[path.resolve('extension')],args:['--no-first-run']});
       try{
         const worker=await(await browser.waitForTarget(t=>t.type()==='service_worker')).worker();

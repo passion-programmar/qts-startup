@@ -51,9 +51,9 @@ const request = (query = "") => new Request("http://localhost/api/extension/work
 const claim = (selection?: unknown, mode?: string) => new Request("http://localhost/api/extension/claim", { method: "POST", body: JSON.stringify({ selection, mode }) });
 
 test("Gemini-matching account choices require nonblank matching notes; notes are not disclosed", async () => {
-  fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", category: "DevOps", categoryColor: "#2563eb", eligibleJobCount: 8 }]];
+  fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", category: "DevOps", categoryColor: "#2563eb", categoryName: "Engineering", eligibleJobCount: 8 }]];
   const response = await GET(request()); assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", categoryColor: "#2563eb", eligibleJobCount: 8 }] });
+  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", categoryColor: "#2563eb", categoryName: "Engineering", eligibleJobCount: 8 }] });
   assert.match(fixture.queries[1].sql, /length\(regexp_replace\(coalesce\("profiles"\."jd_matching"/);
   assert.ok(fixture.queries[1].params.includes("\\s"), 'blank lines and tabs must not count as matching notes');
   assert.match(fixture.queries[1].sql, /parent_user_id/); assert.match(fixture.queries[1].sql, /blocked_at/);
@@ -64,7 +64,7 @@ test("Gemini-matching account choices require nonblank matching notes; notes are
 test("non-Gemini Generation does not require a matching note", async () => {
   fixture.rows = [[{ useGeminiMatching: false }], [{ id: candidateId, firstName: "Jordan", lastName: "Taylor", categoryColor: null, eligibleJobCount: 0 }]];
   const response = await GET(request());
-  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "", categoryColor: null, eligibleJobCount: 0 }] });
+  assert.deepEqual(await response.json(), { success: true, accounts: [{ id: candidateId, name: "Jordan Taylor", category: "", categoryColor: null, categoryName: "Global", eligibleJobCount: 0 }] });
   assert.doesNotMatch(fixture.queries[1].sql, /jd_matching/);
 });
 test("Gemini-assigned Auto Apply accounts require matching notes and Auto Apply job eligibility", async () => {
@@ -72,7 +72,7 @@ test("Gemini-assigned Auto Apply accounts require matching notes and Auto Apply 
   const response = await GET(new Request("http://localhost/api/extension/work-items?mode=auto_apply"));
   assert.deepEqual(await response.json(), {
     success: true,
-    accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", categoryColor: "#2563eb", eligibleJobCount: 6 }],
+    accounts: [{ id: candidateId, name: "Jordan Taylor", category: "DevOps", categoryColor: "#2563eb", categoryName: "Global", eligibleJobCount: 6 }],
   });
   assert.match(fixture.queries[1].sql, /jd_matching/);
   assert.ok(fixture.queries[1].params.includes("\\s"));
@@ -138,6 +138,41 @@ test("Apply forwards exact selection to the existing claim helper and preserves 
   assert.deepEqual(fixture.claims[0][4], { autoApply: true, requireMatchingNote: true });
   await apply(claim()); assert.equal(fixture.claims[1][3], undefined);
   assert.deepEqual(fixture.claims[1][4], { autoApply: false, requireMatchingNote: false });
+  // Manual Apply takes the panel's shared candidate too.
+  assert.equal((await apply(claim(scope, "apply"))).status, 200); assert.deepEqual(fixture.claims[2][3], scope);
+  assert.deepEqual(fixture.claims[2][4], { autoApply: false, requireMatchingNote: false });
+});
+test("the shared candidate list returns each account once with every mode's ready count", async () => {
+  fixture.rows = [[{ useGeminiMatching: true }], [
+    { id: candidateId, firstName: "Jordan", lastName: "Taylor", category: "Platform", categoryColor: "#2563eb", categoryName: "Engineering", qualified: true, generation: 3, apply: 2, autoApply: 1 },
+    { id: jobId, firstName: "Casey", lastName: null, category: null, categoryColor: null, categoryName: null, qualified: false, generation: 4, apply: 5, autoApply: 6 },
+  ]];
+  const body = await (await GET(new Request("http://localhost/api/extension/work-items?mode=all"))).json();
+  assert.deepEqual(body, { success: true, accounts: [
+    { id: candidateId, name: "Jordan Taylor", category: "Platform", categoryColor: "#2563eb", categoryName: "Engineering", counts: { generation: 3, apply: 2, auto_apply: 1 } },
+    // Without enough experience (or a matching note) only manual Apply counts.
+    { id: jobId, name: "Casey", category: "", categoryColor: null, categoryName: "Global", counts: { generation: 0, apply: 5, auto_apply: 0 } },
+  ] });
+  const query = fixture.queries[1].sql;
+  assert.match(query, /parent_user_id/); assert.match(query, /blocked_at/);
+  assert.equal(fixture.joins.length, 1, "one account query for all three modes");
+  const counts = fixture.selects[1] as Record<string, Parameters<PgDialect["sqlToQuery"]>[0]>;
+  const sqlOf = (field: string) => new PgDialect().sqlToQuery(counts[field]).sql;
+  assert.match(sqlOf("generation"), /generation_lease_expires_at/);
+  assert.match(sqlOf("apply"), /released/); assert.match(sqlOf("apply"), /bids/); assert.match(sqlOf("apply"), /generation_status/);
+  assert.match(sqlOf("autoApply"), /bids/); assert.doesNotMatch(sqlOf("autoApply"), /released/);
+  assert.match(sqlOf("qualified"), /jd_matching/); assert.match(sqlOf("qualified"), /experiences/);
+  assert.equal((await GET(new Request(`http://localhost/api/extension/work-items?mode=all&candidateId=${candidateId}`))).status, 400);
+});
+test("Apply job lists use manual Apply eligibility without the experience or note gates", async () => {
+  const job = { id: jobId, title: "Engineer", company: "Example", url: "https://example.test/jobs/1" };
+  fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId }], [job]];
+  const body = await (await GET(new Request(`http://localhost/api/extension/work-items?mode=apply&candidateId=${candidateId}`))).json();
+  assert.deepEqual(body, { success: true, jobs: [job], hasMore: false });
+  const query = fixture.queries[2].sql;
+  assert.match(query, /generation_status/); assert.match(query, /released/); assert.match(query, /bids/);
+  assert.doesNotMatch(query, /jd_matching/); assert.doesNotMatch(query, /experiences/);
+  assert.equal((await GET(new Request("http://localhost/api/extension/work-items?mode=apply"))).status, 400, "Apply has no per-mode account list");
 });
 test("selected Auto Apply runs one job at a time and enforces assigned-manager gates", async () => {
   fixture.rows = [[{ parallelLimit: 4 }]];

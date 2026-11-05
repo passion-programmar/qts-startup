@@ -3577,11 +3577,12 @@ async function processApplyQueue() {
         continue;
       }
       if (autoApply && !(await self.__qtsAutoApply.retryPendingReleases())) break;
-      const scope = autoApply ? (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection : null;
+      const scope = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
+      const claimMode = autoApply ? 'auto_apply' : 'apply';
       const claim = await workerApiRequest('POST', '/api/extension/apply/claim', {
-        mode: autoApply ? 'auto_apply' : 'apply',
+        mode: claimMode,
         skipJobIds: await cancelledJobIds(),
-        ...(scope?.mode === 'auto_apply' ? { selection: scope } : {}),
+        ...(scope?.mode === claimMode ? { selection: scope } : {}),
       });
       if (claim.success !== true) {
         if ([401, 403, 426].includes(claim._httpStatus)) {

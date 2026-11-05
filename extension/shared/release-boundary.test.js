@@ -85,7 +85,7 @@ test('Get JD monitoring uses the non-Gemini duplicate check', () => {
   assert.ok(launcher.includes("document.documentElement?.getAttribute('data-qts-get-jd-docked') === 'true'"));
   assert.ok(launcher.includes("attributeFilter: ['data-qts-get-jd-docked']"));
   assert.ok(launcher.includes('.launcher { position: fixed; top: 50%; right: 0;'));
-  assert.ok(launcher.includes('.launcher.get-jd-active { right: min(400px, 48vw); }'));
+  assert.ok(launcher.includes('.launcher.get-jd-active { right: min(384px, 48vw); }'));
   // The actions in order: Get JD, Generation, Apply, Custom, Highlight, Site Setting, then Sign Out.
   const order = ["'get_jd', 'Get JD'", "'generation', 'Generation'", "'apply', 'Apply'", "'custom', 'Custom'",
     "'text_highlights', 'Highlight'", "'page_exclusions', 'Site Setting'", "'session', 'Sign In'"].map((entry) => launcher.indexOf(entry));
@@ -149,7 +149,8 @@ test('Get JD applies Manager URL blocks, then settled job-page detection, before
     blockedRuleIndex,
   );
   const extractionIndex = serviceWorker.indexOf(
-    'const extraction = await extractJobFromTab(tabId, { requireCompany: true });',
+    'const extraction = await extractJobFromTab(tabId, { requireCompany: false });',
+    detectionIndex,
   );
   const duplicateCheckIndex = serviceWorker.indexOf("workerApiRequest('POST', '/api/extension/get-jd/check'");
 
@@ -341,7 +342,8 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   );
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
 
-  assert.ok(launcher.includes("['generation', 'Generation', '▤', 'generation']"));
+  assert.ok(launcher.includes("['generation', 'Generation', 'generation', 'generation']"));
+  assert.ok(launcher.includes("generation: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'"));
   assert.ok(launcher.includes("button.dataset.modeAction = active ? (action === 'get_jd' ? 'cancel_get_jd' : 'cancel_status') : action"));
   assert.ok(serviceWorker.includes("'/api/extension/generation/cancel-all'"));
   assert.ok(serviceWorker.includes("'/api/extension/generation/heartbeat'"));
@@ -548,12 +550,12 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
 
   assert.ok(profilesRoute.includes('getExtensionManager(request)'));
   assert.ok(profilesRoute.includes('eq(users.parentUserId, manager.id)'));
-  assert.ok(profilesRoute.includes('category: categories.name'));
+  assert.ok(duplicateCheckRoute.includes('categoryName: categories.name'));
   assert.ok(review.includes('result.profiles || []'));
   assert.equal(review.includes("type: 'GET_MANAGER_CANDIDATE_PROFILES'"), false);
   assert.ok(review.includes('position: fixed; inset: 0 0 0 auto'));
-  assert.ok(review.includes('width: min(400px, 48vw)'));
-  assert.ok(review.includes('padding-right: min(400px, 48vw)'));
+  assert.ok(review.includes('width: min(384px, 48vw)'));
+  assert.ok(review.includes('padding-right: min(384px, 48vw)'));
   assert.ok(review.includes("extensionStatus !== 'get_jd'"));
   assert.ok(review.includes('data-qts-get-jd-docked'));
   assert.ok(review.includes("panel.classList.add('is-visible')"));
@@ -580,7 +582,7 @@ test('Get JD review lists candidates and reports per-candidate saves', () => {
   assert.ok(review.includes("has_job: 'Has this job · uncheck to remove'"));
   assert.ok(review.includes("applied: 'Applied (in Bids)'"));
   assert.ok(review.includes("elements.heading.textContent = 'Save result'"));
-  assert.ok(review.includes('savedCount ? `Added ${candidates(savedCount)}` :'));
+  assert.ok(review.includes('Successfully saved to ${candidates(savedCount)}'));
   assert.ok(review.includes("if (result.inBids) return 'Already applied — this job is in your Bids.';"));
   assert.ok(review.includes("if (result.inJobs) return 'Already added — this job is in your Jobs list.';"));
   assert.ok(review.includes('result.toastMessage || jobPresenceMessage(result)'));
@@ -780,7 +782,7 @@ test('shared text highlights are manager-gated and available from the page launc
   assert.ok(workerApi.includes("path === '/api/extension/highlights'"));
   assert.ok(worker.includes("'/api/extension/highlights'"));
   assert.ok(worker.includes("'/api/extension/features/me'"));
-  assert.ok(launcher.includes("['text_highlights', 'Highlight', '✎', 'text-highlights']"));
+  assert.ok(launcher.includes("['text_highlights', 'Highlight', 'text_highlights', 'text-highlights']"));
   assert.ok(launcher.includes("type: 'GET_MANAGER_EXTENSION_FEATURES'"));
   assert.ok(launcher.includes('managerPanel.openManagerSettings(panel, response.tabId, {'));
   assert.ok(launcher.includes('await globalThis.__qtsInitializeGetJdReview?.()'));

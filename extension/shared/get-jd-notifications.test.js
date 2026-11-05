@@ -1,9 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { recordResult, summarizeBatch, recentResults, resultDetails, sessionKey } = require('./get-jd-notifications.js');
+const { recordResult, summarizeBatch, recentResults, launcherBatch, resultDetails, sessionKey } = require('./get-jd-notifications.js');
 
 const result = (runId, status, extra = {}) => ({
-  runId, status, pageUrl: `https://jobs.example/${runId}`, updatedAt: 1000, ...extra,
+  runId, status, evaluationMode: 'gemini', pageUrl: `https://jobs.example/${runId}`, updatedAt: 1000, ...extra,
 });
 
 test('distinct results within two seconds share one accurately counted batch', () => {
@@ -13,7 +13,7 @@ test('distinct results within two seconds share one accurately counted batch', (
     [2, 'two', 'error'],
     [3, 'three', 'duplicate'],
   ]) {
-    state = recordResult(state, result(runId, status), tabId, 1000 + (tabId * 400)).state;
+    state = recordResult(state, result(runId, status, status === 'complete' ? { evaluationMode: 'manual' } : {}), tabId, 1000 + (tabId * 400)).state;
   }
 
   assert.equal(state.batch.items.length, 3);
@@ -87,8 +87,32 @@ test('latest three completed job results persist while processing bursts cannot 
   assert.deepEqual(recentResults(restored), recentResults(state));
 });
 
+test('manual results are not shown as Get JD launcher sub-items', () => {
+  let state = recordResult(undefined, result('gemini-run', 'saved'), 1, 1000).state;
+  state = recordResult(state, result('manual-run', 'complete', { evaluationMode: 'manual' }), 2, 1100).state;
+  state = recordResult(state, result('legacy-manual-run', 'complete', { evaluationMode: undefined }), 3, 1200).state;
+
+  assert.deepEqual(recentResults(state).map((entry) => entry.runId), ['gemini-run']);
+  assert.equal(state.history.find((entry) => entry.runId === 'manual-run').evaluationMode, 'manual');
+  assert.equal(state.history.find((entry) => entry.runId === 'legacy-manual-run').evaluationMode, 'manual');
+});
+
+test('manual Get JD results are omitted from launcher alert batches', () => {
+  const manual = recordResult(undefined, result('manual-run', 'processing', { evaluationMode: 'manual' }), 1, 1000).state;
+  assert.equal(launcherBatch(manual.batch), null);
+
+  const mixed = {
+    ...manual.batch,
+    items: [
+      ...manual.batch.items,
+      recordResult(undefined, result('gemini-run', 'processing'), 2, 1100).state.batch.items[0],
+    ],
+  };
+  assert.deepEqual(launcherBatch(mixed).items.map((entry) => entry.runId), ['gemini-run']);
+});
+
 test('manual review, actual saves, partial saves and selection removals have honest labels', () => {
-  assert.equal(resultDetails(result('review', 'complete')).outcome, 'review');
+  assert.equal(resultDetails(result('review', 'complete', { evaluationMode: 'manual' })).outcome, 'review');
   assert.equal(resultDetails(result('saved', 'complete', { autoSavedProfileIds: ['a', 'b'] })).label, 'Saved for 2 accounts');
   const partial = result('partial', 'complete', { autoSavedProfileIds: ['a'], autoSaveFailureCount: 2 });
   const state = recordResult(null, partial, 1).state;

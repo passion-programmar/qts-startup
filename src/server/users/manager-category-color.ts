@@ -22,3 +22,12 @@ const managerCategoryColorValues = new Set<string>(
 export function isManagerCategoryColor(value: string): boolean {
   return value === "" || managerCategoryColorValues.has(value);
 }
+
+export function labelTextColor(background: string | null): string {
+  if (!background || !/^#[0-9a-f]{6}$/i.test(background)) return "#000000";
+  const rgb = [1, 3, 5].map(offset => {
+    const channel = parseInt(background.slice(offset, offset + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] > 0.179 ? "#000000" : "#ffffff";
+}

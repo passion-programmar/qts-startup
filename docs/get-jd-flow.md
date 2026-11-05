@@ -1,4 +1,4 @@
-# Get JD: local detection and one global precheck
+# Get JD: local detection and duplicate checks
 
 This describes the local implementation. It has not been deployed by this change.
 The older Manager-keyword detection flow is superseded by this document.
@@ -8,10 +8,10 @@ The older Manager-keyword detection flow is superseded by this document.
 1. A tab is created after Get JD is enabled, or an existing tab is explicitly reloaded.
 2. After that document loads, inspect lightweight local job-page signals. Retry only within this admitted document's bounded loading cycle.
 3. Extract available identity: URL, platform identifier, title and company. Missing title/company remain empty.
-4. Make one authenticated `POST /api/extension/get-jd/check` with `scope: "global"`.
-5. If either Jobs or Bids matches the URL/platform identity **or** normalized title plus company, stop the entire job for all candidates and Managers. The response exposes only a boolean, without other accounts' details.
-6. If the lookup fails, stop with a retryable error. Do not call Gemini.
-7. If new, extract the complete available original description, then run the existing Gemini matching/automatic saving flow or Manual selection/Save flow.
+4. Load the Manager's Get JD matching mode.
+5. In Gemini mode, make one authenticated `POST /api/extension/get-jd/check` with `scope: "global"`. If either Jobs or Bids matches the URL/platform identity **or** normalized title plus company, stop the job. The response exposes only a boolean, without other accounts' details. If the lookup fails, stop with a retryable error; do not call Gemini.
+6. In Manual mode, extract the complete available original description and make an authenticated `POST /api/extension/get-jd/check` with `scope: "manual"`. The response reports each active candidate's Jobs/Bids state: already-saved candidates start checked, applied candidates stay checked and locked, and available candidates can be selected. A duplicate for one candidate does not prevent selecting another.
+7. Manual Save is disabled when no candidate is checked. Save adds selected available candidates and removes candidates who already had the job but were unchecked; it does not duplicate existing Jobs/Bids rows. After a successful manual save, the result appears at the top of the review panel, no launcher alert is shown, and the tab closes after two seconds when it is safe to close.
 8. Save the original extracted JD, not Gemini's rewritten description. Complete existing result and auto-close behavior and release temporary resources.
 
 ## Launcher and admission
@@ -73,3 +73,11 @@ Remaining limits:
 - Chrome renderer CDP task-duration/heap observations describe only the sampled local background tab, not whole-browser CPU/RAM or a before/after improvement.
 - Stored review results are serialized and capped at 100 entries. Chrome storage limits can still matter for unusually many maximum-size descriptions.
 - Live Gemini, production database behavior and hosted deployment have not been tested by these local fixtures.
+
+## Manual review fields and candidate selection
+
+When Gemini matching is not assigned, completed Get JD results automatically open the manual review panel with editable URL, Title, Company, and JD fields. This also works when the panel loads an already stored result before session initialization finishes. Cancel keeps that result closed; a new manual run opens again. Missing extracted values can be entered before Save; all four fields are required and validated by the worker and existing save endpoint. Manual review does not require a remote classification. Gemini matching, eligibility, extraction, and automatic saving remain unchanged.
+
+Managers can assign an existing Super Admin Category when creating or editing a candidate, regardless of their Get JD mode. The manager's existing free-text category is now named Label, with its existing color used as a filled background and contrasting text. No database migration is needed. Category assignment is validated against the catalog; candidate ownership checks remain in place.
+
+The manual review lists each candidate's Label and Super Admin Category. Category checkboxes select or clear all editable candidates in that category; individual checkboxes can refine that selection. Draft job edits survive review rerenders and are submitted with Save. Existing duplicate, ownership, current-employer, and locked-account checks still apply. Candidate activation and experience requirements remain unchanged.

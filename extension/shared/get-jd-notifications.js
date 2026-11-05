@@ -30,8 +30,14 @@
   function recentResults(state, auth) {
     if (auth && state?.ownerKey && state.ownerKey !== sessionKey(auth)) return [];
     return (Array.isArray(state?.history) ? state.history : [])
-      .filter((entry) => entry?.operationId && entry.status !== 'processing')
+      .filter((entry) => entry?.operationId && entry.status !== 'processing' && entry.evaluationMode === 'gemini')
       .slice(-3).reverse();
+  }
+
+  function launcherBatch(batch) {
+    const items = (Array.isArray(batch?.items) ? batch.items : [])
+      .filter((entry) => entry?.evaluationMode === 'gemini');
+    return items.length ? { ...batch, items } : null;
   }
 
   function classifyResult(result) {
@@ -60,6 +66,7 @@
       message: String(result.saveError || result.message || '').trim(),
       pageUrl: String(result.pageUrl || ''),
       pageTitle: String(result.pageTitle || '').trim(),
+      evaluationMode: result.evaluationMode === 'gemini' ? 'gemini' : 'manual',
       updatedAt: Number.isFinite(Number(result.updatedAt)) ? Number(result.updatedAt) : now,
       ...resultDetails(result),
     };
@@ -71,7 +78,7 @@
       && previous.message === record.message
       && previous.pageUrl === record.pageUrl
       && previous.pageTitle === record.pageTitle
-      && ['outcome', 'label', 'title', 'company', 'savedCount', 'failedCount'].every((key) => previous[key] === record[key])) {
+      && ['outcome', 'label', 'title', 'company', 'savedCount', 'failedCount', 'evaluationMode'].every((key) => previous[key] === record[key])) {
       return { state: current, changed: false };
     }
     if (previousIndex >= 0) history.splice(previousIndex, 1);
@@ -114,6 +121,6 @@
     return counts;
   }
 
-  global.__qtsGetJdNotifications = { recordResult, summarizeBatch, recentResults, resultDetails, sessionKey };
+  global.__qtsGetJdNotifications = { recordResult, summarizeBatch, recentResults, launcherBatch, resultDetails, sessionKey };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.__qtsGetJdNotifications;
 })(typeof self !== 'undefined' ? self : globalThis);

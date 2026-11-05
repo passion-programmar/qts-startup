@@ -35,9 +35,10 @@ async function initializeGetJdReviewOnce() {
   let extensionStatus = null;
   let signedIn = false;
   let profilesLoaded = false;
-  // The review opens only when the Manager asks (Review in the QTS panel's Get JD row): a checked
-  // job page shows its short result in that row instead of this panel.
+  const manualDrafts = new Map();
+  // Manual results need immediate review; Gemini keeps its existing automatic flow.
   let reviewOpen = false;
+  let dismissedReviewKey = null;
   let profileLoadError = '';
   let panelHideTimer = null;
   let managerSettingsOpen = false;
@@ -77,7 +78,10 @@ async function initializeGetJdReviewOnce() {
     dockStyle.textContent = `
       html[data-qts-get-jd-docked="true"] body {
         box-sizing: border-box !important;
-        padding-right: min(400px, 48vw) !important;
+        padding-right: min(384px, 48vw) !important;
+      }
+      html[data-qts-manual-get-jd-review="true"] [data-qts-page-launcher] {
+        display: none !important;
       }
       html body { transition: padding-right .28s cubic-bezier(.2,.8,.2,1); }
     `;
@@ -91,7 +95,7 @@ async function initializeGetJdReviewOnce() {
     style.textContent = `
       .panel {
         position: fixed; inset: 0 0 0 auto; z-index: 1; display: flex; flex-direction: column;
-        width: min(400px, 48vw); height: 100vh; height: 100dvh; box-sizing: border-box;
+        width: min(384px, 48vw); height: 100vh; height: 100dvh; box-sizing: border-box;
         padding: 20px 18px 16px; border: 1px solid #dbe4f0; border-right: 0;
         border-radius: 18px 0 0 18px; background: linear-gradient(160deg, #fff 0%, #f8faff 100%);
         color: #172033; box-shadow: -16px 0 42px #0f172a24;
@@ -159,6 +163,7 @@ async function initializeGetJdReviewOnce() {
       .manager-settings-rule-edit { min-height: 26px !important; padding: 0 2px !important; color: #475569; background: transparent; font-size: 10px !important; font-weight: 600 !important; }
       .manager-settings-empty { padding: 9px; border: 1px dashed #cbd5e1; border-radius: 8px; color: #64748b; font-size: 11px; text-align: center; }
       .panel-header { flex: 0 0 auto; padding-bottom: 15px; border-bottom: 1px solid #e2e8f0; }
+      .panel.save-result .status { margin: 0 0 12px; padding: 10px 12px; border: 1px solid #86efac; border-radius: 10px; background: #f0fdf4; color: #166534; font-weight: 750; }
       h2 { margin: 0; color: #111827; font-size: 17px; font-weight: 750; letter-spacing: -.02em; }
       .status { position: relative; margin: 7px 0 0; color: #64748b; }
       .status.is-loading { display: flex; align-items: flex-start; gap: 8px; }
@@ -169,10 +174,28 @@ async function initializeGetJdReviewOnce() {
       .details div { margin-top: 9px; overflow-wrap: anywhere; }
       .details dt { color: #718096; font-size: 10px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
       .details dd { margin: 2px 0 0; color: #273449; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .panel.manual-review:not(.is-manager-settings) > .manager-brand-header,
+      .manual-review .manager-panel-content > .panel-header,
+      .manual-review .manager-panel-content > .account-heading { display: none; }
+      .manual-review .profiles { order: 0; }
+      .manual-review .details { order: 1; }
+      .manual-review .message { order: 2; }
+      .manual-review .message:empty { display: none; }
+      .manual-review .actions { order: 3; }
+      .manual-field { display: block; margin: 8px 0; color: #475569; font-weight: 600; }
+      .manual-field input, .manual-field textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; color: #111827; font: 12px/1.5 system-ui; }
+      .candidate-label { display: inline-block; margin-left: 7px; padding: 3px 7px; border-radius: 5px; font-size: 11px; font-weight: 600; }
+      .category-selection { position: sticky; top: 0; z-index: 1; padding: 8px 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
+      .category-option { display: inline-flex; align-items: center; gap: 5px; margin: 5px 10px 5px 0; }
+      .category-jump { min-height: 0; padding: 0; border: 0; border-radius: 0; color: #334155; background: transparent; font: inherit; font-weight: 500; cursor: pointer; }
+      .category-jump:hover { color: #1d4ed8; text-decoration: underline; }
+      .category-jump--top { color: #64748b; font-weight: 700; }
+      .category-group-heading { margin: 10px 0 0; padding: 8px 3px 5px; border-bottom: 1px solid #dbe4f0; color: #475569; font-size: 11px; font-weight: 750; letter-spacing: .04em; }
       .description { max-height: 130px; overflow: auto; padding: 10px; border: 1px solid #e5eaf2; border-radius: 10px; background: #f7f9fc; }
       .account-heading { display: flex; flex: 0 0 auto; justify-content: space-between; gap: 8px; padding: 13px 0 8px; color: #48566d; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
       .account-count { display: inline-flex; min-width: 22px; height: 22px; align-items: center; justify-content: center; margin-top: -4px; border: 1px solid #dbe4f0; border-radius: 999px; background: #fff; color: #334155; font-size: 11px; letter-spacing: 0; }
       .profiles { flex: 1 1 auto; min-height: 100px; overflow: auto; margin: 0 0 8px; border-top: 1px solid #e2e8f0; scrollbar-color: #b8c4d6 transparent; scrollbar-width: thin; }
+      .manual-review .profiles { scroll-behavior: smooth; }
       .profile { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-height: 58px; padding: 10px 3px; border-bottom: 1px solid #edf1f6; cursor: pointer; transition: background .16s ease, padding .16s ease; }
       .profile:hover { padding-right: 7px; padding-left: 7px; background: #f1f5ff; }
       .profile.unavailable, .profile.inactive { cursor: default; opacity: .68; }
@@ -198,8 +221,94 @@ async function initializeGetJdReviewOnce() {
         .panel { padding: 16px 14px 14px; border-radius: 14px 0 0 14px; }
         .details { max-height: 28vh; }
       }
+      /* QTS panel theme: this panel opens as a page of the dark QTS panel (page-launcher.js), with the
+         same header, width and colours, so Get JD review and Manager settings look like one panel. */
+      .panel { padding: 0; border: 0; border-left: 1px solid #243047; border-radius: 0; background: #0a0f1c; color: #e2e8f0; color-scheme: dark; box-shadow: -12px 0 32px rgb(0 0 0 / 35%); }
+      .panel > .manager-brand-header, .panel.manual-review:not(.is-manager-settings) > .manager-brand-header { display: grid; flex: 0 0 64px; grid-template-columns: 42px 1fr; padding: 8px 14px; border-bottom: 1px solid #243047; background: #0d1526; }
+      .manager-brand-logo { width: 42px; height: 42px; border-color: #243047; }
+      .manager-brand-pill { border-color: #34425a; background: #111a2d; }
+      .manager-brand-pill--quality { color: #fcd34d; } .manager-brand-pill--speed { color: #60a5fa; }
+      .manager-brand-subline { color: #66758c; font-weight: 700; }
+      .manager-brand-connected { display: none; }
+      .manager-panel-content { padding: 12px 14px 0; }
+      .review-bar { display: none; flex: 0 0 auto; align-items: center; gap: 10px; padding: 0 0 12px; }
+      .manual-review .review-bar { display: flex; }
+      .review-back { min-height: 32px; padding: 0 11px; border: 1px solid #2c3a55; border-radius: 9px; background: #111a2d; color: #cbd5e1; font: 650 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; }
+      .review-back:hover:not(:disabled) { transform: none; border-color: #3b4b69; background: #16213a; }
+      .review-title { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+      .review-title strong { color: #f8fafc; font: 700 14px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
+      .review-title span { color: #8b9ab3; font: 500 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
+      .panel-header { border-bottom-color: #1f2a40; }
+      h2 { color: #f8fafc; }
+      .status { color: #8b9ab3; }
+      .panel.save-result .status { border-color: rgb(16 185 129 / .45); background: rgb(16 185 129 / .1); color: #6ee7b7; }
+      .details dt { color: #7d8ba3; } .details dd { color: #cbd5e1; }
+      .description { border-color: #1f2a40; background: #0b1322; }
+      .account-heading { color: #7d8ba3; }
+      .account-count { border-color: #2c3a55; background: #111a2d; color: #cbd5e1; }
+      /* The candidates: one card, Category chips pinned on top, the checkbox first on each row. */
+      .profiles { border-top-color: #1f2a40; scrollbar-color: #34425a transparent; }
+      .manual-review .profiles { min-height: 140px; margin: 0; padding: 0 12px; border: 1px solid #1f2a40; border-radius: 14px; background: #111a2d; }
+      .category-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 -12px; padding: 10px 12px; border-bottom-color: #1f2a40; background: #111a2d; }
+      .category-option { gap: 6px; margin: 0; padding: 5px 10px; border: 1px solid #2c3a55; border-radius: 999px; background: #0b1322; }
+      .category-option input { margin: 0; accent-color: #8b7cf6; }
+      .category-option:has(.category-jump--top) { border-style: dashed; }
+      .category-jump { color: #cbd5e1; font-weight: 600; font-size: 12px; }
+      .category-jump:hover:not(:disabled) { transform: none; color: #c4b5fd; text-decoration: none; }
+      .category-jump--top { color: #8b9ab3; }
+      .category-group-heading { margin: 8px 0 0; padding: 10px 2px 6px; border-bottom-color: #1f2a40; color: #7d8ba3; font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; }
+      .profile { flex-direction: row-reverse; justify-content: flex-end; gap: 11px; min-height: 48px; padding: 9px 4px; border-bottom-color: #18233a; }
+      .profile:last-child { border-bottom: 0; }
+      .profile:hover { padding-right: 4px; padding-left: 4px; background: #16213a; }
+      .profile input { accent-color: #8b7cf6; }
+      .profile-name { color: #e6ebf5; font-weight: 650; }
+      .profile small { color: #8b9ab3; }
+      .profile small:empty { display: none; }
+      .profile .saved { color: #6ee7b7; } .profile .failed { color: #fca5a5; }
+      .profiles-empty { color: #8b9ab3; }
+      .profile-skeleton { background: linear-gradient(90deg, #16213a 25%, #1f2a40 40%, #16213a 65%); background-size: 300% 100%; }
+      /* Job fields: folded under the list so the candidates get the room; open when a field is empty. */
+      .fields-toggle { display: none; order: 1; flex: 0 0 auto; align-self: stretch; margin: 10px 0 0; padding: 0 12px; min-height: 40px; border: 1px solid #1f2a40; border-radius: 12px; background: #111a2d; color: #cbd5e1; font: 650 12.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; }
+      .fields-toggle:hover:not(:disabled) { transform: none; border-color: #2c3a55; background: #16213a; }
+      .manual-review .fields-toggle { display: block; }
+      .manual-review .details { max-height: 34vh; margin: 8px 0 0; padding: 4px 12px; border: 1px solid #1f2a40; border-radius: 12px; background: #111a2d; }
+      .manual-review:not(.fields-open) .details { display: none; }
+      .manual-field { margin: 8px 0; color: #8b9ab3; font-size: 11px; font-weight: 650; }
+      .manual-field input, .manual-field textarea { margin-top: 5px; padding: 8px 10px; border-color: #2c3a55; border-radius: 9px; background: #0b1322; color: #e2e8f0; color-scheme: dark; }
+      .manual-field input:focus, .manual-field textarea:focus { border-color: #8b7cf6; outline: none; box-shadow: 0 0 0 2px rgb(139 124 246 / .2); }
+      .message { margin: 8px 0 0; color: #fca5a5; }
+      .manual-review .message:empty { display: none; }
+      /* Save and Cancel stay in a footer, like Sign Out in the QTS panel. */
+      .actions { margin: 10px -14px 0; padding: 10px 14px; border-top: 1px solid #1f2a40; background: #0d1526; }
+      .save { background: linear-gradient(135deg, #6d5bd0, #4f6ef7); box-shadow: none; }
+      .save:hover:not(:disabled) { background: linear-gradient(135deg, #5e4cc4, #405fe8); box-shadow: none; }
+      .cancel { border-color: #2c3a55; color: #cbd5e1; background: transparent; }
+      .cancel:hover:not(:disabled) { background: #16213a; }
+      button:hover:not(:disabled) { transform: none; }
+      /* Manager settings (Highlight, Site Setting, Custom URLs) in the same colours. */
+      .manager-settings { background: #0a0f1c; scrollbar-color: #34425a transparent; }
+      .manager-settings-card { border-color: #1f2a40; background: #111a2d; }
+      .manager-settings-header h2, .manager-settings-group h3 { color: #f1f5f9; }
+      .manager-settings-hint, .manager-settings-status, .manager-settings-group p, .manager-settings-preview-label { color: #8b9ab3; }
+      .manager-settings-status.is-error { color: #fca5a5; }
+      .manager-settings-back { border: 1px solid #2c3a55; background: #16213a; color: #cbd5e1; }
+      .manager-settings-label, .manager-settings-color-picker legend { color: #8b9ab3; }
+      .manager-settings-input { border-color: #2c3a55; background: #0b1322; color: #e2e8f0; color-scheme: dark; }
+      .manager-settings-input:focus { outline-color: #8b7cf6; }
+      .manager-settings-color-option { border-color: #2c3a55; background: #0b1322; }
+      .manager-settings-color-option.is-selected { outline-color: #a78bfa; }
+      .manager-settings-color-option:focus-visible { outline-color: #e2e8f0; }
+      .manager-settings-preview, .manager-settings-rule { border-color: #1f2a40; background: #0b1322; }
+      .manager-settings-preview-sample { color: #cbd5e1; }
+      .manager-settings-rule-edit { color: #8b9ab3; }
+      .manager-settings-empty { border-color: #2c3a55; color: #8b9ab3; }
+      .manager-settings-delete { border-color: rgb(239 68 68 / .45); background: transparent; color: #fca5a5; }
+      .manager-settings-suggest { border-color: #10b981; background: rgb(16 185 129 / .08); color: #6ee7b7; }
+      .manager-settings-suggest:hover:not(:disabled) { background: rgb(16 185 129 / .14); }
+      .manager-settings-actions button:not(.manager-settings-save):not(.manager-settings-delete), .manager-settings-rule-actions button:not(.manager-settings-delete) { border: 1px solid #2c3a55; background: #16213a; color: #cbd5e1; }
       @media (prefers-reduced-motion: reduce) {
         .panel, .profile, button, .status.is-loading::before, .profile-skeleton { transition: none; animation: none; }
+        .manual-review .profiles { scroll-behavior: auto; }
       }
 `;
     root.appendChild(style);
@@ -262,18 +371,52 @@ async function initializeGetJdReviewOnce() {
     const panelHeader = document.createElement('div');
     panelHeader.className = 'panel-header';
     panelHeader.append(heading, status);
+    // Manual review is a page of the QTS panel: "‹ QTS" goes back to it, keeping the ticks (as Cancel does).
+    const reviewBar = document.createElement('div');
+    reviewBar.className = 'review-bar';
+    const reviewBack = document.createElement('button');
+    reviewBack.type = 'button';
+    reviewBack.className = 'review-back';
+    reviewBack.textContent = '‹ QTS';
+    reviewBack.setAttribute('aria-label', 'Back to the QTS panel');
+    const reviewTitle = document.createElement('span');
+    reviewTitle.className = 'review-title';
+    reviewTitle.append(
+      Object.assign(document.createElement('strong'), { textContent: 'Save this job' }),
+      Object.assign(document.createElement('span'), { textContent: 'Tick the candidates who should get it.' }),
+    );
+    reviewBar.append(reviewBack, reviewTitle);
+    reviewBack.addEventListener('click', () => {
+      host.__qtsElements.cancel.onclick?.();
+      const launcher = globalThis.__qtsPageLauncher;
+      launcher?.setOpen?.(true);
+      launcher?.syncModeActions?.().catch(() => {});
+    });
+    // The job's fields fold under the candidates; renderCurrentResult opens them when one is empty.
+    const fieldsToggle = document.createElement('button');
+    fieldsToggle.type = 'button';
+    fieldsToggle.className = 'fields-toggle';
+    fieldsToggle.addEventListener('click', () => setFieldsOpen(!panel.classList.contains('fields-open')));
     const panelContent = document.createElement('div');
     panelContent.className = 'manager-panel-content';
-    panelContent.append(panelHeader, details, accountHeading, profiles, message, actions);
+    panelContent.append(reviewBar, panelHeader, fieldsToggle, details, accountHeading, profiles, message, actions);
     const managerSettings = buildManagerSettingsView();
     panel.append(brandHeader, panelContent, managerSettings.root);
     root.appendChild(panel);
     host.__qtsElements = {
-      panel, panelContent, managerSettings,
+      panel, panelContent, managerSettings, fieldsToggle,
       heading, status, details, accountCount, profiles, message, save, cancel,
     };
     (document.documentElement || document.body).appendChild(host);
     return root;
+  }
+
+  function setFieldsOpen(open) {
+    const elements = host?.__qtsElements;
+    if (!elements) return;
+    elements.panel.classList.toggle('fields-open', open);
+    elements.fieldsToggle.textContent = `${open ? '▾' : '▸'} Job details · URL, Title, Company, JD`;
+    elements.fieldsToggle.setAttribute('aria-expanded', String(open));
   }
 
   function setPanelVisible(visible) {
@@ -305,6 +448,14 @@ async function initializeGetJdReviewOnce() {
       document.documentElement?.setAttribute('data-qts-get-jd-docked', 'true');
     } else {
       document.documentElement?.removeAttribute('data-qts-get-jd-docked');
+    }
+    const hideLauncher = shouldShow && !managerSettingsOpen
+      && currentResult?.evaluationMode !== 'gemini'
+      && ['complete', 'saved'].includes(currentResult?.status);
+    if (hideLauncher) {
+      document.documentElement?.setAttribute('data-qts-manual-get-jd-review', 'true');
+    } else {
+      document.documentElement?.removeAttribute('data-qts-manual-get-jd-review');
     }
   }
 
@@ -1104,6 +1255,11 @@ async function initializeGetJdReviewOnce() {
       selectedProfileIds: readSelectedIds(),
       selectionModified: true,
     };
+    root.querySelectorAll('input[data-category-ids]').forEach(input => {
+      const ids = JSON.parse(input.dataset.categoryIds);
+      input.checked = ids.length > 0 && ids.every(id => currentResult.selectedProfileIds.includes(id));
+      input.indeterminate = !input.checked && ids.some(id => currentResult.selectedProfileIds.includes(id));
+    });
     selectionUpdateInProgress = true;
     elements.save.disabled = true;
     elements.cancel.disabled = true;
@@ -1153,7 +1309,8 @@ async function initializeGetJdReviewOnce() {
       root.querySelectorAll('input[data-profile-id]').forEach((input) => {
         input.disabled = isFixedProfile(profileById.get(input.dataset.profileId));
       });
-      elements.save.disabled = !(currentResult.profiles || []).some((profile) => !isFixedProfile(profile));
+      elements.save.disabled = readSelectedIds().length === 0
+        || !(currentResult.profiles || []).some((profile) => !isFixedProfile(profile));
       elements.cancel.disabled = false;
     }
   }
@@ -1190,18 +1347,108 @@ async function initializeGetJdReviewOnce() {
       return;
     }
 
-    for (const profile of profiles) {
+    const manualReview = selectable && currentResult?.status === 'complete' && currentResult.evaluationMode !== 'gemini';
+    let manualCategoryGroups = [];
+    if (manualReview) {
+      const groups = new Map();
+      for (const profile of profiles) {
+        const key = profile.categoryId || 'global';
+        if (!groups.has(key)) groups.set(key, { categoryId: key, name: profile.categoryName || 'Global', ids: [], profiles: [] });
+        groups.get(key).profiles.push(profile);
+        if (!isFixedProfile(profile)) groups.get(key).ids.push(profile.id);
+      }
+      manualCategoryGroups = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+      const section = document.createElement('div');
+      section.className = 'category-selection';
+      section.setAttribute('aria-label', 'Select candidates by Category');
+      const topOption = document.createElement('span');
+      topOption.className = 'category-option';
+      const topButton = document.createElement('button');
+      topButton.type = 'button';
+      topButton.className = 'category-jump category-jump--top';
+      topButton.textContent = 'Top';
+      topButton.setAttribute('aria-label', 'Back to candidate categories');
+      topButton.addEventListener('click', () => elements.profiles.scrollTo({ top: 0 }));
+      topOption.appendChild(topButton);
+      section.appendChild(topOption);
+      for (const group of manualCategoryGroups) {
+        const label = document.createElement('span');
+        label.className = 'category-option';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.dataset.categoryIds = JSON.stringify(group.ids);
+        checkbox.setAttribute('aria-label', `Select all ${group.name} candidates`);
+        checkbox.disabled = !selectionEnabled || !group.ids.length;
+        checkbox.checked = group.ids.length > 0 && group.ids.every(id => selectedIds.has(id));
+        checkbox.indeterminate = !checkbox.checked && group.ids.some(id => selectedIds.has(id));
+        checkbox.addEventListener('change', () => {
+          if (selectionUpdateInProgress) return;
+          root.querySelectorAll('input[data-profile-id]').forEach(input => {
+            if (!input.disabled && group.ids.includes(input.dataset.profileId)) input.checked = checkbox.checked;
+          });
+          sendSelection();
+        });
+        const jump = document.createElement('button');
+        jump.type = 'button';
+        jump.className = 'category-jump';
+        jump.textContent = group.name;
+        jump.setAttribute('aria-label', `Scroll to ${group.name} candidates`);
+        jump.addEventListener('click', () => {
+          const heading = [...elements.profiles.querySelectorAll('.category-group-heading')]
+            .find((item) => item.dataset.categoryId === group.categoryId);
+          if (!heading) return;
+          const container = elements.profiles;
+          const sticky = section.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          const headingRect = heading.getBoundingClientRect();
+          const top = container.scrollTop + headingRect.top - containerRect.top - sticky.height;
+          container.scrollTo({ top });
+        });
+        label.append(checkbox, jump);
+        section.appendChild(label);
+      }
+      elements.profiles.appendChild(section);
+    }
+    const profilesToRender = manualReview
+      ? manualCategoryGroups.flatMap((group) => group.profiles)
+      : profiles;
+    let previousCategoryKey = null;
+    for (const profile of profilesToRender) {
+      if (manualReview) {
+        const categoryKey = profile.categoryId || 'global';
+        if (categoryKey !== previousCategoryKey) {
+          const heading = document.createElement('h3');
+          heading.className = 'category-group-heading';
+          heading.dataset.categoryId = categoryKey;
+          heading.textContent = profile.categoryName || 'Global';
+          elements.profiles.appendChild(heading);
+          previousCategoryKey = categoryKey;
+        }
+      }
       const label = document.createElement('label');
       label.className = 'profile';
       const details = document.createElement('span');
       details.className = 'profile-name';
       details.textContent = profile.name || 'Candidate';
+      if (currentResult?.evaluationMode !== 'gemini') {
+        const badge = document.createElement('span');
+        badge.className = 'candidate-label';
+        badge.textContent = profile.label || 'No label';
+        badge.style.backgroundColor = /^#[0-9a-f]{6}$/i.test(profile.labelColor || '') ? profile.labelColor : '#e2e8f0';
+        const background = /^#[0-9a-f]{6}$/i.test(profile.labelColor || '') ? profile.labelColor : '#e2e8f0';
+        const rgb = [1, 3, 5].map(offset => {
+          const channel = parseInt(background.slice(offset, offset + 2), 16) / 255;
+          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+        });
+        badge.style.color = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] > 0.179 ? '#000000' : '#ffffff';
+        details.appendChild(badge);
+      }
       const category = document.createElement('small');
       const saveResult = saveResults.get(profile.id) || profile.saveResult;
       const locked = isLockedProfile(profile);
       category.textContent = [
         profile.recommended === true ? 'Recommended' : '',
-        profile.category || 'Uncategorized',
+        currentResult?.evaluationMode === 'gemini' ? (profile.category || 'Uncategorized') : '',
         profile.autoSaved === true ? 'Saved automatically' : '',
         profile.autoSaveFailed === true ? 'Auto-save failed · select Save to retry' : '',
         saveResult?.message
@@ -1236,6 +1483,9 @@ async function initializeGetJdReviewOnce() {
 
   function renderIdlePanel(message) {
     const elements = host.__qtsElements;
+    elements.panel.classList.remove('manual-review');
+    elements.panel.classList.remove('save-result');
+    elements.status.parentElement.insertBefore(elements.heading, elements.status);
     elements.heading.textContent = 'QTS Candidate Accounts';
     elements.status.textContent = message || profileLoadError || (
       !profilesLoaded
@@ -1262,21 +1512,52 @@ async function initializeGetJdReviewOnce() {
 
   function renderReview(result) {
     const elements = host.__qtsElements;
+    elements.panel.classList.toggle('manual-review', result.evaluationMode !== 'gemini');
+    elements.panel.classList.remove('save-result');
+    elements.status.parentElement.insertBefore(elements.heading, elements.status);
     setPanelVisible(true);
     elements.heading.textContent = 'QTS Candidate Accounts';
     elements.status.textContent = result.summaryText || result.message || 'Select candidates to save this job.';
     elements.status.classList.remove('is-loading');
     elements.details.hidden = false;
     elements.details.replaceChildren();
-    appendDetail(elements.details, 'Eligibility reason', result.classification.job.reason);
-    appendDetail(elements.details, 'Title', result.classification.job.title);
-    appendDetail(elements.details, 'Company', result.classification.job.company);
-    appendDetail(elements.details, 'Location', result.classification.job.location);
-    appendDetail(elements.details, 'Employment type', result.classification.job.employmentType);
-    appendDetail(elements.details, 'Work arrangement', result.classification.job.workplaceType);
-    appendDetail(elements.details, 'Salary', result.classification.job.salary);
-    appendDetail(elements.details, 'URL', result.classification.job.jobUrl);
-    appendDetail(elements.details, 'Job description', result.jobDescription, 'description');
+    let manualJob;
+    if (result.evaluationMode !== 'gemini') {
+      const draftKey = result.runId || result.pageUrl || result.classification.job.jobUrl;
+      manualJob = manualDrafts.get(draftKey) || {
+        jobUrl: result.classification.job.jobUrl || '', title: result.classification.job.title || '',
+        company: result.classification.job.company || '', description: result.jobDescription || '',
+      };
+      manualDrafts.set(draftKey, manualJob);
+      if (manualDrafts.size > 100) manualDrafts.delete(manualDrafts.keys().next().value);
+      for (const [key, name, limit] of [['jobUrl', 'URL', 2048], ['title', 'Title', 500], ['company', 'Company', 500], ['description', 'JD', 100000]]) {
+        const label = document.createElement('label');
+        label.className = 'manual-field';
+        label.textContent = name;
+        const input = document.createElement(key === 'description' ? 'textarea' : 'input');
+        if (key === 'description') input.rows = 6;
+        else input.type = key === 'jobUrl' ? 'url' : 'text';
+        input.required = true;
+        input.maxLength = limit;
+        input.value = manualJob[key];
+        input.dataset.manualField = key;
+        input.addEventListener('input', () => { manualJob[key] = input.value; });
+        label.appendChild(input);
+        elements.details.appendChild(label);
+      }
+      // Folded unless something is missing, so an empty required field is never hidden.
+      setFieldsOpen(['jobUrl', 'title', 'company', 'description'].some((key) => !String(manualJob[key] || '').trim()));
+    } else {
+      appendDetail(elements.details, 'Eligibility reason', result.classification.job.reason);
+      appendDetail(elements.details, 'Title', result.classification.job.title);
+      appendDetail(elements.details, 'Company', result.classification.job.company);
+      appendDetail(elements.details, 'Location', result.classification.job.location);
+      appendDetail(elements.details, 'Employment type', result.classification.job.employmentType);
+      appendDetail(elements.details, 'Work arrangement', result.classification.job.workplaceType);
+      appendDetail(elements.details, 'Salary', result.classification.job.salary);
+      appendDetail(elements.details, 'URL', result.classification.job.jobUrl);
+      appendDetail(elements.details, 'Job description', result.jobDescription, 'description');
+    }
     elements.message.textContent = result.saveError || '';
 
     // Accounts that have the job start checked; after a change, the stored selection wins
@@ -1321,14 +1602,25 @@ async function initializeGetJdReviewOnce() {
     });
 
     elements.save.hidden = false;
-    elements.save.disabled = !candidates.some((profile) => !isFixedProfile(profile));
+    elements.save.disabled = selectedIds.size === 0
+      || !candidates.some((profile) => !isFixedProfile(profile));
     elements.cancel.hidden = false;
     elements.save.textContent = 'Save';
     elements.cancel.disabled = false;
-    elements.cancel.textContent = 'Close';
+    elements.cancel.textContent = manualJob ? 'Cancel' : 'Close';
     elements.save.onclick = async () => {
       // The full checked set goes to the worker, which adds new ones and removes unchecked saved ones.
       const ids = readSelectedIds();
+      if (ids.length === 0) {
+        elements.save.disabled = true;
+        elements.status.textContent = 'Select at least one candidate to save this job.';
+        return;
+      }
+      if (manualJob) {
+        for (const input of elements.details.querySelectorAll('[data-manual-field]')) {
+          if (!input.value.trim() || !input.reportValidity()) { input.focus(); elements.message.textContent = 'Complete URL, Title, Company and JD before saving.'; return; }
+        }
+      }
       elements.save.disabled = true;
       elements.cancel.disabled = true;
       // Freeze the checkboxes so a click during the save cannot start a second save.
@@ -1342,7 +1634,12 @@ async function initializeGetJdReviewOnce() {
         const response = await chrome.runtime.sendMessage({
           type: 'SAVE_GET_JD_SELECTION',
           profileIds: ids,
+          ...(manualJob ? { manualJob } : {}),
         });
+        if (response?.result) {
+          applyResult(response.result);
+          if (!response.ok) return;
+        }
         if (!response?.ok) throw new Error(response?.error || 'Could not save selected candidates.');
       } catch (error) {
         elements.message.textContent = error.message || 'Could not save selected candidates.';
@@ -1360,6 +1657,7 @@ async function initializeGetJdReviewOnce() {
       }
     };
     elements.cancel.onclick = () => {
+      dismissedReviewKey = currentResult?.runId || currentResult?.pageUrl;
       reviewOpen = false;
       setPanelVisible(false);
     };
@@ -1367,6 +1665,9 @@ async function initializeGetJdReviewOnce() {
 
   function renderSaveResult(result) {
     const elements = host.__qtsElements;
+    elements.panel.classList.remove('manual-review');
+    elements.panel.classList.add('save-result');
+    elements.status.parentElement.insertBefore(elements.status, elements.heading);
     const response = result.saveResponse || {};
     const savedCount = Number(response.savedCount || 0);
     const removedCount = Number(response.removedCount || 0);
@@ -1376,8 +1677,10 @@ async function initializeGetJdReviewOnce() {
     setPanelVisible(true);
     elements.heading.textContent = 'Save result';
     elements.status.textContent = [
-      savedCount ? `Added ${candidates(savedCount)}` : '',
+      savedCount ? `Successfully saved to ${candidates(savedCount)}` : '',
       removedCount ? `Removed ${candidates(removedCount)}` : '',
+      !savedCount && duplicateCount ? `Already saved for ${candidates(duplicateCount)}` : '',
+      result.evaluationMode !== 'gemini' && result.closeAfterSeconds === 2 ? 'Closing this tab in 2 seconds' : '',
     ].filter(Boolean).join(' · ') || 'Nothing changed.';
     elements.status.classList.remove('is-loading');
     elements.details.hidden = false;
@@ -1423,8 +1726,8 @@ async function initializeGetJdReviewOnce() {
     setPanelVisible(true);
     if (
       currentResult?.status === 'complete' &&
-      currentResult.classification?.isJobPage === true &&
-      currentResult.classification?.isRemote === true
+      (currentResult.evaluationMode !== 'gemini' || (currentResult.classification?.isJobPage === true &&
+      currentResult.classification?.isRemote === true))
     ) {
       renderReview(currentResult);
       return;
@@ -1468,7 +1771,6 @@ async function initializeGetJdReviewOnce() {
     profilesLoaded = true;
     profileLoadError = '';
     renderCurrentResult();
-    renderCurrentResult();
   }
 
   // Get JD has its own switch (qtsGetJdOn), separate from the Generation/Apply work slot.
@@ -1487,6 +1789,10 @@ async function initializeGetJdReviewOnce() {
       return;
     }
     currentResult = result;
+    if (result.status === 'complete' && result.evaluationMode !== 'gemini'
+      && (result.runId || result.pageUrl) !== dismissedReviewKey) {
+      reviewOpen = true;
+    }
     if (result.status === 'processing') profilesLoaded = false;
     else profilesLoaded = true;
     if (!signedIn) return;
@@ -1518,7 +1824,7 @@ async function initializeGetJdReviewOnce() {
       renderIdlePanel(result.message || 'Get JD is checking this page...');
       return;
     }
-    if (!result.classification.isJobPage || !result.classification.isRemote) {
+    if (result.evaluationMode === 'gemini' && (!result.classification.isJobPage || !result.classification.isRemote)) {
       currentResult = null;
       setPanelVisible(false);
       return;
@@ -1563,8 +1869,12 @@ async function initializeGetJdReviewOnce() {
   globalThis.__qtsGetJdReview = {
     excluded: false,
     applyResult,
+    manualReviewAvailable() {
+      return currentResult?.status === 'complete' && currentResult.evaluationMode !== 'gemini';
+    },
     // From the QTS panel's Get JD row: show this page's candidates to change who gets the job.
     openReview() {
+      dismissedReviewKey = null;
       reviewOpen = true;
       renderCurrentResult();
     },
@@ -1575,6 +1885,7 @@ async function initializeGetJdReviewOnce() {
       chrome.storage.onChanged.removeListener(onStorageChanged);
       host?.remove();
       document.documentElement?.removeAttribute('data-qts-get-jd-docked');
+      document.documentElement?.removeAttribute('data-qts-manual-get-jd-review');
       globalThis.__qtsGetJdReview = { excluded: true };
     },
   };

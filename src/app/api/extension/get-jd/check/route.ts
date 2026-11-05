@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { profiles, users } from "@/db/schema";
+import { categories, profiles, users } from "@/db/schema";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { db } from "@/lib/db";
 import {
@@ -48,7 +48,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       return jsonResponse({ success: false, message: "QTS could not check Jobs and Bids. Refresh to retry; Gemini was not called." }, 503);
     }
   }
-  const job = readJob(body);
+  const manualCheck = isRecord(body) && body.scope === "manual";
+  const job = readJob(body, manualCheck);
   if (!job) {
     return jsonResponse(
       { success: false, message: "Valid extracted job details are required." },
@@ -65,9 +66,14 @@ export async function POST(request: Request): Promise<NextResponse> {
         firstName: profiles.firstName,
         lastName: profiles.lastName,
         category: profiles.managerCategory,
+        categoryId: profiles.categoryId,
+        categoryName: categories.name,
+        label: profiles.managerCategory,
+        labelColor: profiles.managerCategoryColor,
       })
       .from(users)
       .innerJoin(profiles, eq(profiles.userId, users.id))
+      .innerJoin(categories, eq(categories.id, profiles.categoryId))
       .where(
         and(
           eq(users.parentUserId, manager.id),
@@ -110,6 +116,10 @@ export async function POST(request: Request): Promise<NextResponse> {
           .filter(Boolean)
           .join(" ") || "Candidate",
         category: candidate.category || null,
+        categoryId: candidate.categoryId,
+        categoryName: candidate.categoryName,
+        label: candidate.label,
+        labelColor: candidate.labelColor,
         available,
         state: getJdAccountState(duplicate),
         rowId: duplicate?.rowId ?? null,
@@ -151,7 +161,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 }
 
-function readJob(value: unknown): {
+function readJob(value: unknown, allowIncomplete = false): {
   jobUrl: string;
   jobTitle: string;
   company: string;
@@ -163,9 +173,9 @@ function readJob(value: unknown): {
     typeof job.jobTitle !== "string" ||
     typeof job.company !== "string" ||
     job.jobUrl.length > 2048 ||
-    job.jobTitle.trim().length === 0 ||
+    (!allowIncomplete && job.jobTitle.trim().length === 0) ||
     job.jobTitle.length > 500 ||
-    job.company.trim().length === 0 ||
+    (!allowIncomplete && job.company.trim().length === 0) ||
     job.company.length > 500 ||
     !isHttpUrl(job.jobUrl)
   ) {
