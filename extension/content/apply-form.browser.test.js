@@ -37,6 +37,70 @@ async function onPage(html, code) {
   }
 }
 
+test('Normal Apply policy context changes with inline terms and refuses linked documents', { skip }, async () => {
+  const result = await onPage('<form><div><label for="consent">I acknowledge the application notice</label><input id="consent" type="checkbox"><p id="terms">Notice version 1</p></div></form>', `
+    const first = api.scanForAssist()[0].policyContext;
+    document.querySelector('#terms').textContent = 'Notice version 2';
+    const changed = api.scanForAssist()[0].policyContext;
+    document.querySelector('#terms').innerHTML = '<a href="https://employer.example/privacy">Privacy</a>';
+    return { first, changed, linked: api.scanForAssist()[0].policyContext };
+  `);
+  assert.ok(result.first); assert.notEqual(result.first, result.changed); assert.equal(result.linked, null);
+});
+
+test('shared semantic definitions fill equivalent profile and saved-choice labels through real controls', { skip }, async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<form><label for="email">What is your contact email?</label><input id="email" type="email"><label for="channel">What is your preferred interview channel?</label><select id="channel"><option value="">Select</option><option>Video</option><option>Phone</option></select></form>');
+    for (const file of ['../shared/semantic-fields.js', '../shared/apply-answers.js', 'apply-form.js']) await page.addScriptTag({ path: path.join(__dirname, file) });
+    const result = await page.evaluate(async () => {
+      const api = globalThis.__qtsApplyForm;
+      const saved = [{ id: 'saved', scope: 'candidate', questionText: 'Preferred interview format', questionKey: 'preferred interview format', answer: 'Video' }];
+      const before = JSON.stringify(saved), fields = api.scanForAssist();
+      const plan = globalThis.__qtsApplyAnswers.resolveFields(fields, { email: 'ana@example.test' }, saved, { normalApply: true });
+      const outcomes = [];
+      for (const [id, answer] of Object.entries(plan.answers)) outcomes.push((await api.fillField(id, answer.value)).ok);
+      const auto = globalThis.__qtsApplyAnswers.resolveFields(fields, { email: 'ana@example.test' }, saved, { autoApply: true });
+      return { outcomes, email: document.querySelector('#email').value, choice: document.querySelector('#channel').value,
+        untouched: before === JSON.stringify(saved), autoChannel: auto.answers[fields.find((field) => field.label.includes('channel')).id]?.value ?? null };
+    });
+    assert.deepEqual(result, { outcomes: [true, true], email: 'ana@example.test', choice: 'Video', untouched: true, autoChannel: null });
+  } finally { await page.close(); }
+});
+
+test('typed representations are accepted by real date, phone, number, radio and multiselect controls', { skip }, async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<form>
+      <div><label for="name">Full name</label><input id="name" placeholder="Last, First"></div>
+      <div><label for="dob">Date of birth</label><input id="dob" placeholder="DD/MM/YYYY" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}"></div>
+      <div><select aria-label="Phone country code"><option>+49</option><option selected>+40</option></select><label for="phone">Local phone number</label><input id="phone" type="tel" pattern="[0-9]{9}"></div>
+      <div><label for="years">Years of experience</label><input id="years" type="number" min="0" step="1"></div>
+      <div><label for="notice">Notice period in days</label><input id="notice" type="number" data-unit="days" step="1"></div>
+      <div><label for="start">Earliest start date</label><input id="start" type="date" min="2026-01-01" max="2027-12-31"></div>
+      <div><label for="languages">Programming languages</label><select id="languages" multiple><option>Python</option><option>JavaScript</option></select></div>
+      <fieldset><legend>Do you need sponsorship now?</legend><label><input type="radio" name="sponsor" value="yes">Yes, I do</label><label><input id="no" type="radio" name="sponsor" value="no">No, I do not</label></fieldset>
+      <div><label for="unsafe">Phone number</label><input id="unsafe" type="tel" pattern="[0-9]{3}"></div>
+    </form>`);
+    for (const file of ['../shared/semantic-fields.js', '../shared/answer-representations.js', '../shared/apply-answers.js', 'apply-form.js']) await page.addScriptTag({ path: path.join(__dirname, file) });
+    const result = await page.evaluate(async () => {
+      const api = globalThis.__qtsApplyForm, fields = api.scanForAssist();
+      const rows = [{ scope: 'candidate', questionText: 'Languages you can program in', questionKey: 'languages you can program in', answer: 'Python | JavaScript', variants: [{ kind: 'checkbox-group', options: [], answer: 'Python | JavaScript' }] },
+        { scope: 'candidate', questionText: 'Do you currently require visa sponsorship?', questionKey: 'do you currently require visa sponsorship', answer: 'false', variants: [] }];
+      const plan = globalThis.__qtsApplyAnswers.resolveFields(fields, { firstName: 'Ana', lastName: 'Pop', birthday: '1990-12-31', phone: '+40 711222333', yearsOfExperience: 0, noticePeriod: '1_week' }, rows,
+        { normalApply: true, today: new Date('2026-01-01T12:00:00') });
+      const outcomes = [];
+      for (const [id, answer] of Object.entries(plan.answers)) outcomes.push((await api.fillField(id, answer.value)).ok);
+      return { outcomes, name: document.querySelector('#name').value, dob: document.querySelector('#dob').value, phone: document.querySelector('#phone').value,
+        years: document.querySelector('#years').value, notice: document.querySelector('#notice').value, start: document.querySelector('#start').value,
+        languages: [...document.querySelector('#languages').selectedOptions].map((entry) => entry.textContent), no: document.querySelector('#no').checked,
+        unsafe: document.querySelector('#unsafe').value, valid: document.querySelector('form').checkValidity() };
+    });
+    assert.ok(result.outcomes.length >= 8); assert.ok(result.outcomes.every(Boolean));
+    assert.deepEqual({ ...result, outcomes: undefined }, { outcomes: undefined, name: 'Pop, Ana', dob: '31/12/1990', phone: '711222333', years: '0', notice: '7', start: '2026-01-08', languages: ['Python', 'JavaScript'], no: true, unsafe: '', valid: true });
+  } finally { await page.close(); }
+});
+
 test('repeated PDF fills and a redrawn empty input do not duplicate an accepted attachment', { skip }, async () => {
   const result = await onPage(`<form><section id="cv"><div><label for="resume">Resume *</label><input id="resume" type="file" required></div><ul id="attachments"></ul></section><section><label for="letter">Cover letter</label><input id="letter" type="file"></section></form>
     <script>window.uploads = 0; document.querySelector('#resume').addEventListener('change', (event) => { window.uploads++; const row = document.createElement('li'); row.textContent = event.target.files[0].name; document.querySelector('#attachments').append(row); event.target.value = ''; });</script>`,
@@ -255,13 +319,13 @@ test('application actions take priority over account actions; sign-in/register i
   const priority = await onPage(`<a id="login" href="/login">Sign in</a>
     <button id="apply">Apply now</button><a id="register" href="/register">Register</a>
     <script>document.getElementById('apply').addEventListener('click', () => { window.clicked = 'apply'; });
-      document.getElementById('login').addEventListener('click', () => { window.clicked = 'login'; });</script>`,
+      document.getElementById('login').addEventListener('click', (event) => { event.preventDefault(); window.clicked = 'login'; });</script>`,
   `const result = api.clickStart(); return { result, clicked: window.clicked };`);
   assert.equal(priority.clicked, 'apply');
   assert.equal(priority.result.action, 'application');
 
   const fallback = await onPage(`<a id="login" href="/login">Sign in</a><a href="/register">Register</a>
-    <script>document.getElementById('login').addEventListener('click', () => { window.clicked = 'login'; });</script>`,
+    <script>document.getElementById('login').addEventListener('click', (event) => { event.preventDefault(); window.clicked = 'login'; });</script>`,
   `const result = api.clickStart(); return { result, clicked: window.clicked };`);
   assert.equal(fallback.clicked, 'login');
   assert.equal(fallback.result.action, 'account');

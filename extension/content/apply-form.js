@@ -274,8 +274,9 @@
   }
 
   /** The unit a number or slider counts in (Teamtailor's notice slider says data-unit="Weeks"). */
-  function unitOf(control, label) {
+  function unitOf(control, label, isolated = false) {
     for (let node = control, depth = 0; node && depth < 4; node = node.parentElement, depth += 1) {
+      if (isolated && node !== control && node.querySelectorAll('input, select, textarea').length > 1) break;
       const unit = node.getAttribute?.('data-unit') || node.querySelector?.('[data-unit]')?.getAttribute('data-unit');
       if (unit) return cleanText(unit).toLowerCase();
     }
@@ -2515,6 +2516,23 @@
     return fields.map((field) => {
       const element = elements.get(field.id);
       if (!element) return field;
+      // Only visible inline policy text can be compared. Linked terms need fresh review:
+      // a stable URL does not establish an unchanged document/version.
+      const { block } = blockQuestion(element);
+      const policyText = cleanText(block?.innerText || '');
+      const policyQuestion = /agree|consent|acknowledg|privacy|terms|policy|certif|attest|confirm|accuracy|marketing|newsletter|job alerts|data processing/i.test(field.label);
+      const isolated = !block?.querySelector('input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea');
+      const policyContext = policyQuestion && isolated && !block?.querySelector('a[href]') && policyText && policyText !== cleanText(field.label) && policyText.length <= 6000
+        ? JSON.stringify([location.origin, location.pathname, field.label, policyText]) : null;
+      const phone = /phone|telephone|mobile|contact number/i.test(field.label) ? dialPicker(element) : null;
+      field = { ...field, policyContext,
+        ...(['number', 'range'].includes(field.kind) ? { unit: unitOf(element, field.label, true) } : {}),
+        ...(phone ? { phoneCallingCode: `+${phone.code}` } : {}),
+        ...(element.pattern ? { pattern: element.pattern } : {}),
+        ...(['number', 'range'].includes(field.kind) ? { step: element.step === 'any' ? null : Number(element.step || 1) } : {}),
+        ...(field.kind === 'range' ? { min: field.min ?? 0, max: field.max ?? 100 } : {}),
+        ...(field.kind === 'date' ? { minDate: element.min || null, maxDate: element.max || null, dateStep: element.step === 'any' ? null : Number(element.step || 1) } : {}),
+      };
       if (unrelatedBox(element)) return { ...field, unrelated: true };
       return accountBox(element) ? { ...field, account: true } : field;
     });

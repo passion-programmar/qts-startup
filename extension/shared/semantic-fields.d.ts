@@ -1,0 +1,4 @@
+export type Definition = { id: string; aliases?: readonly string[]; canonicalLabel?: string | null; profileKey?: string | null; profileField?: 'firstName' | 'lastName' | 'candidateEmail' | 'phone' | 'city' | 'linkedinUrl' | null; valueType: string; authority: string; defaultScope: 'candidate' | 'application' | 'manager'; contextDimensions: readonly string[]; allowedScopes: readonly string[]; representations: readonly string[] };
+export type Recognition = { definition?: Definition; context?: Record<string, unknown>; representation?: {unit?: string; nameOrder?: string}; key?: string; blocked?: boolean; reason?: string };
+declare const api: { version: number; definitions: readonly Definition[]; recognize(question: string, hints?: {note?: string; section?: string}): Recognition | null; compatible(left: string, right: string): boolean };
+export default api;

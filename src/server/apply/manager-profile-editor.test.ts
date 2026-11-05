@@ -17,8 +17,8 @@ test.before(async () => {
     '@/lib/session': `export const requireUser=async()=>({id:'${managerId}',role:globalThis.__profileEditor.role});`,
     '@/server/apply/apply-route-auth': `export const isUuid=v=>typeof v==='string'&&/^[a-f0-9-]{36}$/i.test(v);`,
     '@/server/apply/manager-answers': `export const makeManagerReusable=async()=>({ok:true});`,
-    '@/lib/db': `const f=globalThis.__profileEditor;export const db={
-      select:()=>({from:()=>({where:q=>{f.record(q);return {limit:async()=>f.current?[f.current]:[]}}})}),
+    '@/lib/db': `const f=globalThis.__profileEditor;export const neonSql={query:async(sql,params)=>{f.queries.push({sql,params});return f.changed?[{id:'saved'}]:[]},transaction:async(queries,options)=>{if(options.isolationLevel!=='Serializable')throw Error('missing serializable');return Promise.all(queries)}};export const db={
+      select:()=>({from:()=>({where:q=>{f.record(q);return {limit:async()=>f.current?[f.current]:[],then:fn=>Promise.resolve([]).then(fn)}}})}),
       execute:async q=>{f.record(q);return {rows:f.changed?[{id:'saved'}]:[]}},
       delete:()=>({where:q=>{f.record(q);return {returning:async()=>f.changed?[{id:'saved'}]:[]}}}),
       insert:()=>({values:()=>({onConflictDoNothing:()=>({returning:async()=>f.changed?[{id:'saved'}]:[]})})})};`,
@@ -48,4 +48,14 @@ test('stale deletes and duplicate additions report conflicts rather than success
   assert.match((await manage({ message: '' }, form({ action: 'delete' }))).message, /nothing was overwritten/);
   assert.match((await manage({ message: '' }, form({ id: '', version: '', question: 'Additional details' }))).message, /already has a saved answer/);
   assert.equal(f.revalidated, 0);
+});
+
+test('explicit variation removal uses owner/version/index and never changes canonical value or profile', async () => {
+  assert.match((await manage({ message: '' }, form({ action: 'variation-delete:0' }))).message, /Saved/);
+  assert.equal(f.queries.length, 1);
+  assert.match(f.queries[0].sql, /jsonb_array_length/);
+  assert.ok(f.queries[0].params.includes(managerId)); assert.ok(f.queries[0].params.includes('123.000001'));
+  assert.doesNotMatch(f.queries[0].sql, /update "profiles"|set answer/);
+  f.changed = false;
+  assert.match((await manage({ message: '' }, form({ action: 'variation-delete:0' }))).message, /nothing was overwritten/);
 });

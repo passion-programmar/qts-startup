@@ -24,6 +24,47 @@ const candidate = {
 
 const field = (label, extra = {}) => ({ id: label, label, kind: 'text', required: true, ...extra });
 
+test('Normal Apply reuses only explicitly saved matching inline policy contexts, preserving refusal and Auto behavior', () => {
+  const f = field('I agree to the privacy policy', { kind: 'checkbox', policyContext: 'employer:terms-v1' });
+  const row = { scope: 'application', questionText: f.label, questionKey: answers.normalizeQuestionKey(f.label), answer: 'false',
+    variants: [{ kind: 'checkbox', options: [], answer: 'false', policyContext: f.policyContext }] };
+  assert.equal(answers.resolveField(f, candidate, [row], { normalApply: true }).value, false);
+  for (const changed of [{ ...f, policyContext: null }, { ...f, policyContext: 'employer:terms-v2' }]) {
+    assert.match(answers.resolveField(changed, candidate, [row], { normalApply: true }).byHand, /Review/);
+  }
+  assert.ok(answers.resolveField(f, candidate, [], { normalApply: true }).byHand);
+  assert.equal(answers.resolveField(f, candidate, [row], { autoApply: true }).value, true, 'Auto Apply consent behavior is unchanged');
+  const legacy = { ...row, variants: [] };
+  assert.ok(answers.resolveField(f, candidate, [legacy], { normalApply: true }).byHand);
+});
+
+test('Normal Apply protects authoritative contact facts and does not invent missing notice information', () => {
+  const row = { scope: 'manager', questionText: 'Phone', questionKey: 'phone', answer: 'wrong' };
+  assert.equal(answers.resolveField(field('Phone'), candidate, [row], { normalApply: true }).value, candidate.phone);
+  const result = answers.resolveFields([field('Notice period')], { ...candidate, noticePeriod: null }, [], { normalApply: true });
+  assert.equal(result.answers['Notice period'], undefined);
+});
+
+test('safety rollout preserves legacy results, protects candidate authority and rejects unverifiable transformations', () => {
+  const saved = [{ questionText: 'Phone', questionKey: 'phone', scope: 'application', answer: '+40 9999999' }];
+  try {
+    globalThis.__qtsAnswerSafetyV1 = false;
+    assert.equal(answers.resolveField(field('Phone'), candidate, saved).value, '+40 9999999');
+    assert.equal(answers.keepsMeaning({ fact: 'answer', intended: 'One week' }, 'Tomorrow'), true);
+    globalThis.__qtsAnswerSafetyV1 = true;
+    const result = answers.resolveField(field('Phone'), candidate, saved, { normalApply: true });
+    assert.equal(result.value, candidate.phone);
+    assert.equal(result.provenance.authority, 'candidate-profile');
+    assert.equal(answers.keepsMeaning({ fact: 'answer', intended: 'One week', normalApply: true }, 'Tomorrow'), false);
+    assert.equal(answers.keepsMeaning({ fact: 'phone', intended: '+40 711222333', normalApply: true }, '+49 711222333'), false);
+    for (const label of ['Email', 'First name', 'City']) {
+      globalThis.__qtsAnswerSafetyV1 = false; const old = answers.resolveField(field(label), candidate, []);
+      globalThis.__qtsAnswerSafetyV1 = true; assert.equal(answers.resolveField(field(label), candidate, []).value, old.value);
+    }
+    assert.equal(answers.resolveField(field('I agree to the privacy policy', { kind: 'checkbox' }), candidate, []).value, true);
+  } finally { delete globalThis.__qtsAnswerSafetyV1; }
+});
+
 test('Apply and Auto Apply use a complete HTTPS LinkedIn URL from the saved account', () => {
   for (const autoApply of [false, true]) {
     for (const saved of ['linkedin.com/in/anna', 'www.linkedin.com/in/anna', 'http://linkedin.com/in/anna', 'https://linkedin.com/in/anna', 'https://www.linkedin.com/in/anna', '//linkedin.com/in/anna']) {

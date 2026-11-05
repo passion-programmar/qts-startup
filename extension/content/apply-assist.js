@@ -376,11 +376,18 @@
     if (answerEditor.busy) return;
     const attempt = state?.attemptId;
     const selected = answerEditor.selected;
+    const confirmShared = panel.querySelector('.answer-editor-share')?.checked === true;
+    const confirmVariation = panel.querySelector('.answer-editor-confirm-variation')?.checked === true;
+    if (action === 'save' && selected?.variation && !confirmVariation) { answerEditor.message = 'Confirm this field variation before saving it.'; render(); return; }
     if (action === 'delete' && !selected?.id) return;
     answerEditor.busy = true;
     answerEditor.message = '';
     render();
     const input = { ...(selected || {}), question: answerEditor.question, answer: answerEditor.draft };
+    if (selected?.variation) input.confirmVariation = confirmVariation;
+    // The server independently rejects sharing personal/contextual questions.
+    // An unchecked sharing box keeps the default scope; Save itself remains explicit.
+    if (action === 'save' && !selected?.id) input.confirmShared = confirmShared;
     try {
       const result = await send(action === 'load' ? 'load_answers' : action === 'save' ? 'save_answer' : 'delete_answer', { input });
       if (!state || state.attemptId !== attempt) return;
@@ -402,7 +409,7 @@
     open.addEventListener('click', () => { answerEditor.open = true; answerRequest('load'); });
     body.append(open);
     if (!answerEditor.open) return;
-    body.append(element('p', 'none', 'Pause autofill before saving or deleting. Eligible shared answers apply to all your candidates; personal facts stay with the candidate and job-specific answers stay with this application.'));
+    body.append(element('p', 'none', 'Pause autofill before saving or deleting. Save also confirms the current field’s declared format. Saving a policy response approves only its exact visible inline context. Linked or changed terms require manual review. Personal facts stay with the candidate; sharing requires explicit confirmation.'));
     const select = element('select', 'answer-editor-select');
     select.setAttribute('aria-label', 'Choose a form question or saved answer');
     select.append(new Option('Choose a question or saved answer', ''), new Option('Add a new question', 'new'));
@@ -431,10 +438,35 @@
     answer.addEventListener('input', () => { answerEditor.draft = answer.value; });
     for (const control of [select, question, answer]) control.style.cssText = 'display:block;box-sizing:border-box;width:100%;margin:8px 0;padding:8px;background:#0d1526;color:#e2e8f0;border:1px solid #334155;border-radius:6px;';
     answer.disabled = question.disabled = answerEditor.busy;
-    const save = element('button', 'answer-editor-save', 'Save answer'); save.type = 'button';
+    const selectedField = answerEditor.fields.find((entry) => entry.id === answerEditor.selected?.fieldId);
+    if (selectedField?.compatibleAnswers?.length) {
+      const sources = element('select', 'answer-editor-variation-source');
+      sources.setAttribute('aria-label', 'Use an existing answer for this field variation');
+      sources.append(new Option('Choose an existing answer to confirm this variation', ''));
+      for (const row of selectedField.compatibleAnswers) sources.append(new Option(`${row.scope}: ${row.questionText} = ${row.answer}`, row.id));
+      sources.value = answerEditor.selected?.variation ? answerEditor.selected.id : '';
+      sources.disabled = answerEditor.busy || !state.manualPaused || state.pauseStopping;
+      sources.addEventListener('change', () => {
+        const row = selectedField.compatibleAnswers.find((entry) => entry.id === sources.value);
+        if (!row) return;
+        answerEditor.selected = { ...answerEditor.selected, id: row.id, version: row.version, variation: true, fieldQuestion: selectedField.label };
+        answerEditor.question = row.questionText; render();
+      });
+      body.append(sources);
+    }
+    if (answerEditor.selected?.variation) {
+      const label = element('label', 'none', 'I confirm this field answer represents the same information. Keep the original saved answer unchanged.');
+      const confirm = element('input', 'answer-editor-confirm-variation'); confirm.type = 'checkbox'; label.prepend(confirm); body.append(label);
+    }
+    const save = element('button', 'answer-editor-save', answerEditor.selected?.variation ? 'Save confirmed variation' : 'Save answer'); save.type = 'button';
+    if (!answerEditor.selected?.id) {
+      const label = element('label', 'none', 'Share across all my candidates (personal/contextual answers are rejected). Leave unchecked to keep candidate/application scope.');
+      const share = element('input', 'answer-editor-share'); share.type = 'checkbox';
+      label.prepend(share); body.append(label);
+    }
     const remove = element('button', 'answer-editor-delete', 'Delete saved answer'); remove.type = 'button';
     save.disabled = answerEditor.busy || !answerEditor.selected || !state.manualPaused || state.pauseStopping;
-    remove.disabled = save.disabled || !answerEditor.selected?.id;
+    remove.disabled = save.disabled || !answerEditor.selected?.id || answerEditor.selected?.variation === true;
     save.addEventListener('click', () => answerRequest('save'));
     remove.addEventListener('click', () => answerRequest('delete'));
     body.append(select, question, answer, save, remove);

@@ -12,7 +12,7 @@ function fixture() {
   const review = { assist: true, attemptId: 'attempt', application, assistant, tabIds: new Set([10]) };
   const reviews = new Map([['attempt', review]]);
   const fields = [{ id: 'field', label: 'Additional details', value: 'Current value', kind: 'text', options: [] }];
-  const context = { chrome: { runtime: { id: 'fixture' } }, self: { __qtsApplyAnswers: helpers, __qtsAutoApply: { isOn: async () => state.auto === true } },
+  const context = { chrome: { runtime: { id: 'fixture' } }, self: { __qtsApplyAnswers: helpers, __qtsSemanticFields: require('./semantic-fields.js'), __qtsAnswerRepresentations: require('./answer-representations.js'), __qtsAutoApply: { isOn: async () => state.auto === true } },
     activeReviews: reviews, tabsOf: (r) => r.tabIds, isApplyOn: async () => state.on,
     inForm: async () => fields,
     workerApiRequest: async (...args) => { state.calls.push(args); if (state.gate) await state.gate; return state.response || { success: true, savedAnswers: [{ id: 'saved', scope: 'manager', questionText: 'Additional details', answer: 'Shared' }], editableAnswers: [{ id: 'saved', version: '123.000001', scope: 'manager', questionText: 'Additional details', answer: 'Shared' }] }; },
@@ -38,6 +38,20 @@ test('explicit Save uses live field metadata, refreshes shared snapshots and nev
   assert.equal(other.application.savedAnswers[1].answer, 'New shared');
   assert.equal(f.state.pokes, 0);
   assert.equal(f.assistant.manualPaused, true);
+});
+
+test('explicit Save approves live format metadata and proves national digits without trusting forged representations', async () => {
+  const f = fixture();
+  f.fields[0] = { id: 'field', label: 'Earliest start date', value: '31/12/2028', kind: 'text', options: [], placeholder: 'DD/MM/YYYY' };
+  assert.equal((await f.run('save_answer', { fieldId: 'field', question: 'Earliest start date', answer: '31/12/2028', representation: { dateFormat: 'MM/DD/YYYY' } })).ok, true);
+  assert.equal(f.state.calls.at(-1)[2].answer.representation.dateFormat, 'DD/MM/YYYY');
+  f.application.candidate.phone = '+40 711222333';
+  f.fields[0] = { id: 'field', label: 'Local phone number', value: '711222333', kind: 'tel', options: [], phoneCallingCode: '+40' };
+  await f.run('save_answer', { fieldId: 'field', question: 'Local phone number', answer: '711222333' });
+  assert.equal(f.state.calls.at(-1)[2].answer.representation.nationalSignificant, true);
+  await f.run('save_answer', { fieldId: 'field', question: 'Local phone number', answer: '0711222333', representation: { nationalSignificant: true } });
+  assert.equal(f.state.calls.at(-1)[2].answer.representation.nationalSignificant, undefined);
+  assert.equal(f.assistant.manualPaused, true); assert.equal(f.state.pokes, 0);
 });
 
 test('save/delete require an owned top frame, paused normal Apply and drained work', async () => {

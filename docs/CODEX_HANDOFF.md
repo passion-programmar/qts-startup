@@ -1,3 +1,33 @@
+## Reusable Answers phases 4–6 release - 4 November 2026
+
+User approved completing phases 4–6 and deploying to Production. Implemented versioned identity metadata in existing JSON, scope-aware duplicate-create/share guards, explicit field-variation confirmation without canonical-value overwrite, Profile variation removal/duplicate notices, Normal-only metadata compatibility, rollback flags and answer-library mutation version gate (1.46.0). See docs/REUSABLE_ANSWERS_RELEASE.md. No schema migration, automatic merge, answerSafetyV1 activation, Auto Apply logic change or PDF rendering change.
+
+Production project and origin are being freshly verified; commit/deployment and final checks will be recorded after validation. Earlier entries below are historical.
+## Phase 3 typed answer representations - 4 November 2026
+
+Implemented Normal Apply-only typed composition, extraction, formatting and validated selection using Phase 2 semantic definitions. See docs/PHASE_3_TYPED_REPRESENTATIONS.md for supported operations, explicit metadata Save, restrictions and modified components. Candidate authority, scoped answers, policy confirmation, Save/Delete, CAS and Pause/Resume remain protected. Unsupported conversions remain manual; no AI answers, Auto Apply changes, answerSafetyV1 activation or Phase 4 identity work.
+
+Validation: 124 targeted extension tests; 35 isolated server tests; MV3 PDF/Retry/restart/editor/continuation E2E 1; Chrome panel editor/conflict tests 2, passed. Final form/static results follow below. No schema migration or production write; no commit, push or deploy. Previous phase entries below are historical.
+## Phase 2 shared semantic recognition ? 4 November 2026
+
+Implemented Phase 2 only. See docs/PHASE_2_SEMANTIC_RECOGNITION.md. One classic-script/CommonJS registry is used by the extension and Normal Apply backend validation. It defines meanings, authority, scope, representations and context. Normal Apply reuses compatible saved aliases through existing validators; conflicts and unsupported contexts remain manual. Selected contact aliases update only the owned candidate through the existing atomic/CAS path. Legacy keys/variants and authoritative records are not rewritten. Policy matching stays exact-context; Auto matching/legacy correction defaults are unchanged; strict flag remains off.
+
+Validation completed during this phase: extension suite 113 passed; isolated server suite 34 passed (including alias-profile SQL and semantic parity); full form Chrome 34 passed; real MV3 PDF/Retry/restart/editor/continuation regression 1 passed. Final semantic edge-case reruns and static-check results are noted below. No schema migration, automatic merge, production write, commit, push or deploy. Phase 3 and Phase 4 remain unstarted and require approval.
+
+## Normal Apply reliability completion ? 4 November 2026
+
+See docs/NORMAL_APPLY_RELIABILITY.md. Normal Apply now has caller/engine/AI-boundary no-AI enforcement (including legacy dry-run), re-resolves caches, excludes legacy remembered choices, protects recognized candidate facts and removes its missing-notice default. Explicit policy Save captures exact isolated inline context in existing variant JSON. Compatible saved policy answers/refusals are no longer shadowed. Linked, label-only, changed or unapproved policies remain manual. No canonical identity, migration or automatic merge.
+
+Validation: 108 extension tests; 31 isolated server tests; full Chrome forms 33 and panel 18; real MV3 PDF/error/Retry/restart/editor/continuation E2E 1, all passed. Fixture stall traced to synthetic login navigation; preventDefault preserved assertions and full rerun passed. Existing incomplete runs are not counted as successes. Typecheck/lint/diff checks clean. Auto Apply AI/cache/consent paths remain unchanged; experimental strict flag remains disabled and now mode-scoped. No production data changes, commit, push or deploy. Phase 2 unstarted and requires approval.
+
+## Reusable Answers Phase 1 safety patch ? 4 November 2026
+
+Phase 1 only. See docs/REUSABLE_ANSWERS_PHASE_1.md for authority rules, rollout and limitations. New normal Apply saves no longer silently promote unknown questions to shared scope; explicit sharing is a separate checkbox, server-validated. Selected sensitive personal labels remain candidate-specific. Move to shared now requires an exact source version and atomically updates the same row; unique-index conflicts preserve source and destination. Legacy promotion clients without versions fail safely with reload instructions. Existing stored answers are untouched.
+
+Major resolver changes are implemented behind runtime-config features.answerSafetyV1=false: candidate fact authority and stricter meaning checks with candidate-source provenance. Default autofill, document/consent rules and PDF bytes remain unchanged. The stricter policy is NOT production-enabled; unknown semantic classification, complete transformation provenance and legal-consent interpretation remain unresolved. No Phase 2 identities or storage changes.
+
+Validation: final Node resolver/editor/pause/runtime suite 88/88; server suite 32/32 before final query extraction, final isolated SQL/library subset 20/20 including real uniqueness/stale-source/foreign-Manager tests; full Chrome panel 18/18 and final changed editor cases 2/2. Typecheck and changed-source lint passed. Broader form browser suite passed three upload cases then stalled in an existing suggestion case and was interrupted: not a full pass. Narrow serial platform/control subset: 4/4 passed (dial-code detection, native multiselect, dependent-list refresh and embedded Greenhouse application handoff). No database-connected production tests or migrations, commit, push or deploy.
+
 # QTS development handoff
 
 ## Production migration recheck and consolidated commit - 4 November 2026
@@ -295,3 +325,13 @@ Subsequent user instruction authorizes checking qts-startup-deploy and fast-forw
 ## Get JD alert commit and Production push preparation
 
 User requested committing Get JD result alerts separately and a fast-forward Production push. Alert shared/toast tests passed 12/12 and changed-source lint passed. Verified through the Vercel project API that prj_OtLNKMZ8N2uhgs20PBpAemg4gm6k links passion-programmar/qts-startup with Production branch qts-startup-deploy. Existing Production was READY at 8209697; fetched origin/qts-startup-deploy is an ancestor of the reviewed local branch. No Preview or force push is intended. The new PDF protocol requires reloading the updated extension files in every profile; automatic version enforcement remains open in Task 4. Do not describe all remaining work as Auto Apply only: the known normal Apply transition/Apply-this-page issues and release compatibility checks also remain.
+
+Final Phase 2 validation: final semantic/no-AI edge subset 7/7 passed after identity, multilingual and contextual guards; typecheck, Phase 2 changed-source lint and Git diff checks passed. The schema/migration diff is empty. Later transformations and persistent canonical identities remain unimplemented.
+
+Final Phase 3 validation: full Chrome form suite 35/35 passed after fixing neighbouring numeric-unit leakage in Normal Apply only. The final typed subset 10/10 and panel editor/conflict subset 2/2 passed. Changed-source lint and Git diff --check passed (Git reported only existing LF/CRLF notices). Typecheck passed. A failed final browser rerun exposed the unit leak; assertions were preserved and the full suite passed after the fix. No schema/migration changes. Existing unrelated broad-repository lint baseline was not rerun or claimed clean.
+
+Final release validation (4 November 2026): final serial server suite 316 total / 312 passed / 4 skipped / zero failures or cancellations. Final targeted extension suite 130/130 passed, including browser-bundled identity parity and Normal-only storage compatibility. Full production build, typecheck, lint on every changed JS/TS/TSX/CJS source and Git diff checks passed. Chrome explicit confirmation/editor/conflict 3/3 passed; Normal Apply MV3 PDF/errors/Retry/restart/editor/continuation passed. The full extension run remains 532 passed, two known category-string failures and one work-picker timeout; independent work-picker and checkbox fixtures passed without assertion changes. Broad repository/vendor lint remains a documented baseline failure.
+
+The broader Auto Apply run passed eight compatibility cases (sign-in/registration, parallel limits, selected jobs, three-step filling, tab closure and AI-batch review) before encountering three existing failures; it was stopped during later long cases and is not a full pass. All three failures reproduced against an isolated unchanged HEAD snapshot: restart submission count, mode/Apply-this-page boundary, and dynamic legal/authorization expectations. Auto code and assertions were not changed. Evidence is retained under ignored .pdf-verification/answers-*.log. Independent concurrent production PostgreSQL transactions and every live ATS are not claimed tested.
+
+Vercel CLI refreshed expired local credentials; the read-only release gate freshly confirmed qts-job-system, origin passion-programmar/qts-startup and configured Production branch qts-startup-deploy. Release artifact is dist/qts-extension-1.46.0.zip. No database migration or production data edit is required/performed. Production push and post-release verification follow after the reviewed commit.

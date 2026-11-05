@@ -151,6 +151,7 @@ test('answer editor saves and deletes explicitly while preserving the employer f
     await panel.click('.answer-editor-save');
     await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-message')?.textContent.includes('Saved explicitly'));
     const save = (await panel.sent()).find((message) => message.action === 'save_answer');
+    assert.equal(save.input.confirmShared, false, 'new personal answers are not implicitly shared');
     assert.equal(save.input.answer, 'Saved name'); assert.equal(save.input.fieldId, 'name-field');
     assert.equal(await page.$eval('#fn', (node) => node.value), 'Manager edit');
     await page.evaluate(() => { const select = document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-select'); select.value = 'saved:saved'; select.dispatchEvent(new Event('change')); });
@@ -159,6 +160,41 @@ test('answer editor saves and deletes explicitly while preserving the employer f
     const removed = (await panel.sent()).find((message) => message.action === 'delete_answer');
     assert.equal(removed.input.version, '123.000001');
     assert.equal(await page.$eval('#fn', (node) => node.value), 'Manager edit');
+    assert.equal((await panel.sent()).some((message) => ['resume_fill', 'retry_fill', 'submitted'].includes(message.action)), false);
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-qts-apply-assist]').shadowRoot;
+      const select = root.querySelector('.answer-editor-select'); select.value = 'new'; select.dispatchEvent(new Event('change'));
+      for (const [selector, value] of [['.answer-editor-question', 'Additional details'], ['.answer-editor-value', 'Discuss with recruiter']]) {
+        const input = root.querySelector(selector); input.value = value; input.dispatchEvent(new Event('input'));
+      }
+      root.querySelector('.answer-editor-share').checked = true;
+    });
+    await panel.click('.answer-editor-save');
+    assert.equal((await panel.sent()).filter((message) => message.action === 'save_answer').at(-1).input.confirmShared, true);
+  });
+});
+
+test('a field variation requires explicit confirmation and never resumes or rewrites the employer form', { skip }, async () => {
+  await withPanel(FORM, { ...STATE, manualPaused: true }, async (page, panel) => {
+    await page.evaluate(() => {
+      window.chrome.runtime.sendMessage = async (message) => {
+        window.__sent.push(message);
+        return { ok: true, answers: [], fields: [{ id: 'format', label: 'Preferred interview channel', value: 'Online', kind: 'select', options: ['Online', 'In person'], compatibleAnswers: [{ id: 'source', version: '123.000001', scope: 'candidate', questionText: 'Preferred interview format', answer: 'Video' }] }] };
+      };
+    });
+    await panel.click('[data-card="reusable"] .card-head'); await panel.click('.answer-editor-open');
+    await page.waitForFunction(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-select'));
+    await page.evaluate(() => { const root = document.querySelector('[data-qts-apply-assist]').shadowRoot;
+      const field = root.querySelector('.answer-editor-select'); field.value = 'field:format'; field.dispatchEvent(new Event('change'));
+      const source = root.querySelector('.answer-editor-variation-source'); source.value = 'source'; source.dispatchEvent(new Event('change'));
+    });
+    await panel.click('.answer-editor-save');
+    assert.equal((await panel.sent()).some((message) => message.action === 'save_answer'), false);
+    await page.evaluate(() => { document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.answer-editor-confirm-variation').checked = true; });
+    await panel.click('.answer-editor-save');
+    const save = (await panel.sent()).find((message) => message.action === 'save_answer');
+    assert.equal(save.input.confirmVariation, true); assert.equal(save.input.question, 'Preferred interview format');
+    assert.equal(save.input.fieldQuestion, 'Preferred interview channel'); assert.equal(save.input.answer, 'Online'); assert.equal(save.input.version, '123.000001');
     assert.equal((await panel.sent()).some((message) => ['resume_fill', 'retry_fill', 'submitted'].includes(message.action)), false);
   });
 });

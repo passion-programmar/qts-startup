@@ -1,3 +1,16 @@
+## Reusable Answers phases 4–6 release - 4 November 2026
+
+User approved completing phases 4–6 and deploying to Production. Implemented versioned identity metadata in existing JSON, scope-aware duplicate-create/share guards, explicit field-variation confirmation without canonical-value overwrite, Profile variation removal/duplicate notices, Normal-only metadata compatibility, rollback flags and answer-library mutation version gate (1.46.0). See docs/REUSABLE_ANSWERS_RELEASE.md. No schema migration, automatic merge, answerSafetyV1 activation, Auto Apply logic change or PDF rendering change.
+
+Production project and origin are being freshly verified; commit/deployment and final checks will be recorded after validation. Earlier entries below are historical.
+## Phase 3 update
+
+Normal Apply typed representations are implemented; see docs/PHASE_3_TYPED_REPRESENTATIONS.md. Existing variants JSON carries optional explicitly approved source metadata; no migration. Persistent canonical identity and semantic deduplication remain Phase 4, unimplemented and requiring approval. Earlier status below is historical.
+
+## Phase 2 update
+
+The six-phase plan now has a shared semantic recognition layer implemented for Normal Apply. See docs/PHASE_2_SEMANTIC_RECOGNITION.md for supported definitions, validation and restrictions. The original broader meaning/representation step below is only partly delivered: general transformations and persistent identity remain later phases requiring approval. No migration or automatic record merge.
+
 # Manager answer library
 
 Agreed with the user on 4 November 2026. Implement and validate one step at a time.

@@ -1,16 +1,18 @@
 import "server-only";
 import { and, desc, eq, getTableColumns, isNull, or, sql } from "drizzle-orm";
 import { managerApplyAnswers, profiles, users } from "@/db/schema";
-import { db } from "@/lib/db";
+import { db, neonSql } from "@/lib/db";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { canShareQuestion, parseCorrection, profileField } from "./manager-answer-values";
 import { variantUpdate } from "./manager-answer-sql";
+import { moveAnswerQuery } from "./manager-answer-editor";
 export { variantUpdate } from "./manager-answer-sql";
 
 export async function listManagerAnswers(managerId: string) {
   const rows = await db.select({ ...getTableColumns(managerApplyAnswers), version: sql<string>`extract(epoch from ${managerApplyAnswers.updatedAt})::text`, candidateName: sql<string | null>`nullif(concat_ws(' ', ${profiles.firstName}, ${profiles.lastName}), '')` })
     .from(managerApplyAnswers).leftJoin(profiles, eq(profiles.userId, managerApplyAnswers.candidateId))
     .where(eq(managerApplyAnswers.managerId, managerId)).orderBy(desc(managerApplyAnswers.updatedAt));
-  return rows.map((row) => ({ ...row, canReuse: row.scope === "application" && canShareQuestion(row.questionText) }));
+  return rows.map((row) => ({ ...row, canReuse: row.scope === "application" && canShareQuestion(row.questionText, true) }));
 }
 
 export async function loadApplicationAnswers(managerId: string, candidateId: string, jobId: string, includeProfileFacts = false) {
@@ -50,15 +52,24 @@ export async function saveManagerCorrection(managerId: string, candidateId: stri
     globalOverride: false, variants: row.variants, canReuse: scope === "application" && canShareQuestion(questionText) };
 }
 
-export async function makeManagerReusable(managerId: string, answerId: string) {
+export async function makeManagerReusable(managerId: string, answerId: string, version?: string, normalApply = false) {
+  if (typeof version !== "string" || !/^\d{1,12}(?:\.\d{1,6})?$/.test(version)) return { ok: false as const, reason: "Reload answers before sharing this answer." };
   const [row] = await db.select().from(managerApplyAnswers).where(and(eq(managerApplyAnswers.id, answerId), eq(managerApplyAnswers.managerId, managerId))).limit(1);
   if (!row) return { ok: false as const, reason: "Answer not found." };
   if (row.scope === "manager") return { ok: true as const };
-  if (row.scope === "candidate" || !canShareQuestion(row.questionText)) return { ok: false as const, reason: "Personal facts must stay specific to this candidate or application context." };
-  await db.batch([
-    db.insert(managerApplyAnswers).values({ managerId, scope: "manager", contextKey: "manager", questionKey: row.questionKey, questionText: row.questionText, answer: row.answer, variants: row.variants })
-      .onConflictDoUpdate({ target: [managerApplyAnswers.managerId, managerApplyAnswers.contextKey, managerApplyAnswers.questionKey], set: { answer: row.answer, variants: row.variants, updatedAt: new Date() } }),
-    db.delete(managerApplyAnswers).where(and(eq(managerApplyAnswers.id, row.id), eq(managerApplyAnswers.managerId, managerId))),
-  ]);
-  return { ok: true as const };
+  if (row.scope === "candidate" || !canShareQuestion(row.questionText, normalApply)) return { ok: false as const, reason: "Personal facts must stay specific to this candidate or application context." };
+  // Move one row atomically. The unique index rejects an occupied shared destination.
+  try {
+    let changed;
+    if (normalApply) {
+      const query = new PgDialect().sqlToQuery(moveAnswerQuery(managerId, answerId, row.questionText, version, true));
+      [changed] = await neonSql.transaction([neonSql.query(query.sql, query.params)], { isolationLevel: "Serializable" });
+    } else changed = (await db.execute(moveAnswerQuery(managerId, answerId, row.questionText, version))).rows;
+    if (!changed.length) return { ok: false as const, reason: "This answer changed or an equivalent shared answer exists. Reload before sharing; nothing was overwritten." };
+    return { ok: true as const };
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") return { ok: false as const, reason: "A shared answer already exists. Review both answers; neither was changed." };
+    if (["40001", "40P01", "55P03"].includes((error as {code?: string}).code || "")) return { ok: false as const, reason: "The answer is being changed. Reload Profile before sharing again; nothing was overwritten." };
+    throw error;
+  }
 }

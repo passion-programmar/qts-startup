@@ -590,6 +590,7 @@ function followUpAllowed(application, needed, fields) {
 }
 
 async function askAiForAnswers(application, fields, keepAlive) {
+  if (application.normalApplyAnswers === true) throw new Error('Normal Apply requires manual completion; AI answers are disabled.');
   spendAiRequest(application);
   diag('ai-request', { questions: fields.length, mode: application.aiMode });
   return withAutoApplyAiQueue(application, () => application.aiMode === 'gemini'
@@ -598,6 +599,7 @@ async function askAiForAnswers(application, fields, keepAlive) {
 }
 
 async function askAiToFix(application, problems, fields, keepAlive) {
+  if (application.normalApplyAnswers === true) throw new Error('Normal Apply requires manual correction; AI repair is disabled.');
   spendAiRequest(application);
   return withAutoApplyAiQueue(application, () => {
     if (application.aiMode !== 'gemini' && application.chatFocus !== undefined) {
@@ -1183,6 +1185,7 @@ async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
 async function fillFormPageBody(tabId, application, keepAlive, step, options, stepAttempts) {
   const helpers = self.__qtsApplyAnswers;
   const assist = options.assist === true;
+  if (assist) application.normalApplyAnswers = true;
   const skip = options.skip || (() => false);
   // Auto Apply: the form reader's own rules in this page (an upload named by its labelled group).
   if (application.factSources) {
@@ -1190,8 +1193,9 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   }
   // Normal Apply allows documents, profile facts and reusable answers. Auto Apply passes its own
   // source allowlist, which also includes required agreements. Unanswered fields are never sent to AI.
-  const allowed = assist ? NORMAL_APPLY_SOURCES : options.sources || null;
-  let noAi = options.noAi === true;
+  const normalApply = assist || application.normalApplyAnswers === true;
+  const allowed = normalApply ? NORMAL_APPLY_SOURCES : options.sources || null;
+  let noAi = normalApply || options.noAi === true;
   let accountPage = false;
   const unresolved = [];
   // Auto Apply: AI answers filled though the documents and approved facts do not show them, with why;
@@ -1257,7 +1261,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       today: new Date(),
       coverLetterText: application.job.coverLetterText,
       // Auto Apply: its own answer rules (no built-in notice default; more question wordings).
-      autoApply: Boolean(application.factSources),
+      normalApply, autoApply: Boolean(application.factSources),
     });
     for (const entry of again.byHand || []) problem(entry.message, entry, assist ? 'profile' : 'field');
     const left = toAsk.filter((field) => !changed.includes(field));
@@ -1418,7 +1422,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     // The assistant opens only the lists it has an answer for: no list opens on the page for nothing.
     const toDiscover = assist
       ? fresh.filter((field) => allowed.has(helpers.resolveFields([field], application.candidate, application.savedAnswers, {
-        exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText, autoApply: Boolean(application.factSources),
+        exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText, normalApply, autoApply: Boolean(application.factSources),
       }).answers[field.id]?.source))
       : fresh;
     const changedByLooking = await readComboboxOptions(tabId, toDiscover, options.stop);
@@ -1431,7 +1435,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       today: new Date(),
       coverLetterText: application.job.coverLetterText,
       // Auto Apply: no built-in defaults for personal facts the profile lacks (notice, start date).
-      autoApply: Boolean(application.factSources),
+      normalApply, autoApply: Boolean(application.factSources),
     });
     const { answers } = resolved;
     // The assistant fills only documents, profile facts, reusable answers, and required agreements;
@@ -1453,7 +1457,8 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         return false;
       }
       const cached = HAS_WORDS.test(field.label || '') && application.answerCache?.get(field.label);
-      if (!cached) return true;
+      if (!cached || (normalApply && !allowed.has(cached.source))) return true;
+      if (normalApply) return true; // Re-resolve saved values; cached provenance may be stale.
       answers[field.id] = cached;
       return false;
     });
@@ -1557,7 +1562,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     const remaining = [];
     for (const field of toAsk) {
       // A caller's own sources decide whether remembered choices may fill a box at all.
-      const choice = options.sources && !options.sources.has('saved')
+      const choice = normalApply || (options.sources && !options.sources.has('saved'))
         ? null
         : helpers.findRememberedChoice(field, field.intended, application.rememberedChoices);
       if (!choice || !helpers.keepsMeaning(field, choice)) {
@@ -2289,6 +2294,8 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
  * assisted Apply can still take it. onProgress hears each step.
  */
 async function runApplication(application, recipe, { auto = false, onProgress = () => {}, resume = null } = {}) {
+  // The legacy/dry-run Normal Apply entry point must obey the same no-AI boundary.
+  if (!auto) application.normalApplyAnswers = true;
   let lostClaim = false;
   let tabClosed = false;
   // Auto Apply: Cancel, Stop all, or a lost claim interrupts the work at once (the step being filled,
@@ -3122,14 +3129,26 @@ async function editAssistedAnswer(msg, sender) {
   try {
     const fields = await inForm(sender.tab.id, () => {
       const api = globalThis.__qtsApplyForm;
-      const allowed = new Set(api.scanForAssist().filter((field) => !field.hidden && !field.disabled && !field.account && !field.unrelated && field.kind !== 'file' && field.kind !== 'password').map((field) => field.id));
-      return api.currentAnswers().filter((field) => allowed.has(field.id) && !/password|passcode|captcha|verification code|one.time code|\bOTP\b/i.test(field.label));
+      const scanned = api.scanForAssist();
+      const allowed = new Set(scanned.filter((field) => !field.hidden && !field.disabled && !field.account && !field.unrelated && field.kind !== 'file' && field.kind !== 'password').map((field) => field.id));
+      return api.currentAnswers().filter((field) => allowed.has(field.id) && !/password|passcode|captcha|verification code|one.time code|\bOTP\b/i.test(field.label)).map((field) => ({ ...field, policyContext: scanned.find((entry) => entry.id === field.id)?.policyContext, semanticHint: scanned.find((entry) => entry.id === field.id)?.note, placeholder: scanned.find((entry) => entry.id === field.id)?.placeholder, unit: scanned.find((entry) => entry.id === field.id)?.unit, phoneCallingCode: scanned.find((entry) => entry.id === field.id)?.phoneCallingCode }));
     }).catch(() => []);
     let answer = msg.input;
     if (action === 'save' && answer?.fieldId) {
       const field = fields.find((entry) => entry.id === answer.fieldId);
-      if (!field || self.__qtsApplyAnswers.correctionKey(field.label) !== self.__qtsApplyAnswers.correctionKey(answer.question)) return { ok: false, error: 'This form question changed. Reload answers and select it again.' };
-      answer = { ...answer, kind: field.kind, options: field.options || [] };
+      if (!field || self.__qtsApplyAnswers.correctionKey(field.label) !== self.__qtsApplyAnswers.correctionKey(answer.confirmVariation ? answer.fieldQuestion : answer.question)) return { ok: false, error: 'This form question changed. Reload answers and select it again.' };
+      answer = { ...answer, kind: field.kind, options: field.options || [], policyContext: field.policyContext, semanticHint: field.semanticHint,
+        representation: self.__qtsAnswerRepresentations?.describeField({ ...field, ...self.__qtsSemanticFields?.recognize(field.label)?.representation }) };
+      // Persist a significant-national-number claim only after explicit Save and exact proof
+      // against the existing international profile number; never infer trunk prefixes.
+      const phone = review.application?.candidate?.phone;
+      const code = answer.representation?.callingCode;
+      if (self.__qtsSemanticFields?.recognize(field.label)?.definition?.id === 'candidate.phoneNationalNumber'
+        && /^\+[1-9][\d\s().-]+$/.test(phone || '') && code
+        && phone.replace(/\D/g, '').startsWith(code.slice(1))
+        && String(answer.answer).replace(/\D/g, '') === phone.replace(/\D/g, '').slice(code.length - 1)) {
+        answer.representation.nationalSignificant = true;
+      }
     }
     if (!owned() || !(await isApplyOn())) return { ok: false, error: 'Apply stopped. No answer request was sent.' };
     const response = await workerApiRequest('POST', '/api/extension/apply/answer-library', { attemptId: msg.attemptId, action, ...(action !== 'load' ? { answer } : {}) });
@@ -3160,6 +3179,8 @@ async function editAssistedAnswer(msg, sender) {
     }
     return { ok: true, answers: response.editableAnswers || [], fields: fields.map((field) => ({ ...field,
       saved: (response.editableAnswers || []).find((row) => self.__qtsApplyAnswers.correctionKey(row.questionText) === self.__qtsApplyAnswers.correctionKey(field.label)) || null,
+      compatibleAnswers: (response.editableAnswers || []).filter((row) => self.__qtsAnswerIdentity?.same(row.questionText, field.label)
+        && self.__qtsSemanticFields?.recognize(field.label)?.definition?.allowedScopes.includes(row.scope)).map((row) => ({ id: row.id, version: row.version, questionText: row.questionText, answer: row.answer, scope: row.scope })),
     })) };
   } finally { assistant.answerEditBusy = false; }
 }
@@ -3183,6 +3204,7 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
   try {
     const filled = await fillFormPage(tabId, application, keepAlive, 1, {
       assist: true,
+      noAi: true,
       skip: (field) => filledFields.has(field.id),
       stop: async () => !active() || Boolean(assistant.fillError) || assistant.manualPaused,
       onFilled: (field) => filledFields.add(field.id),

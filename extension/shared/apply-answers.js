@@ -2,6 +2,10 @@
 // go to the configured AI instructions, and its responses are checked against the field itself.
 
 (function initApplyAnswers(global) {
+  const semantics = global.__qtsSemanticFields || (typeof module !== 'undefined' && module.exports ? module.require('./semantic-fields.js') : null);
+  const representations = global.__qtsAnswerRepresentations || (typeof module !== 'undefined' && module.exports ? module.require('./answer-representations.js') : null);
+  const identities = global.__qtsAnswerIdentity || (typeof module !== 'undefined' && module.exports ? module.require('./answer-identity.js') : null);
+  const answerFeature = (name) => global.__qtsAnswerRollout?.[name] ?? global.__qtsRuntimeConfig?.features?.[name] ?? true;
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
   const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
   const PERSONAL_FACT = /authori[sz]|\bsponsor|\bvisa\b|citizen|nationality|right to work|work permit|permanent resident|relocat|security clearance|criminal|date of birth|\bage\b|over 18|gender|veteran|disab|\brace\b|ethnic/i;
@@ -535,6 +539,40 @@
       }
       return null;
     }
+    if (context.normalApply === true && field.kind !== 'file') {
+      if (LEGAL_QUESTION.test(label) || OPT_IN.test(label) || /\b(policy|declaration|acknowledg)/i.test(label)) {
+        const row = savedAnswers.find((entry) => ['application', 'candidate', 'manager'].includes(entry.scope)
+          && correctionKey(entry.questionText) === correctionKey(field.label)
+          && entry.variants?.some((variant) => variant.policyContext && variant.policyContext === field.policyContext
+            && variant.kind === field.kind && [...(variant.options || [])].sort().join('|') === [...(field.options || [])].sort().join('|')));
+        if (!row) return { skip: 'Policy confirmation needs explicit approval for this exact inline context.', byHand: 'Review this acknowledgment, consent or attestation yourself. Linked, changed or unapproved terms are not accepted automatically.' };
+        return controlledAnswer(field, [row]);
+      }
+      const otherPerson = /\b(employee|referr\w*|references?|emergency|next of kin|recruiter|their|someone)\b/.test(label);
+      const semantic = answerFeature('answerSemanticV1') ? semanticAnswer(field, candidate, savedAnswers, context) : null;
+      if (semantic) return semantic;
+      // Guard legacy wording through the same typed quantity operations, rather than the
+      // old fixed-hours/30-day arithmetic. Exact saved answers still retain their authority.
+      if (representations && !semantics?.recognize(field.label) && (NOTICE_QUESTION.test(label) || SALARY_QUESTION.test(label))) {
+        const exact = controlledAnswer(field, savedAnswers.filter((row) => row.scope === 'application' || row.scope === 'candidate'));
+        if (exact) return exact;
+        const id = NOTICE_QUESTION.test(label) ? (/\bdate\b|when|availability/.test(label) || field.kind === 'date' ? 'candidate.startDate' : 'candidate.noticeDuration') : 'candidate.salaryExpectation';
+        const definition = semantics.definitions.find((entry) => entry.id === id);
+        return contextualProfileRepresentation(field, candidate, definition, context) || { missing: id };
+      }
+      const own = otherPerson ? null : personalAnswer(field, label, candidate, context);
+      if (own) return { ...own, provenance: { policy: 'normal-apply', authority: 'candidate-profile', operation: 'existing-profile-rule' } };
+      const personalRule = RULES.find((rule) => rule.test.test(label));
+      if (!otherPerson && personalRule && (personalRule.personal || personalRule.yesNo || personalRule.salary || personalRule.notice || personalRule.years)) {
+        savedAnswers = savedAnswers.filter((row) => row.scope === 'candidate' || row.scope === 'application');
+      }
+    }
+    // Opt-in rollout: disabled until platform regressions authorize activation.
+    if (context.normalApply === true && (global.__qtsAnswerSafetyV1 ?? global.__qtsRuntimeConfig?.features?.answerSafetyV1) === true && field.kind !== 'file' && !LEGAL_QUESTION.test(label)) {
+      const otherPerson = /\b(referr\w*|references?|emergency|next of kin|recruiter|their|someone)\b/.test(label);
+      const own = otherPerson ? null : personalAnswer(field, label, candidate, context);
+      if (own) return { ...own, provenance: { policy: 'answer-safety-v1', authority: 'candidate-profile', operation: 'existing-profile-rule' } };
+    }
     // Optional marketing and future-contact opt-ins are never accepted automatically.
     if (OPT_IN.test(label)) return { skip: 'Optional opt-in.' };
     const policyAgreement = /\b(privacy|terms|data processing|gdpr)\b/i.test(label);
@@ -662,6 +700,7 @@
         return resolveSalary(field, label, candidate, context.exchangeRates) ?? { ask: salaryText(candidate) };
       }
       if (rule.notice) {
+        if (context.normalApply && !hasNotice(candidate)) return { missing: 'notice period' };
         if (context.autoApply && !hasNotice(candidate)) return { missing: 'notice period' };
         return resolveNotice(field, label, candidate, context.today)
           ?? { ask: `notice period ${noticeWords(noticeDays(candidate)).toLowerCase()}, can start ${formatDate(startDate(candidate, context.today))}` };
@@ -815,6 +854,20 @@
     const intended = String(field.intended ?? '');
     if (!field.fact || !intended) return true;
     const text = [].concat(value).map(String).join(' ');
+    if (field.normalApply === true && (global.__qtsAnswerSafetyV1 ?? global.__qtsRuntimeConfig?.features?.answerSafetyV1) === true) {
+      const exact = plain(text) === plain(intended);
+      if (field.fact === 'birthday') return /^\d{4}-\d{2}-\d{2}$/.test(text) && text === intended.slice(0, 10);
+      if (field.fact === 'phone') return text.replace(/\D/g, '') === intended.replace(/\D/g, '');
+      if (field.fact === 'answer') {
+        const meant = yesOrNo(intended), said = yesOrNo(text);
+        return exact || (meant !== null && said !== null && meant === said);
+      }
+      if (!['country', 'location', 'nationality', 'birthday'].includes(field.fact)) return exact;
+      if (['country', 'location', 'nationality'].includes(field.fact)) {
+        const known = field.fact === 'nationality' ? nationalityCode(intended) : countryCode(field.fact === 'location' ? intended.split(',').pop() : intended);
+        if (!known) return exact;
+      }
+    }
     if (['country', 'location', 'nationality'].includes(field.fact)) {
       const code = field.fact === 'nationality' ? nationalityCode(intended) : countryCode(field.fact === 'location' ? intended.split(',').pop() : intended);
       if (!code) return true;
@@ -928,6 +981,206 @@
       ? 'application source' : normalizeQuestionKey(question);
   }
 
+  function moneyTargetContext(field, context) {
+    const target = { ...semantics.recognize(field.label)?.context };
+    const note = String(field.note || '');
+    const text = `${field.label} ${note}`;
+    const currency = currencyIn(text, context.exchangeRates)?.toLowerCase(), period = periodIn(text), basis = text.match(/\b(gross|net)\b/i)?.[1]?.toLowerCase();
+    const currencies = new Set((`${field.label} ${note}`.match(/\b[A-Z]{3}\b/g) || []).filter((code) => CURRENCY_CODES.includes(code)));
+    if (currencies.size > 1 || (target.currency && currency && target.currency !== currency) || (target.period && period && target.period !== period)
+      || (target.basis && basis && target.basis !== basis) || /\bgross\b.*\bnet\b|\bnet\b.*\bgross\b/i.test(text)) return { conflict: true };
+    target.currency ||= currency; target.period ||= period; target.basis ||= basis;
+    if (/[$¥]/.test(`${field.label} ${note}`) && !target.currency) return { conflict: true };
+    return target;
+  }
+
+  function representationResult(field, source, definition, context, authority, row) {
+    if (!representations || !answerFeature('answerRepresentationsV1')) return { skip: 'Typed representations are disabled.', byHand: 'Complete this representation manually during rollback.' };
+    if (definition.id === 'candidate.fullName' && /(?:first|given).*(?:last|family|surname)|(?:last|family|surname).*(?:first|given)/i.test(field.placeholder || '') && !representations.describeField(field)?.nameOrder) return { skip: 'Unsupported name layout.', byHand: 'Confirm this name component layout manually.' };
+    if (definition.id === 'candidate.fullName' && source.type === 'string' && (semantics.recognize(field.label)?.representation?.nameOrder || representations.describeField(field)?.nameOrder)) return { skip: 'Name components are unknown.', byHand: 'A full name without declared component boundaries cannot be reordered.' };
+    if (source.type === 'duration' && /business days?|working days?|after.*(?:offer|accept|contract)/i.test(`${field.label} ${field.note || ''}`)) return { skip: 'Unsupported availability convention.', byHand: 'Business days and offer-dependent dates need explicit manual confirmation.' };
+    const description = representations.describeField(field) || {};
+    const moneyContext = definition.valueType === 'money' ? moneyTargetContext(field, context) : {};
+    if (moneyContext.conflict) return { skip: 'Salary context is ambiguous.', byHand: 'Confirm the conflicting salary units or basis manually.' };
+    const target = { ...field, unit: field.unit || semantics.recognize(field.label)?.representation?.unit || (definition.id === 'candidate.yearsExperience' ? 'year' : undefined), context: moneyContext,
+      component: source.type === 'structured-text' ? definition.id === 'candidate.givenName' ? 'first' : definition.id === 'candidate.familyName' ? 'last' : undefined : undefined,
+      representation: definition.id === 'candidate.phoneCallingCode' ? 'calling-code' : definition.id === 'candidate.phoneNationalNumber' ? 'national'
+        : definition.id === 'candidate.startDate' && source.type === 'duration' ? 'availability-date'
+          : field.pattern === '[0-9]+' || field.pattern === '\\d+' ? 'digits' : undefined };
+    const base = context.today instanceof Date ? context.today : new Date(context.today || Date.now());
+    const baseDate = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
+    const transformed = representations.convert(source, target, { ...description, ...source.conversionContext,
+      callingCode: field.phoneCallingCode || source.context?.callingCode,
+      rates: context.exchangeRates?.rates, baseDate,
+      periodFactors: context.salaryPeriodFactors });
+    if (!transformed.ok) return { skip: transformed.reason, byHand: transformed.reason };
+    const checked = checkAnswer(field, Array.isArray(transformed.value) ? transformed.value.join(' | ') : transformed.value);
+    if (!checked.ok) return { skip: checked.reason, byHand: `The transformed answer is invalid: ${checked.reason}` };
+    return { value: transformed.value, source: authority === 'candidate-profile' ? 'profile' : 'reusable',
+      provenance: { authority, meaning: definition.id, registryVersion: semantics.version, savedAnswerId: row?.id || null, transformation: transformed.provenance } };
+  }
+
+  function nameComposition(field) {
+    const familyFirst = (semantics.recognize(field.label)?.representation?.nameOrder || representations?.describeField(field)?.nameOrder) === 'family-given';
+    return { layout: familyFirst ? [['last'], ['first']] : [['first', 'last']], required: ['first', 'last'], separator: familyFirst ? ', ' : ' ' };
+  }
+
+  function profileRepresentation(field, candidate, definition, context) {
+    if (!representations) return undefined;
+    const id = definition.id;
+    let source;
+    if (id === 'candidate.fullName') {
+      if (!candidate.firstName || !candidate.lastName) return candidate.firstName || candidate.lastName ? { skip: 'Full name components are incomplete.', byHand: 'Complete both name components in the candidate profile.' } : null;
+      if (/(?:first|given).*(?:last|family|surname)|(?:last|family|surname).*(?:first|given)/i.test(field.placeholder || '') && !representations.describeField(field)?.nameOrder) return { skip: 'Unsupported name layout.', byHand: 'Confirm this name component layout manually.' };
+      source = { type: 'components', value: { first: candidate.firstName, last: candidate.lastName },
+        conversionContext: nameComposition(field) };
+    } else if (id === 'candidate.fullAddress') {
+      if (!candidate.addressLine1 || !candidate.city || !candidate.country || !candidate.postalCode) return [candidate.addressLine1, candidate.city, candidate.country, candidate.postalCode].some(Boolean) ? { skip: 'Full address components are incomplete.', byHand: 'Complete the street, postal code, city and country, or fill this address manually.' } : null;
+      source = { type: 'components', value: candidate,
+        conversionContext: { layout: [['addressLine1'], ['postalCode', 'city'], ['province'], ['country']], required: ['addressLine1', 'postalCode', 'city', 'country'], separator: field.kind === 'textarea' ? '\n' : ', ' } };
+    } else if (['candidate.phone', 'candidate.phoneNationalNumber', 'candidate.phoneCallingCode'].includes(id)) {
+      if (id === 'candidate.phone' && !field.pattern) return undefined; // Keep the existing paired-picker handler.
+      if (!candidate.phone) return null;
+      source = { type: 'phone', value: candidate.phone };
+    } else if (definition.valueType === 'date' && definition.profileKey) {
+      if (candidate[definition.profileKey] == null || candidate[definition.profileKey] === '') return null;
+      source = { type: 'date', value: candidate[definition.profileKey] };
+    } else if (definition.valueType === 'number' && definition.profileKey) {
+      if (candidate[definition.profileKey] == null || candidate[definition.profileKey] === '') return null;
+      source = { type: 'number', value: candidate[definition.profileKey], context: { unit: definition.id === 'candidate.yearsExperience' ? 'year' : undefined } };
+    } else if (['candidate.salaryCurrency', 'candidate.salaryPeriod'].includes(id)) {
+      const value = candidate[definition.profileKey]; if (!value) return null;
+      const aliases = id === 'candidate.salaryPeriod' ? { year: ['Annual', 'Yearly', 'Annually', 'Per year'], month: ['Monthly', 'Per month'], day: ['Daily', 'Per day'], hour: ['Hourly', 'Per hour'] }
+        : { [value]: (field.options || []).filter((option) => currencyIn(option, context.exchangeRates) === value) };
+      source = { type: 'string', value, conversionContext: { choiceAliases: aliases } };
+    } else return undefined;
+    return representationResult(field, source, definition, context, 'candidate-profile');
+  }
+
+  function contextualProfileRepresentation(field, candidate, definition, context) {
+    if (!representations) return null;
+    if (definition.valueType === 'money' && candidate.salaryExpectationAmount != null && candidate.salaryExpectationAmount !== '') {
+      const target = moneyTargetContext(field, context);
+      if (['number', 'range'].includes(field.kind) && (!target.currency || !target.period)) return { skip: 'Salary units are unspecified.', byHand: 'Confirm the requested salary currency and period manually.' };
+      return representationResult(field, { type: 'money', value: candidate.salaryExpectationAmount,
+        context: { currency: candidate.salaryExpectationCurrency, period: candidate.salaryExpectationPeriod, basis: candidate.salaryExpectationBasis } }, definition, context, 'candidate-profile');
+    }
+    if (['candidate.noticeDuration', 'candidate.startDate'].includes(definition.id)) {
+      const days = Number.isFinite(candidate.noticeDays) ? candidate.noticeDays : candidate.noticePeriod === '1_week' ? 7 : candidate.noticePeriod === 'immediately' ? 0 : null;
+      if (days !== null) return representationResult(field, { type: 'duration', value: days, context: { unit: 'day' } }, definition, context, 'candidate-profile');
+    }
+    return null;
+  }
+
+  function relatedRepresentation(field, row) {
+    if (semantics.compatible(field.label, row.questionText)) return true;
+    const a = semantics.recognize(field.label), b = semantics.recognize(row.questionText);
+    if (!a?.definition || !b?.definition) return false;
+    if (['candidate.givenName', 'candidate.familyName'].includes(a.definition.id) && b.definition.id === 'candidate.fullName'
+      && (semantics.recognize(row.questionText)?.representation?.nameOrder === 'family-given' || row.variants?.some((entry) => entry.answer === row.answer && entry.representation?.nameOrder === 'family-given'))) return true;
+    if ([a.definition.id, b.definition.id].every((id) => ['candidate.phone', 'candidate.phoneNationalNumber', 'candidate.phoneCallingCode'].includes(id))) return true;
+    if (a.definition.id === 'candidate.startDate' && b.definition.id === 'candidate.noticeDuration') return true;
+    return a.definition.valueType === 'money' && a.definition.id === b.definition.id && !a.context.wording && !b.context.wording
+      && a.context.country === b.context.country && a.context.time === b.context.time && a.context.basis === b.context.basis;
+  }
+
+  function savedRepresentation(field, row, definition, context) {
+    if (!representations) return undefined;
+    const selected = answerFeature('answerIdentityV1') ? identities?.selectVariant(row, field) : null;
+    if (selected?.conflict) return { skip: 'Confirmed variations conflict.', byHand: 'Review the saved field variations explicitly.' };
+    row = { ...row, variants: (row.variants || []).filter((entry) => !entry.normalVariation) };
+    const origin = semantics.recognize(row.questionText)?.definition;
+    const variant = selected?.variant || (row.variants || []).find((entry) => !entry.questionText && entry.kind === field.kind && JSON.stringify([...(entry.options || [])].sort()) === JSON.stringify([...(field.options || [])].sort()))
+      || (row.variants || []).find((entry) => entry.answer === row.answer && entry.representation)
+      || (row.variants || []).find((entry) => entry.answer === row.answer);
+    const formats = new Set((row.variants || []).filter((entry) => entry.answer === (variant?.answer ?? row.answer) && entry.representation).map((entry) => JSON.stringify(representations?.metadata(entry.representation))));
+    if (formats.size > 1) return { skip: 'Saved representations conflict.', byHand: 'Review the conflicting saved formats explicitly.' };
+    const format = { ...semantics.recognize(row.questionText)?.representation, ...representations?.metadata(variant?.representation) };
+    let source = { type: 'string', value: variant?.answer ?? row.answer, context: format };
+    if (origin?.id === 'candidate.fullName' && format.nameOrder === 'family-given') source = { ...source, type: 'structured-text', context: { keys: ['last', 'first'], separator: ',' }, conversionContext: nameComposition(field) };
+    else if (origin?.id === 'candidate.phoneCallingCode') {
+      if (definition.id !== origin.id) return { skip: 'The complete phone number is missing.', byHand: 'A calling code alone cannot establish national phone digits.' };
+    }
+    else if (origin?.id === 'candidate.phone' || origin?.id === 'candidate.phoneNationalNumber') source = { ...source, type: 'phone', context: { ...format, national: origin.id === 'candidate.phoneNationalNumber' } };
+    else if (origin?.valueType === 'date') {
+      const relative = origin.id === 'candidate.startDate' && String(source.value).trim().match(/^(\d+(?:\.\d+)?)\s*(?:calendar )?(days?|weeks?)$/i);
+      if (relative) source = { ...source, type: 'duration', value: Number(relative[1]), context: { unit: relative[2].toLowerCase().replace(/s$/, '') } };
+      else if (origin.id === 'candidate.startDate' && /^immediately$/i.test(String(source.value))) source = { ...source, type: 'duration', value: 0, context: { unit: 'day' } };
+      else source.type = 'date';
+    }
+    else if (origin?.valueType === 'number') source = { ...source, type: 'number', context: { ...format, unit: format.unit || (origin.id === 'candidate.yearsExperience' ? 'year' : undefined) } };
+    else if (origin?.valueType === 'boolean') source.type = field.options?.some((option) => String(option) === String(source.value)) ? 'string' : 'boolean';
+    else if (origin?.valueType === 'set' || ['checkbox-group', 'multiselect'].includes(variant?.kind)) source = { ...source, type: 'set', value: String(source.value).split(/\s*\|\s*/) };
+    else if (origin?.valueType === 'duration') {
+      const duration = String(source.value).trim().match(/^(\d+(?:\.\d+)?)\s*(?:calendar )?(days?|weeks?|months?|years?)$/i);
+      if (duration) source = { ...source, type: 'duration', value: Number(duration[1]), context: { unit: duration[2].toLowerCase().replace(/s$/, '') } };
+      else if (/^immediately$/i.test(String(source.value))) source = { ...source, type: 'duration', value: 0, context: { unit: 'day' } };
+      else if (format.unit) source = { ...source, type: 'duration' };
+      else return { skip: 'The duration lacks a known unit or structure.', byHand: 'Confirm the duration unit and convention manually.' };
+    } else if (origin?.valueType === 'money') {
+      const known = semantics.recognize(row.questionText).context;
+      const money = String(source.value).trim().match(/^(-?\d+(?:[.,]\d+)?)\s*([A-Z]{3})?(?:\s*(?:per|\/)\s*(year|month|day|hour))?$/i);
+      if (!money) return undefined;
+      if ((known.currency && money[2] && known.currency !== money[2].toLowerCase()) || (known.period && money[3] && known.period !== money[3].toLowerCase())) return { skip: 'Saved salary text contradicts its question context.', byHand: 'Review the saved salary currency and period.' };
+      source = { ...source, type: 'money', value: representations.number(money[1], format.numberFormat), context: { currency: money[2] || known.currency, period: money[3] || known.period, basis: known.basis } };
+    }
+    return representationResult(field, source, definition, context, row.scope, row);
+  }
+
+  // Meaning selection remains separate from typed representations and control acceptance.
+  function semanticAnswer(field, candidate, rows, context) {
+    const found = semantics?.recognize(field.label, { note: field.note, section: field.section });
+    if (!found) return null;
+    const manual = (reason) => ({ skip: reason, byHand: reason });
+    if (found.blocked) {
+      // Preserve explicitly saved application-only third-party facts, without alias expansion.
+      if (found.reason === 'other-person-or-employer') {
+        const exact = rows.filter((row) => row.scope === 'application' && correctionKey(row.questionText) === correctionKey(field.label));
+        if (exact.length === 1) return controlledAnswer(field, exact);
+      }
+      return manual('This question needs contextual review; QTS will not infer a combined, third-party or policy answer.');
+    }
+    const definition = found.definition;
+    if (!definition.representations.includes(field.kind)) return manual('This meaning has no supported representation for this control.');
+    if (definition.id === 'candidate.phoneCallingCode' && candidate.phone && field.options?.length) {
+      const code = sameFactOption('phone', candidate.phone, field.options);
+      if (code) return { value: code, source: 'profile', provenance: { authority: 'candidate-profile', meaning: definition.id, operation: 'existing-phone-option-mapping' } };
+    }
+    const profile = profileRepresentation(field, candidate, definition, context);
+    if (profile) return profile;
+    if (profile === undefined && definition.canonicalLabel) {
+      const own = personalAnswer({ ...field, label: definition.canonicalLabel }, labelOf({ label: definition.canonicalLabel }), candidate, context);
+      if (own) return { ...own, provenance: { authority: 'candidate-profile', meaning: definition.id, registryVersion: semantics.version, operation: 'existing-profile-rule' } };
+    }
+    const matching = rows.filter((row) => definition.allowedScopes.includes(row.scope) && relatedRepresentation(field, row));
+    for (const scope of ['application', 'candidate', 'manager']) {
+      const scoped = matching.filter((row) => row.scope === scope);
+      if (!scoped.length) continue;
+      const values = new Set(scoped.map((row) => String(row.answer).trim().toLowerCase().replace(/\s+/g, ' ')));
+      if (values.size > 1) return manual('Saved answers for this meaning conflict at the same scope. Review them explicitly.');
+      const row = scoped.find((entry) => correctionKey(entry.questionText) === correctionKey(field.label)) || scoped[0];
+      const represented = savedRepresentation(field, row, definition, context);
+      if (represented) return represented;
+      const result = controlledAnswer(field, [{ ...row, questionText: field.label, questionKey: normalizeQuestionKey(field.label) }]);
+      return result && { ...result, provenance: { authority: scope, meaning: definition.id, registryVersion: semantics.version, savedAnswerId: row.id || null, operation: 'recognized-alias' } };
+    }
+    const contextual = contextualProfileRepresentation(field, candidate, definition, context);
+    if (contextual) return contextual;
+    if (definition.id === 'application.workAuthorization' || definition.id === 'application.sponsorship') {
+      if (definition.id === 'application.sponsorship' && !found.context.country && found.context.time === 'current' && !found.context.wording) {
+        const own = profileAnswer(field, labelOf(field), candidate, context);
+        if (own?.value !== undefined) return own;
+      }
+      return manual('No saved answer establishes this country and time context.');
+    }
+    if (definition.valueType === 'money' && (found.context.basis || (found.context.country && found.context.country !== found.context.currency))) return manual('No saved answer establishes this salary basis or employer/country context.');
+    // Do not equate legal/preferred identity or citizenship to the legacy generic profile fact.
+    if (definition.canonicalLabel || ['candidate.legalName', 'candidate.preferredName', 'candidate.citizenship', 'candidate.phoneCallingCode', 'candidate.phoneNationalNumber', 'candidate.interviewFormat'].includes(definition.id)) {
+      return manual('This specific fact is not available. Save an explicit candidate-specific answer.');
+    }
+    return null;
+  }
+
   function controlledAnswer(field, rows = []) {
     const key = correctionKey(field.label);
     const matches = rows.filter((row) => correctionKey(row.questionText) === key);
@@ -954,7 +1207,7 @@
         const posts = field.options.filter((option) => /^linkedin job post(?:ing)?$/i.test(String(option).trim()));
         if (posts.length === 1) return { value: posts[0], source: 'reusable' };
       }
-      return { skip: 'Saved answer does not uniquely match the offered choices.', byHand: 'Choose an answer, then click Check to save this variant.' };
+      return { skip: 'Saved answer does not uniquely match the offered choices.', byHand: 'Choose an answer and explicitly Save it in Reusable answers (or Check in legacy review).' };
     }
     const value = exact?.answer ?? row.answer;
     if (field.kind === 'checkbox') {
@@ -963,7 +1216,7 @@
     }
     const fits = checkAnswer(field, value);
     return fits.ok ? { value: fits.value, source: 'reusable' }
-      : { skip: 'Saved answer does not fit this field.', byHand: 'Edit the answer and click Check.' };
+      : { skip: 'Saved answer does not fit this field.', byHand: 'Edit and explicitly Save the answer (or Check in legacy review).' };
   }
 
   function changedCorrections(baseline, current) {
@@ -1083,7 +1336,9 @@
   function resolveFields(fields, profile, savedAnswerRows, givenContext = {}) {
     const savedAnswers = savedAnswerRows || [];
     const context = { ...givenContext, generalUploadId: generalUploadId(fields) };
-    const candidate = withReusableFacts(profile, savedAnswers, context.exchangeRates);
+    const factRows = context.normalApply ? savedAnswers.filter((row) => (row.scope === 'candidate' || row.scope === 'application')
+      && !['notice', 'salary'].includes(topicOf(row.questionText)) && !semantics?.recognize(row.questionText)?.definition?.contextDimensions.length) : savedAnswers;
+    const candidate = withReusableFacts(profile, factRows, context.exchangeRates);
     const answers = {};
     const open = [];
     const missing = [];

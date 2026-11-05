@@ -23,7 +23,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (!held) return NextResponse.json({ success: false, message: "This application is no longer held by this Chrome." }, { status: 409 });
     if (body.reuseAnswerId !== undefined) {
       if (!isUuid(body.reuseAnswerId)) return NextResponse.json({ success: false, message: "Invalid answer ID." }, { status: 400 });
-      const moved = await makeManagerReusable(auth.manager.id, body.reuseAnswerId);
+      const moved = await makeManagerReusable(auth.manager.id, body.reuseAnswerId, body.reuseAnswerVersion);
       if (!moved.ok) return NextResponse.json({ success: false, message: moved.reason }, { status: 400 });
     }
     const results = [];
