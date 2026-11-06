@@ -16,7 +16,8 @@ import {
 import type { PDFFont, PDFPage } from "pdf-lib";
 
 type PdfWriter = {
-  header(title: string, detail: string, size?: number): void;
+  // contact, when given, is drawn below the detail as one fitted line (contactLine).
+  header(title: string, detail: string, size?: number, contact?: string): void;
   line(text: string, size?: number, color?: "black" | "gray"): void;
   heading(text: string, size?: number): void;
   paragraph(text: string, size?: number): void;
@@ -30,7 +31,7 @@ type PdfWriter = {
     bullets?: string[],
     hasFollowingEntry?: boolean,
   ): void;
-  centeredLine(text: string, size?: number): void;
+  contactLine(text: string, size?: number): void;
   space(amount: number): void;
   save(): Promise<Uint8Array>;
 };
@@ -73,6 +74,66 @@ function pdfBulletText(bullet: DocumentBullet): string {
   return text.replaceAll("**", "");
 }
 
+// The templates with a centred header separate contact items with bullets, as their HTML
+// templates do (public/resume-templates/templates/*.css); every other one uses "|".
+const bulletContactTemplates: ReadonlySet<string> = new Set(["startup", "centered", "nordic", "banded", "academic"]);
+
+export function contactSeparator(template: PdfTemplate | LegacyPdfTemplate): string {
+  return bulletContactTemplates.has(template) ? "•" : "|";
+}
+
+const pointsPerMm = 72 / 25.4;
+export const contactMinimumSize = 8;
+const contactEdge = 8 * pointsPerMm;
+const contactLastEdge = 6 * pointsPerMm;
+
+export type ContactLineFit = {
+  size: number;
+  // Distances, in points, from the left and right paper edges to the area the line is set in.
+  left: number;
+  right: number;
+  fits: boolean;
+};
+
+/**
+ * Fits the contact line on one line, as render.js does for the HTML templates: at its own
+ * size inside the margins, then running into the margin up to 8 mm from the paper edge
+ * (a left-aligned line at its right end only), then 0.25pt smaller down to 8pt, then up
+ * to 6 mm from the edge, at the right end first and then on both sides. The text is never
+ * changed. `innerEdge` keeps the line inside a header box that does not reach the margin.
+ */
+export function fitContactLine(
+  widthAt: (size: number) => number,
+  { pageWidth, margin, size, centered, innerEdge = 0 }: {
+    pageWidth: number;
+    margin: number;
+    size: number;
+    centered: boolean;
+    innerEdge?: number;
+  },
+): ContactLineFit {
+  const edge = (distance: number) => Math.min(margin, Math.max(distance, innerEdge));
+  const fitsIn = (fontSize: number, left: number, right: number) =>
+    widthAt(fontSize) <= pageWidth - left - right + 0.01;
+  const steps: { left: number; right: number; sizes: number[] }[] = [];
+  const sizes: number[] = [];
+  for (let quarter = Math.ceil(size * 4) - 1; quarter >= contactMinimumSize * 4; quarter -= 1) {
+    sizes.push(quarter / 4);
+  }
+  const near = edge(contactEdge);
+  const last = edge(contactLastEdge);
+  steps.push({ left: margin, right: margin, sizes: [size] });
+  steps.push({ left: centered ? near : margin, right: near, sizes: [size, ...sizes] });
+  steps.push({ left: centered ? last : margin, right: last, sizes: [contactMinimumSize] });
+  steps.push({ left: last, right: last, sizes: [contactMinimumSize] });
+  for (const step of steps) {
+    for (const fontSize of step.sizes) {
+      if (fitsIn(fontSize, step.left, step.right)) return { size: fontSize, left: step.left, right: step.right, fits: true };
+    }
+  }
+  return { size: Math.min(size, contactMinimumSize), left: last, right: last, fits: false };
+}
+
 export async function renderPdfPackage(
   data: PdfPackage,
   template: PdfTemplate,
@@ -108,11 +169,14 @@ async function renderResumePdf(
   ];
   const contact = template === "flowcv"
     ? contactParts.map((value) => value ?? "").join(" | ")
-    : contactParts.filter(Boolean).join("  |  ");
-  pdf.header(document.candidate.fullName, [
-    ...(template === "vellum" ? [headline] : [headline, contact]),
-  ].filter(Boolean).join(template === "flowcv" ? "\n" : " | "), 19);
-  if (template === "vellum" && contact) pdf.centeredLine(contact, 8.5);
+    : contactParts.filter(Boolean).join(`  ${contactSeparator(template)}  `);
+  if (template === "flowcv") {
+    pdf.header(document.candidate.fullName, [headline, contact].filter(Boolean).join("\n"), 19);
+  } else {
+    // The contact line is drawn on its own line, fitted to one line (contactLine).
+    pdf.header(document.candidate.fullName, headline ?? "", 19, template === "vellum" ? undefined : contact);
+    if (template === "vellum" && contact) pdf.contactLine(contact, 8.5);
+  }
   if (document.summary) {
     pdf.section(["vellum", "flowcv"].includes(template) ? "Summary" : "Professional Summary");
     pdf.paragraph(document.summary);
@@ -156,12 +220,9 @@ async function renderCoverLetterPdf(
   ];
   const coverContact = template === "flowcv"
     ? ["", ...coverContactParts].map((value) => value ?? "").join(" | ")
-    : coverContactParts.filter(Boolean).join(" | ");
-  pdf.header(
-    document.candidate.fullName,
-    template === "flowcv" ? `\n${coverContact}` : coverContact,
-    17,
-  );
+    : coverContactParts.filter(Boolean).join(` ${contactSeparator(template)} `);
+  if (template === "flowcv") pdf.header(document.candidate.fullName, `\n${coverContact}`, 17);
+  else pdf.header(document.candidate.fullName, "", 17, coverContact);
   pdf.space(22);
   pdf.line(
     document.date
@@ -395,8 +456,35 @@ async function createWriter(
     });
       y -= Math.max(size * 1.35, size + 4);
   };
-  const centeredLine = (text: string, size = 10) => {
-    drawWrapped(text, size, "gray", true);
+  // Draws the contact line at y on one line (fitContactLine); the caller moves y on.
+  const drawContact = (
+    text: string,
+    preferredSize: number,
+    color: ReturnType<typeof rgb>,
+    innerEdge = 0,
+  ) => {
+    const cleaned = clean(text);
+    const centered = design.align === "center";
+    const fit = fitContactLine((fontSize) => measureText(cleaned, fontSize), {
+      pageWidth: width,
+      margin,
+      size: preferredSize,
+      centered,
+      innerEdge,
+    });
+    const textWidth = measureText(cleaned, fit.size);
+    drawText(cleaned, {
+      x: centered ? (width - textWidth) / 2 : fit.left,
+      y,
+      size: fit.size,
+      font: regular,
+      color,
+    });
+  };
+  const contactLine = (text: string, size = 10) => {
+    ensure(size + 5);
+    drawContact(text, size, muted);
+    y -= Math.max(size * 1.35, size + 3);
   };
   const drawFlowCvContactRow = (text: string, preferredSize: number) => {
     const items = text.split(/\s*\|\s*/).map((value, iconIndex) => ({
@@ -475,7 +563,7 @@ async function createWriter(
       color: rgb(1, 1, 1),
     });
   };
-  const header = (title: string, detail: string, size = 19) => {
+  const header = (title: string, detail: string, size = 19, contact = "") => {
     if (template === "flowcv") {
       const nameSize = 22;
       const headlineSize = 16;
@@ -545,6 +633,11 @@ async function createWriter(
           y -= 13;
         }
       }
+      if (contact) {
+        ensure(15);
+        drawContact(contact, 10, muted);
+        y -= 13;
+      }
       page.drawLine({
         start: { x: margin, y: y - 1 },
         end: { x: width - margin, y: y - 1 },
@@ -561,7 +654,7 @@ async function createWriter(
       return;
     }
     const headerTop = y + 16;
-    const blockHeight = detail ? 68 : 48;
+    const blockHeight = detail || contact ? 68 : 48;
     const darkHeader = design.header === "band" || design.header === "card";
     const headerFill = template === "amber-crest"
         ? rgb(.07, .12, .22)
@@ -604,6 +697,11 @@ async function createWriter(
         font: regular,
         color: darkHeader ? rgb(.92, .94, .97) : muted,
       });
+      y -= 12;
+    }
+    if (contact) {
+      // A card stops 10pt into the margin; the line stays 4pt inside it.
+      drawContact(contact, 9, darkHeader ? rgb(.92, .94, .97) : muted, design.header === "card" ? margin - 6 : 0);
       y -= 12;
     }
     if (design.header === "rule" || design.header === "double-rule") {
@@ -1097,7 +1195,7 @@ async function createWriter(
     skillsHeight,
     skills,
     entry,
-    centeredLine,
+    contactLine,
     space(amount) {
       y -= amount;
     },

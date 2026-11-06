@@ -3,7 +3,7 @@ import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { DocumentPageLimitError } from "@/app/pdf/document-page-limit-error";
-import { renderPdfPackage } from "@/app/pdf/pdf-renderer";
+import { contactSeparator, fitContactLine, renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import {
   isPdfTemplate,
   pdfTemplateDesigns,
@@ -226,4 +226,92 @@ test("the fallback rejects a résumé that exceeds five pages without truncation
       && /5 A4 pages/.test(error.message)
       && /not truncated/.test(error.message),
   );
+});
+
+test("the contact line fits on one line, growing into the margin before shrinking, never below 8pt", () => {
+  const pageWidth = 595.28;
+  const margin = 48;
+  const mm = 72 / 25.4;
+  // A line whose width is proportional to its size, like a run of text in one font.
+  const line = (widthAtNinePoints: number) => (size: number) => widthAtNinePoints * size / 9;
+  const inside = pageWidth - margin * 2;
+
+  assert.deepEqual(
+    fitContactLine(line(inside - 10), { pageWidth, margin, size: 9, centered: false }),
+    { size: 9, left: margin, right: margin, fits: true },
+  );
+
+  // Slightly too wide: same size, the right end runs into the margin; the left stays aligned.
+  const widened = fitContactLine(line(inside + 10), { pageWidth, margin, size: 9, centered: false });
+  assert.equal(widened.size, 9);
+  assert.equal(widened.left, margin);
+  assert.ok(Math.abs(widened.right - 8 * mm) < 0.01);
+
+  // A centred line grows on both sides.
+  const centred = fitContactLine(line(inside + 30), { pageWidth, margin, size: 9, centered: true });
+  assert.equal(centred.size, 9);
+  assert.ok(Math.abs(centred.left - 8 * mm) < 0.01 && Math.abs(centred.right - 8 * mm) < 0.01);
+
+  // Wider still: it shrinks by quarter points and stops at the first size that fits.
+  const shrunk = fitContactLine(line((pageWidth - margin - 8 * mm) * 9 / 8.5), { pageWidth, margin, size: 9, centered: false });
+  assert.equal(shrunk.size, 8.5);
+  assert.ok(shrunk.fits);
+
+  // Too wide even at 8pt with 8 mm: it may use the margin up to 6 mm, right end first.
+  const lastRight = fitContactLine(line((pageWidth - margin - 6 * mm) * 9 / 8), { pageWidth, margin, size: 9, centered: false });
+  assert.equal(lastRight.size, 8);
+  assert.equal(lastRight.left, margin);
+  assert.ok(lastRight.fits);
+  const lastBoth = fitContactLine(line((pageWidth - 12 * mm) * 9 / 8), { pageWidth, margin, size: 9, centered: false });
+  assert.equal(lastBoth.size, 8);
+  assert.ok(Math.abs(lastBoth.left - 6 * mm) < 0.01);
+  assert.ok(lastBoth.fits);
+
+  // Longer than the page allows: still one line at 8pt, reported as not fitting.
+  const tooLong = fitContactLine(line(pageWidth * 2), { pageWidth, margin, size: 9, centered: false });
+  assert.equal(tooLong.size, 8);
+  assert.equal(tooLong.fits, false);
+
+  // A header box that stops inside the margin keeps the line inside it.
+  const boxed = fitContactLine(line(inside + 10), { pageWidth, margin, size: 9, centered: false, innerEdge: margin - 6 });
+  assert.ok(boxed.right >= margin - 6);
+});
+
+test("centred-header templates separate contact items with bullets; the others use a bar", () => {
+  for (const template of ["startup", "centered", "nordic", "banded", "academic"] as const) {
+    assert.equal(contactSeparator(template), "•", template);
+  }
+  for (const template of ["minimal", "classic", "corporate", "creative", "ledger", "executive", "graphite", "qts-standard"] as const) {
+    assert.equal(contactSeparator(template), "|", template);
+  }
+});
+
+test("every template renders a very long contact line", async () => {
+  const long: PdfPackage = {
+    ...data,
+    resume: {
+      ...data.resume,
+      candidate: {
+        ...data.resume.candidate,
+        email: "maximilian.alexander.konstantinopoulos.engineering@protonmail.com",
+        phone: "+44 (0) 7700 900 123 ext 45",
+        location: "Newcastle upon Tyne, Tyne and Wear, United Kingdom",
+        linkedinUrl: "https://www.linkedin.com/in/maximilian-alexander-konstantinopoulos-senior-engineer",
+      },
+    },
+    coverLetter: {
+      ...data.coverLetter,
+      candidate: {
+        ...data.coverLetter.candidate,
+        email: "maximilian.alexander.konstantinopoulos.engineering@protonmail.com",
+        phone: "+44 (0) 7700 900 123 ext 45",
+        linkedinUrl: "https://www.linkedin.com/in/maximilian-alexander-konstantinopoulos-senior-engineer",
+      },
+    },
+  };
+  for (const template of pdfTemplateSupportedValues) {
+    const rendered = await renderPdfPackage(long, template);
+    assert.equal((await PDFDocument.load(rendered.resume)).getPageCount() >= 1, true, template);
+    assert.equal((await PDFDocument.load(rendered.coverLetter)).getPageCount(), 1, template);
+  }
 });

@@ -803,6 +803,81 @@
     return inPageFlow(article, () => Math.max(1, article.getClientRects().length));
   }
 
+  /* ---------- Contact line ----------
+     Email, phone, location and links always print on one line, with their
+     text unchanged. When the line is too wide, it first runs into the page
+     margin up to CONTACT_EDGE from the paper edge at its own size, then steps
+     down by 0.25pt to CONTACT_MIN_PT. Only if it still does not fit does it
+     use the margin up to CONTACT_LAST_EDGE, at its end and then on both sides,
+     and only if that fails too does it add a warning.
+     Until that last step a start-aligned line grows at its end only, so it
+     stays aligned with the name; a centred one grows evenly on both sides. A
+     band header grows with its line, so the text stays inside the band. */
+  const CONTACT_MIN_PT = 8;
+  const CONTACT_EDGE = "8mm";
+  const CONTACT_LAST_EDGE = "6mm";
+
+  function contactOverflows(list) {
+    const items = [...list.children];
+    if (!items.length) return false;
+    let start = Infinity;
+    let end = -Infinity;
+    for (const item of items) {
+      const box = item.getBoundingClientRect();
+      start = Math.min(start, box.left);
+      end = Math.max(end, box.right);
+    }
+    // Half a pixel absorbs rounding; the items themselves never break (base.css).
+    return end - start > list.getBoundingClientRect().width + 0.5;
+  }
+
+  function fitContactLine(article, settings, warnings) {
+    const contact = article.querySelector(".resume-header .contact");
+    const list = contact?.querySelector(".contact-list");
+    if (!list) return;
+    const header = contact.closest(".resume-header");
+    const names = ["--contact-size", "--contact-extend-start", "--contact-extend-end"];
+    names.forEach((name) => contact.style.removeProperty(name));
+    header.style.removeProperty("--header-extend");
+    header.style.removeProperty("--header-extend-pad");
+    if (!contactOverflows(list)) return;
+
+    const centred = settings.headerAlign === "center";
+    const band = settings.headerStyle === "band";
+    // A side bar sits at the start of the header, so the line never grows over it.
+    const startFree = settings.headerStyle !== "side-bar";
+    const widen = (edge, bothSides) => {
+      const extend = `max(0px, var(--page-margin-inline) - ${edge})`;
+      const growStart = centred || (bothSides && startFree);
+      if (band) {
+        // The band grows; its name and headline stay put, and only the line may move into it.
+        header.style.setProperty("--header-extend", extend);
+        header.style.setProperty("--header-extend-pad", centred ? "0px" : extend);
+        contact.style.setProperty("--contact-extend-start", growStart && !centred ? extend : "0px");
+        return;
+      }
+      contact.style.setProperty("--contact-extend-end", extend);
+      contact.style.setProperty("--contact-extend-start", growStart ? extend : "0px");
+    };
+    const fitsAt = (points) => {
+      contact.style.setProperty("--contact-size", `${points}pt`);
+      return !contactOverflows(list);
+    };
+
+    widen(CONTACT_EDGE);
+    if (!contactOverflows(list)) return;
+    // Quarter points, counted as whole numbers so the steps do not drift.
+    const startPoints = (parseFloat(getComputedStyle(contact).fontSize) * 72) / 96;
+    for (let quarter = Math.ceil(startPoints * 4) - 1; quarter >= CONTACT_MIN_PT * 4; quarter -= 1) {
+      if (fitsAt(quarter / 4)) return;
+    }
+    widen(CONTACT_LAST_EDGE, false);
+    if (fitsAt(CONTACT_MIN_PT)) return;
+    widen(CONTACT_LAST_EDGE, true);
+    if (fitsAt(CONTACT_MIN_PT)) return;
+    warnings.push(`The contact line is too long to fit on one line at ${CONTACT_MIN_PT}pt.`);
+  }
+
   // density "auto" (default) tightens spacing only when content runs past the
   // page budget, then steps a resume's bullets down through BULLET_SIZES
   // (base.css section 12) until it fits. One that does not fit even at the
@@ -1008,6 +1083,7 @@
     }
     if (run !== renderCount) return null;
 
+    fitContactLine(article, settings, warnings);
     const pages = fitToPages(article, settings.density, warnings);
     if (!directRenderMode) fillPages(article);
     root.dataset.document = DOCUMENT;

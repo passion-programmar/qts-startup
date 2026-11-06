@@ -259,18 +259,22 @@ a {
   color: var(--color-muted);
 }
 
+/* The contact line is always one line. When it is too wide, render.js
+   (fitContactLine) first lets it run into the page margin (--contact-extend-*),
+   then lowers its size (--contact-size), never below 8pt. Nothing else moves. */
 .contact {
   margin-top: 6pt;
+  margin-inline: calc(-1 * var(--contact-extend-start, 0px)) calc(-1 * var(--contact-extend-end, 0px));
   font-family: var(--font-meta);
-  font-size: calc(var(--text-contact) * var(--font-scale));
+  font-size: var(--contact-size, calc(var(--text-contact) * var(--font-scale)));
 }
 
-/* A wrapping flex row: missing fields simply aren't rendered, so the rest
-   close up and stay aligned with the header (centred when it is centred).
-   Each separator ends the previous field, so no line starts with "|". */
+/* One flex row: missing fields simply aren't rendered, so the rest close up
+   and stay aligned with the header (centred when it is centred). Each
+   separator ends the previous field. */
 .contact-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-start;
   row-gap: 1pt;
   list-style: none;
@@ -305,8 +309,12 @@ a {
   border-top: 3pt solid var(--color-accent);
 }
 
+/* A long contact line widens the whole band evenly into the page margin
+   (--header-extend); the extra start padding keeps the text where it was. */
 .doc[data-header-style="band"] .resume-header {
+  margin-inline: calc(-1 * var(--header-extend, 0px));
   padding: 10pt 12pt;
+  padding-inline-start: calc(12pt + var(--header-extend-pad, 0px));
   background: var(--color-tint);
 }
 
