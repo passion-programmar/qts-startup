@@ -55,7 +55,8 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(launcher.includes("if (document.readyState !== 'loading') initializePageLauncherAfterLoad();"));
   assert.ok(launcher.includes("else document.addEventListener('DOMContentLoaded', initializePageLauncherAfterLoad, { once: true })"));
   assert.ok(review.includes("window.addEventListener('load', initializeGetJdReviewAfterLoad, { once: true })"));
-  assert.ok(highlighter.includes("window.addEventListener('load', startPageTextHighlighterAfterLoad, { once: true })"));
+  // Highlights start as soon as the script runs (278c2e4: open job pages are highlighted after sign-in).
+  assert.ok(highlighter.includes('\nstartPageTextHighlighterAfterLoad();'));
   // The launcher waits as a tab on the right edge, without endless animations; its actions open as a docked panel.
   assert.equal(launcher.includes('infinite'), false);
   assert.ok(launcher.includes("document.documentElement?.setAttribute('data-qts-menu-docked', open ? 'true' : 'false')"));
