@@ -284,7 +284,29 @@
   }
 
   /** The question a block's control belongs to: its block's label or legend, else the block's text. */
+  /**
+   * A choice group's own name, as the page declares it: its fieldset's legend, or the role="radiogroup"
+   * / role="group" aria-labelledby or aria-label (Workable → "Gender"). '' when it declares none.
+   * Read before any text around the options, which may be an option icon's fallback text
+   * ("SVGs not supported by this browser.").
+   */
+  function declaredGroupName(element) {
+    const group = element.closest('[role="radiogroup"], [role="group"], fieldset')
+      || element.querySelector?.('[role="radiogroup"], [role="group"], fieldset');
+    if (!group) return { text: '', group: null };
+    const root = group.getRootNode();
+    const text = [
+      textOf(group.matches('fieldset') ? group.querySelector(':scope > legend') : null),
+      ...(group.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+        .map((id) => root.getElementById?.(id)).filter((named) => named && !named.contains(element)).map(textOf),
+      cleanText(group.getAttribute('aria-label') || ''),
+    ].find((entry) => /[a-z]{2}/i.test(entry || '')) || '';
+    return { text: text.slice(0, 300), group };
+  }
+
   function blockQuestion(element) {
+    const declared = declaredGroupName(element);
+    if (declared.text) return { text: declared.text, block: declared.group.parentElement || declared.group };
     for (let node = element.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth += 1) {
       const heading = node.querySelector('label, legend, h3, h4, [class*="label" i]');
       if (heading && !heading.contains(element) && textOf(heading)) return { text: textOf(heading).slice(0, 300), block: node };
@@ -324,11 +346,11 @@
       .map((text) => cleanText(text.replace(/[*✱]/g, ' ')))
       .filter((text) => text && !UPLOAD_ACTION.test(text));
     if (named.length) return named[0].slice(0, 200);
-    return global.__qtsAutoApplyRules ? uploadGroupQuestion(control) : '';
+    return uploadGroupQuestion(control);
   }
 
   /**
-   * Auto Apply: the question of the labelled group an upload sits in, when its own label is only its
+   * The question of the labelled group an upload sits in, when its own label is only its
    * button ("Attach"): Greenhouse's role="group" aria-labelledby → "Resume/CV", "Cover Letter".
    */
   function uploadGroupQuestion(control, asWritten = false) {
@@ -466,7 +488,7 @@
       ...(control.id ? [...(root.querySelectorAll?.(`label[for="${CSS.escape(control.id)}"]`) || [])].map(textOf) : []),
       textOf(control.closest('label')),
       blockLabel,
-      global.__qtsAutoApplyRules ? uploadGroupQuestion(control, true) : '',
+      uploadGroupQuestion(control, true),
     ].filter(Boolean).find((text) => isRequired(control, text)) || '';
   }
 
@@ -913,7 +935,7 @@
         field.label = own && /[a-z]{3}/i.test(own) ? own : question;
         delete field.options;
       } else {
-        field.label = question || labelForGroup(control);
+        field.label = declaredGroupName(control).text || question || labelForGroup(control);
       }
       field.required = field.required || isRequired(control, field.label);
     }
@@ -1315,8 +1337,8 @@
         }
       }
       const checked = controlsOfGroup(element).filter((control) => control.checked).map(choiceText);
-      // Auto Apply: done only when exactly the wanted choices are the ticked ones (not just any tick).
-      if (global.__qtsAutoApplyRules) {
+      // Done only when exactly the wanted choices are the ticked ones (not just any tick).
+      {
         const ticked = checked.map((text) => text.toLowerCase());
         const exact = ticked.length === wanted.length && wanted.every((entry) => ticked.includes(entry));
         return exact ? { ok: true, value: checked.join(', ') } : { ok: false, value: checked.join(', '), error: `The site shows "${checked.join(', ') || 'nothing'}" ticked, not "${[].concat(value).join(', ')}".` };

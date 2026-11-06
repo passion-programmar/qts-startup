@@ -293,6 +293,19 @@ test('the form record is well formed, and its revision grows only when questions
   assert.equal(result.revisions[2], result.revisions[0] + 1);
 });
 
+test('live-site labels: Greenhouse uploads named by their group, Workable radios by their radiogroup (both Apply modes)', { skip }, async () => {
+  // Greenhouse: each input's own label is only its button ("Attach"); the group names it and says if it is required.
+  const upload = (key, title, required) => `<div role="group" aria-labelledby="upload-label-${key}" aria-required="${required}"><div id="upload-label-${key}" class="label upload-label">${title}${required ? '<span>*</span>' : ''}</div><div class="button-container"><button type="button">Attach</button><label class="visually-hidden" for="${key}">Attach</label><input id="${key}" class="visually-hidden" type="file" accept=".pdf"></div></div>`;
+  const files = await onPage(`<form><label for="fn">First Name</label><input id="fn">${upload('resume', 'Resume/CV', true)}${upload('cover_letter', 'Cover Letter', false)}</form>`,
+    'return api.scanForm().filter((f) => f.kind === "file").map((f) => [f.label, f.required]);');
+  assert.deepEqual(files, [['Resume/CV', true], ['Cover Letter', false]]);
+  // Workable: the options' labels hold an icon whose fallback text is not the question.
+  const option = (id, text) => `<label role="presentation"><div role="radio" aria-labelledby="g_label l_${id}"><input id="${id}" type="radio" name="CA_1" value="${id}" required><svg><text>SVGs not supported by this browser.</text></svg></div><span id="l_${id}">${text}</span></label>`;
+  const radios = await onPage(`<form><div><span><strong>*</strong></span><span id="g_label"><strong>Gender</strong></span><fieldset role="radiogroup" aria-labelledby="g_label">${option('a', 'Female')}${option('b', 'Male')}</fieldset></div></form>`,
+    'return api.scanForm().filter((f) => f.kind === "radio").map((f) => f.label);');
+  assert.deepEqual(radios, ['Gender']);
+});
+
 test('pages are told apart: form, partial form, email-first, sign-in, account, code, CAPTCHA, closed, sent, job page, nothing', { skip }, async () => {
   const kind = (html) => onPage(html, 'return api.classifyPage().type;');
   assert.equal(await kind(`<form><label for="a">Full name</label><input id="a"><label for="b">Email</label><input id="b" type="email"><label for="c">CV</label><input id="c" type="file"></form>`), 'application_form');

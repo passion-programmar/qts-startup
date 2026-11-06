@@ -1189,10 +1189,6 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   const assist = options.assist === true;
   if (assist) application.normalApplyAnswers = true;
   const skip = options.skip || (() => false);
-  // Auto Apply: the form reader's own rules in this page (an upload named by its labelled group).
-  if (application.factSources) {
-    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: () => { globalThis.__qtsAutoApplyRules = true; } }).catch(() => {});
-  }
   // Normal Apply allows documents, profile facts and reusable answers. Auto Apply passes its own
   // source allowlist, which also includes required agreements. Unanswered fields are never sent to AI.
   const normalApply = assist || application.normalApplyAnswers === true;
@@ -2370,7 +2366,6 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   // Auto Apply: the step's checklist checked on the page as it is now (read only).
   const recheckPage = async (tabId, stepNow) => {
     if (!checklist) return;
-    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: () => { globalThis.__qtsAutoApplyRules = true; } }).catch(() => {});
     const look = await inForm(tabId, () => globalThis.__qtsApplyForm.auditForm()).catch(() => null);
     checklist.recheck(stepNow, look, provisional);
   };

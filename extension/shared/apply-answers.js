@@ -36,6 +36,8 @@
     return String(question || '')
       .toLowerCase()
       .replace(/\(\s*(optional|required)\s*\)/g, ' ')
+      // "Notice period:* Required" (Teamtailor's screen-reader word after the mark) is not the question.
+      .replace(/[*✱]\s*(optional|required)\s*$/, ' ')
       .replace(/[*:?!.,;"'()[\]{}]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -44,6 +46,7 @@
 
   function labelOf(field) {
     return String(field.label || '')
+      .replace(/[*✱]\s*(optional|required)\s*$/i, ' ')
       .replace(/[*✱]/g, ' ')
       .replace(/\(\s*(optional|required)\s*\)/gi, ' ')
       .replace(/\s+/g, ' ')
@@ -320,10 +323,10 @@
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
     // City-labelled location fields are profile facts in both modes; sites vary parenthesis spacing.
     { test: /^(current )?(city|town)(\s*(\/|or)\s*(city|town|locality))?$|^(current )?location\s*\(\s*(city|town)\s*\)$|city of residence|^(stadt|ort|wohnort|ville|ciudad|miasto|localidad|localit[ée]|citt[àa])$/, autoTest: /^(your )?city\s*\/\s*town$/, fact: (c) => c.city, name: 'city', personal: true },
-    // autoTest (Auto Apply only): also as a whole question, "What is your location?" (Lever, a list of countries).
+    // autoTest (Auto Apply and Normal Apply): also as a whole question, "What is your location?" (Lever, a list of countries).
     { test: /^(current )?location$|where are you (currently )?(located|based|living)|where do you (currently )?(live|reside)\b(?! in)|current location|^location of residence|^(city|place) of residence$/, autoTest: /^(what is|what's) your (current )?location\??(\s|$)/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location', personal: true },
     // "Country", "Country/Region" (SmartRecruiters), "Country / Territory", "Region/Country"; autoTest
-    // (Auto Apply only) also as a question: "What is your current country of residence?"
+    // (Auto Apply and Normal Apply) also as a question: "What is your current country of residence?"
     // (Greenhouse), "What country are you based in?" (Ashby), "What country do you currently live
     // in?", "Please choose the country in which you are located." (a yes/no question is never this rule's).
     { test: /^(your |current )?country(\s*(\/|or|and|&)\s*(region|territory|area))?( of (current )?residence)?$|^(region|territory)\s*(\/|or)\s*country$|^residence country$|^(land|wohnland|pays( de r[ée]sidence)?|pa[ií]s( de residencia)?|kraj( zamieszkania)?|paese)$/, autoTest: /\bcountry of (current |permanent )?residence\b|\b(which|what) country (are|do) you (currently )?(live|living|reside|residing|based|located|in)\b|\bcountry (in which|where) you (are |currently |are currently )?(live|living|reside|residing|located|based)\b/, fact: (c) => c.country, name: 'country', personal: true },
@@ -671,7 +674,8 @@
    */
   function profileAnswer(field, label, candidate, context) {
     for (const rule of RULES) {
-      if (!rule.test.test(label) && !(context.autoApply && rule.autoTest?.test(label))) continue;
+      // autoTest: the same profile fact asked as a whole question ("What country do you currently reside in?").
+      if (!rule.test.test(label) && !((context.autoApply || context.normalApply) && rule.autoTest?.test(label))) continue;
       // A tick box takes only a yes/no fact ("SMS to my phone number" is not the phone number).
       if (field.kind === 'checkbox' && !rule.yesNo) continue;
       // Nor does a yes/no question ("Are you available for a phone screen?").
@@ -996,7 +1000,7 @@
 
   function representationResult(field, source, definition, context, authority, row) {
     if (!representations || !answerFeature('answerRepresentationsV1')) return { skip: 'Typed representations are disabled.', byHand: 'Complete this representation manually during rollback.' };
-    if (definition.id === 'candidate.fullName' && /(?:first|given).*(?:last|family|surname)|(?:last|family|surname).*(?:first|given)/i.test(field.placeholder || '') && !representations.describeField(field)?.nameOrder) return { skip: 'Unsupported name layout.', byHand: 'Confirm this name component layout manually.' };
+    if (definition.id === 'candidate.fullName' && /(?:last|family|surname).*(?:first|given)/i.test(field.placeholder || '') && !representations.describeField(field)?.nameOrder) return { skip: 'Unsupported name layout.', byHand: 'Confirm this name component layout manually.' };
     if (definition.id === 'candidate.fullName' && source.type === 'string' && (semantics.recognize(field.label)?.representation?.nameOrder || representations.describeField(field)?.nameOrder)) return { skip: 'Name components are unknown.', byHand: 'A full name without declared component boundaries cannot be reordered.' };
     if (source.type === 'duration' && /business days?|working days?|after.*(?:offer|accept|contract)/i.test(`${field.label} ${field.note || ''}`)) return { skip: 'Unsupported availability convention.', byHand: 'Business days and offer-dependent dates need explicit manual confirmation.' };
     const description = representations.describeField(field) || {};
@@ -1030,8 +1034,10 @@
     const id = definition.id;
     let source;
     if (id === 'candidate.fullName') {
+      // A placeholder in the usual order ("First and last name") composes as usual; only a family-first
+      // layout ("Last name, First name") without a known order is left for the Manager.
       if (!candidate.firstName || !candidate.lastName) return candidate.firstName || candidate.lastName ? { skip: 'Full name components are incomplete.', byHand: 'Complete both name components in the candidate profile.' } : null;
-      if (/(?:first|given).*(?:last|family|surname)|(?:last|family|surname).*(?:first|given)/i.test(field.placeholder || '') && !representations.describeField(field)?.nameOrder) return { skip: 'Unsupported name layout.', byHand: 'Confirm this name component layout manually.' };
+      if (/(?:last|family|surname).*(?:first|given)/i.test(field.placeholder || '') && !representations.describeField(field)?.nameOrder) return { skip: 'Unsupported name layout.', byHand: 'Confirm this name component layout manually.' };
       source = { type: 'components', value: { first: candidate.firstName, last: candidate.lastName },
         conversionContext: nameComposition(field) };
     } else if (id === 'candidate.fullAddress') {

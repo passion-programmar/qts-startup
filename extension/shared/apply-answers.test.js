@@ -1147,3 +1147,19 @@ test('Auto Apply: an approved answer matches the same question in other words (j
   assert.equal(other.answers.r, undefined);
   assert.equal(other.answers.f, undefined);
 });
+
+// Found on live job sites (Teamtailor, JustJoin, Greenhouse), Normal Apply.
+test('Normal Apply: required marks, full-name placeholders and country questions found on live forms', () => {
+  const ana = { firstName: 'Ana', lastName: 'Test', country: 'Poland', city: 'Warsaw' };
+  const field = (label, extra = {}) => ({ id: 'x', label, kind: 'text', required: true, ...extra });
+  // "Notice period:* Required": the screen-reader word after the mark is not the question.
+  assert.equal(answers.normalizeQuestionKey('Please indicate your notice period:* Required'), 'please indicate your notice period');
+  assert.equal(answers.normalizeQuestionKey('Is visa sponsorship required?'), 'is visa sponsorship required');
+  // A placeholder in the usual order composes the full name; a family-first layout stays manual.
+  assert.equal(answers.resolveField(field('First and last name*', { placeholder: 'First and last name' }), ana, [], { normalApply: true }).value, 'Ana Test');
+  assert.ok(answers.resolveField(field('Full name', { placeholder: 'Last name, First name' }), ana, [], { normalApply: true }).byHand);
+  // The country asked as a question comes from the profile in Normal Apply too; a yes/no question does not.
+  const list = { kind: 'combobox', options: ['Poland', 'Romania'] };
+  assert.equal(answers.resolveField(field('What country do you currently reside in?*', list), ana, [], { normalApply: true }).value, 'Poland');
+  assert.notEqual(answers.resolveField(field('Are you based in Poland?', list), ana, [], { normalApply: true })?.value, 'Poland');
+});

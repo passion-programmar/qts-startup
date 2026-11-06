@@ -50,6 +50,9 @@ test("browser headers need a well-formed key", () => {
 test("the same question on different forms shares one key", () => {
   assert.equal(normalizeQuestionKey("Why Exadel? *"), normalizeQuestionKey("why exadel"));
   assert.equal(normalizeQuestionKey("Notice period (optional):"), "notice period");
+  // Teamtailor's screen-reader word after the required mark is not part of the question.
+  assert.equal(normalizeQuestionKey("Please indicate your notice period:* Required"), "please indicate your notice period");
+  assert.equal(normalizeQuestionKey("Is visa sponsorship required?"), "is visa sponsorship required");
 });
 
 test("a bid keeps the résumé's folder and one cleaned-up work type", () => {

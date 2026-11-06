@@ -72,6 +72,8 @@ export function normalizeQuestionKey(question: string): string {
   return question
     .toLowerCase()
     .replace(/\(\s*(optional|required)\s*\)/g, " ")
+    // "Notice period:* Required" (Teamtailor's screen-reader word after the mark) is not the question.
+    .replace(/[*✱]\s*(optional|required)\s*$/, " ")
     .replace(/[*:?!.,;"'()[\]{}]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
