@@ -18,7 +18,18 @@ async function until(label, check, timeout = 30000) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+// The panel redraws while the rest of the form fills (uploads paused): a button found a moment ago
+// may have been replaced, so the click is tried again on the new one.
 async function retryButton(page, buttonClass = 'retry-fill', text = null) {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await clickPanelButtonOnce(page, buttonClass, text); } catch (error) {
+      if (attempt >= 4 || !/Could not find node|No node with given id/i.test(String(error?.message))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+}
+
+async function clickPanelButtonOnce(page, buttonClass, text) {
   const client = await page.createCDPSession();
   try {
     const { root } = await client.send('DOM.getDocument', { depth: -1, pierce: true });
@@ -174,11 +185,15 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
       let { id, form } = await begin(index);
       const panel = await paused(id);
       console.log(`[Assisted Apply PDF] ${failure}: actionable error displayed`);
-      assert.match(panel.status, /Autofill paused.*Retry autofill/);
+      // Only the uploads wait; profile facts and saved answers were filled.
+      assert.match(panel.status, /Uploads paused.*Retry autofill/);
       assert.match(panel.problems[0].message, failure === 'paths' ? /saved PDF paths.*QTS administrator/i : failure === 'permission' ? /permission is unavailable.*Apply PDFs folder/ : /existing Generation PDFs.*exact saved files/);
       if (failure === 'file') assert.match(panel.problems[0].message, /could not be found|missing|not found/i, 'the native missing-file cause is retained');
       assert.equal(docsCount(), before + 1);
-      assert.equal((await worker.evaluate(async (id) => (await chrome.storage.local.get('qtsApplySessions')).qtsApplySessions[id], id)).fillError, panel.problems[0].message);
+      assert.equal((await worker.evaluate(async (id) => (await chrome.storage.local.get('qtsApplySessions')).qtsApplySessions[id], id)).uploadError, panel.problems[0].message.replace(/^Uploads paused: /, ''));
+      // A PDF error pauses only the uploads: the profile's first name was filled meanwhile.
+      assert.equal(await form.$eval('#first', (box) => box.value), 'Casey');
+      await form.$eval('#first', (box) => { box.value = ''; });
       await form.type('#first', 'Manager edit');
       await worker.evaluate(async (id) => {
         const tab = activeReviews.get(id).tabId;
@@ -210,6 +225,7 @@ test('Assisted Apply pauses on exact-path/file/permission errors, retries only o
         assert.deepEqual(await worker.evaluate((id) => [...activeReviews.get(id).tabIds], id), [child.id]);
         assert.equal(requests.filter((request) => request.path === '/api/extension/apply/claim').length, claimsBeforeHandoff, 'closing the parent does not claim a replacement job');
         form = childPage;
+        await form.$eval('#first', (box) => { box.value = ''; });
         await form.type('#first', 'Manager edit');
         console.log('[Assisted Apply panel] continuation replaced the original without retrying PDFs or ending the attempt');
         // Stop just the worker; retain the same form/tab and saved pause.

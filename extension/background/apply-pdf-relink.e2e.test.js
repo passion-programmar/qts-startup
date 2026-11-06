@@ -153,6 +153,8 @@ test('normal Apply explicitly relinks exact original PDFs, handles conflicts, st
     const saves = () => requests.filter(r => r.path === '/api/extension/apply/documents/relink');
     const { id, form } = await begin(0);
     console.log('[relink] normal Apply paused');
+    // A PDF error pauses only the uploads: the profile's first name was filled meanwhile.
+    await form.$eval('#first', (box) => { box.value = ''; });
     await form.type('#first', 'Manager edit');
     assert.equal(docs().length, 1);
     assert.equal(await worker.evaluate(async (id) => (await chrome.storage.local.get('qtsApplySessions')).qtsApplySessions[id].relinkRequired, id), true);

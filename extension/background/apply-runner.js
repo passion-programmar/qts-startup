@@ -31,6 +31,8 @@ const APPLY_AI_TIMEOUT_MS = 120 * 1000;
 // Clicks to reach the form from a job page: "Apply for this job", then perhaps "Apply manually".
 const APPLY_START_STEPS = 8;
 const APPLY_START_WAIT_MS = 15 * 1000;
+// Normal Apply looks at its open pages again this often, besides page events.
+const ASSIST_RECHECK_MS = 15 * 1000;
 let applyLoopRunning = false;
 
 // Development diagnostics: off unless chrome.storage.local has qtsApplyDebug: true (set it from the
@@ -1211,6 +1213,20 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   const seen = new Set();
   await inForm(tabId, context => globalThis.__qtsApplyForm.setUploadContext(context), [{ attemptId: application.attemptId, step }]);
   let documents = application.applyDocuments || (assist ? application.assistDocuments || null : null);
+  // Normal Apply: PDFs that cannot be read pause only the uploads; profile facts and saved answers
+  // still fill, and the panel offers Retry / Link existing PDFs for the uploads.
+  let documentsError = null;
+  const loadDocuments = async () => {
+    // Uploads already paused (an earlier read failed): no new read until the Manager chooses Retry.
+    if (options.uploadsPaused?.()) { documentsError = { message: '', paused: true }; return null; }
+    try {
+      return await fetchApplyDocuments(application.attemptId);
+    } catch (error) {
+      if (!assist || !(error instanceof ApplyStop) || error.keepTab === false) throw error;
+      documentsError = error;
+      return null;
+    }
+  };
   const keepDocuments = (ready) => {
     if (!ready?.resume?.base64) return;
     application.applyDocuments = ready;
@@ -1402,10 +1418,12 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     // Apply") gets it before anything else, once per application. The form is then read again.
     const autofill = !application.resumeAutofillTried && fresh.find((field) => helpers.isAutofillUpload(field));
     if (autofill) {
-      if (!documents) {
-        documents = await fetchApplyDocuments(application.attemptId);
-        application.documentsFolder = documents.folder;
-        keepDocuments(documents);
+      if (!documents && !documentsError) {
+        documents = await loadDocuments();
+        if (documents) {
+          application.documentsFolder = documents.folder;
+          keepDocuments(documents);
+        }
       }
       if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       application.resumeAutofillTried = true;
@@ -1466,11 +1484,15 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       answers[field.id] = cached;
       return false;
     });
-    if (!documents && Object.values(answers).some((answer) => answer.file)) {
-      documents = await fetchApplyDocuments(application.attemptId);
-      application.documentsFolder = documents.folder;
-      keepDocuments(documents);
+    if (!documents && !documentsError && Object.values(answers).some((answer) => answer.file)) {
+      documents = await loadDocuments();
+      if (documents) {
+        application.documentsFolder = documents.folder;
+        keepDocuments(documents);
+      }
     }
+    // The PDFs could not be read: this pass fills everything else; the uploads wait for Retry.
+    if (documentsError) for (const [id, answer] of Object.entries(answers)) if (answer.file) delete answers[id];
     if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
 
     // 1. The profile's answers, in page order; one the site does not take goes to ChatGPT.
@@ -1656,7 +1678,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   for (const entry of uploadProblems) problem(entry.message, entry, 'upload');
   if (assist) {
     // What the Manager must do, and why: an upload, a value the site refused, a fact the profile lacks.
-    return { used, problems: problems.filter((entry) => ['upload', 'check', 'profile'].includes(entry.kind)), met: [...metFields.values()] };
+    return { used, problems: problems.filter((entry) => ['upload', 'check', 'profile'].includes(entry.kind)), met: [...metFields.values()], ...(documentsError ? { documentsError } : {}) };
   }
   const checksStarted = Date.now();
   const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
@@ -1692,7 +1714,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   // Unresolved: questions no source answered that are still not answered (another round may have).
   const left = unresolved.filter((entry) => !(HAS_WORDS.test(entry.label || '') && used[entry.label]));
   // Provisional: only the answers that were filled in the end.
-  return { used, problems, canAskAgain, report, unresolved: left, provisional: provisional.filter((entry) => used[entry.label]?.fieldId === entry.id) };
+  return { used, problems, canAskAgain, report, unresolved: left, provisional: provisional.filter((entry) => used[entry.label]?.fieldId === entry.id), ...(documentsError ? { documentsError } : {}) };
 }
 
 async function browserName() {
@@ -1988,7 +2010,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'link_pdfs') {
       const review = activeReviews.get(msg.attemptId);
       if (sender.id !== chrome.runtime.id || !review?.assist || !tabsOf(review).has(sender.tab?.id)
-        || !review.assistant?.relinkRequired || !review.assistant.fillError || review.assistant.stopped
+        || !review.assistant?.relinkRequired || !(review.assistant.fillError || review.assistant.uploadError) || review.assistant.stopped
         || !(await isApplyOn()) || await self.__qtsAutoApply?.isOn?.() === true) return { ok: false, error: 'This page no longer owns a recoverable application.' };
       await chrome.tabs.create({ url: chrome.runtime.getURL(`settings/apply-pdfs.html?attemptId=${encodeURIComponent(msg.attemptId)}`) });
       return { ok: true };
@@ -3041,6 +3063,7 @@ function rememberApplySession(review) {
       jobId: review.job.id, company: review.job.company, title: review.job.title, tabIds,
       ...(review.continuationParents?.size ? { continuationParents: [...review.continuationParents] } : {}),
       ...(review.assistant?.fillError ? { fillError: review.assistant.fillError } : {}),
+      ...(review.assistant?.uploadError ? { uploadError: review.assistant.uploadError } : {}),
       ...(review.assistant?.relinkRequired ? { relinkRequired: true } : {}),
       ...(review.assistant?.manualPaused ? { manualPaused: true } : {}),
     };
@@ -3069,7 +3092,7 @@ async function resumeApplySessions(limit) {
       ? await workerApiRequest('POST', '/api/extension/apply/resume', { attemptId, jobId: saved.jobId })
       : null;
     if (reply?.success === true && reply.application) {
-      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds, continuationParents: saved.continuationParents, manualPaused: saved.manualPaused, fillError: saved.fillError, relinkRequired: saved.relinkRequired }));
+      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds, continuationParents: saved.continuationParents, manualPaused: saved.manualPaused, fillError: saved.fillError, uploadError: saved.uploadError, relinkRequired: saved.relinkRequired }));
       continue;
     }
     for (const tabId of tabIds) await removeStalePanel(tabId);
@@ -3120,12 +3143,17 @@ async function retryAssistedAutofill(attemptId, tabId) {
   if (!review?.assist || !tabsOf(review).has(tabId) || !assistant || assistant.stopped || !(await isApplyOn())) {
     return { ok: false, error: 'This page no longer owns an active Assisted Apply application. Turn Apply on again if needed.' };
   }
-  if (!assistant.fillError) return { ok: false, error: 'Autofill is not paused.' };
+  if (!assistant.fillError && !assistant.uploadError) return { ok: false, error: 'Nothing is waiting for a retry.' };
   if (assistant.manualPaused) return { ok: false, error: 'Choose Resume autofill first, then Retry autofill to retry the PDF error.' };
+  // Paused uploads: the rest of the form may still be filling; Retry waits for that pass to end.
+  for (let waited = 0; assistant.uploadError && (assistant.navigationRuns.size || assistant.fillingTabs.size) && waited < 15000; waited += 250) {
+    await sleep(250);
+  }
   if (assistant.navigationRuns.size || assistant.fillingTabs.size) {
     return { ok: false, error: 'Autofill is still stopping. Choose Retry autofill again in a moment.' };
   }
   assistant.fillError = null;
+  assistant.uploadError = null;
   assistant.relinkRequired = false;
   assistant.problems = [];
   assistant.formSignatures.clear();
@@ -3247,12 +3275,27 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive) {
       assist: true,
       noAi: true,
       skip: (field) => filledFields.has(field.id),
+      uploadsPaused: () => Boolean(assistant.uploadError),
       stop: async () => !active() || Boolean(assistant.fillError) || assistant.manualPaused,
       onFilled: (field) => filledFields.add(field.id),
     });
     if (!active() || assistant.fillError || assistant.manualPaused) return;
     for (const answer of Object.values(filled.used || {})) if (answer.fieldId) filledFields.add(answer.fieldId);
     assistant.problems = filled.problems || [];
+    // PDFs that could not be read hold only the uploads; everything else was filled.
+    if (filled.documentsError && !filled.documentsError.paused) {
+      assistant.uploadError = filled.documentsError.message;
+      assistant.relinkRequired = filled.documentsError.relinkRequired === true;
+      assistant.problems = [{ message: `Uploads paused: ${filled.documentsError.message}`, fieldId: null }, ...assistant.problems];
+      await rememberApplySession(activeReviews.get(application.attemptId));
+    }
+    if (assistant.uploadError) {
+      if (!assistant.problems.some((entry) => String(entry.message).startsWith('Uploads paused:'))) {
+        assistant.problems = [{ message: `Uploads paused: ${assistant.uploadError}`, fieldId: null }, ...assistant.problems];
+      }
+      assistant.status = 'Uploads paused: QTS could not read the saved PDFs. Profile facts and saved answers were filled. Fix the PDFs, then choose Retry autofill (or Link existing PDFs).';
+      return;
+    }
     const count = Object.keys(filled.used || {}).length;
     assistant.status = count
       ? `Filled ${count} saved answer${count === 1 ? '' : 's'}. Review them, complete the rest, then submit on the employer site.`
@@ -3347,7 +3390,7 @@ function panelProfile(candidate) {
  * deleted. Cancel, closing all its tabs, Apply turned off, or an error record nothing: the job stays
  * as it was (not opened again in this Chrome until Apply restarts). No goes back to the form.
  */
-async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null, continuationParents = null, manualPaused = false, fillError = null, relinkRequired = false } = {}) {
+async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null, continuationParents = null, manualPaused = false, fillError = null, uploadError = null, relinkRequired = false } = {}) {
   const { attemptId } = application;
   let renewedAt = Date.now();
   let leaseSeconds = 0;
@@ -3361,6 +3404,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     }
   };
   const heartbeat = setInterval(() => keepAlive().catch(() => {}), APPLY_HEARTBEAT_MS);
+  let recheckTimer = null;
   await loadApplyDebug();
   diag('application', { attempt: String(attemptId).slice(0, 8), assist: true });
   const candidate = ([application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate') + (application.candidate.managerCategory ? ` (${application.candidate.managerCategory})` : '');
@@ -3379,9 +3423,12 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   publishApplyState();
   const assistant = {
     manualPaused: manualPaused === true,
-    problems: typeof fillError === 'string' && fillError ? [{ message: fillError, fieldId: null }] : [],
+    problems: typeof fillError === 'string' && fillError ? [{ message: fillError, fieldId: null }]
+      : typeof uploadError === 'string' && uploadError ? [{ message: `Uploads paused: ${uploadError}`, fieldId: null }] : [],
     fillError: typeof fillError === 'string' && fillError ? fillError : null,
-    relinkRequired: Boolean(fillError) && relinkRequired === true,
+    // PDFs that could not be read: only the uploads wait (a restart keeps that, without re-reading).
+    uploadError: typeof uploadError === 'string' && uploadError ? uploadError : null,
+    relinkRequired: Boolean(fillError || uploadError) && relinkRequired === true,
     message: null, show: null, stopped: false,
     status: fillError ? ASSIST_FILL_PAUSED_STATUS : 'QTS follows safe Start/Continue steps; on visible forms it fills only saved documents, profile facts, and reusable answers. You handle everything else and submit.',
     navigationAttempts: new Map(),
@@ -3445,8 +3492,9 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     filling: assistant.fillingTabs.size > 0,
     manualPaused: assistant.manualPaused,
     pauseStopping: assistant.manualPaused && (assistant.navigationRuns.size > 0 || assistant.fillingTabs.size > 0),
-    retryFill: Boolean(assistant.fillError) && !assistant.stopped && !assistant.fillingTabs.size,
-    relinkPdfs: Boolean(assistant.fillError) && assistant.relinkRequired === true && !assistant.stopped,
+    // Paused uploads keep Retry visible while the rest of the form is being filled.
+    retryFill: !assistant.stopped && (Boolean(assistant.uploadError) || (Boolean(assistant.fillError) && !assistant.fillingTabs.size)),
+    relinkPdfs: Boolean(assistant.fillError || assistant.uploadError) && assistant.relinkRequired === true && !assistant.stopped,
     problems: assistant.problems,
     ...extra,
   });
@@ -3508,6 +3556,12 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     await showPanel('assist');
     for (const tabId of tabsOf(review)) await finishAssistTabHandoff(review, tabId);
     for (const tabId of tabsOf(review)) assistant.poke(tabId);
+    // Every 15 s, besides page events: a form or Apply/Continue that appeared without the page watcher
+    // noticing is still found. Unchanged pages and forms are skipped; Pause, Cancel and errors stop it.
+    recheckTimer = setInterval(() => {
+      if (assistant.stopped || assistant.manualPaused || assistant.fillError) return;
+      for (const tabId of tabsOf(review)) assistant.poke(tabId);
+    }, ASSIST_RECHECK_MS);
     for (;;) {
       const decision = await waitForManager(attemptId);
       assistant.stopped = true;
@@ -3568,6 +3622,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     }
   } finally {
     clearInterval(heartbeat);
+    clearInterval(recheckTimer);
     activeReviews.delete(attemptId);
     publishApplyState();
     reviewWaiters.delete(attemptId);
@@ -3686,7 +3741,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try { source = new URL(sender.url); } catch { return { ok: false, error: 'Open recovery from the application panel.' }; }
     const review = activeReviews.get(msg.attemptId);
     const owns = async () => review?.assist && activeReviews.get(msg.attemptId) === review
-      && review.assistant?.fillError && review.assistant.relinkRequired && !review.assistant.stopped
+      && (review.assistant?.fillError || review.assistant?.uploadError) && review.assistant.relinkRequired && !review.assistant.stopped
       && await isApplyOn() && await self.__qtsAutoApply?.isOn?.() !== true;
     if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || source.protocol !== page.protocol || source.host !== page.host
       || source.pathname !== page.pathname || source.searchParams.get('attemptId') !== msg.attemptId

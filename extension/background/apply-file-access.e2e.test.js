@@ -57,7 +57,7 @@ test('direct local PDFs survive closed settings/restart, upload original bytes i
   let browser;
   try {
     browser = await launch();
-    let target = await browser.waitForTarget((t) => t.type() === 'service_worker');
+    let target = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://') && t.url().includes('service-worker.js'));
     let worker = await connectWorker(target);
     const settingsUrl = await worker.evaluate(() => chrome.runtime.getURL('settings/apply-pdfs.html'));
     const settings = await browser.newPage(); await settings.goto(settingsUrl);
@@ -81,7 +81,7 @@ test('direct local PDFs survive closed settings/restart, upload original bytes i
     assert.deepEqual(Buffer.from(read.coverLetter.base64, 'base64'), cover);
     console.log('[direct PDFs] real bytes read with settings closed');
     await browser.close(); browser = await launch();
-    target = await browser.waitForTarget((t) => t.type() === 'service_worker'); worker = await connectWorker(target);
+    target = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://') && t.url().includes('service-worker.js')); worker = await connectWorker(target);
     // No extension-origin tab is opened after restart; all work comes from ordinary web tabs.
     const job = await browser.newPage(); await job.goto(`${base}/job`);
     await assertNoSettings();
@@ -139,7 +139,7 @@ test('direct local PDFs survive closed settings/restart, upload original bytes i
     // Verify the persisted denial after a fresh restart, without reinstalling the extension.
     await browser.close(); browser = await launch(false);
     const afterRevocation = await browser.newPage(); await afterRevocation.goto(`${base}/job`);
-    target = await browser.waitForTarget((t) => t.type() === 'service_worker'); worker = await connectWorker(target);
+    target = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://') && t.url().includes('service-worker.js')); worker = await connectWorker(target);
     assert.equal(await worker.evaluate(() => chrome.extension.isAllowedFileSchemeAccess()), false);
     const reopened = await browser.newPage(); await reopened.goto(settingsUrl);
     await reopened.waitForFunction(() => document.getElementById('file-access-status').dataset.state === 'revoked');
