@@ -259,12 +259,12 @@ a {
   color: var(--color-muted);
 }
 
-/* The contact line is always one line. When it is too wide, render.js
-   (fitContactLine) first lets it run into the page margin (--contact-extend-*),
-   then lowers its size (--contact-size), never below 8pt. Nothing else moves. */
+/* The contact line is always one line, inside the page area. When it is too
+   wide, render.js (fitContactLine) lowers its size (--contact-size), never
+   below 8pt. It never runs into the page margin: Chrome's print drops glyphs
+   there. Nothing else moves. */
 .contact {
   margin-top: 6pt;
-  margin-inline: calc(-1 * var(--contact-extend-start, 0px)) calc(-1 * var(--contact-extend-end, 0px));
   font-family: var(--font-meta);
   font-size: var(--contact-size, calc(var(--text-contact) * var(--font-scale)));
 }
@@ -290,12 +290,9 @@ a {
 
 .contact-list li:not(:last-child)::after {
   content: var(--separator);
-  margin-inline: 6pt;
+  /* render.js (fitContactLine) tightens this to 3pt before shrinking a long line. */
+  margin-inline: var(--contact-gap, 6pt);
   color: var(--color-rule);
-}
-
-.contact-label {
-  font-weight: 700;
 }
 
 /* headerStyle: how the name and contact block is set off from the page. */
@@ -309,12 +306,8 @@ a {
   border-top: 3pt solid var(--color-accent);
 }
 
-/* A long contact line widens the whole band evenly into the page margin
-   (--header-extend); the extra start padding keeps the text where it was. */
 .doc[data-header-style="band"] .resume-header {
-  margin-inline: calc(-1 * var(--header-extend, 0px));
   padding: 10pt 12pt;
-  padding-inline-start: calc(12pt + var(--header-extend-pad, 0px));
   background: var(--color-tint);
 }
 
@@ -878,11 +871,12 @@ li {
 
 
 /* 12. Density ---------------------------------------------------------------------
-   render.js adds .doc--compact when content runs past its page budget
-   (density "auto") or when asked ("compact"): spacing only. When a resume
-   still runs over, it adds .doc--small-bullets and sets --text-bullet to 10.5pt
-   on the document, but only when that brings it within its pages. No other
-   text shrinks. */
+   render.js (fitToPages) adds .doc--compact when asked ("compact") or, in
+   density "auto", while fitting a résumé into 2 pages (else 3): spacing first,
+   then .doc--small-bullets with --text-bullet 10.5pt, then --text-body and
+   --text-item in 0.5pt steps, never below 10.5pt. If 2 pages are not reachable
+   that way, the résumé prints at normal size on up to 3 pages. A cover letter
+   only gets the spacing step. */
 
 .doc--compact {
   --leading-body: 1.27;

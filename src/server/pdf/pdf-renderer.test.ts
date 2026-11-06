@@ -211,7 +211,7 @@ test("all templates render Romanian characters in both documents", async () => {
   }
 });
 
-test("the fallback rejects a résumé that exceeds five pages without truncation", async () => {
+test("the fallback rejects a résumé that exceeds three pages without truncation", async () => {
   const overlong: PdfPackage = {
     ...data,
     resume: {
@@ -223,58 +223,35 @@ test("the fallback rejects a résumé that exceeds five pages without truncation
   await assert.rejects(
     renderPdfPackage(overlong, "minimal"),
     (error: unknown) => error instanceof DocumentPageLimitError
-      && /5 A4 pages/.test(error.message)
+      && /3 A4 pages/.test(error.message)
       && /not truncated/.test(error.message),
   );
 });
 
-test("the contact line fits on one line, growing into the margin before shrinking, never below 8pt", () => {
+test("the contact line always fits on one line inside the margins", () => {
   const pageWidth = 595.28;
   const margin = 48;
-  const mm = 72 / 25.4;
   // A line whose width is proportional to its size, like a run of text in one font.
   const line = (widthAtNinePoints: number) => (size: number) => widthAtNinePoints * size / 9;
   const inside = pageWidth - margin * 2;
 
-  assert.deepEqual(
-    fitContactLine(line(inside - 10), { pageWidth, margin, size: 9, centered: false }),
-    { size: 9, left: margin, right: margin, fits: true },
-  );
+  assert.deepEqual(fitContactLine(line(inside - 10), { pageWidth, margin, size: 9 }), { size: 9, withinFloor: true });
 
-  // Slightly too wide: same size, the right end runs into the margin; the left stays aligned.
-  const widened = fitContactLine(line(inside + 10), { pageWidth, margin, size: 9, centered: false });
-  assert.equal(widened.size, 9);
-  assert.equal(widened.left, margin);
-  assert.ok(Math.abs(widened.right - 8 * mm) < 0.01);
+  // Too wide: it shrinks by quarter points and stops at the first size that fits inside the
+  // margins; it never runs into them.
+  assert.deepEqual(fitContactLine(line(inside * 9 / 8.5), { pageWidth, margin, size: 9 }), { size: 8.5, withinFloor: true });
+  assert.deepEqual(fitContactLine(line(inside + 1), { pageWidth, margin, size: 9 }), { size: 8.75, withinFloor: true });
+  // Down to the 7pt floor.
+  assert.deepEqual(fitContactLine(line(inside * 9 / 7), { pageWidth, margin, size: 9 }), { size: 7, withinFloor: true });
 
-  // A centred line grows on both sides.
-  const centred = fitContactLine(line(inside + 30), { pageWidth, margin, size: 9, centered: true });
-  assert.equal(centred.size, 9);
-  assert.ok(Math.abs(centred.left - 8 * mm) < 0.01 && Math.abs(centred.right - 8 * mm) < 0.01);
-
-  // Wider still: it shrinks by quarter points and stops at the first size that fits.
-  const shrunk = fitContactLine(line((pageWidth - margin - 8 * mm) * 9 / 8.5), { pageWidth, margin, size: 9, centered: false });
-  assert.equal(shrunk.size, 8.5);
-  assert.ok(shrunk.fits);
-
-  // Too wide even at 8pt with 8 mm: it may use the margin up to 6 mm, right end first.
-  const lastRight = fitContactLine(line((pageWidth - margin - 6 * mm) * 9 / 8), { pageWidth, margin, size: 9, centered: false });
-  assert.equal(lastRight.size, 8);
-  assert.equal(lastRight.left, margin);
-  assert.ok(lastRight.fits);
-  const lastBoth = fitContactLine(line((pageWidth - 12 * mm) * 9 / 8), { pageWidth, margin, size: 9, centered: false });
-  assert.equal(lastBoth.size, 8);
-  assert.ok(Math.abs(lastBoth.left - 6 * mm) < 0.01);
-  assert.ok(lastBoth.fits);
-
-  // Longer than the page allows: still one line at 8pt, reported as not fitting.
-  const tooLong = fitContactLine(line(pageWidth * 2), { pageWidth, margin, size: 9, centered: false });
-  assert.equal(tooLong.size, 8);
-  assert.equal(tooLong.fits, false);
-
-  // A header box that stops inside the margin keeps the line inside it.
-  const boxed = fitContactLine(line(inside + 10), { pageWidth, margin, size: 9, centered: false, innerEdge: margin - 6 });
-  assert.ok(boxed.right >= margin - 6);
+  // Longer than 7pt allows: the last resort is the largest 0.05pt size that still fits.
+  for (const widthAtNine of [inside * 9 / 7 + 1, pageWidth * 2, pageWidth * 5]) {
+    const fit = fitContactLine(line(widthAtNine), { pageWidth, margin, size: 9 });
+    assert.equal(fit.withinFloor, false);
+    assert.ok(fit.size < 7);
+    assert.ok(line(widthAtNine)(fit.size) <= inside + 0.01, "fits inside the margins");
+    assert.ok(line(widthAtNine)(fit.size + 0.05) > inside, "no larger 0.05pt step would fit");
+  }
 });
 
 test("centred-header templates separate contact items with bullets; the others use a bar", () => {

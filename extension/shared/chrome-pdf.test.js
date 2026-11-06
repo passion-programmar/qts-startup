@@ -125,13 +125,13 @@ test('any failure gives null so the server prints, and the tab still closes', as
 });
 
 test('rejects actual oversized PDFs without returning downloadable files, and cleans up', async () => {
-  for (const options of [{ resumePages: 6 }, { coverPages: 2 }]) {
+  for (const options of [{ resumePages: 4 }, { coverPages: 2 }]) {
     const { state, calls } = fakeChrome(options);
     try {
       await assert.rejects(chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' }), {
         name: 'DocumentPageLimitError',
         message: options.resumePages
-          ? 'The résumé exceeds five A4 pages. Its content was not truncated.'
+          ? 'The résumé exceeds three A4 pages. Its content was not truncated.'
           : 'The cover letter exceeds one A4 page. Shorten its paragraphs.',
       });
       assert.equal(calls.filter(([method]) => method === 'Page.printToPDF').length, options.resumePages ? 1 : 2);

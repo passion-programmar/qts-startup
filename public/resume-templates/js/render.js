@@ -43,8 +43,12 @@
   const SKILL_MAX_LENGTH = 40;
   const FONT_SCALE_MIN = 0.95;
   const FONT_SCALE_MAX = 1.15;
-  // The size a resume's bullets step down to from 11.5pt (base.css) when it runs past its pages.
-  const BULLET_SIZES = ["10.5pt"];
+  // A résumé aims for TARGET_PAGES, shrinking text no smaller than MIN_TEXT_PT to get there;
+  // otherwise it prints at normal size within MAX_PAGES (fitToPages).
+  const TARGET_PAGES = 2;
+  const MIN_TEXT_PT = 10.5;
+  // font-size too: body text takes its size from <body> (base.css), so the résumé needs its own.
+  const SHRINK_PROPERTIES = ["--text-bullet", "--text-body", "--text-item", "font-size"];
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
   let MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
@@ -442,9 +446,9 @@
 
     if (fields.length) {
       const contactList = el("ul", "contact-list");
-      fields.forEach(({ label, value }) => {
+      // Values only, never "Email:" / "Phone:" labels: a shorter line fits at the normal size.
+      fields.forEach(({ value }) => {
         const item = el("li");
-        if (settings.contactStyle === "labeled") item.append(el("span", "contact-label", `${label}:`), " ");
         // <bdi> keeps a phone number or email left-to-right inside an RTL document.
         const isolated = el("bdi");
         isolated.append(value);
@@ -804,18 +808,16 @@
   }
 
   /* ---------- Contact line ----------
-     Email, phone, location and links always print on one line, with their
-     text unchanged. When the line is too wide, it first runs into the page
-     margin up to CONTACT_EDGE from the paper edge at its own size, then steps
-     down by 0.25pt to CONTACT_MIN_PT. Only if it still does not fit does it
-     use the margin up to CONTACT_LAST_EDGE, at its end and then on both sides,
-     and only if that fails too does it add a warning.
-     Until that last step a start-aligned line grows at its end only, so it
-     stays aligned with the name; a centred one grows evenly on both sides. A
-     band header grows with its line, so the text stays inside the band. */
-  const CONTACT_MIN_PT = 8;
-  const CONTACT_EDGE = "8mm";
-  const CONTACT_LAST_EDGE = "6mm";
+     Email, phone, location and links always print on one line, inside the
+     page area, with their text unchanged. When the line is too wide:
+       1. the space around the separators tightens from 6pt to CONTACT_TIGHT_GAP;
+       2. the text steps down by 0.25pt to CONTACT_FLOOR_PT;
+       3. then, as a last resort, to whatever size fits (with a warning).
+     So the line always fits. It never runs into the page margin: Chrome's
+     print drops glyphs that reach far into it, which cut letters off emails
+     and LinkedIn URLs (and so broke them for ATS parsers). */
+  const CONTACT_TIGHT_GAP = "3pt";
+  const CONTACT_FLOOR_PT = 7;
 
   function contactOverflows(list) {
     const items = [...list.children];
@@ -831,77 +833,64 @@
     return end - start > list.getBoundingClientRect().width + 0.5;
   }
 
-  function fitContactLine(article, settings, warnings) {
+  function fitContactLine(article, warnings) {
     const contact = article.querySelector(".resume-header .contact");
     const list = contact?.querySelector(".contact-list");
     if (!list) return;
-    const header = contact.closest(".resume-header");
-    const names = ["--contact-size", "--contact-extend-start", "--contact-extend-end"];
-    names.forEach((name) => contact.style.removeProperty(name));
-    header.style.removeProperty("--header-extend");
-    header.style.removeProperty("--header-extend-pad");
+    contact.style.removeProperty("--contact-size");
+    contact.style.removeProperty("--contact-gap");
     if (!contactOverflows(list)) return;
 
-    const centred = settings.headerAlign === "center";
-    const band = settings.headerStyle === "band";
-    // A side bar sits at the start of the header, so the line never grows over it.
-    const startFree = settings.headerStyle !== "side-bar";
-    const widen = (edge, bothSides) => {
-      const extend = `max(0px, var(--page-margin-inline) - ${edge})`;
-      const growStart = centred || (bothSides && startFree);
-      if (band) {
-        // The band grows; its name and headline stay put, and only the line may move into it.
-        header.style.setProperty("--header-extend", extend);
-        header.style.setProperty("--header-extend-pad", centred ? "0px" : extend);
-        contact.style.setProperty("--contact-extend-start", growStart && !centred ? extend : "0px");
-        return;
-      }
-      contact.style.setProperty("--contact-extend-end", extend);
-      contact.style.setProperty("--contact-extend-start", growStart ? extend : "0px");
-    };
+    // 1. Tighter separators, same size.
+    contact.style.setProperty("--contact-gap", CONTACT_TIGHT_GAP);
+    if (!contactOverflows(list)) return;
+
     const fitsAt = (points) => {
       contact.style.setProperty("--contact-size", `${points}pt`);
       return !contactOverflows(list);
     };
-
-    widen(CONTACT_EDGE);
-    if (!contactOverflows(list)) return;
-    // Quarter points, counted as whole numbers so the steps do not drift.
+    // 2. Quarter points, counted as whole numbers so the steps do not drift.
     const startPoints = (parseFloat(getComputedStyle(contact).fontSize) * 72) / 96;
-    for (let quarter = Math.ceil(startPoints * 4) - 1; quarter >= CONTACT_MIN_PT * 4; quarter -= 1) {
+    for (let quarter = Math.ceil(startPoints * 4) - 1; quarter >= CONTACT_FLOOR_PT * 4; quarter -= 1) {
       if (fitsAt(quarter / 4)) return;
     }
-    widen(CONTACT_LAST_EDGE, false);
-    if (fitsAt(CONTACT_MIN_PT)) return;
-    widen(CONTACT_LAST_EDGE, true);
-    if (fitsAt(CONTACT_MIN_PT)) return;
-    warnings.push(`The contact line is too long to fit on one line at ${CONTACT_MIN_PT}pt.`);
+
+    // 3. Last resort: the size that fits, from the line's width at the floor size
+    // (width grows with size), then down in 0.05pt steps for rounding.
+    const width = (points) => {
+      fitsAt(points);
+      const items = [...list.children].map((item) => item.getBoundingClientRect());
+      return Math.max(...items.map((box) => box.right)) - Math.min(...items.map((box) => box.left));
+    };
+    let points = Math.floor((CONTACT_FLOOR_PT * list.getBoundingClientRect().width / width(CONTACT_FLOOR_PT)) * 20) / 20;
+    while (points > 1 && !fitsAt(points)) points = Math.round((points - 0.05) * 100) / 100;
+    warnings.push(`The contact line is very long: printed at ${points}pt to stay on one line.`);
   }
 
-  // density "auto" (default) tightens spacing only when content runs past the
-  // page budget, then steps a resume's bullets down through BULLET_SIZES
-  // (base.css section 12) until it fits. One that does not fit even at the
-  // smallest size keeps its bullets at full size and runs over. No other text
-  // shrinks.
+  /* density "auto" (default), résumé:
+       1. At normal size it fits TARGET_PAGES (2): done.
+       2. Else try to fit TARGET_PAGES with a controlled shrink, measuring after
+          each step: compact spacing; bullets to 10.5pt; then body and role text
+          down by 0.5pt steps to 10.5pt. Text never goes below MIN_TEXT_PT.
+       3. Else undo it all: normal size on MAX_PAGES (3) pages.
+       4. Over MAX_PAGES even then: the same shrink to fit MAX_PAGES; one that
+          still runs over prints at normal size with a warning (and the page
+          check after printing rejects it). Content is never cut.
+     A cover letter only tightens its spacing when it runs past its one page. */
   function fitToPages(article, density, warnings) {
     // The app's own preview (direct render) has no page view to measure with.
     const countPages = directRenderMode ? estimatePages : printedPages;
     article.classList.toggle("doc--compact", density === "compact");
     let pages = countPages(article);
-    if (density === "auto" && pages > MAX_PAGES) {
-      article.classList.add("doc--compact");
-      pages = countPages(article);
-    }
-    if (density === "auto" && pages > MAX_PAGES && DOCUMENT === "resume") {
-      article.classList.add("doc--small-bullets");
-      const fits = BULLET_SIZES.some((size) => {
-        article.style.setProperty("--text-bullet", size);
-        return countPages(article) <= MAX_PAGES;
-      });
-      if (!fits) {
-        article.classList.remove("doc--small-bullets");
-        article.style.removeProperty("--text-bullet");
+    if (density === "auto" && DOCUMENT === "resume") {
+      if (pages > TARGET_PAGES) {
+        pages = shrinkToFit(article, countPages, TARGET_PAGES) ?? normalSize(article, countPages);
       }
+      if (pages > MAX_PAGES) {
+        pages = shrinkToFit(article, countPages, MAX_PAGES) ?? normalSize(article, countPages);
+      }
+    } else if (density === "auto" && pages > MAX_PAGES) {
+      article.classList.add("doc--compact");
       pages = countPages(article);
     }
     if (pages > MAX_PAGES) {
@@ -909,6 +898,50 @@
       warnings.push(`The ${what} needs about ${pages} pages and exceeds the ${MAX_PAGES}-page limit.`);
     }
     return pages;
+  }
+
+  // Back to the template's normal sizes and spacing; returns the page count.
+  function normalSize(article, countPages) {
+    article.classList.remove("doc--compact", "doc--small-bullets");
+    SHRINK_PROPERTIES.forEach((name) => article.style.removeProperty(name));
+    return countPages(article);
+  }
+
+  // The controlled shrink, one step at a time; the page count once it fits within
+  // `limit` pages, or null (sizes left shrunk) when even the smallest step does not.
+  function shrinkToFit(article, countPages, limit) {
+    normalSize(article, countPages);
+    const tokenPt = (name) => parseFloat(getComputedStyle(article).getPropertyValue(name)) || 0;
+    const fits = () => {
+      const pages = countPages(article);
+      return pages <= limit ? pages : null;
+    };
+    // Sizes are multiplied by --font-scale (a few templates lower it in compact
+    // density), so the floor is set on the token that prints at MIN_TEXT_PT.
+    const floorToken = () => MIN_TEXT_PT / (tokenPt("--font-scale") || 1);
+
+    article.classList.add("doc--compact");
+    let pages = fits();
+    if (pages != null) return pages;
+
+    article.classList.add("doc--small-bullets");
+    article.style.setProperty("--text-bullet", `${Math.max(floorToken(), MIN_TEXT_PT)}pt`);
+    pages = fits();
+    if (pages != null) return pages;
+
+    const body = tokenPt("--text-body");
+    const item = tokenPt("--text-item");
+    for (let step = 1; ; step += 1) {
+      const floor = floorToken();
+      const nextBody = Math.max(floor, body - 0.5 * step);
+      const nextItem = Math.max(floor, item - 0.5 * step);
+      article.style.setProperty("--text-body", `${nextBody}pt`);
+      article.style.setProperty("font-size", `calc(${nextBody}pt * var(--font-scale))`);
+      article.style.setProperty("--text-item", `${nextItem}pt`);
+      pages = fits();
+      if (pages != null) return pages;
+      if (nextBody <= floor && nextItem <= floor) return null;
+    }
   }
 
 
@@ -1083,7 +1116,7 @@
     }
     if (run !== renderCount) return null;
 
-    fitContactLine(article, settings, warnings);
+    fitContactLine(article, warnings);
     const pages = fitToPages(article, settings.density, warnings);
     if (!directRenderMode) fillPages(article);
     root.dataset.document = DOCUMENT;

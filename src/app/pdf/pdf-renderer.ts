@@ -82,56 +82,34 @@ export function contactSeparator(template: PdfTemplate | LegacyPdfTemplate): str
   return bulletContactTemplates.has(template) ? "•" : "|";
 }
 
-const pointsPerMm = 72 / 25.4;
-export const contactMinimumSize = 8;
-const contactEdge = 8 * pointsPerMm;
-const contactLastEdge = 6 * pointsPerMm;
+export const contactFloorSize = 7;
 
 export type ContactLineFit = {
   size: number;
-  // Distances, in points, from the left and right paper edges to the area the line is set in.
-  left: number;
-  right: number;
-  fits: boolean;
+  // false only for the last resort: smaller than the 7pt floor so the line still fits.
+  withinFloor: boolean;
 };
 
 /**
- * Fits the contact line on one line, as render.js does for the HTML templates: at its own
- * size inside the margins, then running into the margin up to 8 mm from the paper edge
- * (a left-aligned line at its right end only), then 0.25pt smaller down to 8pt, then up
- * to 6 mm from the edge, at the right end first and then on both sides. The text is never
- * changed. `innerEdge` keeps the line inside a header box that does not reach the margin.
+ * Fits the contact line on one line inside the margins, as render.js does for the HTML
+ * templates: at its own size, else 0.25pt smaller down to 7pt, else (last resort) the
+ * size that fits. It always fits, never runs into the margin (Chrome's print drops
+ * glyphs there), and the text is never changed.
  */
 export function fitContactLine(
   widthAt: (size: number) => number,
-  { pageWidth, margin, size, centered, innerEdge = 0 }: {
-    pageWidth: number;
-    margin: number;
-    size: number;
-    centered: boolean;
-    innerEdge?: number;
-  },
+  { pageWidth, margin, size }: { pageWidth: number; margin: number; size: number },
 ): ContactLineFit {
-  const edge = (distance: number) => Math.min(margin, Math.max(distance, innerEdge));
-  const fitsIn = (fontSize: number, left: number, right: number) =>
-    widthAt(fontSize) <= pageWidth - left - right + 0.01;
-  const steps: { left: number; right: number; sizes: number[] }[] = [];
-  const sizes: number[] = [];
-  for (let quarter = Math.ceil(size * 4) - 1; quarter >= contactMinimumSize * 4; quarter -= 1) {
-    sizes.push(quarter / 4);
+  const room = pageWidth - margin * 2;
+  const fitsAt = (fontSize: number) => widthAt(fontSize) <= room + 0.01;
+  if (fitsAt(size)) return { size, withinFloor: true };
+  for (let quarter = Math.ceil(size * 4) - 1; quarter >= contactFloorSize * 4; quarter -= 1) {
+    if (fitsAt(quarter / 4)) return { size: quarter / 4, withinFloor: true };
   }
-  const near = edge(contactEdge);
-  const last = edge(contactLastEdge);
-  steps.push({ left: margin, right: margin, sizes: [size] });
-  steps.push({ left: centered ? near : margin, right: near, sizes: [size, ...sizes] });
-  steps.push({ left: centered ? last : margin, right: last, sizes: [contactMinimumSize] });
-  steps.push({ left: last, right: last, sizes: [contactMinimumSize] });
-  for (const step of steps) {
-    for (const fontSize of step.sizes) {
-      if (fitsIn(fontSize, step.left, step.right)) return { size: fontSize, left: step.left, right: step.right, fits: true };
-    }
-  }
-  return { size: Math.min(size, contactMinimumSize), left: last, right: last, fits: false };
+  // Text width grows with its size, so scale from the floor size; then 0.05pt steps for rounding.
+  let fitted = Math.floor((contactFloorSize * room / widthAt(contactFloorSize)) * 20) / 20;
+  while (fitted > 1 && !fitsAt(fitted)) fitted = Math.round((fitted - 0.05) * 100) / 100;
+  return { size: fitted, withinFloor: false };
 }
 
 export async function renderPdfPackage(
@@ -154,7 +132,7 @@ async function renderResumePdf(
   document: ResumeDocument,
   template: PdfTemplate | LegacyPdfTemplate,
 ): Promise<Uint8Array> {
-  const pdf = await createWriter(template, 5, containsRomanianCharacters(document));
+  const pdf = await createWriter(template, 3, containsRomanianCharacters(document));
   const headline = document.candidate.headline ?? document.targetRole;
   const contactParts = template === "flowcv" ? [
     document.candidate.location,
@@ -461,7 +439,6 @@ async function createWriter(
     text: string,
     preferredSize: number,
     color: ReturnType<typeof rgb>,
-    innerEdge = 0,
   ) => {
     const cleaned = clean(text);
     const centered = design.align === "center";
@@ -469,12 +446,10 @@ async function createWriter(
       pageWidth: width,
       margin,
       size: preferredSize,
-      centered,
-      innerEdge,
     });
     const textWidth = measureText(cleaned, fit.size);
     drawText(cleaned, {
-      x: centered ? (width - textWidth) / 2 : fit.left,
+      x: centered ? (width - textWidth) / 2 : margin,
       y,
       size: fit.size,
       font: regular,
@@ -701,7 +676,7 @@ async function createWriter(
     }
     if (contact) {
       // A card stops 10pt into the margin; the line stays 4pt inside it.
-      drawContact(contact, 9, darkHeader ? rgb(.92, .94, .97) : muted, design.header === "card" ? margin - 6 : 0);
+      drawContact(contact, 9, darkHeader ? rgb(.92, .94, .97) : muted);
       y -= 12;
     }
     if (design.header === "rule" || design.header === "double-rule") {

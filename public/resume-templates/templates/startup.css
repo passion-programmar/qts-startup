@@ -13,4 +13,6 @@
   --text-item: 11.5pt;
   --text-body: 11.5pt;
   --text-meta: 10.5pt;
+  /* Tighter gap between sections (base: 10pt). Compact density still sets its own. */
+  --space-section: 8pt;
 }

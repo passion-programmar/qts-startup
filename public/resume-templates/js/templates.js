@@ -19,7 +19,7 @@
       label: "Header",
       values: ["plain-rule", "accent-top", "band", "side-bar", "centered-rules", "centered-plain"],
     },
-    contactStyle: { label: "Contact line", values: ["inline", "labeled"] },
+    contactStyle: { label: "Contact line", values: ["inline"] },
     titleStyle: {
       label: "Section titles",
       values: ["rule", "plain", "band", "bar", "pill", "flanked", "topline", "double", "overbar", "underbar", "marker", "underline"],
@@ -61,7 +61,7 @@
     template("ledger", "QTS Template 8",
       "Education, Skills, Experience, Projects · role and dates, then company and location · rows skills",
       "Tinos", {
-        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "underbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "inline", titleStyle: "underbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
       }),
     template("bold", "QTS Template 5",
       "Experience, Projects, Skills, Education · role and dates, then company and location · tags skills",
@@ -76,7 +76,7 @@
     template("professional", "QTS Template 7",
       "Education, Experience, Projects, Skills · role and dates, then company and location · compact skills",
       "Tinos", {
-        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "rule", titleCase: "upper", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "inline", titleStyle: "rule", titleCase: "upper", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "colon", letterLayout: "block",
       }),
     template("executive", "QTS Template 10",
       "Education, Skills, Experience, Projects · role and dates, then company and location · rows skills",
@@ -91,7 +91,7 @@
     template("graphite", "QTS Template 12",
       "Skills, Experience, Projects, Education · role and dates, then company and location · rows skills",
       "Gelasio + Arimo", {
-        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "labeled", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "modified",
       }),
     template("modern-serif", "QTS Template 11",
       "Education, Experience, Projects, Skills · role and dates, then company and location · tags skills",
@@ -106,7 +106,7 @@
     template("minimal", "QTS Template 2",
       "Experience, Projects, Skills, Education · role and dates, then company and location · compact skills",
       "Carlito", {
-        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "labeled", titleStyle: "bar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "bar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
       }),
     template("harvard", "QTS Template 14",
       "Skills, Experience, Projects, Education · role and dates, then company and location · compact skills",
@@ -151,7 +151,7 @@
     template("elegant", "QTS Template 22",
       "Skills, Experience, Projects, Education · role and dates, then company and location · rows skills",
       "Caladea", {
-        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "labeled", titleStyle: "overbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "dash", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "band", headerAlign: "start", contactStyle: "inline", titleStyle: "overbar", titleCase: "title", bulletStyle: "disc", itemStyle: "divided", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "dash", letterLayout: "modified",
       }),
     template("creative", "QTS Template 6",
       "Education, Experience, Projects, Skills · role and dates, then company and location · rows skills",
