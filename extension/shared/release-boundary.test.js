@@ -740,7 +740,11 @@ test('every candidate has a category, falling back to the default Global categor
   assert.ok(categoryActions.includes('The default category cannot be deleted'));
   assert.ok(categoryActions.includes('set category_id = (select id from categories where is_default)'));
   assert.ok(userActions.includes('(select id from categories where is_default)'));
-  assert.ok(userForms.includes('label="Category"'));
+  // The account's Category is its own field (falling back to Global); the Manager's text is its Label.
+  assert.ok(userForms.includes('function CandidateCategoryField'));
+  assert.ok(userForms.includes('name="candidateCategoryId"'));
+  assert.ok(userForms.includes('{name || "Global"}'));
+  assert.ok(userForms.includes('label="Label"'));
   assert.ok(!userForms.includes('No category'));
 });
 

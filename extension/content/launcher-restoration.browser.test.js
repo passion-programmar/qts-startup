@@ -38,7 +38,7 @@ test('launcher follows tab switches and window moves and restores old tabs witho
       expiresAt: Date.now() - 1000,
       dismissAt: Date.now() + 5000,
       updatedAt: Date.now(),
-      items: [{ operationId: 'test-run', status: 'success', pageTitle: 'Synthetic result', updatedAt: Date.now() }],
+      items: [{ operationId: 'test-run', status: 'success', evaluationMode: 'gemini', pageTitle: 'Synthetic result', updatedAt: Date.now() }],
     }));
     await worker.evaluate(async batch => chrome.storage.local.set({ qtsGetJdNotificationState: { history: [], batch } }), batch);
     await pages[0].bringToFront();

@@ -879,7 +879,8 @@ test('restart recovery: a restarted worker goes on at the same step in the same 
     assert.equal(await form.evaluate(() => document.getElementById('extra').value), 'Typed before the restart.');
     // The Manager submits; then the worker restarts again: only Yes/No, the Submit is not recorded again.
     await form.type('#dj', '6');
-    await form.click('#privacy');
+    // Required consent is filled before review (ASSIST_SOURCES 'consent'); clicking it would untick it.
+    assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true, 'the required consent is filled before review');
     await form.click('#submit');
     await until(() => mock.submitted.length === 1, 20000, 'the Submit record').catch(async (error) => {
       console.log('[debug]', JSON.stringify({ phase: await ctx.phase(), runs: (await ctx.storage(['qtsAutoApplyRuns'])).qtsAutoApplyRuns, panel: (await panelText(form)).slice(0, 500), log: mock.log.slice(-10).map((r) => r.path), pageSubmitted: mock.pageSubmitted }));
@@ -1045,7 +1046,7 @@ const FORM_DYN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><ti
   });
 </script></body></html>`;
 
-test('the checklist: a revealed question, a section drawn on scroll, a refused answer, personal facts and terms left, Check, Submit held then let through', { skip, timeout: 420000 }, async () => {
+test('the checklist: a revealed question, a section drawn on scroll, a refused answer, personal facts left and required terms filled, Check, Submit held then let through', { skip, timeout: 420000 }, async () => {
   resetMock();
   const { browser, action, phase, ...ctx } = await launch({ ai: 'off' });
   try {
@@ -1077,12 +1078,14 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
     assert.equal(mock.answers, answersBefore, 'Check asks no AI');
     assert.equal(await form.evaluate(() => document.getElementById('yrs').value), '3', 'nothing the Manager wrote was refilled');
 
-    // Step 2: the right to work and the terms are the Manager's; the cover letter is attached.
+    // Step 2: the right to work is the Manager's; the required terms are filled (the 'consent' source,
+    // as for the privacy box elsewhere); the cover letter is attached.
     await form.click('#next1');
     await until(async () => (await phase()) === 'final', 60000, 'the last step');
     const last = await until(async () => { const text = await panelText(form); return /Review, then Submit/.test(text) && /Needs you \(/.test(text) ? text : null; }, 20000, 'the final checklist');
     assert.match(last, /Needs your answer: "Are you legally authorized to work in the United States\? \*" — Still empty: "Are you legally authorized to work in the United States\? \*"\./);
-    assert.match(last, /Needs your answer: "Do you agree to the terms and conditions of this application\? \*" — A legal agreement or consent/);
+    assert.doesNotMatch(last, /Needs your answer: "Do you agree to the terms and conditions/);
+    assert.equal(await form.evaluate(() => document.getElementById('terms').value), 'Yes, I agree', 'the required terms are filled before review');
     assert.equal(await form.evaluate(() => document.getElementById('cl').files[0]?.name), 'Ana_Test_Cover.pdf');
     // Earlier steps stay on the checklist, marked as not on this page.
     assert.match(last, /step 1 \(earlier: use the site's Back to see it\)/);
@@ -1094,9 +1097,8 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
     assert.match(await panelText(form), /Submit was held/);
     await shot(form, 'k-2-final-held');
 
-    // The Manager answers both: they count at once (read live), and the Manager's Submit goes through.
+    // The Manager answers the right to work: it counts at once (read live), and the Manager's Submit goes through.
     await form.click('input[name=auth][value=Yes]');
-    await form.select('#terms', 'Yes, I agree');
     await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing left blocking');
     await form.click('#submit');
     await until(() => mock.submitted.length === 1, 20000, 'the Submit record');
@@ -1200,12 +1202,13 @@ test('manual steps: QTS fills each step and waits; the Manager\'s Next starts th
     assert.equal(await form.evaluate(() => document.querySelector('input[name=office]:checked')?.value), 'No', 'nothing refilled after the restart');
     await form.click('#s4 .next');
 
-    // The last step: QTS waits for the Manager's Submit (the consent box is the Manager's).
+    // The last step: QTS waits for the Manager's Submit (the required consent box is already ticked).
     await until(async () => { const run = (await ctx.storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs?.[0]; return run?.step === 5 && run.phase === 'final' ? run : null; }, 120000, 'the last step');
     await sleep(3000);
     assert.equal(mock.submitted.length, 0, 'nothing submitted by QTS');
     assert.equal(mock.pageSubmitted, 0);
-    await form.click('#privacy');
+    // Required consent is filled before review (ASSIST_SOURCES 'consent'); clicking it would untick it.
+    assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true, 'the required consent is filled before review');
     await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing blocking');
     await form.click('#submit');
     await until(() => mock.submitted.length === 1, 20000, 'the Submit record');
@@ -1263,6 +1266,10 @@ test('Cancel and Stop all at every point: no live claim, saved checkpoint, no ta
     assert.equal(outcome.aiQueuesIdle, true, `${name}: the AI queues are free`);
   };
   const begin = async (n, form = 'form') => {
+    // Stop all can let the service worker restart (normal for MV3); its new instance loads the real
+    // PDF folder and AI code, so the test's stand-ins are put back before each job.
+    await ctx.installApplyPdfs();
+    await ctx.installAiMock();
     mock.queue.push(application(n, form));
     assert.equal((await ctx.action('auto_apply')).ok, true);
     return until(() => formPage(ctx.browser, `/${form}`), 30000, `the form tab ${n}`);

@@ -1,7 +1,8 @@
 // End-to-end test of the REAL extension in Chrome: its service worker, the Apply runner, the form
 // engine, and the answer rules, against a local mock QTS server on 127.0.0.1. The mock hands out one
-// test job, serves a two-step test application form, and plays the AI by fixed rules. Test mode
-// (qtsApplyDryRun) fills every step and stops before Submit. Nothing leaves this machine; nothing is
+// test job, serves a two-step test application form, and would play the AI by fixed rules (Normal
+// Apply never asks it: docs/NORMAL_APPLY_RELIABILITY.md). Test mode (qtsApplyDryRun) fills every step
+// from documents and profile facts and stops before Submit. Nothing leaves this machine; nothing is
 // submitted. Run with: npm run test:apply-e2e (skipped when Chrome is not installed; QTS_CHROME sets it).
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -62,7 +63,7 @@ const FORM = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
     document.getElementById('more').innerHTML = r.value === 'y' ? '<label for="where">Where would you relocate to?</label><input id="where">' : '';
   }));
   document.getElementById('next').addEventListener('click', () => {
-    const missing = ['fn', 'ln', 'em', 'ph', 'co', 'rg', 'yrs'].filter((id) => !document.getElementById(id).value);
+    const missing = ['fn', 'ln', 'em', 'ph', 'co', 'rg'].filter((id) => !document.getElementById(id).value);
     if (missing.length) return;
     document.getElementById('step1').style.display = 'none'; document.getElementById('step2').style.display = '';
   });
@@ -214,30 +215,32 @@ test('the real runner applies to a two-step form: profile, documents, dependent 
     assert.equal(log.pageSubmitted, false);
     assert.equal(state.submitted, false);
     assert.equal(log.pageLoads, 1);
-    // Step 1: profile facts (phone beside its +40 picker), the dependent region, the AI's list pick,
-    // the relocation follow-up from the AI (never the yes/no fact), cover letter in the rich editor,
-    // the CSS-required résumé, the toolbar untouched, the missing GitHub left for the Manager.
+    // Step 1: profile facts (phone beside its +40 picker), the dependent region, the relocation fact,
+    // cover letter in the rich editor, the CSS-required résumé, the toolbar untouched. Questions only
+    // an AI could answer (ML years, GitHub, where to relocate) are left for the Manager.
     assert.deepEqual([state.fn, state.em, state.ph, state.co, state.rg], ['Radu', 'radu.test@example.com', '264484948', 'Romania', 'Cluj']);
-    assert.equal(state.yrs, '6+ years');
-    assert.deepEqual([state.relocate, state.where], ['y', 'Germany']);
+    assert.deepEqual([state.yrs, state.gh, state.where], ['', '', '']);
+    assert.equal(state.relocate, 'y');
     assert.match(state.editor, /Dear Hiring Manager,\s*I would like to join Acme/);
     assert.equal(state.resume, 1);
     assert.equal(state.bold, 'false');
-    assert.equal(state.gh, '');
-    // Step 2: a native multi-select, a written answer, a list found only by searching.
+    // Step 2 is reached; its multi-select, written answer and searchable list stay for the Manager.
     assert.equal(state.step2, true);
-    assert.deepEqual(state.tools, ['Docker', 'Kubernetes']);
-    assert.match(state.why, /join Acme/);
-    assert.equal(state.lvl, 'Expert');
-    // One AI request per batch of open questions (two rounds on step 1, one on step 2), no repeats.
-    assert.equal(log.aiPrompts.length, 3);
+    assert.deepEqual([state.tools, state.why, state.lvl], [[], '', '']);
+    // Normal Apply never asks the AI.
+    assert.equal(log.aiPrompts.length, 0);
+    assert.equal(log.requests.some((request) => request.includes('/api/extension/apply/answers')), false);
     assert.equal(log.requests.some((request) => request.includes('/api/pdf/print')), false);
     // The step reports: what was verified, what needs the Manager, and why.
     const [first, second] = reports;
     assert.equal(first.step, 1);
-    assert.deepEqual(first.plan.filter((entry) => entry.status === 'needs_review').map((entry) => entry.question), ['GitHub username *']);
+    assert.equal(first.aiCalls, 0);
+    assert.deepEqual(first.plan.filter((entry) => entry.status === 'needs_review').map((entry) => entry.question),
+      ['Years of experience in machine learning? *', 'GitHub username *']);
     assert.equal(first.failedAttempts, 0);
-    assert.deepEqual([second.step, second.verified, second.needsReview], [2, 3, 0]);
+    assert.equal(second.step, 2);
+    assert.equal(second.aiCalls, 0);
+    assert.equal(second.verified, 0);
   } finally {
     await browser.close();
     server.close();

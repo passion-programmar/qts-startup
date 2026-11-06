@@ -14,7 +14,7 @@ test('launcher shows three completed results only while Get JD is on and restore
       Element.prototype.attachShadow = function(options) { const root = attach.call(this, options); window.testRoot = root; return root; };
       window.calls = [];
       window.stored = { authExpiresAt: Date.now() + 3600000, qtsSessionUser: { id: 'manager', role: 'manager' }, qtsGetJdOn: true,
-        qtsGetJdNotificationState: { history: Array.from({ length: 5 }, (_, i) => ({ operationId: `tab:${i}`, title: `Job ${i}`, status: i === 4 ? 'processing' : 'success', outcome: 'review', label: 'Review needed', pageUrl: `https://jobs.example/${i}`, message: 'Matching finished', updatedAt: Date.now() })) } };
+        qtsGetJdNotificationState: { history: Array.from({ length: 5 }, (_, i) => ({ operationId: `tab:${i}`, title: `Job ${i}`, status: i === 4 ? 'processing' : 'success', outcome: 'review', label: 'Review needed', evaluationMode: 'gemini', pageUrl: `https://jobs.example/${i}`, message: 'Matching finished', updatedAt: Date.now() })) } };
       window.chrome = {
         runtime: { id: 'fixture', getURL: (p) => `https://extension.test/${p}`, onMessage: { addListener() {}, removeListener() {} }, sendMessage: async (message) => {
           window.calls.push(message);

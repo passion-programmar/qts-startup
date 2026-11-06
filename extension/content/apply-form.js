@@ -2837,8 +2837,17 @@
     if (closed && shown.length < 2) return { type: 'application_closed', reason: `The page says "${closed}".` };
     if (shown.some(isEmail) && shown.length >= 3) return { type: 'application_form', reason: `${shown.length} questions, including an email.` };
     // Only an email (and maybe a name) with a Continue: the next page may be a sign-in or a code sent by email.
-    if (shown.some(isEmail) && shown.length <= 2 && actions.some((action) => action.type === 'next' || action.type === 'start' || action.type === 'submit')) {
+    // Not when the page already holds the application's later steps (hidden questions other than a
+    // password or email a sign-in would reveal): that is step 1 of a multi-step form, which the
+    // Manager moves on, not an account gate QTS continues by itself.
+    const laterSteps = fields.filter((field) => field.hidden && !field.disabled && !field.unrelated
+      && field.kind !== 'password' && !isEmail(field));
+    if (shown.some(isEmail) && shown.length <= 2 && laterSteps.length < 2
+      && actions.some((action) => action.type === 'next' || action.type === 'start' || action.type === 'submit')) {
       return { type: 'email_first_application', reason: 'The page asks only for an email before going on.' };
+    }
+    if (shown.some(isEmail) && laterSteps.length >= 2) {
+      return { type: 'partial_application_form', multiStep: true, reason: `${shown.length} questions on the first step of a multi-step form.` };
     }
     if (shown.length >= 2) return { type: 'partial_application_form', reason: `${shown.length} questions, no email.` };
     // No questions: an "Apply" button (also a Submit word) can only start the application.

@@ -173,8 +173,10 @@ async function waitForFormFields(tabId, { minFields = 3 } = {}) {
     const page = await inForm(tabId, (current) => globalThis.__qtsApplyForm.classifyPage(current), [fields || []]).catch(() => null);
     if (['email_first_application', 'authentication_required', 'registration_required', 'verification_required', 'captcha_required'].includes(page?.type)) return fields || [];
     // Two scans in a row with the same number of fields: the form is built. A later step (the form
-    // already open) may hold a single question, such as a consent box before Submit.
-    if (visible.length >= minFields && visible.length === previous) return fields;
+    // already open) may hold a single question, such as a consent box before Submit; so may the first
+    // step of a multi-step form whose later steps are already in the page (name and email only).
+    const needed = page?.multiStep ? 1 : minFields;
+    if (visible.length >= needed && visible.length === previous) return fields;
     previous = visible.length;
     await sleep(1000);
   }
