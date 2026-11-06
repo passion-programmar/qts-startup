@@ -61,6 +61,8 @@ const server = http.createServer((req, res) => {
         { jobId: JOB, candidateName: 'Ola Nowak', title: 'Data Engineer', company: 'Acme', state: 'ready' },
       ] });
     }
+    // Where Generation saved this job's PDFs (read from the stand-in local folder).
+    if (url.pathname === '/api/extension/apply/documents') return json({ success: true, documents: { resumePath: 'QTS_Resume/M/Candidate/Run/CV.pdf', coverLetterPath: 'QTS_Resume/M/Candidate/Run/Cover.pdf' } });
     if (url.pathname === '/api/extension/apply/start-job') { log.started.push(data.jobId); return json({ success: true, application: APPLICATION }); }
     return json({ success: true, leaseSeconds: 600 });
   });
@@ -95,6 +97,13 @@ test('"Apply this page": the accounts with this page\'s job are listed, and the 
         qtsSessionUser: { id: 'e2e', role: 'manager', displayName: 'E2E' },
         qtsApplyDryRun: false, qtsExtensionStatus: value, qtsBrowserName: 'E2E Chrome',
       });
+      // Normal Apply reads the saved PDFs from the local QTS_Resume folder (f3a7d45): a stand-in folder.
+      const testPdf = btoa(['%PDF-1.4', '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj', 'trailer<</Root 1 0 R>>', '%%EOF'].join(String.fromCharCode(10)));
+      Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: { getSetting: async (key) => ({ value: key === 'applyPdfDownloadsDirectoryV1' ? {} : null }) } });
+      Object.defineProperty(self, '__qtsApplyLocalPdfs', { configurable: true, value: { SETTING_KEY: 'applyPdfDownloadsDirectoryV1', readApplyDocuments: async () => ({
+        resume: { filename: 'CV.pdf', base64: testPdf, mimeType: 'application/pdf' },
+        coverLetter: { filename: 'Cover.pdf', base64: testPdf, mimeType: 'application/pdf' },
+      }) } });
     }, BASE, status);
     // The Manager opens the job's page themselves.
     const page = await browser.newPage();

@@ -475,7 +475,16 @@
   /** The page's own language switcher: a dropdown of languages named in their own words, with no question of its own. */
   function languageSwitcher(select) {
     const options = [...select.options].map(optionText).filter(Boolean);
-    if (options.length < 3 || options.filter((text) => LANGUAGE_NAMES.test(text)).length < options.length * 0.6) return false;
+    if (options.length < 3) return false;
+    // A switcher says so itself (mozilla.org: name="lang" in a "language-switcher" form, each option
+    // lang="en-CA"); else most options are language names, a region in brackets allowed ("English (British)").
+    const named = `${select.name} ${select.id} ${select.className} ${select.form?.className || ''} ${select.form?.id || ''}`;
+    const tagged = [...select.options].filter((option) => /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(option.getAttribute('lang') || '')).length;
+    const declared = /lang(uage)?[-_ ]?(switch|select|picker|chooser|menu)|^lang$/i.test(select.name) || /language[-_]?switch/i.test(named);
+    const languageNames = options.filter((text) => LANGUAGE_NAMES.test(text.replace(/\s*\([^)]*\)\s*$/, ''))).length;
+    // Declared by the page itself: a switcher even when labelled "Language".
+    if (declared && tagged >= options.length * 0.6) return true;
+    if (languageNames < options.length * 0.6) return false;
     const label = labelFor(select);
     return !label || options.every((text) => label.includes(text)) || !/\?|language|speak|interview/i.test(label);
   }
@@ -2280,9 +2289,25 @@
   }
 
   /** Closes a cookie banner the way a person would, declining what is optional; true when clicked. */
+  // A cookie or consent banner (Cookiebot, OneTrust, Usercentrics, Didomi, CookieYes…): its tick boxes
+  // (Necessary, Statistics, Marketing) are never application questions.
+  const COOKIE_BANNER = /cookie|CybotCookiebot|onetrust|usercentrics|didomi|cookieyes|\bcky-|\bcmp[-_]|consent[-_]?(banner|manager|dialog|modal)|gdpr[-_]?(banner|cookie)/i;
+  function cookieBanner(element) {
+    for (let node = element, depth = 0; node && depth < 15; node = node.parentElement || node.getRootNode?.()?.host || null, depth += 1) {
+      // Never the page itself ("cookies-accepted" on <body>), and only a block holding tick boxes and
+      // buttons, as banners do: one with text, email, upload or list fields is a real form.
+      if (['BODY', 'HTML'].includes(node.tagName)) return false;
+      if (!COOKIE_BANNER.test(`${node.id || ''} ${typeof node.className === 'string' ? node.className : ''}`)) continue;
+      return !node.querySelector?.('textarea, select, input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="button"]):not([type="submit"])');
+    }
+    return false;
+  }
+
   function declineCookies() {
     const button = allElements().find((element) => clickable(element)
-      && /^(decline|reject|refuse)( all)?( non-?necessary| optional| additional)?( cookies)?$|^(use |allow )?(only )?(necessary|essential|required)( cookies)?( only)?$/i.test(startText(element)));
+      && (/^(decline|reject|refuse)( all)?( non-?necessary| optional| additional)?( cookies)?$|^(use |allow )?(only )?(necessary|essential|required)( cookies)?( only)?$/i.test(startText(element))
+        // "Deny" (Cookiebot) declines only inside a cookie banner; elsewhere it may mean something else.
+        || (/^deny( all)?$/i.test(startText(element)) && cookieBanner(element))));
     if (!button) return false;
     button.click();
     return true;
@@ -2507,6 +2532,7 @@
     for (let node = control; node; node = node.parentElement || node.getRootNode?.()?.host || null) {
       if (node.tagName === 'SEARCH' || node.getAttribute?.('role') === 'search') return true;
     }
+    if (cookieBanner(control)) return true;
     const form = formOf(control);
     if (!form) return Boolean(control.closest(PAGE_FRAME));
     const named = `${form.id} ${typeof form.className === 'string' ? form.className : ''} ${form.getAttribute('name') || ''} ${form.getAttribute('action') || ''} ${form.getAttribute('aria-label') || ''}`;

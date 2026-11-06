@@ -306,6 +306,19 @@ test('live-site labels: Greenhouse uploads named by their group, Workable radios
   assert.deepEqual(radios, ['Gender']);
 });
 
+test('live-site pages: a cookie banner and a declared language switcher are not application questions', { skip }, async () => {
+  // emagine (Cookiebot): the banner's tick boxes made a job page look like a form, so Apply was never clicked.
+  const cookiebot = `<div id="CybotCookiebotDialog"><fieldset><label><input type="checkbox" id="c1" checked disabled> Necessary</label><label><input type="checkbox" id="c2"> Preferences</label><label><input type="checkbox" id="c3"> Statistics</label><label><input type="checkbox" id="c4"> Marketing</label></fieldset><button>Allow all</button></div>`;
+  assert.equal(await onPage(`<main><h1>DevOps Engineer</h1><a href="/apply" class="button">Apply now</a></main>${cookiebot}`, 'return api.classifyPage().type;'), 'application_navigation');
+  // mozilla.org: name="lang" in a language-switcher form, options tagged lang: not a question, even labelled "Language".
+  const switcher = `<footer><form id="lang_form" class="c-language-switcher"><label for="ls">Language</label><select id="ls" name="lang"><option lang="en-CA" value="en-CA">English (Canadian)</option><option lang="en-GB" value="en-GB">English (British)</option><option lang="en-US" value="en-US" selected>English</option></select></form></footer>`;
+  assert.deepEqual(await onPage(`<main><h1>Engineer</h1><button type="button">Apply Now</button></main>${switcher}`, 'return api.scanForm().map((f) => f.label);'), []);
+  // A real question about languages is still one.
+  assert.deepEqual(await onPage(`<form><label for="q">Which language do you speak at work?</label><select id="q"><option>English</option><option>Deutsch</option><option>Polski</option></select></form>`, 'return api.scanForm().map((f) => f.label);'), ['Which language do you speak at work?']);
+  // A body class mentioning cookies does not hide a real form.
+  assert.equal(await onPage(`<div class="cookies-accepted"><form><label for="a">Full name</label><input id="a"><label for="b">Email</label><input id="b" type="email"><label for="c">CV</label><input id="c" type="file"></form></div>`, 'return api.classifyPage().type;'), 'application_form');
+});
+
 test('pages are told apart: form, partial form, email-first, sign-in, account, code, CAPTCHA, closed, sent, job page, nothing', { skip }, async () => {
   const kind = (html) => onPage(html, 'return api.classifyPage().type;');
   assert.equal(await kind(`<form><label for="a">Full name</label><input id="a"><label for="b">Email</label><input id="b" type="email"><label for="c">CV</label><input id="c" type="file"></form>`), 'application_form');

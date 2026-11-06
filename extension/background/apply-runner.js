@@ -200,13 +200,17 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
   for (let step = 0; step < APPLY_START_STEPS; step += 1) {
     if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
     await inForm(tab.id, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
-    // Pages often build their content after loading; give the form a few seconds to appear.
+    // Pages often build their content after loading; give the form a few seconds to appear. A page
+    // still empty (Workday draws everything with JavaScript) gets up to 20 s; one whose Apply button
+    // has appeared goes on to it at once.
     let page = null;
-    for (let waited = 0; waited < 6000; waited += 1000) {
+    for (let waited = 0; waited < 20000; waited += 1000) {
       page = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
       if (['application_form', 'partial_application_form'].includes(page?.type)) return tab;
       if (['email_first_application', 'authentication_required', 'registration_required',
         'verification_required', 'captcha_required'].includes(page?.type)) break;
+      if (page?.type === 'application_navigation' && waited >= 2000) break;
+      if (waited >= 6000 && page && page.type !== 'unsupported_page') break;
       await sleep(1000);
     }
     page ||= await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);

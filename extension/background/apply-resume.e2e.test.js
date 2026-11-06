@@ -54,6 +54,8 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { autoApplyParallelLimit: 2 } });
     if (url.pathname === '/api/extension/apply/claim') { log.claims += 1; return json({ success: true, application: log.claims === 1 ? APPLICATION : null }); }
     if (url.pathname === '/api/extension/apply/resume') { log.resumed.push(data); return json({ success: true, application: APPLICATION }); }
+    // Where Generation saved this job's PDFs (read from the stand-in local folder).
+    if (url.pathname === '/api/extension/apply/documents') return json({ success: true, documents: { resumePath: 'QTS_Resume/M/Candidate/Run/CV.pdf', coverLetterPath: 'QTS_Resume/M/Candidate/Run/Cover.pdf' } });
     if (url.pathname === '/api/extension/apply/heartbeat') return json({ success: true, leaseSeconds: 600 });
     if (url.pathname === '/api/extension/apply/review') return json({ success: true });
     // The application record is gone (its hold ran out while the extension was away).
@@ -113,6 +115,13 @@ test('after the extension restarts, Apply takes an open job page up again, and S
         qtsSessionUser: { id: 'e2e', role: 'manager', displayName: 'E2E' },
         qtsApplyDryRun: false, qtsExtensionStatus: 'apply', qtsBrowserName: 'E2E Chrome',
       });
+      // Normal Apply reads the saved PDFs from the local QTS_Resume folder (f3a7d45): a stand-in folder.
+      const testPdf = btoa(['%PDF-1.4', '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj', 'trailer<</Root 1 0 R>>', '%%EOF'].join(String.fromCharCode(10)));
+      Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: { getSetting: async (key) => ({ value: key === 'applyPdfDownloadsDirectoryV1' ? {} : null }) } });
+      Object.defineProperty(self, '__qtsApplyLocalPdfs', { configurable: true, value: { SETTING_KEY: 'applyPdfDownloadsDirectoryV1', readApplyDocuments: async () => ({
+        resume: { filename: 'CV.pdf', base64: testPdf, mimeType: 'application/pdf' },
+        coverLetter: { filename: 'Cover.pdf', base64: testPdf, mimeType: 'application/pdf' },
+      }) } });
       self.__qtsApplyRunner.processApplyQueue();
     }, BASE);
     const formTab = async () => (await worker.evaluate(async () => (await chrome.tabs.query({})).map((tab) => ({ id: tab.id, url: tab.url }))))
