@@ -166,18 +166,20 @@ Tasks 1 and 2 are accepted. Task 3 normal Apply recovery is implemented and vali
 
 The only existing picker was in the legacy popup behind the disabled `applicationAutomation` flag and a hidden parent section. Supported Manager Apply/Auto Apply use their own `canUseApply` permission and can run independently of that flag.
 
-The two options were compared before finalizing:
+The alternatives were compared before finalizing:
 
 | Option | Assessment |
 | --- | --- |
-| Picker directly in the content-script launcher | The picker/storage would belong to the job site's origin. Content-script IndexedDB is the host page's, and handles can be transferred between the same top-level origin. It cannot directly populate the extension's existing store. An extension iframe adds cross-origin picker restrictions and more messaging. |
-| Dedicated extension page opened by the launcher | Shares the extension origin and IndexedDB with its service worker. A direct click on that page supplies user activation for the picker. This is the smallest reliable option with the existing store. |
+| Picker directly in the content-script launcher | Supplies a top-level user gesture, but its storage belongs to the job site's origin and cannot directly populate the extension's existing IndexedDB store. |
+| Dedicated extension page opened by the launcher | Shares the extension origin and IndexedDB, but opens a separate tab instead of keeping the setting inside the QTS panel. |
+| Extension-origin picker embedded in the QTS panel | Shares the extension's IndexedDB, but Chrome blocks picker and permission prompts in the cross-origin iframe. |
+| Compact top-level extension window launched by the in-panel control | Keeps status and the entry point in the QTS panel, while providing a top-level browsing context for Chrome's picker and permission prompts. |
 
 Chrome references: [extension storage and content-script origins](https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies), [File System Access API, user activation, directory handles and IndexedDB](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access).
 
-Implementation is limited to a supported launcher tool and `extension/settings/apply-pdfs.html` / `apply-pdfs.js`. The tool and setup page require current Manager `canUseApply` access. Opening the page refreshes server permissions; selection rechecks access before saving. The picker is invoked directly from its Choose button before asynchronous checks, requests `mode: read`, and reuses `__qtsScannerDocumentStore` with `applyPdfDownloadsDirectoryV1`. There are no manifest permission changes. Existing Generation and local PDF reading logic remain intact.
+The supported launcher tool opens the folder setting inside the QTS Manager panel. The embedded view uses `extension/settings/apply-pdf-folder-panel.html` and `apply-pdf-folder-panel.js`; it exposes only folder selection and permission restoration, not direct-file setup or legacy PDF relinking. Chrome blocks `showDirectoryPicker` and `requestPermission` in this cross-origin iframe, so its button opens a compact top-level extension window for those actions. The launcher, embedded view, and chooser require current Manager `canUseApply` access. The chooser refreshes server permissions, rechecks access before saving, invokes the picker directly from its Choose button, requests `mode: read`, and reuses `__qtsScannerDocumentStore` with `applyPdfDownloadsDirectoryV1`. The manifest exposes the embedded view and its scripts to the host page; no new browser or host permissions are added. Existing Generation and local PDF reading logic remain intact.
 
-Reopening or focusing the page queries the stored handle's read permission without prompting. Missing/revoked grants explain that the Manager should choose Downloads again. Cancellation/denied permission preserves the previous handle. Session changes invalidate an in-flight selection. Chrome controls the lifetime of OS grants, so saving a handle does not promise a perpetual grant.
+Opening the panel reads the saved folder name without requesting permission. The chooser queries the stored handle's permission and offers explicit permission restoration or folder reselection. Cancellation/denied permission preserves the previous handle. Session changes invalidate an in-flight selection. Chrome controls the lifetime of OS grants, so saving a handle does not promise a perpetual grant.
 
 ## Task 1 validation
 

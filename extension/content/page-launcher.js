@@ -1091,6 +1091,7 @@ async function initializeQtsPageLauncher() {
         canManageTextHighlights: response.canManageTextHighlights === true,
         canManagePageExclusions: response.canManagePageExclusions === true,
         canManageJobDetectionUrlRules: response.canManageJobDetectionUrlRules === true,
+        canUseApply: response.canUseApply === true,
       }, options);
     } catch (error) {
       showToast(error?.message || 'Could not open Manager settings.', 'error');
@@ -1124,6 +1125,15 @@ async function initializeQtsPageLauncher() {
       'auto-apply-custom-urls',
       'canManageJobDetectionUrlRules',
       'Custom URLs access',
+    );
+  }
+
+  async function openApplyPdfFolderPanel(button) {
+    await openManagerPanel(
+      button,
+      'apply-pdf-folder',
+      'canUseApply',
+      'Apply access',
     );
   }
 
@@ -1637,6 +1647,10 @@ async function initializeQtsPageLauncher() {
     }
     if (action === 'auto_apply_custom_urls') {
       await openAutoApplyCustomUrlsPanel(button);
+      return;
+    }
+    if (action === 'apply_pdf_folder') {
+      await openApplyPdfFolderPanel(button);
       return;
     }
     // The panel stays open: the row itself shows what the click changed.

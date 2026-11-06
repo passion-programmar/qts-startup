@@ -34,7 +34,11 @@
       "resources": [
         "assets/wys-launcher.png",
         "assets/account-logo.png",
-        "signin/signin.html"
+        "signin/signin.html",
+        "settings/apply-pdf-folder-panel.html",
+        "settings/apply-pdf-folder-panel.js",
+        "shared/scanner-document-store.js",
+        "shared/apply-local-pdfs.js"
       ],
       "matches": ["<all_urls>"]
     }

@@ -119,13 +119,28 @@ test('authorized Managers configure one persistent read-only folder and both App
         globalThis.__qtsPageLauncher.setOpen(true);
       } });
     }, jobTabId);
-    const opened = browser.waitForTarget((t) => t.url() === settingsUrl && t !== control.target());
     await clickFolderTool(job);
     console.log('[folder setup] clicked folder tool');
-    let settings = await (await opened).page();
-    console.log('[folder setup] extension settings opened from launcher');
+    let folderPanel = await until('in-panel folder settings', () => job.frames().find((frame) => frame.url().endsWith('/settings/apply-pdf-folder-panel.html')));
+    console.log('[folder setup] embedded folder settings opened in the QTS panel');
+    await folderPanel.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'unconfigured');
+    assert.equal(await folderPanel.evaluate(() => window.top === window), false);
+    await folderPanel.evaluate(() => {
+      window.pickerCalled = false;
+      window.showDirectoryPicker = async () => {
+        window.pickerCalled = true;
+        throw new Error('The embedded panel must not invoke the native picker.');
+      };
+    });
+    await folderPanel.evaluate(() => document.getElementById('choose-folder').click());
+    let settings = await until('top-level folder chooser', async () => {
+      const chooser = browser.targets().find((target) => target.type() === 'page' && target.url().endsWith('/settings/apply-pdf-folder-panel.html'));
+      return chooser ? chooser.page() : null;
+    });
+    console.log('[folder setup] top-level folder chooser opened in a compact extension window');
+    assert.equal(await folderPanel.evaluate(() => window.pickerCalled), false, 'embedded panel does not call the native picker');
     await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'unconfigured');
-    assert.equal(await settings.evaluate(() => typeof showDirectoryPicker), 'function', 'native picker is available on the top-level extension page');
+    assert.equal(await settings.evaluate(() => typeof showDirectoryPicker), 'function', 'native picker is available in a top-level extension window');
     assert.equal(await settings.evaluate(() => window.top === window), true);
     assert.equal(await worker.evaluate(() => self.__qtsRuntimeConfig.features.applicationAutomation), false);
 
@@ -152,7 +167,10 @@ test('authorized Managers configure one persistent read-only folder and both App
     console.log('[folder setup] selected real directory handle');
     assert.deepEqual(await settings.evaluate(() => window.pickerOptions), { mode: 'read', startIn: 'downloads' });
     assert.equal(await settings.evaluate(() => window.pickerUserGesture), true);
-    await settings.reload();
+    await folderPanel.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await folderPanel.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready'
+      && document.getElementById('folder-status').textContent.includes('Folder saved'));
+    await settings.goto(settings.url());
     await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready');
 
     // Persist a real structured-cloned directory handle through a complete Chrome/worker restart.

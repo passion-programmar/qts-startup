@@ -21,12 +21,18 @@ test('the launcher exposes Apply PDFs folder only to authorized Managers with le
               window.calls.push(message);
               if (message.type === 'QTS_GET_LAUNCHER_STATE') return { active: true };
               if (message.type === 'CHECK_EXTENSION_PAGE_ALLOWED') return { ok: true };
-              if (message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok, canUseApply };
+              if (message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok, canUseApply, tabId: 1 };
               return { ok: true, accounts: [], applications: [] };
             } },
           storage: { local: { get: async () => ({ authExpiresAt: signedIn ? Date.now() + 3600000 : null }) }, onChanged: { addListener() {}, removeListener() {} } },
         };
       }, { signedIn, canUseApply, ok });
+      await page.evaluate(() => {
+        window.__qtsInitializeGetJdReview = async () => {};
+        window.__qtsGetJdReview = {
+          openManagerSettings: async (...args) => { window.openedSettings = args; },
+        };
+      });
       await page.addScriptTag({ path: path.resolve('extension/shared/runtime-config.js') });
       await page.addScriptTag({ path: path.resolve('extension/content/page-launcher.js') });
       await page.waitForFunction(() => Boolean(window.__qtsPageLauncher));
@@ -38,7 +44,10 @@ test('the launcher exposes Apply PDFs folder only to authorized Managers with le
       if (visible) {
         assert.equal(await page.evaluate(() => [...window.testRoot.querySelectorAll('.label-top')].find((n) => n.textContent === 'Tools').hidden), false);
         await page.evaluate(() => window.testRoot.querySelector('[data-action="apply_pdf_folder"]').click());
-        await page.waitForFunction(() => window.calls.some((m) => m.type === 'QTS_PAGE_ACTION' && m.action === 'apply_pdf_folder'));
+        await page.waitForFunction(() => Boolean(window.openedSettings));
+        assert.equal(await page.evaluate(() => window.openedSettings[0]), 'apply-pdf-folder');
+        assert.equal(await page.evaluate(() => window.openedSettings[2].canUseApply), true);
+        assert.equal(await page.evaluate(() => window.calls.some((m) => m.type === 'QTS_PAGE_ACTION' && m.action === 'apply_pdf_folder')), false);
         assert.equal(await page.evaluate(() => window.calls.some((m) => ['apply', 'auto_apply'].includes(m.action))), false);
       }
       await page.close();

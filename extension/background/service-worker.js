@@ -5706,8 +5706,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: access.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
           return;
         }
-        await chrome.tabs.create({ url: chrome.runtime.getURL('settings/apply-pdfs.html') });
-        sendResponse({ ok: true });
+        const chooser = await chrome.windows.create({
+          url: chrome.runtime.getURL('settings/apply-pdf-folder-panel.html'),
+          type: 'popup',
+          width: 440,
+          height: 330,
+          focused: true,
+        });
+        sendResponse({ ok: true, windowId: chooser.id });
         return;
       }
       // Get JD's switch is separate from the work slot, so it has its own Cancel.
@@ -6449,6 +6455,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })().catch((error) => sendResponse({
       ok: false,
       error: error instanceof Error ? error.message : 'Could not delete this Custom URL.',
+    }));
+    return true;
+  }
+  if (msg.type === 'QTS_OPEN_APPLY_PDF_FOLDER_PICKER') {
+    (async () => {
+      if (
+        sender.id !== chrome.runtime.id
+        || sender.url !== chrome.runtime.getURL('settings/apply-pdf-folder-panel.html')
+      ) {
+        sendResponse({ ok: false, error: 'Open the folder chooser from QTS Tools.' });
+        return;
+      }
+      const access = await getManagerExtensionFeatures(true);
+      if (access.success !== true || access.features?.canUseApply !== true) {
+        sendResponse({ ok: false, error: access.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+        return;
+      }
+      const chooser = await chrome.windows.create({
+        url: chrome.runtime.getURL('settings/apply-pdf-folder-panel.html'),
+        type: 'popup',
+        width: 440,
+        height: 330,
+        focused: true,
+      });
+      sendResponse({ ok: true, windowId: chooser.id });
+    })().catch((error) => sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not open the folder chooser.',
     }));
     return true;
   }

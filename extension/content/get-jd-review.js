@@ -131,6 +131,7 @@ async function initializeGetJdReviewOnce() {
       .manager-settings-status.is-error { color: #b91c1c; }
       .manager-settings-highlight-form { display: flex; flex-direction: column; gap: 10px; }
       .manager-settings-view { display: flex; flex-direction: column; gap: 12px; }
+      .manager-settings-apply-pdf-frame { display: block; flex: 1 1 auto; width: 100%; min-height: 300px; border: 0; background: transparent; }
       .manager-settings-group { display: flex; flex-direction: column; gap: 9px; }
       .manager-settings-group h3 { margin: 0; color: #1f2937; font-size: 13px; font-weight: 750; }
       .manager-settings-group p { margin: 0; color: #64748b; font-size: 11px; line-height: 1.45; }
@@ -538,6 +539,9 @@ async function initializeGetJdReviewOnce() {
             <ul class="manager-settings-list" data-auto-apply-custom-url-list></ul>
           </section>
         </div>
+        <div class="manager-settings-view" data-settings-view="apply-pdf-folder" hidden>
+          <iframe class="manager-settings-apply-pdf-frame" title="Apply PDFs folder settings"></iframe>
+        </div>
       </div>`;
     const textColorPicker = createManagerColorPicker('Text color', '#111827', 'textColor');
     const backgroundColorPicker = createManagerColorPicker('Background color', '#fef08a', 'backgroundColor');
@@ -552,6 +556,8 @@ async function initializeGetJdReviewOnce() {
       highlightView: section.querySelector('[data-settings-view="text-highlights"]'),
       pageView: section.querySelector('[data-settings-view="page-exclusions"]'),
       autoApplyCustomUrlsView: section.querySelector('[data-settings-view="auto-apply-custom-urls"]'),
+      applyPdfFolderView: section.querySelector('[data-settings-view="apply-pdf-folder"]'),
+      applyPdfFolderFrame: section.querySelector('[data-settings-view="apply-pdf-folder"] iframe'),
       highlightForm: section.querySelector('[data-highlight-form]'),
       highlightText: section.querySelector('#qts-manager-highlight-text'),
       textColorInput: textColorPicker.input,
@@ -699,7 +705,7 @@ async function initializeGetJdReviewOnce() {
   // options.prefillBlockedUrl fills the blocked-URL field for the Manager to review and save.
   async function openManagerSettings(panel, tabId, permissions = {}, options = {}) {
     if (
-      !['text-highlights', 'page-exclusions', 'auto-apply-custom-urls'].includes(panel)
+      !['text-highlights', 'page-exclusions', 'auto-apply-custom-urls', 'apply-pdf-folder'].includes(panel)
       || !Number.isInteger(tabId)
     ) {
       throw new Error('Choose a valid Manager settings panel and page.');
@@ -716,6 +722,7 @@ async function initializeGetJdReviewOnce() {
       canManageTextHighlights: permissions.canManageTextHighlights === true,
       canManagePageExclusions: permissions.canManagePageExclusions === true,
       canManageJobDetectionUrlRules: permissions.canManageJobDetectionUrlRules === true,
+      canUseApply: permissions.canUseApply === true,
     };
     if (
       (panel === 'text-highlights' && !managerSettingsPermissions.canManageTextHighlights)
@@ -724,6 +731,7 @@ async function initializeGetJdReviewOnce() {
         && !managerSettingsPermissions.canManageJobDetectionUrlRules)
       || (panel === 'auto-apply-custom-urls'
         && !managerSettingsPermissions.canManageJobDetectionUrlRules)
+      || (panel === 'apply-pdf-folder' && !managerSettingsPermissions.canUseApply)
     ) {
       throw new Error('Ask your Super Admin for access to these settings.');
     }
@@ -733,22 +741,27 @@ async function initializeGetJdReviewOnce() {
     elements.panel.classList.add('is-manager-settings');
     settings.title.textContent = panel === 'text-highlights'
       ? 'Text highlights on all websites'
-      : panel === 'auto-apply-custom-urls' ? 'Custom URLs' : 'URL Settings';
+      : panel === 'auto-apply-custom-urls' ? 'Custom URLs'
+        : panel === 'apply-pdf-folder' ? 'Apply PDFs folder' : 'URL Settings';
     settings.hint.textContent = panel === 'text-highlights'
       ? 'Rules are shared from the database and automatically highlighted across supported HTTP and HTTPS websites. Select a saved phrase below to edit it in the shared editor. Only Managers assigned by Super can change them.'
       : panel === 'auto-apply-custom-urls'
         ? 'Add domains that Auto Apply should skip unless you select their jobs.'
+        : panel === 'apply-pdf-folder'
+          ? 'Choose the folder Generation uses for PDFs that Apply and Auto Apply upload.'
         : 'Manage the URL rules assigned to this Manager account.';
     settings.status.textContent = 'Loading settings…';
     settings.status.classList.remove('is-error');
+    settings.status.hidden = panel === 'apply-pdf-folder';
     settings.highlightView.hidden = panel !== 'text-highlights';
     settings.pageView.hidden = panel !== 'page-exclusions';
     settings.autoApplyCustomUrlsView.hidden = panel !== 'auto-apply-custom-urls';
+    settings.applyPdfFolderView.hidden = panel !== 'apply-pdf-folder';
     if (panel === 'text-highlights') {
       settings.highlightView.insertBefore(settings.status, settings.highlightList);
     } else if (panel === 'page-exclusions') {
       settings.pageView.appendChild(settings.status);
-    } else {
+    } else if (panel === 'auto-apply-custom-urls') {
       settings.autoApplyCustomUrlsView.appendChild(settings.status);
     }
     settings.exclusionGroup.hidden = false;
@@ -757,7 +770,8 @@ async function initializeGetJdReviewOnce() {
     try {
       if (panel === 'text-highlights') await loadHighlightRules();
       else if (panel === 'page-exclusions') await loadUrlSettings();
-      else await loadAutoApplyCustomUrls();
+      else if (panel === 'auto-apply-custom-urls') await loadAutoApplyCustomUrls();
+      else settings.applyPdfFolderFrame.src = chrome.runtime.getURL('settings/apply-pdf-folder-panel.html');
       if (panel === 'page-exclusions') settings.status.textContent = '';
       const blockedUrlInput = settings.root.querySelector('#qts-manager-job-url');
       if (

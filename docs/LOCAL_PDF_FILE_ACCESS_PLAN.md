@@ -25,6 +25,8 @@ References: [Chrome file URL permission](https://developer.chrome.com/docs/exten
 
 ## Setup after updating the unpacked extension
 
+The QTS > Tools > Apply PDFs folder entry opens a compact setting inside the QTS panel. That view intentionally exposes only the shared QTS_Resume folder picker and permission restoration; it does not show direct-file setup or legacy PDF relinking. The detailed direct-file steps below apply only when opening the full extension settings page directly.
+
 1. Reload QTS at `chrome://extensions`. For an unpacked installation, keep Developer mode enabled.
 2. Open QTS Details and enable **Allow access to file URLs**. Chrome may reload the extension when this setting changes; refresh an existing job tab if its old extension controls stop responding.
 3. Open QTS > Tools > Apply PDFs folder. Under **Use PDFs with settings closed**, enter the full actual Windows path ending in `QTS_Resume` (for example `C:\Users\YourName\Downloads\QTS_Resume`, without surrounding quotes).

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Apply PDFs folder</title>
+  <style>
+    :root { color-scheme: light; font: 13px/1.5 Inter, system-ui, sans-serif; color: #172033; background: transparent; }
+    body { margin: 0; padding: 4px; }
+    main { display: flex; flex-direction: column; gap: 12px; }
+    p { margin: 0; color: #64748b; }
+    button { min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: #4f46e5; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+    button.secondary { border: 1px solid #cbd5e1; background: #fff; color: #334155; }
+    button:disabled { opacity: .5; cursor: default; }
+    #folder-status { padding: 10px 12px; border-radius: 9px; background: #f1f5f9; overflow-wrap: anywhere; }
+    #folder-status[data-state="ready"] { background: #f0fdf4; color: #166534; }
+    #folder-status[data-state="error"], #folder-status[data-state="denied"], #folder-status[data-state="revoked"] { background: #fef2f2; color: #991b1b; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <p id="folder-help">Choose the folder where Generation saves PDFs. Apply and Auto Apply will read those same files to upload them; they will not create replacement résumés.</p>
+    <button id="choose-folder" type="button" disabled>Open folder chooser</button>
+    <button id="restore-access" class="secondary" type="button" hidden disabled>Allow saved folder access</button>
+    <p id="folder-status" role="status" aria-live="polite">Checking Apply access…</p>
+  </main>
+  <script src="../shared/scanner-document-store.js"></script>
+  <script src="../shared/apply-local-pdfs.js"></script>
+  <script src="apply-pdf-folder-panel.js"></script>
+</body>
+</html>
