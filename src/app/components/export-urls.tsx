@@ -33,14 +33,38 @@ export function uniqueUrlsOn(entries: ExportUrlEntry[], day: string): string[] {
 }
 
 // Saves the job URLs of one chosen day as a .txt file, one URL per line and none twice.
-export function ExportUrlsButton({ entries, fileLabel, today }: { entries: ExportUrlEntry[]; fileLabel: string; today: string }) {
+// entries: every row, when the page has them all. loadEntries: asks the server for one day's rows,
+// when the page shows only one page of them.
+export function ExportUrlsButton({
+  entries = [],
+  loadEntries,
+  fileLabel,
+  today,
+}: {
+  entries?: ExportUrlEntry[];
+  loadEntries?: (day: string) => Promise<ExportUrlEntry[]>;
+  fileLabel: string;
+  today: string;
+}) {
   // The panel is fixed under the button so the table frame (overflow-clip) can't cut it off.
   // A calendar opened near the bottom of the window makes the panel scroll inside itself.
   const [panelPosition, setPanelPosition] = useState<{ top: number; right: number; maxHeight: number } | null>(null);
   const [day, setDay] = useState(today);
+  const [loaded, setLoaded] = useState<{ day: string; entries: ExportUrlEntry[] } | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const open = panelPosition !== null;
-  const urls = day ? uniqueUrlsOn(entries, day) : [];
+  const loading = Boolean(loadEntries && open && day && loaded?.day !== day);
+  const dayEntries = loadEntries ? (loaded?.day === day ? loaded.entries : []) : entries;
+  const urls = day ? uniqueUrlsOn(dayEntries, day) : [];
+
+  useEffect(() => {
+    if (!loadEntries || !open || !day) return;
+    let current = true;
+    loadEntries(day)
+      .then((rows) => { if (current) setLoaded({ day, entries: rows }); })
+      .catch(() => { if (current) setLoaded({ day, entries: [] }); });
+    return () => { current = false; };
+  }, [loadEntries, open, day]);
 
   useEffect(() => {
     if (!open) return;
@@ -113,7 +137,7 @@ export function ExportUrlsButton({ entries, fileLabel, today }: { entries: Expor
           <DatePicker className="mt-3" defaultValue={day} id={`${fileLabel}-export-day`} label="Date" name="exportDay" onChange={setDay} required />
 
           <p className="mt-3 text-xs text-slate-600">
-            {day ? `${urls.length} unique URL${urls.length === 1 ? "" : "s"}` : "Choose a date"}
+            {!day ? "Choose a date" : loading ? "Counting…" : `${urls.length} unique URL${urls.length === 1 ? "" : "s"}`}
           </p>
           <button
             className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-xs font-semibold text-white shadow-sm shadow-indigo-500/25 hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"

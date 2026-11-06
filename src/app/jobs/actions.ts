@@ -420,3 +420,13 @@ export async function applyAgainAction(_state: RecordActionState, formData: Form
   revalidatePath("/jobs");
   return { error: null, success: "Apply will fill it again from the start." };
 }
+
+/** The URLs of the jobs saved on one day (Romania time), newest first, for the Jobs page's Export URLs. */
+export async function jobUrlsOnDayAction(day: string): Promise<{ url: string; date: string }[]> {
+  const manager = await getCurrentUser();
+  if (!manager || manager.role !== "manager" || typeof day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return [];
+  return db.select({ url: jobs.jobUrl, date: jobs.date })
+    .from(jobs)
+    .where(and(eq(jobs.managerId, manager.id), eq(jobs.date, day), sql`not ${jobHasBid()}`))
+    .orderBy(sql`${jobs.createdAt} desc`);
+}
