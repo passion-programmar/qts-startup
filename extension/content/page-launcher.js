@@ -611,7 +611,8 @@ async function initializeQtsPageLauncher() {
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load jobs.');
       picker.jobs = reply.jobs;
       picker.hasMore = reply.hasMore;
-      picker.selected = new Set(reply.jobs.filter(job => job.selectable !== false).map(job => job.id));
+      picker.selected = new Set(reply.jobs.filter(job => job.selectable !== false
+        && !(['apply', 'auto_apply'].includes(mode) && job.customUrl === true)).map(job => job.id));
       picker.loaded = true;
     } catch (error) {
       if (picker.version === version) picker.error = error.message;
@@ -699,7 +700,7 @@ async function initializeQtsPageLauncher() {
       const link = Object.assign(document.createElement(url ? 'a' : 'span'), { className: 'work-link', title: job.url });
       if (url) { link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
       const title = Object.assign(document.createElement('span'), { className: 'work-title', textContent: job.title, title: job.url });
-      const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company, job.busy ? 'In progress · unavailable' : ''].filter(Boolean).join(' · '), title: job.url });
+      const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company, job.customUrl ? 'Custom URL · off by default' : '', job.busy ? 'In progress · unavailable' : ''].filter(Boolean).join(' · '), title: job.url });
       link.append(title, domain); row.append(check, link); list.append(row);
     }
     panel.append(list);

@@ -39,10 +39,10 @@ test('account job pickers show compact links, full URL tooltips, independent sel
           if(message.candidateId.startsWith('2222') && !window.allowSecondAccount) return { ok: false, error: 'Local loading failure. Retry.' };
           if(message.mode === 'auto_apply') return { ok: true, jobs: [
             {id:'33333333-3333-4333-8333-333333333333',title:'Machine Learning Engineer III',company:'Mapbox',url:'https://example.test/held',busy:true,selectable:false},
-            {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://example.test/ready',busy:false,selectable:true},
+            {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://example.test/ready',customUrl:true,busy:false,selectable:true},
           ] };
           return { ok: true, jobs: [{id:'33333333-3333-4333-8333-333333333333',title:'Machine Learning Engineer III',company:'Mapbox',url:'https://www.remoterocketship.com/publicjobs/company/mapbox/jobs/machine-learning-engineer-iii-routing-cost-poland-remote/?tracking=complete'},
-            {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://djinni.co/jobs/838846-senior-devops-engineer-contractor/'}] };
+            {id:'44444444-4444-4444-8444-444444444444',title:'Senior DevOps Engineer',company:'Example',url:'https://djinni.co/jobs/838846-senior-devops-engineer-contractor/',customUrl:message.mode==='apply'}] };
         }
         return { ok: true };
       } }, storage: { local: {
@@ -128,18 +128,25 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='generation'));
     const started = await page.evaluate(() => window.calls.find(m=>m.type==='QTS_PAGE_ACTION' && m.action==='generation'));
     assert.deepEqual(started.selection,{candidateId:ONE,jobIds:['44444444-4444-4444-8444-444444444444']});
-    // Apply uses the same candidate; its list was never opened, so Start loads it and sends every ready job.
-    await page.evaluate(() => window.testRoot.querySelector('[data-action="apply"]').click());
+    // Custom URL jobs start unchecked in Apply; checking one is the explicit opt-in.
+    await openJobs('apply');
+    await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="apply"] .work-job').length === 2);
+    assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="apply"] .work-job input')].map(input => input.checked)), [true, false]);
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="apply"]').textContent), /Custom URL · off by default/);
+    await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="apply"] .work-job input[data-job-id="44444444-4444-4444-8444-444444444444"]').click());
+    await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="apply"] .work-start').click());
     await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='apply'));
     assert.deepEqual(await page.evaluate(() => window.calls.find(m=>m.action==='apply').selection), { candidateId: ONE, jobIds: ['33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444'] });
     assert.equal(await page.evaluate(() => window.calls.find(m=>m.type==='QTS_WORK_ITEMS' && m.mode==='apply').candidateId), ONE);
     await openJobs('auto_apply');
     await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length===2);
     assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job input')].map(input => ({ checked: input.checked, disabled: input.disabled }))), [
-      { checked: false, disabled: true }, { checked: true, disabled: false },
+      { checked: false, disabled: true }, { checked: false, disabled: false },
     ]);
     assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"]').textContent), /In progress · unavailable/);
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"]').textContent), /Custom URL · off by default/);
     fs.mkdirSync('.pdf-verification',{recursive:true}); await page.screenshot({path:'.pdf-verification/work-picker-preview.png'});
+    await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-job input[data-job-id="44444444-4444-4444-8444-444444444444"]').click());
     await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').click());
     await page.waitForFunction(() => window.calls.some(m=>m.type==='QTS_PAGE_ACTION' && m.action==='auto_apply'));
     assert.deepEqual(await page.evaluate(() => window.calls.find(m=>m.action==='auto_apply').selection.jobIds), ['44444444-4444-4444-8444-444444444444']);
@@ -200,6 +207,9 @@ test('account job pickers show compact links, full URL tooltips, independent sel
       await page.waitForFunction(mode=>window.testRoot.querySelectorAll(`[data-work-picker="${mode}"] .work-job`).length===2,{},mode);
       assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-start`).disabled,mode),true,'starting waits for old run cleanup');
       await page.evaluate(async()=>{window.store.qtsExtensionStatus=null;await window.__qtsPageLauncher.syncModeActions();});
+      if (mode === 'auto_apply') {
+        await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-job input[data-job-id="44444444-4444-4444-8444-444444444444"]').click());
+      }
       assert.equal(await page.evaluate(mode=>window.testRoot.querySelector(`[data-work-picker="${mode}"] .work-start`).disabled,mode),false,'new selection can start after cleanup');
     }
     for (const mode of ['generation', 'apply', 'auto_apply']) {

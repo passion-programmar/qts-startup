@@ -94,7 +94,7 @@ test("job lists enforce ownership and existing Generation eligibility, return fu
   assert.ok(query.params.includes(managerId)); assert.ok(query.params.includes(candidateId));
 });
 test("Auto Apply shows live claims disabled and has no prior-attempt exclusions", async () => {
-  const job = { id: jobId, title: "Engineer", company: "Example", url: "https://example.test/jobs/1", busy: true };
+  const job = { id: jobId, title: "Engineer", company: "Example", url: "https://example.test/jobs/1", customUrl: true, busy: true };
   fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId }], [job]];
   const body = await (await GET(new Request(`http://localhost/api/extension/work-items?mode=auto_apply&candidateId=${candidateId}`))).json();
   assert.deepEqual(body.jobs, [{ ...job, selectable: false }]);
@@ -103,6 +103,10 @@ test("Auto Apply shows live claims disabled and has no prior-attempt exclusions"
   assert.match(query, /bids/);
   assert.match(query, /jd_matching/);
   assert.doesNotMatch(query, /released|failed|skipped|waiting_confirmation/);
+  const customUrl = (fixture.selects[2] as Record<string, Parameters<PgDialect["sqlToQuery"]>[0]>).customUrl;
+  const customUrlQuery = new PgDialect().sqlToQuery(customUrl);
+  assert.match(customUrlQuery.sql, /auto_apply_custom_urls/);
+  assert.match(customUrlQuery.sql, /url_prefix/);
 });
 test("unowned/missing-note account, invalid input and unauthenticated requests cannot expose job lists", async () => {
   fixture.rows = [[{ useGeminiMatching: true }], []];
@@ -165,13 +169,17 @@ test("the shared candidate list returns each account once with every mode's read
   assert.equal((await GET(new Request(`http://localhost/api/extension/work-items?mode=all&candidateId=${candidateId}`))).status, 400);
 });
 test("Apply job lists use manual Apply eligibility without the experience or note gates", async () => {
-  const job = { id: jobId, title: "Engineer", company: "Example", url: "https://example.test/jobs/1" };
+  const job = { id: jobId, title: "Engineer", company: "Example", url: "https://example.test/jobs/1", customUrl: true };
   fixture.rows = [[{ useGeminiMatching: true }], [{ id: candidateId }], [job]];
   const body = await (await GET(new Request(`http://localhost/api/extension/work-items?mode=apply&candidateId=${candidateId}`))).json();
   assert.deepEqual(body, { success: true, jobs: [job], hasMore: false });
   const query = fixture.queries[2].sql;
   assert.match(query, /generation_status/); assert.match(query, /released/); assert.match(query, /bids/);
   assert.doesNotMatch(query, /jd_matching/); assert.doesNotMatch(query, /experiences/);
+  const customUrl = (fixture.selects[2] as Record<string, Parameters<PgDialect["sqlToQuery"]>[0]>).customUrl;
+  const customUrlQuery = new PgDialect().sqlToQuery(customUrl);
+  assert.match(customUrlQuery.sql, /auto_apply_custom_urls/);
+  assert.match(customUrlQuery.sql, /url_prefix/);
   assert.equal((await GET(new Request("http://localhost/api/extension/work-items?mode=apply"))).status, 400, "Apply has no per-mode account list");
 });
 test("selected Auto Apply runs one job at a time and enforces assigned-manager gates", async () => {
@@ -191,6 +199,19 @@ test("unselected Auto Apply uses the Manager's configured open-job limit", async
   assert.match(fixture.queries[1].sql, /auto_apply_custom_urls/);
   assert.match(fixture.queries[1].sql, /url_prefix/);
   assert.match(fixture.queries[1].sql, /like \('%\.'/);
+});
+test("unselected Normal Apply skips the Manager's Custom URL domains", async () => {
+  assert.equal(await scopedApply(managerId, { id: "browser" }, [], undefined, { autoApply: false }), null);
+  assert.match(fixture.queries[0].sql, /auto_apply_custom_urls/);
+  assert.match(fixture.queries[0].sql, /url_prefix/);
+  assert.match(fixture.queries[0].sql, /like \('%\.'/);
+  assert.ok(fixture.queries[0].params.includes(false), "the skipped URLs do not change the run into Auto Apply");
+});
+test("explicitly selected Normal Apply jobs are not filtered by Custom URL domains", async () => {
+  assert.equal(await scopedApply(managerId, { id: "browser" }, [], { candidateId, jobIds: [jobId] }, { autoApply: false }), null);
+  assert.doesNotMatch(fixture.queries[0].sql, /auto_apply_custom_urls/);
+  assert.ok(fixture.queries[0].params.includes(candidateId));
+  assert.ok(fixture.queries[0].params.includes(`{${jobId}}`));
 });
 test("selected Auto Apply includes the Custom URL domain check for its Gemini override", async () => {
   const attemptId = "33333333-3333-4333-8333-333333333333";

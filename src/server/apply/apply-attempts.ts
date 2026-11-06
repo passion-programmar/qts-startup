@@ -3,7 +3,6 @@ import "server-only";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   applyAttempts,
-  autoApplyCustomUrls,
   bids,
   educations,
   experiences,
@@ -38,6 +37,7 @@ import { loadApplicationAnswers } from "./manager-answers";
 import { decryptSiteAccountPassword } from "./site-account-password";
 import type { WorkSelection } from "@/server/work/work-selection";
 import { hasEligibleExperienceCount, hasMatchingNote } from "@/server/work/work-eligibility";
+import { matchesManagerCustomUrl } from "@/server/work/custom-urls";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
 // it ("claimed"), the Manager reviews each step ("waiting_review"), clicks the site's Submit
@@ -174,7 +174,8 @@ export async function claimNextApplication(
       ? 1
       : Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
   }
-  const skipCustomUrlJobs = options.autoApply && !selection;
+  // Unscoped Apply and Auto Apply skip these domains; a submitted selection opts jobs in explicitly.
+  const skipCustomUrlJobs = !selection;
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
   // Exclude all rows outside the explicit selection; an empty/stale selection never falls back.
   const skips = selection ? sql`ARRAY(
@@ -188,14 +189,7 @@ export async function claimNextApplication(
   )` : skipCustomUrlJobs ? sql`ARRAY(
     select j.id from jobs j
     where j.manager_id = ${managerId}
-      and exists (
-        select 1 from ${autoApplyCustomUrls}
-        where ${autoApplyCustomUrls.managerId} = ${managerId}
-          and (
-            lower(regexp_replace(split_part(lower(btrim(j.job_url)), '://', 2), '[:/?#].*$', '')) = ${autoApplyCustomUrls.urlPrefix}
-            or lower(regexp_replace(split_part(lower(btrim(j.job_url)), '://', 2), '[:/?#].*$', '')) like ('%.' || ${autoApplyCustomUrls.urlPrefix})
-          )
-      )
+      and ${matchesManagerCustomUrl(managerId, jobs.jobUrl)}
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
   )` : sql`${`{${skipJobIds.join(",")}}`}::uuid[]`;
   const claim = await db.execute<{ attemptId: string | null }>(sql`
@@ -207,14 +201,7 @@ export async function claimNextApplication(
     // A concurrent insert after the exclusion snapshot must never escape the selected batch.
     const [scoped] = await db.select({
       id: applyAttempts.id,
-      customUrlGemini: options.autoApply ? sql<boolean>`exists (
-        select 1 from ${autoApplyCustomUrls}
-        where ${autoApplyCustomUrls.managerId} = ${managerId}
-          and (
-            lower(regexp_replace(split_part(lower(btrim(${jobs.jobUrl})), '://', 2), '[:/?#].*$', '')) = ${autoApplyCustomUrls.urlPrefix}
-            or lower(regexp_replace(split_part(lower(btrim(${jobs.jobUrl})), '://', 2), '[:/?#].*$', '')) like ('%.' || ${autoApplyCustomUrls.urlPrefix})
-          )
-      )` : sql<boolean>`false`,
+      customUrlGemini: options.autoApply ? matchesManagerCustomUrl(managerId, jobs.jobUrl) : sql<boolean>`false`,
     }).from(applyAttempts)
       .innerJoin(jobs, eq(jobs.id, applyAttempts.jobId))
       .innerJoin(profiles, eq(profiles.userId, applyAttempts.candidateId))

@@ -527,8 +527,8 @@ async function initializeGetJdReviewOnce() {
         </div>
         <div class="manager-settings-view" data-settings-view="auto-apply-custom-urls" hidden>
           <section class="manager-settings-group">
-            <h3>Auto Apply URL prefixes</h3>
-            <p>Unselected Auto Apply runs skip jobs from these domains. Select a matching job to include it; selected Custom URL jobs use Gemini for AI answers.</p>
+            <h3>Custom URL prefixes</h3>
+            <p>Unselected Apply and Auto Apply runs skip jobs from these domains. Select a matching job to include it; selected Custom URL jobs use Gemini for AI answers during Auto Apply.</p>
             <form data-auto-apply-custom-url-form>
               <label class="manager-settings-label" for="qts-manager-auto-apply-custom-url">Domain</label>
               <input class="manager-settings-input" id="qts-manager-auto-apply-custom-url" name="url" type="text" maxlength="2048" placeholder="djni.co" autocomplete="off" required>

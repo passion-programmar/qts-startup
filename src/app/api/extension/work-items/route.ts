@@ -4,6 +4,7 @@ import { categories, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { hasEligibleExperienceCount, hasMatchingNote, readyApply, readyAutoApply, readyGeneration, readyGenerationJob } from "@/server/work/work-eligibility";
+import { matchesManagerCustomUrl } from "@/server/work/custom-urls";
 import { isWorkId } from "@/server/work/work-selection";
 
 const reply = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -99,6 +100,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       title: jobs.jobTitle,
       company: jobs.company,
       url: jobs.jobUrl,
+      customUrl: mode === "apply" || mode === "auto_apply"
+        ? matchesManagerCustomUrl(manager.id, jobs.jobUrl)
+        : sql<boolean>`false`,
       busy: mode === "auto_apply" ? sql<boolean>`exists (
         select 1 from apply_attempts a where a.job_id = ${jobs.id}
           and (a.status in ('waiting_confirmation', 'submitting')
@@ -115,9 +119,11 @@ export async function GET(request: Request): Promise<NextResponse> {
       jobs: mode === "auto_apply"
         ? jobsToShow.map(({ busy, ...job }) => {
           const inProgress = busy === true;
-          return { ...job, busy: inProgress, selectable: !inProgress };
+          return { ...job, customUrl: job.customUrl === true, busy: inProgress, selectable: !inProgress };
         })
-        : jobsToShow.map(({ id, title, company, url }) => ({ id, title, company, url })),
+        : mode === "apply"
+          ? jobsToShow.map(({ id, title, company, url, customUrl }) => ({ id, title, company, url, customUrl: customUrl === true }))
+          : jobsToShow.map(({ id, title, company, url }) => ({ id, title, company, url })),
       hasMore: rows.length > 200,
     });
   } catch (error) {
