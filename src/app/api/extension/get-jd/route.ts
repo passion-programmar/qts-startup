@@ -45,6 +45,10 @@ import type { GetJdIdentity } from "@/server/get-jd/global-precheck";
 import type { GetJdDuplicate } from "@/server/jobs/get-jd-account-states";
 import { sourceSiteUrl } from "@/server/jobs/source-site";
 
+// Gemini may take up to 45 s (AbortSignal.timeout below). Without this, a Vercel project
+// with Fluid compute turned off would stop the function after 10 s.
+export const maxDuration = 60;
+
 const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
 const maxPageTextLength = 100_000;
