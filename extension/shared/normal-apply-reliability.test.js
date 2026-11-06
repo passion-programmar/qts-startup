@@ -23,7 +23,7 @@ test('actual Normal Apply fill body excludes AI, cached answers and legacy memor
     fillAndCheck: async (_tab, field, answer) => { fills.push([field.id, answer.value]); return { ok: field.id !== 'rejected', error: 'Rejected' }; },
     askAiForAnswers: async () => { aiCalls++; throw Error('AI must not run'); },
     askAiToFix: async () => { aiCalls++; throw Error('AI repair must not run'); },
-    __qtsApplyForm: { scanForAssist: () => fields, emptyRequired: () => [] },
+    __qtsApplyForm: { setUploadContext() {}, verifyUploads: () => [], emptyRequiredUploads: () => [], scanForAssist: () => fields, emptyRequired: () => [] },
   };
   vm.createContext(context);
   context.inForm = async (_tab, fn, args = []) => vm.runInContext(`(${fn.toString()})(...${JSON.stringify(args)})`, context);

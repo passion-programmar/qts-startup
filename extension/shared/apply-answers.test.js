@@ -1055,8 +1055,8 @@ test('an upload named only "Upload file" takes the document its section heading 
   assert.equal(resolve(field('Upload file', { kind: 'file', section: 'Add a cover letter' }))['Upload file'].file, 'coverLetter');
   assert.equal(resolve(field('Drag & drop', { kind: 'file', required: false, section: 'Confirm your cover letter' }))['Drag & drop'].file, 'coverLetter');
   assert.equal(resolve(field('Upload file', { kind: 'file', section: 'Upload your CV' }))['Upload file'].file, 'resume');
-  // A heading naming both documents decides nothing: a required box still takes the résumé.
-  assert.equal(resolve(field('Upload file', { kind: 'file', section: 'Your CV and cover letter' }))['Upload file'].file, 'resume');
+  // A heading naming both documents is ambiguous, even for a required upload.
+  assert.equal(resolve(field('Upload file', { kind: 'file', section: 'Your CV and cover letter' }))['Upload file'], undefined);
   // The box's own name comes first.
   assert.equal(resolve(field('Resume', { kind: 'file', section: 'Add a cover letter' })).Resume.file, 'resume');
   // Other languages.
@@ -1162,4 +1162,31 @@ test('Normal Apply: required marks, full-name placeholders and country questions
   const list = { kind: 'combobox', options: ['Poland', 'Romania'] };
   assert.equal(answers.resolveField(field('What country do you currently reside in?*', list), ana, [], { normalApply: true }).value, 'Poland');
   assert.notEqual(answers.resolveField(field('Are you based in Poland?', list), ana, [], { normalApply: true })?.value, 'Poland');
+});
+
+
+test('required unknown, supporting, and combined document uploads never default to resume', () => {
+  for (const entry of [
+    { label: 'Supporting document' }, { label: 'Portfolio', section: 'Resume' },
+    { label: 'Resume / Cover letter' }, { label: 'Upload file', section: 'Resume and Cover Letter' },
+    { label: 'Upload file', section: 'Certificates' }, { label: 'Proof of eligibility' },
+  ]) {
+    const result = answers.resolveFields([{ id: 'upload', kind: 'file', required: true, ...entry }], candidate, []);
+    assert.equal(result.answers.upload, undefined, JSON.stringify(entry));
+    assert.equal(result.byHand.length, 1, JSON.stringify(entry));
+  }
+});
+
+test('two generic uploads are ambiguous; named resume and cover remain independent', () => {
+  const generic = answers.resolveFields(['a', 'b'].map(id => ({ id, kind: 'file', label: 'Upload file', required: true })), candidate, []);
+  assert.deepEqual(generic.answers, {});
+  assert.equal(generic.byHand.length, 2);
+  const named = answers.resolveFields([
+    { id: 'resume', kind: 'file', label: 'Resume', required: true },
+    { id: 'letter', kind: 'file', label: 'Cover letter', required: true, autofill: true },
+    { id: 'support', kind: 'file', label: 'Supporting file', required: true },
+  ], candidate, []);
+  assert.equal(named.answers.resume.file, 'resume');
+  assert.equal(named.answers.letter.file, 'coverLetter');
+  assert.equal(named.answers.support, undefined);
 });

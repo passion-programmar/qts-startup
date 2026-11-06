@@ -514,8 +514,8 @@
       if (isImageUpload(field)) return { skip: 'An image upload (photo).' };
       const document = uploadDocument(field);
       if (document) return { file: document, source: 'documents' };
-      if (field.required || field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
-      return { skip: 'An optional upload that is not a résumé or cover letter.' };
+      if (field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
+      return { skip: 'The document type is unclear.', byHand: `Choose the correct document for "${field.label}" manually; QTS could not identify this upload safely.` };
     }
     // An image CAPTCHA ("Type below image text") is the Manager's to solve, never typed by Apply or the AI.
     if (/\bcaptcha\b|type (the )?(below |above )?image|(text|characters|letters|code) (shown )?(in|from|below|above) (the )?(image|picture)|(image|picture) (text|code)\b/.test(label)) {
@@ -1117,6 +1117,11 @@
     else if (origin?.valueType === 'number') source = { ...source, type: 'number', context: { ...format, unit: format.unit || (origin.id === 'candidate.yearsExperience' ? 'year' : undefined) } };
     else if (origin?.valueType === 'boolean') source.type = field.options?.some((option) => String(option) === String(source.value)) ? 'string' : 'boolean';
     else if (origin?.valueType === 'set' || ['checkbox-group', 'multiselect'].includes(variant?.kind)) source = { ...source, type: 'set', value: String(source.value).split(/\s*\|\s*/) };
+    // A free-text box with no unit or choices takes the saved wording as written ("Immediately" stays
+    // "Immediately", not "0 days"); lists and number boxes still get it converted to what they take.
+    else if (origin?.valueType === 'duration' && ['text', 'textarea'].includes(field.kind) && !hasOptions(field) && !format.unit) {
+      source = { ...source, type: 'string' };
+    }
     else if (origin?.valueType === 'duration') {
       const duration = String(source.value).trim().match(/^(\d+(?:\.\d+)?)\s*(?:calendar )?(days?|weeks?|months?|years?)$/i);
       if (duration) source = { ...source, type: 'duration', value: Number(duration[1]), context: { unit: duration[2].toLowerCase().replace(/s$/, '') } };
@@ -1243,7 +1248,7 @@
   function isAutofillUpload(field) {
     // A photo upload near an "Easy Apply" heading is still a photo upload.
     // The page marks it (`autofill`: its section says so, apply-form.js) or its label says so.
-    return field.kind === 'file' && (field.autofill === true || AUTOFILL_UPLOAD.test(labelOf(field))) && !isImageUpload(field);
+    return field.kind === 'file' && (field.autofill === true || AUTOFILL_UPLOAD.test(labelOf(field))) && !isImageUpload(field) && !COVER_DOCUMENT.test(labelOf(field));
   }
 
   // A salutation question ("Anrede", "Civilité", "Title: Mr / Ms") in the languages job sites use,
@@ -1302,14 +1307,18 @@
   function generalUploadId(fields) {
     const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled
       && !isImageUpload(field) && !isAutofillUpload(field));
-    // The uploads resolveField already gives the résumé (named for it, or required).
-    const takesResume = (field) => uploadDocument(field) === 'resume' || (!uploadDocument(field) && field.required);
+    // A named resume attachment takes precedence over a generic attachment.
+    const takesResume = (field) => uploadDocument(field) === 'resume';
     if (uploads.some(takesResume)) return null;
-    const general = uploads.find((field) => {
+    const general = uploads.filter((field) => {
       const label = labelOf(field);
-      return GENERAL_UPLOAD.test(label) && !OTHER_DOCUMENT.test(label) && !uploadDocument(field);
+      return GENERAL_UPLOAD.test(label) && !OTHER_DOCUMENT.test(label)
+        && !COVER_DOCUMENT.test(label) && !RESUME_DOCUMENT.test(label)
+        && !OTHER_DOCUMENT.test(String(field.section || '').toLowerCase())
+        && !(COVER_DOCUMENT.test(String(field.section || '').toLowerCase()) && RESUME_DOCUMENT.test(String(field.section || '').toLowerCase()))
+        && !uploadDocument(field);
     });
-    return general ? general.id : null;
+    return general.length === 1 ? general[0].id : null;
   }
 
   // A cover letter and a résumé as job sites name them, in the languages they use.
@@ -1323,8 +1332,10 @@
    */
   function uploadDocument(field) {
     const label = labelOf(field);
+    if (COVER_DOCUMENT.test(label) && RESUME_DOCUMENT.test(label)) return null;
     if (COVER_DOCUMENT.test(label)) return 'coverLetter';
     if (RESUME_DOCUMENT.test(label)) return 'resume';
+    if (OTHER_DOCUMENT.test(label)) return null;
     const section = String(field.section || '').toLowerCase();
     const cover = COVER_DOCUMENT.test(section);
     const resume = RESUME_DOCUMENT.test(section);

@@ -92,7 +92,7 @@ test('pause between fields retains completed field IDs so resuming cannot overwr
     readComboboxOptions: async () => [], usedKey: (_used, field) => field.label, fieldFacts: () => ({}),
     fillAndCheck: async (_tab, field, answer) => { calls.push(field.id); values[field.id] = answer.value; if (pauseOnFill) paused = true; return { ok: true }; },
     ApplyStop: class extends Error { constructor(message, options) { super(message); Object.assign(this, options); } },
-    __qtsApplyForm: { scanForAssist: () => fields, emptyRequired: () => [] },
+    __qtsApplyForm: { setUploadContext() {}, verifyUploads: () => [], emptyRequiredUploads: () => [], scanForAssist: () => fields, emptyRequired: () => [] },
   };
   vm.createContext(context);
   context.inForm = async (_tab, fn, args = []) => vm.runInContext(`(${fn})(...${JSON.stringify(args)})`, context);

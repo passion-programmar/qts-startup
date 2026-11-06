@@ -102,7 +102,7 @@ const job = (number, url, candidate) => ({
     experiences: [{ jobTitle: 'Data Engineer', companyName: 'Initech', location: 'Cluj', workMode: 'remote', startDate: '2019-01-01', endDate: null, isCurrent: true, description: 'Spark pipelines.' }],
     educations: [{ institution: 'UBB', degree: 'BSc', fieldOfStudy: 'Computer Science', startDate: '2012-10-01', endDate: '2015-07-01', isCurrent: false, description: null }],
   },
-  savedAnswers: [{ questionKey: 'notice period', questionText: 'Notice period', answer: 'Immediately', note: null, scope: 'everyone' }],
+  savedAnswers: [{ questionKey: 'notice period', questionText: 'Notice period', answer: 'Immediately', note: null, scope: 'candidate' }], // Notice is a candidate fact: never from an all-candidates answer.
   exchangeRates: null, rememberedChoices: [], answerPrompt: null,
   siteAccountPassword: PASSWORD,
 });

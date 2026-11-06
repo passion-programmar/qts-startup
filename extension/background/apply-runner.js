@@ -110,7 +110,9 @@ async function applyWindowId() {
 async function openApplyTab(url, { active = true } = {}) {
   const windowId = await applyWindowId();
   const [shown] = await chrome.tabs.query({ windowId, active: true }).catch(() => []);
-  const tab = await chrome.tabs.create({ windowId, url, active, ...(shown?.id != null ? { openerTabId: shown.id } : {}) });
+  // Placed beside the shown tab by position, never with an opener: a job tab opened beside another
+  // job's page would otherwise count as that page's continuation and take over its application.
+  const tab = await chrome.tabs.create({ windowId, url, active, ...(Number.isInteger(shown?.index) ? { index: shown.index + 1 } : {}) });
   await tabOwnership.markTab(tab.id, 'apply');
   return tab;
 }
@@ -1207,7 +1209,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   const problems = [];
   let canAskAgain = false;
   const seen = new Set();
-  const uploaded = new Set();
+  await inForm(tabId, context => globalThis.__qtsApplyForm.setUploadContext(context), [{ attemptId: application.attemptId, step }]);
   let documents = application.applyDocuments || (assist ? application.assistDocuments || null : null);
   const keepDocuments = (ready) => {
     if (!ready?.resume?.base64) return;
@@ -1410,13 +1412,13 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       if (documents?.resume?.base64) {
         const outcome = await fillAndCheck(tabId, autofill, { file: 'resume', source: 'documents' }, { ...documents.resume, mimeType: 'application/pdf' }, seen);
         if (outcome.ok) {
-          uploaded.add('resume');
           application.siteFilledFromResume = true;
           await waitForSiteFill(tabId);
           for (const field of fresh) if (field.id !== autofill.id) seen.delete(field.id);
           round -= 1;
           continue;
         }
+        if (!outcome.ok) problem(outcome.error || 'Check the resume parser upload before continuing.', autofill, 'upload');
       }
     }
     for (const field of fresh) metFields.set(field.id, field);
@@ -1501,21 +1503,15 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         if (field.required) problem(`Upload the ${answer.file === 'coverLetter' ? 'cover letter' : 'résumé'} by hand: "${field.label}".`, field, 'upload');
         continue;
       }
-      // Check every pass, including the first one after a form mutation or Retry. Uploads are
-      // intentionally absent from the reusable typed-answer list; the page owns their lifetime.
-      if (answer.file) {
-        const holds = await inForm(tabId, (id) => globalThis.__qtsApplyForm.uploadHolds(id), [field.id]).catch(() => true);
-        if (holds || uploaded.has(answer.file)) continue;
-      }
+      // The content engine verifies the expected PDF and deduplicates this destination across retries.
       const outcome = await fillAndCheck(tabId, field, answer, file, seen);
       if (outcome.gone) continue;
       if (outcome.ok) {
-        if (answer.file) uploaded.add(answer.file);
-        else used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
+        if (!answer.file) used[usedKey(used, field)] = { ...answer, step, fieldId: field.id, ...fieldFacts(field) };
         noteFilled(field);
       } else if (answer.file) {
         // A cover letter that could not be attached is typed instead where the site offers it.
-        const typed = answer.file === 'coverLetter' && application.job.coverLetterText
+        const typed = !outcome.manualUpload && answer.file === 'coverLetter' && application.job.coverLetterText
           && await inForm(tabId, (id) => globalThis.__qtsApplyForm.enterManually(id), [field.id]).catch(() => false);
         if (!typed && (field.required || outcome.manualUpload)) problem(outcome.manualUpload ? outcome.error : `The ${answer.file === 'coverLetter' ? 'cover letter' : 'résumé'} upload failed: add it by hand ("${field.label}") from the folder above.`, field, 'upload');
       } else if (answer.source === 'documents') {
@@ -1649,6 +1645,15 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     // Let the page show the questions these answers unlock before looking again.
     await sleep(1000);
   }
+  // Reconcile attachments in both modes after the page has had time to process the upload.
+  // Failure to inspect is a review item, never evidence that an upload succeeded.
+  const uploadProblems = await inForm(tabId, async () => {
+    const api = globalThis.__qtsApplyForm;
+    const verified = await api.verifyUploads();
+    const missing = api.emptyRequiredUploads().filter(entry => !verified.some(problem => problem.id === entry.id));
+    return [...verified, ...missing.map(entry => ({ ...entry, message: 'A required attachment is still missing. Check this upload manually.' }))];
+  }).catch(() => [{ id: null, label: 'Attachments', message: 'Could not verify the attachments. Check them before continuing.' }]);
+  for (const entry of uploadProblems) problem(entry.message, entry, 'upload');
   if (assist) {
     // What the Manager must do, and why: an upload, a value the site refused, a fact the profile lacks.
     return { used, problems: problems.filter((entry) => ['upload', 'check', 'profile'].includes(entry.kind)), met: [...metFields.values()] };
@@ -1673,11 +1678,6 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
   const unread = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadRequired()).catch(() => []);
   for (const entry of (unread || []).filter((item) => !listed(item))) {
     problem(entry.kind === 'unread' ? `QTS couldn't read this question — check it: "${entry.label}".` : `Still empty: "${entry.label}".`, entry);
-  }
-  // A required upload left empty (lost to a reload, refused by the site) is never assumed done.
-  const emptyUploads = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequiredUploads()).catch(() => []);
-  for (const entry of (emptyUploads || []).filter((item) => !listed(item))) {
-    problem(`Upload by hand: "${entry.label}" is required and still empty (the files are in the folder above).`, entry, 'upload');
   }
   // A frame from another site the browser does not let QTS read may hold questions: the Manager is told.
   const frames = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadableFrames()).catch(() => []);
@@ -2120,16 +2120,43 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 const tabsOf = (review) => review.tabIds || new Set(review.tabId != null ? [review.tabId] : []);
 const assistTabContinued = (review, tabId) => [...(review.continuationParents?.values() || [])].includes(tabId);
 
-function adoptAssistContinuation(tab) {
-  if (tab?.openerTabId == null || tab.id == null) return false;
+// The tab a link or pop-up was really opened from (webNavigation's sourceTabId). Chrome's openerTabId
+// can name another tab (one shown at the time), which would hand a page to the wrong application and
+// close that application's own form as the new tab's "parent".
+const navigationSources = new Map();
+chrome.webNavigation?.onCreatedNavigationTarget?.addListener(({ tabId, sourceTabId }) => {
+  if (!Number.isInteger(tabId) || !Number.isInteger(sourceTabId)) return;
+  navigationSources.set(tabId, sourceTabId);
+  // Adopted already under another tab (openerTabId was wrong): give it back before its load
+  // completes, so no handoff closes that application's page.
   for (const review of activeReviews.values()) {
-    if (!review.assist || review.assistant?.stopped || !review.tabIds?.has(tab.openerTabId)) continue;
+    const parent = review.continuationParents?.get(tabId);
+    if (parent == null || parent === sourceTabId) continue;
+    review.continuationParents.delete(tabId);
+    review.tabIds?.delete(tabId);
+    if (review.tabId === tabId) review.tabId = parent;
+    rememberApplySession(review).catch(() => {});
+  }
+  getTab(tabId).then((tab) => adoptAssistContinuation(tab)).catch(() => {});
+});
+chrome.tabs.onRemoved.addListener((tabId) => { navigationSources.delete(tabId); });
+
+// Only a web page can continue an application: never the extension's own pages or chrome:// pages
+// (a popup opened to wake the extension must not become the tab Submitted reads answers from).
+const webOrBlank = (tab) => { const url = tab?.pendingUrl || tab?.url || ''; return !url || /^(https?:|about:blank)/i.test(url); };
+
+function adoptAssistContinuation(tab) {
+  if (tab?.id == null || !webOrBlank(tab)) return false;
+  const opener = navigationSources.has(tab.id) ? navigationSources.get(tab.id) : tab.openerTabId;
+  if (opener == null) return false;
+  for (const review of activeReviews.values()) {
+    if (!review.assist || review.assistant?.stopped || !review.tabIds?.has(opener)) continue;
     if (review.tabIds.has(tab.id)) return true;
     review.tabIds.add(tab.id);
     review.tabId = tab.id;
     review.continuationParents ||= new Map();
-    review.continuationParents.set(tab.id, tab.openerTabId);
-    review.assistant?.pendingNavigation?.delete(tab.openerTabId);
+    review.continuationParents.set(tab.id, opener);
+    review.assistant?.pendingNavigation?.delete(opener);
     tabOwnership.markTab(tab.id, 'apply').catch(() => {});
     rememberApplySession(review).catch(() => {});
     restoreOwnedAssistPanel(review, tab.id).catch(() => {});
@@ -2200,7 +2227,19 @@ async function openOwnedAssistPanel(tabId) {
 chrome.tabs.onUpdated.addListener(async (tabId, change) => {
   if (change.status !== 'complete' && change.status !== 'loading') return;
   // Chrome can populate openerTabId after onCreated, especially for initially blank tabs.
-  adoptAssistContinuation(await getTab(tabId));
+  const updated = await getTab(tabId);
+  // A blank continuation that became an extension or chrome:// page leaves its application.
+  if (updated && !webOrBlank(updated)) {
+    for (const review of activeReviews.values()) {
+      if (!review.assist || !review.continuationParents?.has(tabId)) continue;
+      const parent = review.continuationParents.get(tabId);
+      review.continuationParents.delete(tabId);
+      review.tabIds?.delete(tabId);
+      if (review.tabId === tabId) review.tabId = parent;
+      rememberApplySession(review).catch(() => {});
+    }
+  }
+  adoptAssistContinuation(updated);
   for (const review of activeReviews.values()) {
     if (!tabsOf(review).has(tabId) || !review.panel) continue;
     if (change.status === 'complete' && review.panel.mode === 'review') {
@@ -2248,9 +2287,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // A tab the job page opens ("Apply on the employer's site", a next step) joins its application: the
 // panel shows there, QTS fills there, and its Submit counts.
 chrome.tabs.onCreated.addListener((tab) => {
+  // Normal Apply: adopted at once; webNavigation's real source corrects a wrong opener before load.
   if (adoptAssistContinuation(tab)) return;
   for (const review of activeReviews.values()) {
-    if (tab.openerTabId == null) continue;
+    if (tab.openerTabId == null || review.assist) continue;
     if (review.tabIds?.has(tab.openerTabId)) {
       review.tabIds.add(tab.id);
       review.tabId = tab.id;
@@ -3428,7 +3468,13 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   // The bid's first step reached QTS (the Manager answered; only saving the bid is left).
   let marked = false;
   const readAnswers = async (given) => {
-    const current = (given?.length ? given : null) || await inForm(review.tabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) || [];
+    // The application's latest web page (never an extension page that joined by mistake).
+    let readTabId = review.tabId;
+    for (const tabId of [review.tabId, ...[...tabsOf(review)].reverse()]) {
+      const tab = tabId == null ? null : await getTab(tabId);
+      if (tab && /^https?:/i.test(tab.url || '')) { readTabId = tabId; break; }
+    }
+    const current = (given?.length ? given : null) || await inForm(readTabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) || [];
     // Normal Apply records submitted values, but answer learning requires the editor's Save.
     return { answers: submittedAnswers({}, current), learned: [] };
   };

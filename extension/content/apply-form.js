@@ -12,9 +12,9 @@
   const MENU_ATTRIBUTE = 'data-qts-apply-menu';
   const SEEN_ATTRIBUTE = 'data-qts-apply-seen';
   const RADIO_GROUP_ATTRIBUTE = 'data-qts-apply-radiogroup';
-  // Lives with this document, across worker autofill passes. A cleared input is not proof that
-  // an asynchronous upload failed; never send the same bytes twice to that unchanged control.
-  const sentUploads = global.__qtsApplySentUploads ||= new WeakMap();
+  // Lives with the document across reinjection and worker retries. Records belong to logical
+  // upload destinations, not disposable DOM inputs, and never authorize an automatic resend.
+  const uploadState = global.__qtsApplyUploadState ||= { entries: new Map(), roots: new WeakMap(), nextRoot: 0, context: '' };
   // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
@@ -1290,12 +1290,7 @@
     const element = findField(id);
     if (!element) return { ok: false, error: 'The field is no longer on the page.' };
     if (element.hasAttribute(DROP_ATTRIBUTE)) {
-      if (!file) return { ok: false, error: 'No file to attach.' };
-      if (uploadHolds(id)) return { ok: true, value: file.filename };
-      const previous = sentUploads.get(element);
-      if (previous?.filename === file.filename && previous.base64 === file.base64) return { ok: false, manualUpload: true, error: 'This PDF was already sent to this upload. Check the site’s attachments; if it was removed or rejected, attach it manually to avoid a duplicate.' };
-      sentUploads.set(element, { filename: file.filename, base64: file.base64 });
-      return dropFile(element, file);
+      return fillUpload(element, file);
     }
     if (element.hasAttribute(MENU_ATTRIBUTE)) return pickMenuChoice(element, value);
     if (isEditorHost(element)) return fillEditor(element, value);
@@ -1314,18 +1309,7 @@
     }
     const type = (element.getAttribute('type') || '').toLowerCase();
     if (type === 'file') {
-      if (!file) return { ok: false, error: 'No file to attach.' };
-      if (!acceptsFile(element, file)) return { ok: false, error: `This upload does not take ${file.filename.split('.').pop()?.toUpperCase() || 'this'} files (it takes ${element.accept}).` };
-      if (uploadHolds(id)) return { ok: true, value: element.files?.[0]?.name || file.filename };
-      const previous = sentUploads.get(element);
-      if (previous?.filename === file.filename && previous.base64 === file.base64) return { ok: false, manualUpload: true, error: 'This PDF was already sent to this upload. Check the site’s attachments; if it was removed or rejected, attach it manually to avoid a duplicate.' };
-      const transfer = new DataTransfer();
-      transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
-      element.files = transfer.files;
-      sentUploads.set(element, { filename: file.filename, base64: file.base64 });
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-      element.dispatchEvent(new Event('change', { bubbles: true }));
-      return { ok: uploadHolds(id), value: element.files?.[0]?.name || file.filename };
+      return fillUpload(element, file);
     }
     if (type === 'radio' || (type === 'checkbox' && element.name && controlsOfGroup(element).length > 1)) {
       const wanted = [].concat(value).map((entry) => cleanText(entry).toLowerCase());
@@ -1576,21 +1560,187 @@
   // A file's name as a site shows it once attached ("Radu_Star_CV.pdf"), not an allowed-types note (".pdf").
   const SHOWN_FILE_NAME = /[\p{L}\p{N}_()-][\p{L}\p{N}_ ()-]*\.(pdf|docx?|rtf|odt|txt)\b/iu;
 
-  /** Whether an upload holds a file: its input has one, or its block shows a file's name. */
+  // Never use a common parent containing a sibling upload as attachment evidence.
+  function uploadControls(scope) {
+    const nodes = [scope, ...deepQuery(scope, 'input[type="file"], [' + DROP_ATTRIBUTE + ']')]
+      .filter(node => node?.matches?.('input[type="file"], [' + DROP_ATTRIBUTE + ']'));
+    return [...new Set(nodes)].filter(node => !node.hasAttribute(DROP_ATTRIBUTE) || !deepQuery(node, 'input[type="file"]').length);
+  }
+
+  function uploadScope(element) {
+    let scope = element;
+    for (let node = element.parentNode, depth = 0; node && depth < 6; node = node.parentNode, depth++) {
+      if (node === element.ownerDocument.body || node === element.ownerDocument.documentElement) break;
+      if (uploadControls(node).length > 1) break;
+      if (deepQuery(node, 'input:not([type="file"]):not([type="hidden"]), select, textarea').some(isShown)) break;
+      scope = node;
+      if (node.nodeType === 11 || node.matches?.('[role="group"], fieldset, section, form')) break;
+    }
+    return scope;
+  }
+
+  function setUploadContext(context = {}) {
+    uploadState.context = JSON.stringify([context.attemptId || '', context.step || 0]);
+  }
+
+  function uploadIdentity(element) {
+    const root = element.getRootNode();
+    const owner = element.ownerDocument;
+    if (!uploadState.roots.has(owner)) uploadState.roots.set(owner, ++uploadState.nextRoot);
+    const shadowPath = [];
+    for (let current = root; current.host; current = current.host.getRootNode()) {
+      const host = current.host;
+      shadowPath.unshift([host.tagName, host.id || '', [...host.getRootNode().querySelectorAll(host.tagName)].indexOf(host)]);
+    }
+    const question = node => cleanText(uploadQuestion(node) || blockQuestion(node).text || node.name || 'Upload').toLowerCase();
+    const form = element.closest('form');
+    const forms = [...root.querySelectorAll('form')];
+    const peers = uploadControls(form || root).filter(node => question(node) === question(element));
+    return JSON.stringify([uploadState.context, element.ownerDocument.location?.href || '', uploadState.roots.get(owner), shadowPath,
+      form ? forms.indexOf(form) : -1, headingAbove(element), question(element), Math.max(0, peers.indexOf(element))]);
+  }
+
+  function uploadError(element, scope = uploadScope(element)) {
+    const errors = [scope, ...deepQuery(scope, '[role="alert"], [class*="error" i], [class*="invalid" i]')];
+    const message = errors.filter(node => node.matches?.('[role="alert"], [class*="error" i], [class*="invalid" i]')
+      && isShown(node) && !node.contains(element) && textOf(node).length < 300).map(textOf).find(Boolean);
+    return message || (element.getAttribute?.('aria-invalid') === 'true' ? 'The site marks this upload as invalid.' : '');
+  }
+
+  function uploadBusy(scope) {
+    return [scope, ...deepQuery(scope, '[aria-busy="true"], [role="progressbar"], progress')].some(node =>
+      node.getAttribute?.('aria-busy') === 'true' || (node.matches?.('[role="progressbar"], progress') && isShown(node)
+        && Number(node.getAttribute('aria-valuenow') || node.value || 0) < Number(node.getAttribute('aria-valuemax') || node.max || 100)))
+      || /\b(uploading|processing upload|scanning file)\b/i.test(textOf(scope));
+  }
+
+  function exactFilenameShown(scope, filename) {
+    const escaped = filename.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&');
+    const pattern = new RegExp('(^|[^\\p{L}\\p{N}_-])' + escaped + '(?![\\p{L}\\p{N}_.-])', 'iu');
+    // ShadowRoot.textContent concatenates adjacent labels and attachment names without spaces.
+    return [scope, ...deepQuery(scope, '*')].some(node => pattern.test(textOf(node)));
+  }
+
   function uploadHolds(id) {
     const element = findField(id);
-    if (!element) return false;
-    if (element.files?.length) return true;
-    const { block } = blockQuestion(element);
-    if (SHOWN_FILE_NAME.test(textOf(block))) return true;
-    // Some widgets put the attachment list beside the input's labelled block. Look only within
-    // its own upload section: another file control or drop target is a hard boundary.
-    for (let node = element.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth++) {
-      if (node === document.body || node === document.documentElement) break;
-      if (node.querySelectorAll(`input[type="file"], [${DROP_ATTRIBUTE}]`).length > 1) break;
-      if (SHOWN_FILE_NAME.test(textOf(node))) return true;
+    if (!element || uploadError(element) || uploadBusy(uploadScope(element))) return false;
+    return Boolean(element.files?.length || SHOWN_FILE_NAME.test(textOf(uploadScope(element))));
+  }
+
+  async function inspectUpload(element, file) {
+    if (!element?.isConnected) return { state: 'uncertain', error: 'The upload control changed before its attachment could be verified.' };
+    if (!element.matches('input[type="file"]')) {
+      const inputs = deepQuery(element, 'input[type="file"]');
+      if (inputs.length === 1) return inspectUpload(inputs[0], file);
     }
-    return false;
+    const scope = uploadScope(element);
+    const issue = uploadError(element);
+    if (issue) return { state: 'rejected', error: issue };
+    if (uploadBusy(scope)) return { state: 'pending', error: 'The site is still uploading or checking this document.' };
+    if (element.files?.length) {
+      if (element.files.length !== 1) return { state: 'mismatch', error: 'This upload contains multiple files. Review them and remove unintended attachments manually.' };
+      // Native selection can be checked exactly, including a wrong PDF with the same filename.
+      const binary = atob(file.base64);
+      for (const attached of element.files) {
+        if (attached.name !== file.filename || attached.size !== binary.length) continue;
+        const bytes = new Uint8Array(await attached.arrayBuffer());
+        if (bytes.every((byte, index) => byte === binary.charCodeAt(index))) return { state: 'selected' };
+      }
+      return { state: 'mismatch', error: 'This upload contains a different document. Check it before replacing it manually.' };
+    }
+    if (exactFilenameShown(scope, file.filename)) return { state: 'confirmed' };
+    if (SHOWN_FILE_NAME.test(textOf(scope))) return { state: 'mismatch', error: 'This upload shows a different filename. Check the attachment manually.' };
+    return { state: 'empty' };
+  }
+
+  const acceptedUpload = state => state === 'selected' || state === 'confirmed';
+  function uploadOutcome(record, observation) {
+    record.state = observation.state;
+    return acceptedUpload(observation.state)
+      ? { ok: true, value: record.file.filename, uploadState: observation.state }
+      : { ok: false, manualUpload: true, uploadState: observation.state,
+        error: observation.error || 'This PDF was already sent, but its attachment cannot be confirmed. Check the site; attach it manually if missing to avoid a duplicate.' };
+  }
+
+  function currentUpload(key, original) {
+    if (original.isConnected) return original;
+    return uploadControls(original.ownerDocument).find(node => uploadIdentity(node) === key) || null;
+  }
+
+  async function settleUpload(record, original, key) {
+    let observation = { state: 'uncertain' };
+    // A selected native FileList is usable for form submission, not proof of remote receipt.
+    for (let elapsed = 0; elapsed <= 5000; elapsed += 250) {
+      observation = await inspectUploadRecord(record, key, original);
+      if (observation.state === 'rejected' || observation.state === 'mismatch') break;
+      if (elapsed >= 750 && acceptedUpload(observation.state)) break;
+      if (elapsed < 5000) await sleep(250);
+    }
+    if (observation.state === 'empty') observation.state = 'uncertain';
+    return uploadOutcome(record, observation);
+  }
+
+  async function fillUpload(element, file) {
+    if (!file?.base64 || !file.filename) return { ok: false, error: 'No file to attach.' };
+    const key = uploadIdentity(element);
+    const previous = uploadState.entries.get(key);
+    if (previous) {
+      if (previous.file.filename !== file.filename || previous.file.base64 !== file.base64) {
+        return { ok: false, manualUpload: true, error: 'A different document was already assigned to this upload. Review the attachment manually.' };
+      }
+      if (previous.promise) return previous.promise;
+      return uploadOutcome(previous, await inspectUpload(element, file));
+    }
+    const record = { file, state: 'pending', sent: false, promise: null, context: uploadState.context, pageUrl: location.href, element, scope: uploadScope(element), id: fieldId(element), label: uploadQuestion(element) || blockQuestion(element).text || 'Attachment' };
+    uploadState.entries.set(key, record);
+    record.promise = (async () => {
+      const before = await inspectUpload(element, file);
+      if (before.state !== 'empty') return uploadOutcome(record, before);
+      let input = element.matches('input[type="file"]') ? element : null;
+      if (!input) {
+        const ownInputs = deepQuery(element, 'input[type="file"]');
+        if (ownInputs.length === 1) input = ownInputs[0];
+      }
+      if (input && !acceptsFile(input, file)) return uploadOutcome(record, { state: 'rejected', error: 'This upload does not accept this PDF type.' });
+      const transfer = new DataTransfer();
+      transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
+      record.sent = true;
+      if (input) {
+        input.files = transfer.files;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        for (const type of ['dragenter', 'dragover', 'drop']) element.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      }
+      return settleUpload(record, input || element, key);
+    })().catch(error => uploadOutcome(record, { state: 'uncertain', error: error.message || 'Could not verify the upload.' }));
+    try { return await record.promise; } finally { record.promise = null; }
+  }
+
+  async function inspectUploadRecord(record, key, original = record.element) {
+    const element = currentUpload(key, original);
+    if (element) return inspectUpload(element, record.file);
+    // Some accepted widgets remove the input, keeping only the attachment row.
+    if (record.scope.isConnected && uploadControls(record.scope).length <= 1) {
+      const issue = uploadError(original, record.scope);
+      if (issue) return { state: 'rejected', error: issue };
+      if (uploadBusy(record.scope)) return { state: 'pending', error: 'The site is still processing this document.' };
+      if (exactFilenameShown(record.scope, record.file.filename)) return { state: 'confirmed' };
+    }
+    return { state: 'uncertain', error: 'The upload changed or disappeared. Check that the intended document is attached.' };
+  }
+
+  async function verifyUploads() {
+    const problems = [];
+    for (const [key, record] of uploadState.entries) {
+      if (record.context !== uploadState.context || record.pageUrl !== location.href) continue;
+      const result = uploadOutcome(record, await inspectUploadRecord(record, key));
+      if (!result.ok) {
+        const element = currentUpload(key, record.element);
+        problems.push({ id: element ? fieldId(element) : record.id, label: record.label, message: result.error });
+      }
+    }
+    return problems;
   }
 
   /**
@@ -1599,7 +1749,7 @@
    */
   function emptyRequiredUploads() {
     return scanForm()
-      .filter((field) => field.kind === 'file' && !field.drop && field.required && !field.hidden && !field.disabled && !uploadHolds(field.id))
+      .filter((field) => field.kind === 'file' && field.required && !field.hidden && !field.disabled && !uploadHolds(field.id))
       .map((field) => ({ id: field.id, label: field.label }));
   }
 
@@ -1614,50 +1764,6 @@
       element.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, composed: true }));
       await new Promise((resolve) => setTimeout(resolve, 80));
     }
-  }
-
-  /**
-   * Drops the file on an upload area as a person dragging it there would, then waits for the site
-   * to show it. A Dropzone that ignores the drop gets it through its own hidden file input instead.
-   */
-  async function dropFile(zone, file) {
-    if (!file) return { ok: false, error: 'No file to attach.' };
-    const { block } = blockQuestion(zone);
-    const inputValues = () => deepQuery(block, 'input:not([type="file"])').map((input) => input.value).join('|');
-    const before = textOf(block);
-    const valuesBefore = inputValues();
-    const shown = () => {
-      const text = textOf(block);
-      const name = file.filename.replace(/\.[a-z0-9]+$/i, '').slice(0, 12).toLowerCase();
-      return text.toLowerCase().includes(name)
-        || inputValues() !== valuesBefore
-        || (text !== before && /\b(kb|mb|uploaded|100 ?%)\b/i.test(text));
-    };
-    const waitShown = async () => {
-      for (let waited = 0; waited < 10000; waited += 500) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        if (shown()) return true;
-      }
-      return false;
-    };
-    const transfer = new DataTransfer();
-    transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
-    for (const type of ['dragenter', 'dragover', 'drop']) {
-      zone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
-    }
-    if (await waitShown()) return { ok: true, value: file.filename };
-    // The zone's own input first (in its box), then a Dropzone's hidden one; never one that does not
-    // take this kind of file (a photo upload elsewhere on the page).
-    const hiddenInput = [
-      ...[zone, block].flatMap((element) => [...(element?.querySelectorAll('input[type="file"]') || [])]),
-      ...document.querySelectorAll('input.dz-hidden-input, body > input[type="file"]'),
-    ].find((input) => acceptsFile(input, file));
-    if (hiddenInput) {
-      hiddenInput.files = transfer.files;
-      hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
-      if (await waitShown()) return { ok: true, value: file.filename };
-    }
-    return { ok: false, error: 'The site did not take the dropped file.' };
   }
 
   async function pickMenuChoice(button, value) {
@@ -1741,7 +1847,7 @@
   function fieldIssue(id) {
     const element = findField(id);
     if (!element) return '';
-    const { block } = blockQuestion(element);
+    const block = element.matches('input[type="file"], [' + DROP_ATTRIBUTE + ']') ? uploadScope(element) : blockQuestion(element).block;
     // Inside page components too: a component shows its own field's error in its shadow root.
     const message = deepQuery(block, '[role="alert"], [class*="error" i], [class*="invalid" i]')
       .filter((node) => isShown(node) && !node.contains(element) && textOf(node) && textOf(node).length < 300)
@@ -2598,6 +2704,8 @@
     classifyPage,
     formActions,
     uploadHolds,
+    setUploadContext,
+    verifyUploads,
     emptyRequiredUploads,
     unreadableFrames,
     searchComboboxChoices,
@@ -2890,8 +2998,12 @@
     // Manager moves on, not an account gate QTS continues by itself.
     const laterSteps = fields.filter((field) => field.hidden && !field.disabled && !field.unrelated
       && field.kind !== 'password' && !isEmail(field));
+    // An email gate goes on with Continue / Next / Start; a page whose button is a real submit word
+    // ("Submit application", "Send application") is a short application form, filled and reviewed.
+    const realSubmit = (action) => action.type === 'submit' && /^(submit|send)\b|bewerbung|wyślij|envoyer|enviar/i.test(action.text);
     if (shown.some(isEmail) && shown.length <= 2 && laterSteps.length < 2
-      && actions.some((action) => action.type === 'next' || action.type === 'start' || action.type === 'submit')) {
+      && actions.some((action) => action.type === 'next' || action.type === 'start' || (action.type === 'submit' && !realSubmit(action)))
+      && !actions.some(realSubmit)) {
       return { type: 'email_first_application', reason: 'The page asks only for an email before going on.' };
     }
     if (shown.some(isEmail) && laterSteps.length >= 2) {

@@ -14,7 +14,7 @@ function fixture() {
   const review = { attemptId: 'owned', assist: true, tabId: 1, tabIds: new Set([1]), panel: { assist: true, attemptId: 'owned', mode: 'assist' }, assistant: { poke: () => { state.pokes++; } } };
   const reviews = new Map([['owned', review]]);
   const context = { activeReviews: reviews, EXTENSION_STATUS_KEY: 'status', isApplyOn: async () => state.applyOn !== false,
-    chrome: { tabs: { onUpdated: event('updated'), onRemoved: event('removed'), onCreated: event('created'), onActivated: event('activated'), remove: async (id) => { state.closed.push(id); events.removed(id); } },
+    chrome: { webNavigation: { onCreatedNavigationTarget: event('navTarget') }, tabs: { onUpdated: event('updated'), onRemoved: event('removed'), onCreated: event('created'), onActivated: event('activated'), remove: async (id) => { state.closed.push(id); events.removed(id); } },
       storage: { onChanged: event('storage') }, scripting: { executeScript: async () => { if (state.gate) await state.gate; return [{ result: state.mounted }]; } } },
     showReviewPanel: async (tabId, panel) => { renders.push({ tabId, panel }); if (state.renderGate) await state.renderGate; state.mounted = true; },
     removeReviewPanel: async () => { state.mounted = false; state.removals++; },
@@ -80,6 +80,21 @@ test('a loaded continuation replaces its parent while two unfinished application
   assert.equal(f.reviews.size, 2);
   assert.equal(f.state.decisions.length, 0, 'handoff cannot finish a review or free its queue slot');
   assert.ok(f.renders.some((render) => render.tabId === 2));
+});
+
+test('a wrong opener is corrected by the real source tab before load, so the other application keeps its page', async () => {
+  const f = fixture();
+  const second = { attemptId: 'second', assist: true, tabId: 9, tabIds: new Set([9]), panel: {}, assistant: { poke() {} } };
+  f.reviews.set('second', second);
+  // Chrome names the first application page as the opener, but the second application page opened the tab.
+  f.state.tabs.set(2, { id: 2, openerTabId: 1, status: 'loading', url: 'https://employer.test/login' });
+  f.events.created(f.state.tabs.get(2)); await settle();
+  f.events.navTarget({ tabId: 2, sourceTabId: 9 }); await settle(); await settle();
+  assert.equal(f.review.tabIds.has(2), false, 'not the first application page');
+  assert.equal(second.tabIds.has(2), true, 'the second application has it');
+  f.state.tabs.set(2, { ...f.state.tabs.get(2), status: 'complete' });
+  await f.events.updated(2, { status: 'complete' }); await settle(); await settle();
+  assert.equal(f.state.closed.includes(1), false, 'the first application page is never closed');
 });
 
 test('loading, blank and unrelated child pages do not close the original application', async () => {
