@@ -132,7 +132,8 @@ async function renderResumePdf(
   document: ResumeDocument,
   template: PdfTemplate | LegacyPdfTemplate,
 ): Promise<Uint8Array> {
-  const pdf = await createWriter(template, 3, containsRomanianCharacters(document));
+  // No page limit for the résumé (as in the templates): it uses as many pages as it needs.
+  const pdf = await createWriter(template, Infinity, containsRomanianCharacters(document));
   const headline = document.candidate.headline ?? document.targetRole;
   const contactParts = template === "flowcv" ? [
     document.candidate.location,

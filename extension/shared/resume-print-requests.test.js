@@ -24,7 +24,7 @@ test('a résumé and cover letter request is accepted and keyed by its template 
   assert.equal(result.error, undefined);
   assert.equal(result.key, `qts-standard\n${JSON.stringify(job().data)}`);
   assert.notEqual(prints.checkPrintJob(job('qts-standard', 'Ion Pop')).key, result.key);
-  assert.notEqual(prints.checkPrintJob(job('harvard')).key, result.key);
+  assert.notEqual(prints.checkPrintJob(job('nordic')).key, result.key);
 });
 
 test('a request without usable résumé data is refused, never printed with the sample résumé', () => {
@@ -48,15 +48,15 @@ test('a request without usable résumé data is refused, never printed with the 
   assert.match(broken((value) => { value.data.self = value.data; }), /cannot be read/);
 });
 
-test('only the 24 QTS templates are accepted, never a stand-in for an unknown one', () => {
-  assert.equal(prints.TEMPLATES.length, 24);
+test('only the 13 QTS templates are accepted, never a stand-in for an unknown one', () => {
+  assert.equal(prints.TEMPLATES.length, 13);
   for (const template of prints.TEMPLATES) assert.equal(prints.checkPrintJob(job(template)).error, undefined, template);
-  for (const template of ['no-such-template', '', 'QTS-STANDARD', '../resume', 'heritage', null, 7]) {
+  for (const template of ['no-such-template', '', 'QTS-STANDARD', '../resume', 'heritage', 'harvard', null, 7]) {
     const value = job();
     value.template = template;
     assert.match(prints.checkPrintJob(value).error, /QTS templates/, String(template));
   }
-  assert.match(prints.checkPrintJob({ ...job('harvard'), template: 'classic' }).error, /another template/);
+  assert.match(prints.checkPrintJob({ ...job('nordic'), template: 'classic' }).error, /another template/);
 });
 
 test('two identical requests at once print once and both get that print', async () => {

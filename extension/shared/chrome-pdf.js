@@ -26,7 +26,9 @@
   // The page is laid out at the sheet's full paper width, like the server and the Resume page preview.
   const VIEWPORT = Object.freeze({ width: 1240, height: 1754, deviceScaleFactor: 1, mobile: false });
   const DOCUMENTS = ['resume', 'cover-letter'];
-  const PAGE_LIMITS = Object.freeze({ resume: 3, 'cover-letter': 1 });
+  // Only the cover letter has a page limit: a résumé the template could not fit within 3 pages
+  // prints reduced on as many pages as it needs (render.js fitToPages), never rejected.
+  const PAGE_LIMITS = Object.freeze({ resume: Infinity, 'cover-letter': 1 });
   const RENDER_TIMEOUT_MS = 25_000;
   const PRINT_TIMEOUT_MS = 60_000;
   // Tabs printing right now: QTS's own page scripts stay out of them.
@@ -40,9 +42,7 @@
     const count = pdf.getPageCount();
     if (count < 1) throw new Error('Chrome produced an empty PDF.');
     if (count > PAGE_LIMITS[document]) {
-      const error = new Error(document === 'resume'
-        ? 'The résumé exceeds three A4 pages. Its content was not truncated.'
-        : 'The cover letter exceeds one A4 page. Shorten its paragraphs.');
+      const error = new Error('The cover letter exceeds one A4 page. Shorten its paragraphs.');
       error.name = 'DocumentPageLimitError';
       throw error;
     }

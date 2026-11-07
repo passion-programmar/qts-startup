@@ -3,12 +3,10 @@
 // template page prints its sample résumé when it gets no data, and the default template for a name
 // it does not know, so a request that would do either is refused here instead of printed.
 (function (global) {
-  // The 24 templates of src/server/pdf/pdf-templates.ts; resume-print-requests.test.js keeps them equal.
+  // The 13 templates of src/server/pdf/pdf-templates.ts; resume-print-requests.test.js keeps them equal.
   const TEMPLATES = Object.freeze([
-    'startup', 'centered', 'corporate', 'ledger', 'bold', 'technical',
-    'professional', 'executive', 'timeline', 'graphite', 'modern-serif', 'compact',
-    'minimal', 'harvard', 'nordic', 'academic', 'swiss', 'slate',
-    'high-contrast', 'classic', 'qts-standard', 'elegant', 'creative', 'banded',
+    'startup', 'centered', 'corporate', 'ledger', 'executive', 'graphite',
+    'minimal', 'nordic', 'academic', 'classic', 'qts-standard', 'creative', 'banded',
   ]);
   // The same limit as the server's /api/pdf/print.
   const MAX_DATA_CHARACTERS = 1_000_000;

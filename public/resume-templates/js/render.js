@@ -10,7 +10,7 @@
      2. <script type="application/json" id="resume-data"> in the page
      3. ?data=local       JSON loaded earlier with "Load JSON" (browser storage)
         ?data=<path>      a JSON file on the same site, e.g. data/sample-rtl.json
-     4. data/sample-full.json
+     4. data/default.json (the default sample; data/sample-full.json is the test sample)
 
    Settings, lowest to highest priority
      template defaults (js/templates.js) → data.theme → URL parameters
@@ -38,17 +38,29 @@
   }
   const OPTIONS = window.RESUME_OPTIONS || {};
   const DEFAULT_TEMPLATE = "qts-standard";
-  const DEFAULT_DATA_URL = "data/sample-full.json";
+  const DEFAULT_DATA_URL = "data/default.json";
   const STORAGE_KEY = "qts-resume:data";
   const SKILL_MAX_LENGTH = 40;
   const FONT_SCALE_MIN = 0.95;
   const FONT_SCALE_MAX = 1.15;
-  // A résumé aims for TARGET_PAGES, shrinking text no smaller than MIN_TEXT_PT to get there;
-  // otherwise it prints at normal size within MAX_PAGES (fitToPages).
-  const TARGET_PAGES = 2;
+  // A résumé that runs onto a partly used page is shrunk to one page fewer, text no smaller
+  // than MIN_TEXT_PT; otherwise it prints at normal size, within MAX_PAGES (fitToPages).
   const MIN_TEXT_PT = 10.5;
+  // The denser layout tried before any text shrinks (shrinkToFit). Spacing and sizes only: the
+  // text and its order, which ATS parsers read, stay the same.
+  const DENSE_LAYOUT = Object.freeze({
+    "--leading-body": "1.25",
+    "--text-name": "22pt",
+    "--space-item": "6pt",
+    "--space-title": "3pt",
+    "--summary-pad-block": "4pt",
+    "--summary-pad-inline": "8pt",
+  });
+  // Page margins live on the page itself (the page view measures with them) and in @page,
+  // which cannot read custom properties; the bottom margin stays 10mm.
+  const DENSE_MARGINS = Object.freeze({ top: "12mm", inline: "14mm", bottom: "10mm" });
   // font-size too: body text takes its size from <body> (base.css), so the résumé needs its own.
-  const SHRINK_PROPERTIES = ["--text-bullet", "--text-body", "--text-item", "font-size"];
+  const SHRINK_PROPERTIES = ["--text-bullet", "--text-body", "--text-item", "font-size", ...Object.keys(DENSE_LAYOUT)];
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
   let MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
@@ -138,14 +150,29 @@
     return link;
   }
 
-  // Appends text, turning **keyword** into <strong class="keyword">. Nothing
-  // else is wrapped: Chrome prints the space next to an inline element as a
-  // piece of its own, which some ATS parsers drop, joining the words.
+  // Appends text, turning **keyword** into <strong class="keyword">, and keeps
+  // each hyphenated word on one line (keepHyphenatedWords). Nothing else is
+  // wrapped: Chrome prints the space next to an inline element as a piece of
+  // its own, which some ATS parsers drop, joining the words.
   function rich(node, value) {
     value.split(/(\*\*[^*]+?\*\*)/g).forEach((part) => {
       if (!part) return;
       const keyword = /^\*\*([^*]+?)\*\*$/.exec(part);
-      node.append(keyword ? el("strong", "keyword", keyword[1]) : part);
+      // Bold phrases too: "**… cloud-native …**" must not break after its hyphen either.
+      if (keyword) node.append(keepHyphenatedWords(el("strong", "keyword"), keyword[1]));
+      else keepHyphenatedWords(node, part);
+    });
+    return node;
+  }
+
+  // "cross-functional", "Domain-Driven" in a no-wrap span (base.css .nobr). Chrome
+  // otherwise breaks the line after the hyphen, and reading-order text extraction
+  // (most ATS) then drops the hyphen: "crossfunctional". Verified with pdftotext
+  // in both reading and raw order on all 13 templates. (A WORD JOINER instead
+  // leaks into the PDF text and breaks keyword matching.)
+  function keepHyphenatedWords(node, value) {
+    value.split(/([\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)+)/u).forEach((part, index) => {
+      if (part) node.append(index % 2 ? el("span", "nobr", part) : part);
     });
     return node;
   }
@@ -867,35 +894,39 @@
     warnings.push(`The contact line is very long: printed at ${points}pt to stay on one line.`);
   }
 
-  /* density "auto" (default), résumé:
-       1. At normal size it fits TARGET_PAGES (2): done.
-       2. Else try to fit TARGET_PAGES with a controlled shrink, measuring after
-          each step: compact spacing; bullets to 10.5pt; then body and role text
-          down by 0.5pt steps to 10.5pt. Text never goes below MIN_TEXT_PT.
-       3. Else undo it all: normal size on MAX_PAGES (3) pages.
-       4. Over MAX_PAGES even then: the same shrink to fit MAX_PAGES; one that
-          still runs over prints at normal size with a warning (and the page
-          check after printing rejects it). Content is never cut.
+  /* density "auto" (default), résumé: a page that is only partly used is pulled back.
+       1. Measure at normal size: N pages.
+       2. If N > 1, try to fit one page fewer (N − 1, at most MAX_PAGES) with a
+          controlled shrink, measuring after each step: compact spacing; the
+          denser layout (DENSE_LAYOUT, DENSE_MARGINS: line height, margins,
+          name, gaps, summary box); bullets to 10.5pt; then body and role text
+          down by 0.5pt steps. Text never goes below MIN_TEXT_PT.
+       3. If it still does not fit, undo it all: normal sizes on N pages.
+       So 1.1 pages of content print on 1 page, 2.1 on 2, and 2.6 on 3 at normal size.
+       Over MAX_PAGES even fully reduced: it prints reduced, on as many pages as
+       it needs, with a warning; it is not rejected. Content is never cut.
      A cover letter only tightens its spacing when it runs past its one page. */
   function fitToPages(article, density, warnings) {
     // The app's own preview (direct render) has no page view to measure with.
     const countPages = directRenderMode ? estimatePages : printedPages;
     article.classList.toggle("doc--compact", density === "compact");
     let pages = countPages(article);
-    if (density === "auto" && DOCUMENT === "resume") {
-      if (pages > TARGET_PAGES) {
-        pages = shrinkToFit(article, countPages, TARGET_PAGES) ?? normalSize(article, countPages);
-      }
-      if (pages > MAX_PAGES) {
-        pages = shrinkToFit(article, countPages, MAX_PAGES) ?? normalSize(article, countPages);
-      }
+    if (density === "auto" && DOCUMENT === "resume" && pages > 1) {
+      const target = Math.min(pages - 1, MAX_PAGES);
+      const fitted = shrinkToFit(article, countPages, target);
+      // Over MAX_PAGES even fully reduced: it prints reduced, on as many pages as it needs
+      // (not rejected). Otherwise a résumé that did not fit one page fewer keeps normal sizes.
+      if (fitted != null) pages = fitted;
+      else if (pages > MAX_PAGES) pages = countPages(article);
+      else pages = normalSize(article, countPages);
     } else if (density === "auto" && pages > MAX_PAGES) {
       article.classList.add("doc--compact");
       pages = countPages(article);
     }
     if (pages > MAX_PAGES) {
-      const what = DOCUMENT === "resume" ? "resume" : "cover letter";
-      warnings.push(`The ${what} needs about ${pages} pages and exceeds the ${MAX_PAGES}-page limit.`);
+      warnings.push(DOCUMENT === "resume"
+        ? `The resume needs about ${pages} pages even with reduced spacing and text; it prints on ${pages} pages.`
+        : `The cover letter needs about ${pages} pages and exceeds the ${MAX_PAGES}-page limit.`);
     }
     return pages;
   }
@@ -904,7 +935,26 @@
   function normalSize(article, countPages) {
     article.classList.remove("doc--compact", "doc--small-bullets");
     SHRINK_PROPERTIES.forEach((name) => article.style.removeProperty(name));
+    setDenseMargins(false);
     return countPages(article);
+  }
+
+  // The denser page margins: the page tokens (what the page view measures) and a matching
+  // @page rule (what Chrome prints), added after the runtime style so it has the last word.
+  function setDenseMargins(on) {
+    styleRoot.querySelector("#resume-dense-margins")?.remove();
+    root.style.removeProperty("--page-margin-top");
+    root.style.removeProperty("--page-margin-inline");
+    root.style.removeProperty("--page-margin-bottom");
+    if (!on) return;
+    root.style.setProperty("--page-margin-top", DENSE_MARGINS.top);
+    root.style.setProperty("--page-margin-inline", DENSE_MARGINS.inline);
+    root.style.setProperty("--page-margin-bottom", DENSE_MARGINS.bottom);
+    if (directRenderMode) return; // the app preview has no printed pages
+    const style = el("style");
+    style.id = "resume-dense-margins";
+    style.textContent = `@page { margin: ${DENSE_MARGINS.top} ${DENSE_MARGINS.inline} ${DENSE_MARGINS.bottom}; }`;
+    styleRoot.append(style);
   }
 
   // The controlled shrink, one step at a time; the page count once it fits within
@@ -922,6 +972,12 @@
 
     article.classList.add("doc--compact");
     let pages = fits();
+    if (pages != null) return pages;
+
+    // Denser layout, text sizes unchanged: line height, page margins, name, gaps, summary box.
+    Object.entries(DENSE_LAYOUT).forEach(([name, value]) => article.style.setProperty(name, value));
+    setDenseMargins(true);
+    pages = fits();
     if (pages != null) return pages;
 
     article.classList.add("doc--small-bullets");

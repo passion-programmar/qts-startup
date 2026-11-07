@@ -6,7 +6,8 @@ import { LoadingIcon } from "@/app/components/loading-icon";
 import { WorkspaceClocks } from "@/app/components/workspace-clocks";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
-import sampleFull from "@/app/pdf/sample-full.json";
+// The JSON box starts with a Generation V2 sample, as ChatGPT returns it (no real person).
+import defaultResume from "@/app/pdf/default-resume.json";
 import { TemplatePagesPreview } from "@/app/pdf/template-pages-preview";
 import {
   isPdfTemplate,
@@ -43,7 +44,7 @@ declare global {
   }
 }
 
-const example = JSON.stringify(sampleFull, null, 2);
+const example = JSON.stringify(defaultResume, null, 2);
 
 const samplePreviewData = parsePdfPackage(example);
 

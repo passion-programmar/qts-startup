@@ -50,5 +50,5 @@ test("the extension accepts what the Resume page sends for every supported templ
 
 test("data prepared for one template is refused for another", () => {
   const data = toResumeTemplateData(parsePdfPackage(JSON.stringify(sample)), "classic");
-  assert.match(prints.checkPrintJob({ template: "harvard", data }).error ?? "", /another template/);
+  assert.match(prints.checkPrintJob({ template: "nordic", data }).error ?? "", /another template/);
 });

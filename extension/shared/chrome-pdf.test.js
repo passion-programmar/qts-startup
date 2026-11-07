@@ -34,8 +34,8 @@ test('the print settings are what the server sends Chrome through puppeteer', as
 
 test('the template page is the QTS site\'s, as the server prints it', () => {
   assert.equal(
-    chromePdf.templatePageUrl('https://qts.example.com/', 'cover-letter', 'modern-serif'),
-    'https://qts.example.com/resume-templates/cover-letter.html?template=modern-serif',
+    chromePdf.templatePageUrl('https://qts.example.com/', 'cover-letter', 'nordic'),
+    'https://qts.example.com/resume-templates/cover-letter.html?template=nordic',
   );
   assert.equal(
     chromePdf.templatePageUrl('http://localhost:3000', 'resume', 'a b'),
@@ -124,22 +124,29 @@ test('any failure gives null so the server prints, and the tab still closes', as
   }
 });
 
-test('rejects actual oversized PDFs without returning downloadable files, and cleans up', async () => {
-  for (const options of [{ resumePages: 4 }, { coverPages: 2 }]) {
-    const { state, calls } = fakeChrome(options);
-    try {
-      await assert.rejects(chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' }), {
-        name: 'DocumentPageLimitError',
-        message: options.resumePages
-          ? 'The résumé exceeds three A4 pages. Its content was not truncated.'
-          : 'The cover letter exceeds one A4 page. Shorten its paragraphs.',
-      });
-      assert.equal(calls.filter(([method]) => method === 'Page.printToPDF').length, options.resumePages ? 1 : 2);
-      assert.equal(state.tabs.size, 0);
-      assert.equal(state.attached.size, 0);
-    } finally {
-      delete global.chrome;
-    }
+test('rejects an actual oversized cover letter without returning downloadable files, and cleans up', async () => {
+  const { state, calls } = fakeChrome({ coverPages: 2 });
+  try {
+    await assert.rejects(chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' }), {
+      name: 'DocumentPageLimitError',
+      message: 'The cover letter exceeds one A4 page. Shorten its paragraphs.',
+    });
+    assert.equal(calls.filter(([method]) => method === 'Page.printToPDF').length, 2);
+    assert.equal(state.tabs.size, 0);
+    assert.equal(state.attached.size, 0);
+  } finally {
+    delete global.chrome;
+  }
+});
+
+test('a résumé longer than 3 pages is printed, never rejected (the template already reduced it)', async () => {
+  const { state } = fakeChrome({ resumePages: 6 });
+  try {
+    const printed = await chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' });
+    assert.ok(printed && printed.resume && printed['cover-letter']);
+    assert.equal(state.tabs.size, 0);
+  } finally {
+    delete global.chrome;
   }
 });
 
@@ -149,7 +156,7 @@ test('the packaged PDF validator reads compressed PDF page trees', async () => {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/pdf-lib/pdf-lib.min.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'chrome-pdf.js'), 'utf8'), context);
   const pdf = await PDFDocument.create();
-  for (let index = 0; index < 6; index += 1) pdf.addPage();
+  for (let index = 0; index < 2; index += 1) pdf.addPage();
   context.base64 = await pdf.saveAsBase64({ useObjectStreams: true });
-  await assert.rejects(vm.runInContext('__qtsChromePdf.validatePdf(base64, "resume")', context), { name: 'DocumentPageLimitError' });
+  await assert.rejects(vm.runInContext('__qtsChromePdf.validatePdf(base64, "cover-letter")', context), { name: 'DocumentPageLimitError' });
 });

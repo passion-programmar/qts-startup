@@ -622,6 +622,12 @@ a {
   color: var(--color-keyword);
 }
 
+/* A hyphenated word ("cross-functional") stays on one line (render.js
+   keepHyphenatedWords): a break after the hyphen makes ATS text read "crossfunctional". */
+.nobr {
+  white-space: nowrap;
+}
+
 
 /* 8. Cover letter -------------------------------------------------------------- */
 
@@ -826,7 +832,8 @@ a {
 }
 
 .doc[data-summary-style="boxed"] .summary {
-  padding: 7pt 10pt;
+  /* The denser page-fit step (render.js shrinkToFit) lowers these. */
+  padding: var(--summary-pad-block, 7pt) var(--summary-pad-inline, 10pt);
   border-radius: 2pt;
   background: var(--summary-bg);
 }
@@ -872,10 +879,11 @@ li {
 
 /* 12. Density ---------------------------------------------------------------------
    render.js (fitToPages) adds .doc--compact when asked ("compact") or, in
-   density "auto", while fitting a résumé into 2 pages (else 3): spacing first,
+   density "auto", while pulling a résumé back to one page fewer: spacing first,
+   then a denser layout (line height, page margins, name, gaps, summary box),
    then .doc--small-bullets with --text-bullet 10.5pt, then --text-body and
-   --text-item in 0.5pt steps, never below 10.5pt. If 2 pages are not reachable
-   that way, the résumé prints at normal size on up to 3 pages. A cover letter
+   --text-item in 0.5pt steps, never below 10.5pt. If that page count is not
+   reachable, the résumé prints at normal size (up to 3 pages). A cover letter
    only gets the spacing step. */
 
 .doc--compact {
@@ -888,14 +896,7 @@ li {
   --space-bullet: 0.5pt;
 }
 
-.doc--compact:is(
-  [data-template="bold"],
-  [data-template="timeline"],
-  [data-template="modern-serif"],
-  [data-template="nordic"],
-  [data-template="swiss"],
-  [data-template="slate"]
-) {
+.doc--compact[data-template="nordic"] {
   --font-scale: 0.97;
   --leading-body: 1.2;
   --space-header: 6pt;

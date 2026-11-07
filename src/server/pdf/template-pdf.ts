@@ -9,10 +9,10 @@ import { resolveTemplateRenderAsset, templateRenderOrigin } from "@/server/pdf/t
 
 const renderTimeoutMs = 25_000;
 
-// The templates compact content first; this check prevents a successful PDF from exceeding
-// the résumé and cover-letter page policies without silently truncating content.
+// The templates compact content first. Only the cover letter has a page limit: a résumé the
+// template could not fit within 3 pages prints reduced on as many pages as it needs.
 const pageLimits = {
-  resume: { pages: 3, message: "The résumé exceeds three A4 pages. Its content was not truncated." },
+  resume: { pages: Infinity, message: "" },
   "cover-letter": { pages: 1, message: "The cover letter exceeds one A4 page. Shorten its paragraphs." },
 } as const;
 

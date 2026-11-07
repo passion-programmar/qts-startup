@@ -1,0 +1,158 @@
+{
+  "resume": {
+    "targetCompany": "ENSEK",
+    "applyJobTitle": "Staff AI/ML Engineer",
+    "name": "Sample Candidate",
+    "title": "Senior AI / ML Engineer | AI/ML Platform Architecture | MLOps & LLMOps | AWS | Kubernetes | Generative AI",
+    "contact": {
+      "location": "Iasi, Romania",
+      "email": "sample.candidate@example.com",
+      "linkedin": "linkedin.com/in/sample-candidate",
+      "phone": "+40 700 000 000"
+    },
+    "summary": "Senior AI / ML Engineer with 10 years of experience across machine learning, data science, and software engineering, specializing in production AI systems and scalable platform architecture. Expertise spans **Python, MLOps, LLMOps, Generative AI, RAG, and cloud-native infrastructure** on AWS and Kubernetes. Experienced in designing reusable model serving components, automated ML pipelines, evaluation frameworks, and operational controls while guiding engineering decisions and cross-functional delivery. Brings the architectural judgment and hands-on implementation expertise to establish ENSEK's governed, self-service AI/ML Platform.",
+    "skills": [
+      {
+        "category": "Programming Languages",
+        "items": "Python, SQL, TypeScript, JavaScript, Bash"
+      },
+      {
+        "category": "Machine Learning & Frameworks",
+        "items": "PyTorch, TensorFlow, scikit-learn, XGBoost, LightGBM, Hugging Face Transformers, Optuna, ONNX, Probability Calibration"
+      },
+      {
+        "category": "Generative AI & Agentic AI",
+        "items": "Large Language Models, Retrieval-Augmented Generation, LangChain, LangGraph, LlamaIndex, OpenAI API, Amazon Bedrock, Prompt Engineering, Model Context Protocol, Function Calling, Multi-Agent Orchestration, Human-in-the-Loop"
+      },
+      {
+        "category": "MLOps & LLMOps",
+        "items": "MLflow, Kubeflow, Amazon SageMaker, KServe, BentoML, LangSmith, Arize Phoenix, Ragas, DeepEval, Prompt Versioning, Model Registry, Experiment Tracking, Model Monitoring, Data Drift Detection"
+      },
+      {
+        "category": "Cloud & Infrastructure",
+        "items": "AWS, Amazon EKS, Amazon ECS, AWS Lambda, Amazon S3, Amazon ECR, Terraform, Docker, Kubernetes, Helm"
+      },
+      {
+        "category": "DevOps & CI/CD",
+        "items": "GitHub Actions, GitLab CI, Argo CD, GitOps, Infrastructure as Code, Git"
+      },
+      {
+        "category": "Software Architecture & Distributed Systems",
+        "items": "Microservices, Event-Driven Architecture, Domain-Driven Design, Hexagonal Architecture, Asynchronous Processing, Message Queues, Circuit Breaker Pattern, API Gateway"
+      },
+      {
+        "category": "APIs & Model Serving",
+        "items": "FastAPI, Flask, Pydantic, REST APIs, gRPC, vLLM, Redis Streams, Celery"
+      },
+      {
+        "category": "Databases & Retrieval",
+        "items": "PostgreSQL, Redis, MongoDB, pgvector, Pinecone, FAISS, OpenSearch, Hybrid Search, BM25"
+      },
+      {
+        "category": "Data Engineering & Lakehouse",
+        "items": "Apache Airflow, Apache Spark, Databricks, Delta Lake, Apache Kafka, pandas, NumPy, Polars, Parquet"
+      },
+      {
+        "category": "Security & AI Governance",
+        "items": "OAuth 2.0, OpenID Connect, RBAC, AWS IAM, AWS KMS, Secrets Management, PII Redaction, Prompt Injection Detection, OWASP Top 10 for LLM Applications, NIST AI RMF, GDPR, Audit Logging"
+      },
+      {
+        "category": "Observability & Testing",
+        "items": "OpenTelemetry, Prometheus, Grafana, Amazon CloudWatch, pytest, Locust, Integration Testing, Contract Testing, Golden Dataset Evaluation"
+      }
+    ],
+    "experience": [
+      {
+        "company": "Serokell",
+        "location": "Iasi, Romania",
+        "role": "Senior AI / ML Engineer | MLOps | AI Platform Architecture",
+        "dates": "Apr 2025 – Present",
+        "bullets": [
+          "Architect reusable **AI/ML platform** components in Python, combining model inference services, feature pipelines, and standardized API contracts to support consistent deployment and operation of production machine learning capabilities.",
+          "Design **MLOps** workflows using MLflow, Docker, Kubernetes, and automated CI/CD pipelines, establishing reproducible model packaging, artifact versioning, deployment validation, and controlled promotion between environments.",
+          "Develop **Generative AI** and **Retrieval-Augmented Generation (RAG)** services with LangChain, embedding models, pgvector, and FastAPI, integrating document ingestion, retrieval filtering, grounded generation, and structured response validation.",
+          "Implement **LLMOps evaluation** workflows with versioned prompts, representative test datasets, retrieval quality checks, and model comparison experiments to assess answer accuracy, consistency, latency, and operational cost.",
+          "Engineer **Agentic AI** orchestration components using LangGraph, typed tool interfaces, conditional execution, and human-in-the-loop approval, introducing controlled tool access and escalation paths for sensitive operations.",
+          "Build **cloud-native AI services on AWS** using Docker, Amazon EKS, Terraform, and Helm, defining reusable infrastructure configurations, service health checks, and automated deployment workflows for scalable inference workloads.",
+          "Establish **model lifecycle management** patterns with MLflow registries, model metadata, experiment lineage, and deployment records, improving traceability between training artifacts, evaluation results, and production model versions.",
+          "Implement **AI governance and security** mechanisms through role-aware API authorization, sensitive-data filtering, audit logs, prompt injection defenses, and restricted integration credentials to support safer production AI workflows.",
+          "Integrate **observability and monitoring** with OpenTelemetry, Prometheus, Grafana, and structured application logs, exposing inference latency, model errors, retrieval diagnostics, and resource consumption for operational investigation.",
+          "Guide technical design reviews and mentor engineers on Python architecture, model serving, automated testing, and deployment reliability while collaborating with data scientists and product stakeholders on platform standards and technical priorities."
+        ]
+      },
+      {
+        "company": "Sidra",
+        "location": "Bilbao, Spain",
+        "role": "AI/ML Engineer | Python | Production Machine Learning",
+        "dates": "Aug 2022 – Mar 2025",
+        "bullets": [
+          "Developed production **machine learning pipelines** using Python, PyTorch, scikit-learn, and XGBoost, integrating feature preparation, model training, evaluation, and inference components into reusable application workflows.",
+          "Implemented **model deployment and serving** services with FastAPI, Docker, and AWS, exposing versioned inference endpoints with request validation, asynchronous processing, health checks, and structured error handling.",
+          "Established **MLOps** experiment workflows with MLflow, automated training jobs, and validation datasets, recording model parameters, evaluation results, and artifacts to support reproducibility and release decisions.",
+          "Built data ingestion and transformation pipelines using **Apache Airflow**, PostgreSQL, pandas, and Amazon S3, enforcing schema consistency, data quality checks, and reliable delivery of training and inference features.",
+          "Developed NLP and **LLM application** components using Hugging Face Transformers and retrieval techniques, connecting document processing and semantic representations to application services for knowledge extraction and search.",
+          "Collaborated with data scientists and software engineers to define API contracts, evaluate model trade-offs, introduce automated pytest coverage, and improve production monitoring through application metrics and logging."
+        ]
+      },
+      {
+        "company": "Crystal System",
+        "location": "Bucharest, Romania",
+        "role": "Data Scientist | Python | Machine Learning",
+        "dates": "May 2019 – Jul 2022",
+        "bullets": [
+          "Designed **predictive machine learning** workflows using Python, scikit-learn, XGBoost, and statistical feature engineering, developing classification and regression models for structured enterprise datasets.",
+          "Built analytical data pipelines using **SQL**, PostgreSQL, pandas, and Apache Spark, combining disparate records into validated feature tables for experimentation and downstream reporting.",
+          "Implemented **model evaluation** procedures with cross-validation, hyperparameter optimization, error analysis, and probability calibration to assess generalization and support informed model selection.",
+          "Developed interactive analytical dashboards using **Plotly**, Streamlit, and Power BI, translating model predictions, feature importance, and data quality findings into accessible information for business stakeholders."
+        ]
+      },
+      {
+        "company": "StatusToday",
+        "location": "London, UK",
+        "role": "Software Engineer | Python | Distributed Systems",
+        "dates": "Aug 2016 – Apr 2019",
+        "bullets": [
+          "Developed backend application services using **Python**, Flask, and REST APIs, implementing business logic, request validation, and service integrations for data-intensive software applications.",
+          "Engineered asynchronous data processing workflows with **Redis**, Celery, and PostgreSQL, separating background computation from synchronous application requests to support reliable data ingestion and processing.",
+          "Implemented application data access and integration components using **SQL**, structured schemas, and API interfaces, supporting consistent data retrieval and downstream analytical workflows.",
+          "Contributed to **CI/CD** and software quality practices using Git, pytest, Docker, and automated regression testing, strengthening service maintainability, release consistency, and operational troubleshooting."
+        ]
+      }
+    ],
+    "education": [
+      {
+        "institution": "Technical University of Cluj Napoca",
+        "location": "Cluj-Napoca, Romania",
+        "degree": "Bachelor's Degree",
+        "field": "Computer Science",
+        "dates": "Oct 2013 – Jul 2016"
+      }
+    ]
+  },
+  "coverLetter": {
+    "candidate": {
+      "fullName": "Sample Candidate",
+      "email": "sample.candidate@example.com",
+      "phone": "+40 700 000 000",
+      "location": "Iasi, Romania",
+      "linkedinUrl": "linkedin.com/in/sample-candidate"
+    },
+    "targetRole": "Staff AI/ML Engineer",
+    "targetCompany": "ENSEK",
+    "recipient": {
+      "name": "",
+      "title": "Hiring Manager",
+      "company": "ENSEK",
+      "address": []
+    },
+    "subject": "Application for Staff AI/ML Engineer",
+    "salutation": "Dear Hiring Manager,",
+    "bodyParagraphs": [
+      "I am applying for the Staff AI/ML Engineer position at ENSEK, bringing 10 years of experience across software engineering, data science, and production machine learning systems. As a Senior AI / ML Engineer at Serokell, I focus on scalable AI architecture, model deployment, reusable platform components, and engineering practices that make production AI reliable and maintainable. My experience with Python, MLOps, LLMOps, Generative AI, RAG, AWS, and Kubernetes aligns closely with the technical foundation ENSEK is seeking for its new AI/ML Platform. The opportunity to shape a shared engineering capability from its earliest architectural decisions is particularly compelling.",
+      "My recent engineering work spans production model serving, reproducible ML pipelines, RAG services, agent orchestration, and evaluation frameworks. I use MLflow, FastAPI, Docker, Kubernetes, Terraform, and cloud-native infrastructure to connect experimentation with reliable deployment and operational monitoring. I also emphasize prompt versioning, model traceability, human approval mechanisms, secure tool access, and practical observability for production AI systems. Beyond implementation, I contribute to architecture reviews, mentor engineers, and work with data scientists and product stakeholders to establish reusable technical patterns. These capabilities directly support ENSEK's need for governed, observable golden paths across ML, GenAI, and Agentic AI.",
+      "I am particularly interested in helping ENSEK establish an AI/ML Platform that product teams can adopt confidently while meeting the reliability, privacy, auditability, and operational requirements of the energy sector. I would bring hands-on engineering expertise, pragmatic architectural decision-making, and a strong focus on balancing scalability, model quality, cost, and risk. I welcome the opportunity to contribute to the platform roadmap, define sustainable engineering standards, and support the development of a high-performing ML Engineering capability. I would be pleased to discuss how my experience can help ENSEK deliver safe, measurable AI innovation across its products."
+    ],
+    "closing": "Kind regards,",
+    "signatureName": "Sample Candidate"
+  }
+}

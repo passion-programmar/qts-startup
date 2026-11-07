@@ -59,10 +59,10 @@ function selector(rows: Array<Array<Record<string, string>>>) {
 }
 
 test("explicit Manager prompt selection keeps the selected version and rotating template", async () => {
-  const { calls, setup } = selector([[{ id: "selected", prompt_template: "Use concise bullets." }], [{ template: "harvard" }]]);
+  const { calls, setup } = selector([[{ id: "selected", prompt_template: "Use concise bullets." }], [{ template: "nordic" }]]);
   const selected = await setup("manager", "selected");
   assert.equal(selected.promptId, "selected");
-  assert.equal(selected.pdfTemplate, "harvard");
+  assert.equal(selected.pdfTemplate, "nordic");
   assert.deepEqual(calls[0].values, ["selected", "manager"]);
   assert.match(calls[0].sql, /owner_manager_id/);
   assert.match(calls[0].sql, /is_active/);

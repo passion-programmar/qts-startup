@@ -31,8 +31,8 @@ async function pdfBytes(pages: number) {
   return pdf.save();
 }
 
-test("server template printing enforces actual three/one-page limits and closes pages", async () => {
-  for (const [resumePages, coverPages] of [[3, 1], [4, 1], [3, 2]]) {
+test("server template printing keeps the cover letter to one page, never rejects a long résumé, and closes pages", async () => {
+  for (const [resumePages, coverPages] of [[3, 1], [6, 1], [3, 2]]) {
     let closed = 0;
     const resume = await pdfBytes(resumePages);
     const coverLetter = await pdfBytes(coverPages);
@@ -58,11 +58,11 @@ test("server template printing enforces actual three/one-page limits and closes 
       "@/server/pdf/template-pdf-assets": { templateRenderOrigin: "https://qts.test" },
     });
     const result = printing.renderTemplatePdfPackage({}, "minimal", { enforcePageLimits: true });
-    if (resumePages > 3 || coverPages > 1) {
+    if (coverPages > 1) {
       await assert.rejects(result, (error: unknown) => error instanceof DocumentPageLimitError);
     } else {
       const bytes = await result as { resume: Uint8Array; coverLetter: Uint8Array };
-      assert.equal((await PDFDocument.load(bytes.resume)).getPageCount(), 3);
+      assert.equal((await PDFDocument.load(bytes.resume)).getPageCount(), resumePages);
       assert.equal((await PDFDocument.load(bytes.coverLetter)).getPageCount(), 1);
     }
     // Both documents print concurrently; let the other page's finally finish too.

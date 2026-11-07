@@ -13,4 +13,11 @@
   --text-item: 11.5pt;
   --text-body: 11.5pt;
   --text-meta: 10.5pt;
+  /* Tighter gap between sections (base: 10pt). Compact density still sets its own. */
+  --space-section: 8pt;
+}
+/* Verdana kerning moves the letter after a capital T backwards; stream-order text extraction
+   (some ATS) then splits words ("T erraform"). Without kerning every extractor reads them whole. */
+.doc {
+  font-kerning: none;
 }

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import type { PdfPackage } from "@/app/pdf/document-data";
-import { DocumentPageLimitError } from "@/app/pdf/document-page-limit-error";
 import { contactSeparator, fitContactLine, renderPdfPackage } from "@/app/pdf/pdf-renderer";
 import {
   isPdfTemplate,
@@ -47,7 +46,7 @@ const data: PdfPackage = {
 
 test("every supported template renders a valid resume and cover letter PDF", async () => {
   assert.equal(pdfTemplateValues.length, 13);
-  assert.equal(pdfTemplateSupportedValues.length, 24);
+  assert.equal(pdfTemplateSupportedValues.length, 13);
   for (const template of pdfTemplateSupportedValues) {
     const rendered = await renderPdfPackage(data, template);
     assert.equal(Buffer.from(rendered.resume).subarray(0, 4).toString(), "%PDF", template);
@@ -59,7 +58,7 @@ test("every supported template renders a valid resume and cover letter PDF", asy
   }
 });
 
-test("active templates are renumbered in rotation order and hidden templates remain supported", () => {
+test("active templates are renumbered in rotation order and removed templates are no longer accepted", () => {
   assert.deepEqual(
     [...pdfTemplateValues],
     [
@@ -71,7 +70,8 @@ test("active templates are renumbered in rotation order and hidden templates rem
     pdfTemplateValues.map((template) => pdfTemplateLabels[template]),
     Array.from({ length: 13 }, (_, index) => `QTS Template ${index + 1}`),
   );
-  assert.equal(isPdfTemplate("bold"), true);
+  assert.equal(isPdfTemplate("bold"), false);
+  assert.equal(isPdfTemplate("harvard"), false);
   assert.equal(isPdfTemplate("qts-standard"), true);
   assert.equal(isPdfTemplate("flowcv"), false);
   assert.equal(isPdfTemplate("orchid"), false);
@@ -211,7 +211,7 @@ test("all templates render Romanian characters in both documents", async () => {
   }
 });
 
-test("the fallback rejects a résumé that exceeds three pages without truncation", async () => {
+test("the fallback prints a résumé longer than three pages in full, without rejecting it", async () => {
   const overlong: PdfPackage = {
     ...data,
     resume: {
@@ -220,12 +220,8 @@ test("the fallback rejects a résumé that exceeds three pages without truncatio
       sections: [],
     },
   };
-  await assert.rejects(
-    renderPdfPackage(overlong, "minimal"),
-    (error: unknown) => error instanceof DocumentPageLimitError
-      && /3 A4 pages/.test(error.message)
-      && /not truncated/.test(error.message),
-  );
+  const rendered = await renderPdfPackage(overlong, "minimal");
+  assert.ok((await PDFDocument.load(rendered.resume)).getPageCount() > 3);
 });
 
 test("the contact line always fits on one line inside the margins", () => {

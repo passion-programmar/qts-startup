@@ -213,13 +213,13 @@ test("a required section whose entries print nothing counts as missing", () => {
 
 test("each template shows its own sections in its own order, with its own layout", () => {
   const parsed = parsePdfPackage(JSON.stringify(generatedPackage));
-  const technical = toResumeTemplateData(parsed, "technical");
+  const graphite = toResumeTemplateData(parsed, "graphite");
   // Career Highlights are in the JSON but no template prints them.
   assert.deepEqual(
-    technical.resume.sections.map((section) => section.id),
+    graphite.resume.sections.map((section) => section.id),
     ["skills", "experience", "projects", "education"],
   );
-  assert.deepEqual(technical.theme.sectionOrder, ["summary", "skills", "experience", "projects", "education"]);
+  assert.deepEqual(graphite.theme.sectionOrder, ["summary", "skills", "experience", "projects", "education"]);
   const executive = toResumeTemplateData(parsed, "executive");
   assert.deepEqual(
     executive.resume.sections.map((section) => section.id),

@@ -13,10 +13,10 @@ test("serves template pages, styles, scripts, and fonts from public/resume-templ
     "css/base.css",
     "css/fonts.css",
     "js/render.js",
-    "templates/harvard.css",
+    "templates/nordic.css",
     "fonts/arimo/arimo-latin-400-normal.woff2",
   ]) {
-    const asset = resolveTemplateRenderAsset(`${templateRenderOrigin}/resume-templates/${file}?template=harvard`);
+    const asset = resolveTemplateRenderAsset(`${templateRenderOrigin}/resume-templates/${file}?template=nordic`);
     assert.equal(asset?.filePath, path.join(templateRoot, file), file);
     assert.ok(asset && existsSync(asset.filePath), file);
   }
