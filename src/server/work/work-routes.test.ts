@@ -201,17 +201,30 @@ test("unselected Auto Apply uses the Manager's configured open-job limit", async
   assert.match(fixture.queries[1].sql, /like \('%\.'/);
 });
 test("unselected Normal Apply skips the Manager's Custom URL domains", async () => {
+  fixture.rows = [[{ parallelLimit: 2 }]];
   assert.equal(await scopedApply(managerId, { id: "browser" }, [], undefined, { autoApply: false }), null);
-  assert.match(fixture.queries[0].sql, /auto_apply_custom_urls/);
-  assert.match(fixture.queries[0].sql, /url_prefix/);
-  assert.match(fixture.queries[0].sql, /like \('%\.'/);
-  assert.ok(fixture.queries[0].params.includes(false), "the skipped URLs do not change the run into Auto Apply");
+  assert.match(fixture.queries[1].sql, /auto_apply_custom_urls/);
+  assert.match(fixture.queries[1].sql, /url_prefix/);
+  assert.match(fixture.queries[1].sql, /like \('%\.'/);
+  assert.ok(fixture.queries[1].params.includes(false), "the skipped URLs do not change the run into Auto Apply");
+  // The Custom URL check names "jobs"."job_url": an aliased "jobs j" made Postgres refuse every claim.
+  assert.doesNotMatch(fixture.queries[1].sql, /from "?jobs"? j/);
 });
 test("explicitly selected Normal Apply jobs are not filtered by Custom URL domains", async () => {
+  fixture.rows = [[{ parallelLimit: 2 }]];
   assert.equal(await scopedApply(managerId, { id: "browser" }, [], { candidateId, jobIds: [jobId] }, { autoApply: false }), null);
-  assert.doesNotMatch(fixture.queries[0].sql, /auto_apply_custom_urls/);
-  assert.ok(fixture.queries[0].params.includes(candidateId));
-  assert.ok(fixture.queries[0].params.includes(`{${jobId}}`));
+  assert.doesNotMatch(fixture.queries[1].sql, /auto_apply_custom_urls/);
+  assert.ok(fixture.queries[1].params.includes(candidateId));
+  assert.ok(fixture.queries[1].params.includes(`{${jobId}}`));
+});
+test("Normal Apply uses the Manager's configured open-job limit, chosen jobs included", async () => {
+  fixture.rows = [[{ parallelLimit: 5 }]];
+  assert.equal(await scopedApply(managerId, { id: "browser" }, [], undefined, { autoApply: false }), null);
+  assert.ok(fixture.queries[1].params.includes(5), "not the old fixed limit of 2");
+  fixture.queries = [];
+  fixture.rows = [[{ parallelLimit: 5 }]];
+  assert.equal(await scopedApply(managerId, { id: "browser" }, [], { candidateId, jobIds: [jobId] }, { autoApply: false }), null);
+  assert.ok(fixture.queries[1].params.includes(5), "only an Auto Apply selection runs one at a time");
 });
 test("selected Auto Apply includes the Custom URL domain check for its Gemini override", async () => {
   const attemptId = "33333333-3333-4333-8333-333333333333";

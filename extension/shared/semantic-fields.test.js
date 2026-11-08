@@ -32,7 +32,9 @@ test('candidate authority, scope precedence and conflicting aliases remain conse
   assert.equal(answers.resolveField(field('Preferred interview channel'), {}, records, { normalApply: true }).value, 'Video');
   records.push(row('Preferred interview channel', 'In person', 'candidate', 'second'));
   assert.match(answers.resolveField(field('Preferred interview channel'), {}, records, { normalApply: true }).byHand, /conflict/);
-  assert.equal(answers.resolveField(field('Preferred interview format'), {}, [row('Preferred interview channel', 'Video', 'manager')], { normalApply: true }).value, undefined);
+  // A Manager default applies when the candidate has no answer of their own (2026-11-06 decision).
+  assert.equal(answers.resolveField(field('Preferred interview format'), {}, [row('Preferred interview channel', 'Video', 'manager')], { normalApply: true }).value, 'Video');
+  assert.equal(answers.resolveField(field('Preferred interview format'), {}, [row('Preferred interview channel', 'Video', 'manager'), row('Preferred interview method', 'Phone', 'candidate')], { normalApply: true }).value, 'Phone', 'the candidate wins over the Manager default');
 });
 
 test('identity, geography, time, money and policy meanings never broaden automatically', () => {
@@ -54,7 +56,9 @@ test('identity, geography, time, money and policy meanings never broaden automat
     ['Expected annual salary EUR gross', 'Expected monthly salary EUR net'],
     ['I agree to the privacy policy', 'I accept the privacy policy'],
   ]) assert.equal(semantics.compatible(left, right), false, `${left} / ${right}`);
-  assert.equal(answers.resolveField(field('Legal name'), { firstName: 'Ana', lastName: 'Pop' }, [], { normalApply: true }).value, undefined);
+  // Decision 2026-11-07 (autofill as much as possible from the profile): a legal name is the profile's
+  // first and last name; a passport name (below) is still never inferred.
+  assert.equal(answers.resolveField(field('Legal name'), { firstName: 'Ana', lastName: 'Pop' }, [], { normalApply: true }).value, 'Ana Pop');
   for (const label of ['Full name as shown on passport', 'Employer email']) assert.equal(answers.resolveField(field(label), { firstName: 'Ana', lastName: 'Pop', email: 'candidate@example.test' }, [], { normalApply: true }).value, undefined);
   assert.equal(answers.resolveField(field('Email and phone'), { email: 'one@example.test', phone: '+40' }, [], { normalApply: true }).value, undefined);
   assert.equal(answers.resolveField(field('Are you authorized to work in Germany?'), { country: 'Romania' }, [], { normalApply: true }).value, undefined);

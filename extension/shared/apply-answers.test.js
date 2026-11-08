@@ -24,18 +24,20 @@ const candidate = {
 
 const field = (label, extra = {}) => ({ id: label, label, kind: 'text', required: true, ...extra });
 
-test('Normal Apply reuses only explicitly saved matching inline policy contexts, preserving refusal and Auto behavior', () => {
+test('Normal Apply keeps an explicitly saved answer for the same policy context, and otherwise accepts the acknowledgment', () => {
   const f = field('I agree to the privacy policy', { kind: 'checkbox', policyContext: 'employer:terms-v1' });
   const row = { scope: 'application', questionText: f.label, questionKey: answers.normalizeQuestionKey(f.label), answer: 'false',
     variants: [{ kind: 'checkbox', options: [], answer: 'false', policyContext: f.policyContext }] };
+  // An explicitly saved answer for exactly these terms still wins.
   assert.equal(answers.resolveField(f, candidate, [row], { normalApply: true }).value, false);
+  // Changed, linked or never-saved terms are accepted automatically (decision 2026-11-06).
   for (const changed of [{ ...f, policyContext: null }, { ...f, policyContext: 'employer:terms-v2' }]) {
-    assert.match(answers.resolveField(changed, candidate, [row], { normalApply: true }).byHand, /Review/);
+    assert.equal(answers.resolveField(changed, candidate, [row], { normalApply: true }).value, true);
   }
-  assert.ok(answers.resolveField(f, candidate, [], { normalApply: true }).byHand);
+  assert.equal(answers.resolveField(f, candidate, [], { normalApply: true }).value, true);
   assert.equal(answers.resolveField(f, candidate, [row], { autoApply: true }).value, true, 'Auto Apply consent behavior is unchanged');
   const legacy = { ...row, variants: [] };
-  assert.ok(answers.resolveField(f, candidate, [legacy], { normalApply: true }).byHand);
+  assert.equal(answers.resolveField(f, candidate, [legacy], { normalApply: true }).value, true);
 });
 
 test('Normal Apply protects authoritative contact facts and does not invent missing notice information', () => {

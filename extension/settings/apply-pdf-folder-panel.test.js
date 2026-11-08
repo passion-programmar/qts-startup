@@ -15,7 +15,7 @@ function fixture({ access = { ok: true, canUseApply: true }, saved, supported = 
   const restore = { hidden: true, addEventListener: (_type, handler) => { handlers.restore = handler; } };
   const status = { dataset: {} };
   const state = { access, saved, selected: null, writes: [] };
-  const windowObject = { dispatchEvent: () => {}, addEventListener: () => {} };
+  const windowObject = { dispatchEvent: () => {}, addEventListener: (type, handler) => { if (type === 'focus') handlers.focus = handler; } };
   windowObject.top = embedded ? {} : windowObject;
   const documentObject = { getElementById: (id) => ({ 'choose-folder': button, 'restore-access': restore, 'folder-status': status })[id],
     addEventListener: (_type, handler) => { handlers.visibility = handler; } };
@@ -49,7 +49,7 @@ function fixture({ access = { ok: true, canUseApply: true }, saved, supported = 
     return Promise.resolve(state.selected);
   };
   vm.runInNewContext(source, context);
-  return { button, restore, status, state, calls, choose: () => handlers.choose(), restoreAccess: () => handlers.restore() };
+  return { button, restore, status, state, calls, context, choose: () => handlers.choose(), restoreAccess: () => handlers.restore(), focus: () => handlers.focus() };
 }
 
 function directory(permission = 'granted', requested = 'granted') {
@@ -138,4 +138,21 @@ test('unsupported directory picker reports an explicit error and stays disabled'
   await settle();
   assert.equal(f.status.dataset.state, 'error');
   assert.equal(f.button.disabled, true);
+});
+
+test('the window getting focus back when the folder dialog closes does not drop the chosen folder', async () => {
+  const panel = fixture({ saved: null });
+  await settle(); await settle();
+  const chosen = directory('granted');
+  let close;
+  panel.context.window.showDirectoryPicker = () => new Promise((resolve) => { close = () => resolve(chosen); });
+  const picking = panel.choose();
+  await settle();
+  // Windows' dialog closes: focus returns to the QTS window before the pick resolves.
+  panel.focus();
+  close();
+  await picking; await settle(); await settle();
+  assert.equal(panel.state.writes.length, 1, 'the chosen folder is saved');
+  assert.equal(panel.state.saved, chosen);
+  assert.match(panel.status.textContent, /Ready: Apply can read PDFs from QTS_Resume/);
 });

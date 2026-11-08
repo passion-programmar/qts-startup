@@ -624,6 +624,13 @@
       "when": 1793765616375,
       "tag": "0088_curly_payback",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1794092590152,
+      "tag": "0089_equal_phil_sheldon",
+      "breakpoints": true
     }
   ]
 }

@@ -255,7 +255,7 @@ test('normal Apply navigates safely, fills saved values, and pauses for manual a
     const FORM_IDS = ['fn', 'ln', 'em', 'ph', 'co', 'np', 'hear', 'why', 'cl', 'cv', 'ok'];
     const knownFormValues = {
       fn: 'Radu', ln: 'Star', em: 'radu.test@example.com', ph: '+40264484948', co: 'Romania', np: 'Immediately',
-      hear: '', why: '', cl: 'Dear Hiring Manager,\nI would like to join Acme.', cv: 1, ok: false,
+      hear: '', why: '', cl: 'Dear Hiring Manager,\nI would like to join Acme.', cv: 1, ok: true, // the privacy agreement is accepted automatically
     };
 
     try {
@@ -278,7 +278,7 @@ test('normal Apply navigates safely, fills saved values, and pauses for manual a
     try {
       await until('saved normal Apply values', async () => {
         const values = await read('/form/1', FORM_IDS);
-        return values?.fn === knownFormValues.fn && values?.cv === knownFormValues.cv && values?.np === knownFormValues.np;
+        return values?.fn === knownFormValues.fn && values?.cv === knownFormValues.cv && values?.np === knownFormValues.np && values?.ok === true;
       });
     } catch (error) {
       console.error('Normal Apply form state:', JSON.stringify({

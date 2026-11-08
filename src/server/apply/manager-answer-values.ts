@@ -50,11 +50,21 @@ export function correctionKey(question: string): string {
     ? "application source" : normalizeQuestionKey(question);
 }
 
+// Never one answer for all candidates: who the candidate is (identity, contacts, address, diversity),
+// questions naming one company or role, and legal terms (QTS ticks acknowledgments by its own rule).
+const IDENTITY_QUESTION = /\b(?:city|town|location|located|where (?:do|are) you (?:live|living|based|reside)|place of residence|name|surname|e-?mail|phone|mobile|telephone|address|street|postcode|postal|zip|linkedin|github|portfolio|website|gender|sex|race|ethnic\w*|veteran|disabilit\w*|orientation|pronouns?|age|dob|birth\w*|nationalit\w*|citizenship|passport|tax|national insurance|social security)\b/i;
+const MANAGER_NEVER = /\b(?:privacy|terms|conditions|consent|attest\w*|certif\w*|data processing|background check)\b|\b(?:this|that|our|the)\s+(?:company|employer|role|position|job|product|service|team)\b/i;
+
 export function canShareQuestion(question: string, normalApply = false): boolean {
   if (normalApply) {
     const found = semantics.recognize(question);
     if (found?.blocked) return false;
     if (found?.definition) return found.definition.allowedScopes.includes("manager");
+    // Decision 2026-11-06: a Manager may set a default for all candidates on any other question
+    // (relocation, remote, notice, salary, work rights, sponsorship, years, skills, tools); each
+    // candidate's or application's own answer overrides it.
+    if (correctionKey(question) === "application source") return true;
+    return !profileField(question) && !IDENTITY_QUESTION.test(question) && !MANAGER_NEVER.test(question);
   }
   if (correctionKey(question) === "application source") return true;
   if (/\b(telephone|contact number|birth|passport|tax|national insurance|social security|legal name|maiden name)\b/i.test(question)) return false;
@@ -75,7 +85,17 @@ export function parseCorrection(item: unknown, recognitionOptions: { normalApply
   if (raw.kind === "file" || raw.kind === "password") return "Files and passwords are not saved.";
   const kind = typeof raw.kind === "string" ? raw.kind : "text";
   const options = Array.isArray(raw.options) ? raw.options.filter((entry): entry is string => typeof entry === "string" && entry.length <= 500).slice(0, 100) : [];
-  if (options.length && !options.includes(parsed.answer) && !(kind === "checkbox-group" && parsed.answer.split(" | ").every((answer) => options.includes(answer)))) return "The answer is not an offered choice.";
+  // A choice must be one of the site's options; spacing and capitals may differ, and the site's own
+  // wording is stored ("masters " → "Masters").
+  if (options.length) {
+    const plain = (value: string) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+    const offered = (value: string) => options.find((option) => option === value) ?? options.find((option) => plain(option) === plain(value));
+    const chosen = kind === "checkbox-group" ? parsed.answer.split(" | ").map(offered) : [offered(parsed.answer)];
+    if (chosen.some((option) => option === undefined)) {
+      return `The answer is not one of the site's options (${options.filter((option) => !/^(select|choose)\b/i.test(option)).slice(0, 6).join(", ")}).`;
+    }
+    parsed.answer = chosen.join(" | ");
+  }
   if (profileField(parsed.questionText, recognitionOptions.normalApply) === "candidateEmail" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parsed.answer)) return "Invalid email address.";
   const policyContext = typeof raw.policyContext === "string" && raw.policyContext.length <= 8000 ? raw.policyContext : undefined;
   const answer = profileField(parsed.questionText, recognitionOptions.normalApply) === "linkedinUrl"

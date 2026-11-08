@@ -4,9 +4,7 @@
 import { resumeJsonVersion } from "@/app/pdf/document-data";
 import { normalizeCheckboxAnswer } from "@/lib/checkbox-answer";
 
-/** Job pages open at once per Chrome (any number of Chromes may work at the same time). */
-export const APPLY_PARALLEL_LIMIT = 2;
-/** Manager-configurable Auto Apply jobs open in one Chrome. */
+/** Most Apply and Auto Apply jobs open in one Chrome (the Manager's setting, default 2; any number of Chromes may work). */
 export const MAX_AUTO_APPLY_PARALLEL_LIMIT = 10;
 /** A claim being filled lives this long without a heartbeat; Chromes renew it every 30 seconds. */
 export const APPLY_LEASE_SECONDS = 120;

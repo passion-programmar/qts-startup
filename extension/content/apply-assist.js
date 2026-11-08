@@ -77,6 +77,45 @@
     .alert li { margin-left: 16px; cursor: pointer; }
     .alert li:hover { text-decoration: underline; }
     .alert.empty { border-color: rgb(245 158 11 / .3); background: rgb(245 158 11 / .1); color: #fcd34d; }
+    .questions-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 8px; font-size: 12px; color: #cbd5e1; }
+    .question-filters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+    .question-filters button { padding: 3px 8px; border: 1px solid #334155; border-radius: 999px; background: transparent; color: #cbd5e1; font: 11px Inter, system-ui, sans-serif; cursor: pointer; }
+    .question-filters button.on { border-color: #818cf8; background: rgb(99 102 241 / .25); color: #fff; }
+    .question { display: grid; grid-template-columns: 18px 1fr; gap: 6px; width: 100%; padding: 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; text-align: left; font: 12px/1.4 Inter, system-ui, sans-serif; cursor: pointer; }
+    .question:hover { background: #1a2438; }
+    .question .mark { font-weight: 700; }
+    .question .q-label { color: #e2e8f0; overflow-wrap: anywhere; }
+    .question .q-value { color: #93c5fd; overflow-wrap: anywhere; }
+    .question .q-meta { color: #94a3b8; font-size: 11px; }
+    .question .q-copy { margin-top: 4px; padding: 2px 8px; border: 1px solid #334155; border-radius: 6px; background: #111a2e; color: #a5b4fc; font: 11px Inter, system-ui, sans-serif; cursor: copy; }
+    .question .q-copy:hover { background: #1a2438; }
+    .question .q-copy + .q-copy { margin-left: 6px; }
+    .q-editor { display: grid; gap: 6px; margin-top: 6px; padding: 8px; border: 1px solid #334155; border-radius: 8px; background: #0d1526; cursor: default; }
+    .q-input { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid #334155; border-radius: 6px; background: #111a2e; color: #e2e8f0; font: 12px Inter, system-ui, sans-serif; }
+    .q-option { display: block; color: #cbd5e1; font-size: 12px; }
+    .q-save { padding: 6px 10px; border: 0; border-radius: 6px; background: #4f46e5; color: #fff; font: 600 12px Inter, system-ui, sans-serif; cursor: pointer; }
+    .q-save:disabled { opacity: .6; cursor: default; }
+    .question.edited { outline: 1px solid rgb(250 204 21 / .5); }
+    .question.flash { animation: qflash 2.4s ease-out; }
+    @keyframes qflash { 0%, 40% { background: rgb(250 204 21 / .25); } 100% { background: transparent; } }
+    .q-change { color: #fde68a; font-size: 12px; overflow-wrap: anywhere; }
+    .q-offer { margin-top: 4px; color: #a5b4fc; font-size: 12px; overflow-wrap: anywhere; }
+    .question .q-use { color: #6ee7b7; border-color: #065f46; }
+    .q-levels { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+    .q-level { padding: 3px 8px; border: 0; border-radius: 6px; background: #4f46e5; color: #fff; font: 600 11px Inter, system-ui, sans-serif; cursor: pointer; }
+    .q-level:disabled { opacity: .6; }
+    .q-unsaved { color: #fde68a; }
+    .q-saved { margin-top: 4px; padding: 4px 6px; border-radius: 6px; background: rgb(16 185 129 / .15); color: #6ee7b7; font-size: 11px; }
+    .q-error { margin-top: 4px; padding: 4px 6px; border-radius: 6px; background: rgb(244 63 94 / .15); color: #fda4af; font-size: 11px; }
+    .question.need .mark, .question.need .q-meta { color: #fda4af; }
+    .question.filled .mark { color: #6ee7b7; }
+    .question.changed .mark { color: #fcd34d; }
+    .question.page .mark { color: #93c5fd; }
+    .question.optional .mark { color: #64748b; }
+    .alert.differs { border-color: rgb(56 189 248 / .35); background: rgb(56 189 248 / .1); color: #bae6fd; }
+    .alert.differs strong { color: #e0f2fe; }
+    .alert.differs li { cursor: default; }
+    .alert.differs li:hover { text-decoration: none; }
     .alert.empty strong { color: #fde68a; }
     .card { margin-top: 12px; border: 1px solid #243047; border-radius: 12px; background: #111a2e; overflow: hidden; }
     .card-head { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 12px; border: 0; background: #0e1626; color: #94a3b8; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; text-align: left; }
@@ -143,7 +182,18 @@
   const answerEditor = { open: false, busy: false, rows: [], fields: [], selected: null, draft: '', question: '', message: '' };
   let hidden = false;
   // Which cards are open; the profile is open first.
-  const openCards = new Set(['profile']);
+  const openCards = new Set(['profile', 'questions']);
+  // The "Questions on this page" filter: all, needs you, filled, empty.
+  let questionFilter = 'all';
+  // The question whose answer the Manager is saving from the list: { id, draft, chosen, level, message, busy }.
+  let editingQuestion = null;
+  // The last save result per question, shown in its row until the next save: { ok, text }.
+  const savedNotes = new Map();
+  // A change the Manager just made: the panel opens and shows that question once per change.
+  let promptSeenAt = 0;
+  let scrollToQuestion = null;
+  const CHOICE_KINDS = ['select', 'radio', 'combobox', 'menu'];
+  const LEVEL_CHOICES = [['manager', 'All my candidates'], ['candidate', 'This candidate'], ['application', 'This job']];
   // Where the panel was scrolled, kept on every redraw; a card just opened is brought to the top.
   let scrollTop = 0;
   let bringToTop = null;
@@ -326,6 +376,202 @@
     const parts = String(folder || '').split(/[\\/]+/).filter(Boolean);
     const mskIndex = parts.findIndex((part) => part.toLowerCase() === 'msk');
     return mskIndex >= 0 ? parts.slice(mskIndex + 1).join('\\') : '';
+  }
+
+  /**
+   * Every question on this page with its value and status. A click scrolls the page to that box and
+   * outlines it. Read only: saving answers stays in Reusable answers.
+   */
+  function questionsCard(questions) {
+    const MARKS = { filled: '✓', changed: '✎', page: '●', need: '!', optional: '○' };
+    const SOURCES = { profile: 'profile', reusable: 'your answer', documents: 'PDF', consent: 'acknowledgment', site: 'from the site' };
+    const LEVELS = { manager: 'all candidates', candidate: 'this candidate', application: 'this job' };
+    const count = (status) => questions.filter((entry) => entry.status === status).length;
+    return card('questions', 'Questions on this page', questions.length, (body) => {
+      const summary = element('div', 'questions-summary');
+      summary.append(element('span', '', `✓ ${count('filled') + count('page') + count('changed')} filled`),
+        element('span', '', `! ${count('need')} need you`), element('span', '', `○ ${count('optional')} optional empty`));
+      const unsaved = questions.filter((entry) => entry.edit?.levels?.length).length;
+      if (unsaved) summary.append(element('span', 'q-unsaved', `✎ ${unsaved} change${unsaved === 1 ? '' : 's'} not saved yet`));
+      const filters = element('div', 'question-filters');
+      for (const [key, label] of [['all', 'All'], ['need', 'Needs you'], ['filled', 'Filled'], ['empty', 'Empty']]) {
+        const chip = element('button', questionFilter === key ? 'on' : '', label);
+        chip.type = 'button';
+        chip.addEventListener('click', () => { questionFilter = key; render(); });
+        filters.append(chip);
+      }
+      body.append(summary, filters);
+      const shown = questions.filter((entry) => questionFilter === 'all'
+        || (questionFilter === 'need' && entry.status === 'need')
+        || (questionFilter === 'filled' && ['filled', 'changed', 'page'].includes(entry.status))
+        || (questionFilter === 'empty' && ['need', 'optional'].includes(entry.status)));
+      for (const entry of shown) {
+        // A block, not a button: it holds its own Copy button. A click anywhere else shows the box.
+        const row = element('div', `question ${entry.status}${entry.edit && !entry.edit.none ? ' edited' : ''}`);
+        row.dataset.qid = entry.id;
+        row.setAttribute('role', 'button');
+        row.tabIndex = 0;
+        row.title = 'Show this question on the page';
+        const text = element('div', '');
+        text.append(element('div', 'q-label', `${entry.label}${entry.required && !/\*\s*$/.test(entry.label) ? ' *' : ''}`));
+        const value = typeof entry.value === 'boolean' ? (entry.value ? '☑ ticked' : '')
+          : Array.isArray(entry.value) ? entry.value.map((option) => `☑ ${option}`).join('  ') : entry.value;
+        if (value) text.append(element('div', 'q-value', value));
+        // A tick-box question shows its choices once, under the question.
+        if (entry.kind === 'checkbox-group' && entry.options?.length) {
+          text.append(element('div', 'q-meta', `Options: ${entry.options.join(' · ')}`));
+        }
+        const meta = entry.status === 'filled' ? [SOURCES[entry.source] || entry.source, LEVELS[entry.level]].filter(Boolean).join(' · ')
+          : entry.status === 'changed' ? 'changed after QTS filled it'
+            : entry.status === 'page' ? 'filled on the page'
+              : entry.reason;
+        if (meta) text.append(element('div', 'q-meta', meta));
+        // The Manager changed this box: what changed, and Save at a level (no click: this application only).
+        if (entry.edit && !entry.edit.none) {
+          const shownNow = Array.isArray(entry.value) ? entry.value.join(', ') : typeof entry.value === 'boolean' ? (entry.value ? 'ticked' : 'not ticked') : String(entry.value || '');
+          text.append(element('div', 'q-change', `You entered: ${shownNow}  (${entry.edit.before ? `was: ${entry.edit.before}` : 'was empty'})`));
+          if (entry.edit.note) text.append(element('div', 'q-meta', entry.edit.note));
+          if (entry.edit.levels?.length) {
+            const buttons = element('div', 'q-levels');
+            buttons.append(element('span', 'q-meta', 'Save as reusable answer for:'));
+            for (const level of entry.edit.levels) {
+              const label = LEVEL_CHOICES.find(([value]) => value === level)?.[1] || level;
+              const button = element('button', 'q-level', label);
+              button.type = 'button';
+              button.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                button.disabled = true;
+                const answer = Array.isArray(entry.value) ? entry.value : typeof entry.value === 'boolean' ? (entry.value ? 'Yes' : 'No') : String(entry.value);
+                const reply = await send('save_question_answer', { fieldId: entry.id, memberIds: entry.memberIds || [],
+                  question: String(entry.label).replace(/\s*\*\s*$/, '').replace(/:\s*$/, ''), kind: entry.kind, options: entry.options || [], answer, level });
+                savedNotes.set(entry.id, reply?.ok
+                  ? { ok: true, text: `Saved for ${label}. Used on your next applications.` }
+                  : { ok: false, text: `Not saved: ${reply?.error || 'Could not save.'}` });
+                render();
+              });
+              buttons.append(button);
+            }
+            text.append(buttons);
+          }
+        }
+        const note = savedNotes.get(entry.id);
+        if (note) text.append(element('div', note.ok ? 'q-saved' : 'q-error', note.text));
+        // What QTS knows for this question (profile, saved answer, converted salary), to paste by hand.
+        // Save this question's answer (a reusable answer), at the chosen level; QTS fills the box at once.
+        const toggle = element('button', 'q-copy', editingQuestion?.id === entry.id ? 'Close' : entry.status === 'need' || entry.status === 'optional' ? 'Save answer' : 'Edit answer');
+        toggle.type = 'button';
+        toggle.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (editingQuestion?.id === entry.id) { editingQuestion = null; render(); return; }
+          const current = Array.isArray(entry.value) ? entry.value : typeof entry.value === 'boolean' ? (entry.value ? 'Yes' : '') : String(entry.value || '');
+          const start = current && (!Array.isArray(current) || current.length) ? current : (entry.suggestion || '');
+          editingQuestion = { id: entry.id, level: 'manager', message: '', busy: false,
+            draft: Array.isArray(start) ? '' : String(start),
+            chosen: new Set(Array.isArray(start) ? start : String(start).split(' | ').filter((value) => (entry.options || []).includes(value))) };
+          render();
+        });
+        text.append(toggle);
+        if (editingQuestion?.id === entry.id) text.append(questionEditor(entry));
+        // A saved answer whose wording is only similar: one click fills it and links this wording to it.
+        if (entry.offer) {
+          const level = { manager: 'All my candidates', candidate: 'This candidate', application: 'This job' }[entry.offer.level] || '';
+          text.append(element('div', 'q-offer', `Looks like: "${entry.offer.question}" → ${entry.offer.value}${level ? ` (${level})` : ''}`));
+          const use = element('button', 'q-copy q-use', `Use: ${entry.offer.value.length > 30 ? `${entry.offer.value.slice(0, 30)}…` : entry.offer.value}`);
+          use.type = 'button';
+          use.title = 'Fill this box with your saved answer, and remember this wording for it';
+          use.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            use.disabled = true;
+            const reply = await send('use_offer', { fieldId: entry.id });
+            savedNotes.set(entry.id, reply?.ok
+              ? { ok: true, text: reply.linked ? 'Filled. This wording now uses your saved answer automatically.' : 'Filled.' }
+              : { ok: false, text: reply?.error || 'Could not fill it. Try again.' });
+            render();
+          });
+          text.append(use);
+        }
+        if (entry.suggestion) {
+          const copy = element('button', 'q-copy', `Copy: ${entry.suggestion.length > 40 ? `${entry.suggestion.slice(0, 40)}…` : entry.suggestion}`);
+          copy.type = 'button';
+          copy.title = 'Copy this value';
+          copy.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            showToast(await copyText(entry.suggestion) ? 'Copied' : 'Could not copy');
+          });
+          text.append(copy);
+        }
+        row.append(element('span', 'mark', MARKS[entry.status] || '•'), text);
+        const show = () => global.__qtsApplyForm?.focusField?.(entry.id);
+        row.addEventListener('click', show);
+        row.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(); } });
+        body.append(row);
+      }
+      if (!shown.length) body.append(element('div', 'none', 'No questions in this view.'));
+    });
+  }
+
+  /** The row's answer editor: the site's own choices (several for tick boxes) or typed text, a level, Save. */
+  function questionEditor(entry) {
+    const edit = editingQuestion;
+    const box = element('div', 'q-editor');
+    box.addEventListener('click', (event) => event.stopPropagation());
+    box.addEventListener('keydown', (event) => event.stopPropagation());
+    const options = entry.options || [];
+    if (entry.kind === 'checkbox-group' && options.length) {
+      for (const option of options) {
+        const label = element('label', 'q-option');
+        const tick = element('input', '');
+        tick.type = 'checkbox';
+        tick.checked = edit.chosen.has(option);
+        tick.addEventListener('change', () => { if (tick.checked) edit.chosen.add(option); else edit.chosen.delete(option); });
+        label.append(tick, document.createTextNode(` ${option}`));
+        box.append(label);
+      }
+    } else if ((CHOICE_KINDS.includes(entry.kind) && options.length) || entry.kind === 'checkbox') {
+      const select = element('select', 'q-input');
+      const choices = entry.kind === 'checkbox' ? ['Yes', 'No'] : options;
+      select.append(new Option('Choose…', ''));
+      for (const option of choices) select.append(new Option(option, option));
+      select.value = choices.includes(edit.draft) ? edit.draft : '';
+      select.addEventListener('change', () => { edit.draft = select.value; });
+      box.append(select);
+    } else {
+      const input = element('textarea', 'q-input');
+      input.rows = 2;
+      input.maxLength = 4000;
+      input.placeholder = 'Answer';
+      input.value = edit.draft;
+      input.addEventListener('input', () => { edit.draft = input.value; });
+      box.append(input);
+    }
+    const level = element('select', 'q-input');
+    for (const [value, label] of LEVEL_CHOICES) level.append(new Option(`Save for: ${label}`, value));
+    level.value = edit.level;
+    level.addEventListener('change', () => { edit.level = level.value; });
+    const save = element('button', 'q-save', edit.busy ? 'Saving…' : 'Save and fill');
+    save.type = 'button';
+    save.disabled = edit.busy;
+    save.addEventListener('click', async () => {
+      const answer = entry.kind === 'checkbox-group' ? options.filter((option) => edit.chosen.has(option)) : edit.draft.trim();
+      if (!answer.length) { edit.message = 'Choose or type an answer first.'; render(); return; }
+      edit.busy = true; edit.message = ''; render();
+      const reply = await send('save_question_answer', { fieldId: entry.id, memberIds: entry.memberIds || [],
+        question: String(entry.label).replace(/\s*\*\s*$/, '').replace(/:\s*$/, ''), kind: entry.kind, options, answer, level: edit.level });
+      if (editingQuestion !== edit) return;
+      edit.busy = false;
+      const levelName = LEVEL_CHOICES.find(([value]) => value === edit.level)?.[1] || edit.level;
+      if (reply?.ok) {
+        editingQuestion = null;
+        savedNotes.set(entry.id, { ok: true, text: reply.filled === false
+          ? `Saved for ${levelName}. The site did not take the value: fill this box by hand.`
+          : `Saved for ${levelName} and filled. See it in Profile → Reusable answers.` });
+        showToast('Saved and filled');
+      } else edit.message = reply?.error || 'Could not save.';
+      render();
+    });
+    box.append(level, save);
+    if (edit.message) box.append(element('div', 'q-error', `Not saved: ${edit.message}`));
+    return box;
   }
 
   function card(key, title, count, fill) {
@@ -516,6 +762,13 @@
     if (previous) scrollTop = previous.scrollTop;
     panel.replaceChildren();
     if (!state) return;
+    if (state.mode === 'assist' && state.questionsPrompt?.at > promptSeenAt) {
+      promptSeenAt = state.questionsPrompt.at;
+      hidden = false;
+      openCards.add('questions');
+      questionFilter = 'all';
+      scrollToQuestion = state.questionsPrompt.id;
+    }
     panel.hidden = hidden;
     tab.hidden = !hidden;
     const initials = String(state.candidate || '').split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0].toUpperCase()).join('');
@@ -576,6 +829,7 @@
       job.append(link);
     }
     scroll.append(job);
+    if (state.mode === 'assist' && state.questions?.length) scroll.append(questionsCard(state.questions));
 
     const status = state.manualPaused
       ? state.pauseStopping ? 'Pausing autofill. The current action is finishing; QTS will not start another field.' : 'Autofill paused. Review and edit the form freely. Choose Resume autofill when you are ready.'
@@ -591,6 +845,18 @@
         const entry = element('li', '', problem.message);
         if (problem.fieldId) entry.addEventListener('click', () => global.__qtsApplyForm?.focusField?.(problem.fieldId));
         list.append(entry);
+      }
+      box.append(list);
+      scroll.append(box);
+    }
+    // Where this candidate's (or this job's) own answer was used instead of the Manager's default.
+    if (state.differences?.length) {
+      const box = element('div', 'alert differs');
+      box.append(element('strong', '', `Different from your defaults (${state.differences.length})`));
+      const list = element('ul', '');
+      const shown = (value) => Array.isArray(value) ? value.join(', ') : String(value);
+      for (const entry of state.differences) {
+        list.append(element('li', '', `${entry.question}: used "${shown(entry.used)}" (${entry.level === 'application' ? 'this job' : 'this candidate'}) · your default "${shown(entry.managerDefault)}"`));
       }
       box.append(list);
       scroll.append(box);
@@ -656,6 +922,11 @@
       const pause = actionButton(state.manualPaused ? 'Resume autofill' : 'Pause autofill', 'pause-fill', state.manualPaused ? 'resume_fill' : 'pause_fill');
       pause.disabled = busy || Boolean(state.pauseStopping);
       actions.append(pause);
+      // This page only, once, also while paused; never overwrites the Manager's edits.
+      const again = actionButton('Fill again', 'fill-again', 'fill_again');
+      again.disabled = busy || Boolean(state.filling);
+      again.title = 'Fill this page again from the profile and saved answers (your own edits stay).';
+      actions.append(again);
     }
     if (state.relinkPdfs) {
       actions.append(actionButton('Link existing PDFs', 'link-pdfs', 'link_pdfs'));
@@ -675,6 +946,13 @@
     const opened = bringToTop && scroll.querySelector(`[data-card="${bringToTop}"]`);
     bringToTop = null;
     if (opened) scroll.scrollTop += opened.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 8;
+    // The question the Manager just changed: in view and highlighted.
+    const changed = scrollToQuestion && [...scroll.querySelectorAll('.question')].find((node) => node.dataset.qid === scrollToQuestion);
+    scrollToQuestion = null;
+    if (changed) {
+      scroll.scrollTop += changed.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientHeight / 3;
+      changed.classList.add('flash');
+    }
     scrollTop = scroll.scrollTop;
   }
 
@@ -736,6 +1014,23 @@
       send('fields_changed');
     }, 500);
   }
+  // The Manager changed a box on the site (decision 2026-11-07): when they leave it or pick a choice,
+  // QTS is told which question changed, so the panel can offer to save it as a reusable answer.
+  let valuesTimer = null;
+  const editedIds = new Set();
+  const valuesChanged = (event) => {
+    if (!state || state.mode !== 'assist' || host.contains(event.target)) return;
+    const marked = event.composedPath().find((node) => node?.getAttribute?.('data-qts-apply-field'));
+    if (marked) editedIds.add(marked.getAttribute('data-qts-apply-field'));
+    clearTimeout(valuesTimer);
+    valuesTimer = setTimeout(() => {
+      const ids = [...editedIds];
+      editedIds.clear();
+      send('values_changed', { editedIds: ids });
+    }, 600);
+  };
+  document.addEventListener('change', valuesChanged, true);
+  document.addEventListener('focusout', valuesChanged, true);
   const pageObserver = new MutationObserver((records) => {
     if (records.every((record) => record.target === host || host.contains(record.target))) return;
     pageChanged();

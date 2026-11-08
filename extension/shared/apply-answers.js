@@ -5,6 +5,8 @@
   const semantics = global.__qtsSemanticFields || (typeof module !== 'undefined' && module.exports ? module.require('./semantic-fields.js') : null);
   const representations = global.__qtsAnswerRepresentations || (typeof module !== 'undefined' && module.exports ? module.require('./answer-representations.js') : null);
   const identities = global.__qtsAnswerIdentity || (typeof module !== 'undefined' && module.exports ? module.require('./answer-identity.js') : null);
+  // Meaning of questions (any wording or language) and the answers worked out from the profile.
+  const meaning = global.__qtsAnswerMeaning || (typeof module !== 'undefined' && module.exports ? module.require('./answer-meaning.js') : null);
   const answerFeature = (name) => global.__qtsAnswerRollout?.[name] ?? global.__qtsRuntimeConfig?.features?.[name] ?? true;
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
   const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
@@ -14,11 +16,13 @@
   const LEGAL_QUESTION = /\b(agree|consent|acknowledge|accept|privacy (policy|notice)|terms (and conditions|of (use|service))|above[- ]mentioned terms|certif(?:y|ication)|attest(ation)?|i have read|data processing|gdpr|confirm that (everything|all|the information)|true and (your own|complete|accurate)|electronic signature)\b/i;
   // Questions about salary, notice or start date, and sponsorship, for the profile rules and for
   // Super Admin's reusable answers on the same topics.
-  const SALARY_QUESTION = /salary|compensation|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b|stawk|wynagrodzeni/;
+  const SALARY_QUESTION = /salary|compensation|financial expectations?|remuneration|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b|stawk|wynagrodzeni/;
   const NOTICE_QUESTION = /notice period|when can you start|earliest start|availability to start|available to start|start date|date (you are |you're )?available|okres wypowiedzenia|od kiedy mo[zż]esz/;
   const SPONSORSHIP_QUESTION = /sponsor|\bvisa\b/;
   // Opt-ins a person may refuse without losing the application.
   const OPT_IN = /\b(marketing|newsletters?|(future|other|new) (jobs?|roles?|opportunit\w*|vacanc\w*|positions?|openings?)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?|contact me about)\b/i;
+  // Questions that use "accept"/"agree"/"confirm" but ask about the candidate, not about terms.
+  const NOT_AN_AGREEMENT = /\b(willing|salary|compensation|relocat\w*|travel|overtime|lower|shift|weekends?|night)\b/i;
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
 
@@ -180,12 +184,19 @@
    * A salary question: the figure for the period and currency it asks, worked out here rather than by
    * the AI. A question naming no period gets the candidate's own wording, or the AI when only a number fits.
    */
-  function resolveSalary(field, label, candidate, exchangeRates) {
+  function resolveSalary(field, label, candidate, exchangeRates, unitsOnPage = false) {
     if (!candidate.salaryExpectationAmount) return { missing: 'salary expectation' };
     const ownPeriod = candidate.salaryExpectationPeriod;
     const ownCurrency = candidate.salaryExpectationCurrency;
-    const askedPeriod = periodIn(field.label);
-    const askedCurrency = currencyIn(field.label, exchangeRates);
+    // The question and its hint ("Gross annual base salary…") say what period and currency they want.
+    const asked = `${field.label} ${field.note || ''}`;
+    const askedPeriod = periodIn(asked);
+    const askedCurrency = currencyIn(asked, exchangeRates);
+    // A question naming two currencies ("… EUR", hint "USD required") is unclear: the Manager decides.
+    const namedCurrencies = new Set((asked.match(/\b[A-Z]{3}\b/g) || []).filter((code) => CURRENCY_CODES.includes(code)));
+    if (namedCurrencies.size > 1) return { skip: 'Conflicting currencies.', byHand: `"${field.label}" names more than one currency; enter the salary yourself.` };
+    // The saved figure is gross (B2B): a question asking for net is the Manager's to answer.
+    if (/\bnet\b/i.test(asked) && !/\bgross\b/i.test(asked)) return { skip: 'Net salary asked.', byHand: `"${field.label}" asks for a net figure; your saved salary is gross. Enter it yourself.` };
     if (hasOptions(field)) {
       const numbered = field.options.filter((option) => /\d/.test(String(option)));
       // A separate period or currency choice takes the candidate's own, so the amount field keeps their figure.
@@ -210,11 +221,14 @@
       return best ? { value: best.option, source: 'profile' } : null;
     }
     // "Currency" or "Salary currency" alone asks for the code, not an amount.
-    if (/\bcurrency\b/.test(label) && !/\b(amount|how much|figure|and currency)\b/.test(label)) {
+    // "(Include currency)" asks for the amount written with its currency, not the currency alone.
+    if (/\bcurrency\b/.test(label) && !/\b(amount|how much|figure|and currency|includ\w* (?:the )?currency|with (?:the )?currency)\b/.test(label)) {
       return { value: ownCurrency, source: 'profile' };
     }
     const currency = askedCurrency || ownCurrency;
-    if (!askedPeriod && field.kind === 'number') return null;
+    // A bare number box: its period comes from the question, or from a period choice beside it on the page
+    // (amount + currency + period, as on Manatal), which QTS sets to the saved period.
+    if (!askedPeriod && field.kind === 'number' && !unitsOnPage) return null;
     const period = askedPeriod || ownPeriod;
     const amount = convertSalary(candidate, period, currency, exchangeRates);
     if (amount === null) return null;
@@ -504,6 +518,93 @@
    * left as they are, or a question for the AI: { missing } when the profile lacks the fact,
    * { ask: profile value } when the profile has it but not in a form the field takes, or null.
    */
+  // EU and EEA countries and Switzerland: their nationals may work in any of them without a permit.
+  const FREE_MOVEMENT = new Set(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU',
+    'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'IS', 'LI', 'NO', 'CH']);
+  const EU_AREA = /\b(the )?(eu|european union|eea|european economic area|schengen|unii europejskiej|europ[aä]ischen union|union europ[ée]enne|uni[oó]n europea)\b/;
+
+  // Region codes that are no country today or name a group ("DD" is also "Germany" in some languages).
+  const NOT_A_COUNTRY = new Set(['DD', 'YU', 'CS', 'SU', 'ZR', 'TP', 'BU', 'FX', 'NT', 'AN', 'QU', 'UK', 'EU', 'EZ', 'UN', 'QO', 'ZZ', 'AC', 'CP', 'DG', 'EA', 'IC', 'TA']);
+  /** The countries a sentence names, by their names in the form languages (never "us" in "join us"). */
+  function countriesNamed(text) {
+    const words = ` ${plain(text)} `;
+    const found = [];
+    for (const [code, names] of allCountryNames()) if (!NOT_A_COUNTRY.has(code) && [...names].some((name) => name.length >= 4 && words.includes(` ${name} `))) found.push(code);
+    for (const [alias, code] of Object.entries(COUNTRY_ALIASES)) if (alias.length >= 3 && words.includes(` ${alias} `) && !found.includes(code)) found.push(code);
+    return found;
+  }
+
+  /** Language levels: the saved "Language levels" answers (all candidates, this candidate, this job), then the profile's. */
+  function languageLevelsOf(candidate, savedAnswers) {
+    const levels = {};
+    for (const scope of ['manager', 'candidate', 'application']) {
+      const row = (savedAnswers || []).find((entry) => entry.scope === scope && meaning.topicOf(entry.questionText)?.id === 'languageLevels');
+      if (row) Object.assign(levels, meaning.parseLanguageLevels(row.answer));
+    }
+    return Object.assign(levels, meaning.parseLanguageLevels(candidate.languages));
+  }
+
+  /**
+   * Normal Apply: answers worked out from the candidate's profile (decisions 2026-11-07) — language
+   * levels, worked for this company?, preferred or legal name, located in …?, and an EU national's
+   * right to work in an EU/EEA country. They win over saved answers, as profile facts do. Null when
+   * the profile does not settle the question.
+   */
+  function derivedFromProfile(field, label, candidate, context, savedAnswers) {
+    if (!meaning || field.kind === 'file') return null;
+    const derived = (value, reason) => (value === null || value === undefined ? null
+      : { value, source: 'profile', provenance: { policy: 'normal-apply', authority: 'candidate-profile', operation: 'derived', reason } });
+    const language = meaning.languageAnswer(field, () => languageLevelsOf(candidate, savedAnswers));
+    if (language) return derived(language.value, language.reason);
+    const employer = meaning.employerAnswer(field, context.experiences, context.jobCompany);
+    if (employer) return derived(employer.value, employer.reason);
+    const textBox = !hasOptions(field) && ['text', 'textarea'].includes(field.kind);
+    if (textBox && /\bname\b/.test(label) && !/\b(passport|company|employer|referr\w*|reference|emergency|school|universit\w*|manager|recruiter|spouse|their)\b/.test(label)) {
+      if (/\bpreferred\b|\bgo by\b|\bnickname\b/.test(label) && !/\b(last|family|surname)\b/.test(label)) return derived(candidate.firstName || null, 'preferred name = first name');
+      if (/\blegal\b/.test(label)) {
+        if (/\b(first|given)\b/.test(label) && /\b(last|family|surname)\b/.test(label)) return derived([candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || null, 'legal name');
+        if (/\b(first|given)\b/.test(label)) return derived(candidate.firstName || null, 'legal first name');
+        if (/\b(last|family|surname)\b/.test(label)) return derived(candidate.lastName || null, 'legal last name');
+        return derived([candidate.firstName, candidate.lastName].filter(Boolean).join(' ') || null, 'legal name');
+      }
+    }
+    const negated = /\bnot\b|n't\b|\bnever\b|\bunable\b/.test(label);
+    const fit = (yes, reason) => {
+      if (field.kind === 'checkbox' && !hasOptions(field)) return derived(yes, reason);
+      if (!hasOptions(field) && !['text', 'textarea'].includes(field.kind)) return null;
+      return derived(yesNoAnswer(field, yes), reason);
+    };
+    // "Are you located in Spain, Portugal, Poland…?" from the profile's country (and the EU/EEA for "in the EU").
+    if (!negated && LOCATED_QUESTION.test(label) && !/\b(employee|referr\w*|their|someone|office|team|company)\b/.test(label)) {
+      const own = countryCode(candidate.country || '');
+      if (own) {
+        const listed = countriesNamed(label);
+        if (listed.includes(own)) return fit(true, `lives in ${candidate.country}`);
+        if (EU_AREA.test(label) && !listed.length) return fit(FREE_MOVEMENT.has(own), `lives in ${candidate.country}`);
+        if (listed.length >= 2) return fit(false, `lives in ${candidate.country}, not listed`);
+      }
+    }
+    // An EU/EEA/Swiss national applying to work in an EU/EEA country or Switzerland: authorized, no sponsorship.
+    // "Authorized to work …?" is Yes; "need (visa) sponsorship?" is No. A question asking both at once
+    // (not "… without sponsorship") is left alone: its Yes and No mean different things.
+    const workRight = WORK_RIGHT_QUESTION.test(label);
+    const mentionsSponsorship = /sponsor/.test(label) || /\b(require|need)\w*\b.{0,30}\bvisa\b/.test(label);
+    const combined = workRight && mentionsSponsorship && !/\bwithout\b.{0,30}\b(sponsor\w*|visa)\b/.test(label);
+    if (!negated && !combined && (workRight || mentionsSponsorship)) {
+      const nationality = nationalityCode(candidate.nationality || '');
+      if (nationality && FREE_MOVEMENT.has(nationality)) {
+        const named = countriesNamed(label);
+        const fromJob = countriesNamed(context.jobLocation || '');
+        const target = named.length === 1 ? named[0] : named.length ? null : EU_AREA.test(label) ? 'EU'
+          : fromJob.length === 1 ? fromJob[0] : null;
+        if (target && (target === 'EU' || FREE_MOVEMENT.has(target))) {
+          return fit(workRight, `${candidate.nationality} national, job in ${target === 'EU' ? 'the EU' : target}`);
+        }
+      }
+    }
+    return null;
+  }
+
   function resolveField(field, candidate, savedAnswers, context = {}) {
     const label = labelOf(field);
     if (field.kind === 'file') {
@@ -543,21 +644,46 @@
       return null;
     }
     if (context.normalApply === true && field.kind !== 'file') {
-      if (LEGAL_QUESTION.test(label) || OPT_IN.test(label) || /\b(policy|declaration|acknowledg)/i.test(label)) {
+      if ((LEGAL_QUESTION.test(label) || OPT_IN.test(label) || /\b(policy|declaration|acknowledg)/i.test(label)) && !NOT_AN_AGREEMENT.test(label)) {
         const row = savedAnswers.find((entry) => ['application', 'candidate', 'manager'].includes(entry.scope)
           && correctionKey(entry.questionText) === correctionKey(field.label)
           && entry.variants?.some((variant) => variant.policyContext && variant.policyContext === field.policyContext
             && variant.kind === field.kind && [...(variant.options || [])].sort().join('|') === [...(field.options || [])].sort().join('|')));
-        if (!row) return { skip: 'Policy confirmation needs explicit approval for this exact inline context.', byHand: 'Review this acknowledgment, consent or attestation yourself. Linked, changed or unapproved terms are not accepted automatically.' };
-        return controlledAnswer(field, [row]);
+        if (row) return controlledAnswer(field, [row]);
+        // Future-recruitment / talent-pool consent is a reusable answer (decision 2026-11-06): a saved
+        // Yes (this job, then this candidate, then the Manager) ticks it, required or not; No or none leaves it.
+        if (semantics?.recognize(field.label)?.definition?.id === 'application.futureRecruitmentConsent') {
+          const saved = ['application', 'candidate', 'manager'].map((scope) => savedAnswers.find((entry) => entry.scope === scope
+            && semantics.recognize(entry.questionText)?.definition?.id === 'application.futureRecruitmentConsent')).find(Boolean);
+          if (!saved) return { skip: 'Optional opt-in.' };
+          if (!/^(yes|true|1|tak|ja|oui|s[ií]|i agree|agree|accept)\b/i.test(String(saved.answer).trim())) return { skip: 'Saved answer: do not consent to future recruitment.' };
+          const agreed = agreementAnswer(field);
+          return agreed ? { ...agreed, source: 'reusable', provenance: { authority: saved.scope, meaning: 'application.futureRecruitmentConsent', savedAnswerId: saved.id || null } }
+            : { skip: 'No single clear Yes choice.', byHand: `Choose the consent for "${field.label}" yourself (your saved answer is Yes).` };
+        }
+        // Decision 2026-11-06: acknowledgments, consents and attestations are accepted automatically,
+        // required or not, even when the terms are a link; marketing and future-contact opt-ins never.
+        if (OPT_IN.test(label)) return { skip: 'Optional opt-in.' };
+        return agreementAnswer(field) || { skip: 'The agreement has no single clear affirmative choice.', byHand: `Choose the agreement for "${field.label}" yourself.` };
       }
+      // Worked out from the profile (languages, employer history, names, located in, EU work rights).
+      // Off with the other meaning features when they are rolled back (answerSemanticV1).
+      const fromProfileFacts = answerFeature('answerSemanticV1') ? derivedFromProfile(field, label, candidate, context, savedAnswers) : null;
+      if (fromProfileFacts) return fromProfileFacts;
       const otherPerson = /\b(employee|referr\w*|references?|emergency|next of kin|recruiter|their|someone)\b/.test(label);
       const semantic = answerFeature('answerSemanticV1') ? semanticAnswer(field, candidate, savedAnswers, context) : null;
       if (semantic) return semantic;
       // Guard legacy wording through the same typed quantity operations, rather than the
       // old fixed-hours/30-day arithmetic. Exact saved answers still retain their authority.
+      // Salary with a saved figure: the same conversion as everywhere else (rounded, per currency and period).
+      if (SALARY_QUESTION.test(label) && !NOTICE_QUESTION.test(label) && candidate.salaryExpectationAmount) {
+        const salary = resolveSalary(field, label, candidate, context.exchangeRates, context.salaryUnitsOnPage === true);
+        if (salary && (salary.value !== undefined || salary.skip)) return salary.value !== undefined && candidate.reusableTopics?.has('salary') ? { ...salary, source: 'reusable' } : salary;
+      }
       if (representations && !semantics?.recognize(field.label) && (NOTICE_QUESTION.test(label) || SALARY_QUESTION.test(label))) {
-        const exact = controlledAnswer(field, savedAnswers.filter((row) => row.scope === 'application' || row.scope === 'candidate'));
+        // The candidate's or application's own answer first; then the Manager's default.
+        const exact = controlledAnswer(field, savedAnswers.filter((row) => row.scope === 'application' || row.scope === 'candidate'))
+          || controlledAnswer(field, savedAnswers.filter((row) => row.scope === 'manager'));
         if (exact) return exact;
         const id = NOTICE_QUESTION.test(label) ? (/\bdate\b|when|availability/.test(label) || field.kind === 'date' ? 'candidate.startDate' : 'candidate.noticeDuration') : 'candidate.salaryExpectation';
         const definition = semantics.definitions.find((entry) => entry.id === id);
@@ -566,7 +692,7 @@
       const own = otherPerson ? null : personalAnswer(field, label, candidate, context);
       if (own) return { ...own, provenance: { policy: 'normal-apply', authority: 'candidate-profile', operation: 'existing-profile-rule' } };
       const personalRule = RULES.find((rule) => rule.test.test(label));
-      if (!otherPerson && personalRule && (personalRule.personal || personalRule.yesNo || personalRule.salary || personalRule.notice || personalRule.years)) {
+      if (!otherPerson && personalRule && personalRule.personal) {
         savedAnswers = savedAnswers.filter((row) => row.scope === 'candidate' || row.scope === 'application');
       }
     }
@@ -621,6 +747,13 @@
         const reused = reusableAnswer(field, row);
         return reused.ask ? { ...reused, note: [reused.note, neutral].filter(Boolean).join(' ') } : reused;
       }
+      // Normal Apply (decision 2026-11-06): a personal fact the profile lacks is left for the Manager;
+      // "Decline to self-identify" is never chosen or suggested for the candidate.
+      if (context.normalApply === true) {
+        return field.required
+          ? { skip: 'Not in the profile.', byHand: `Fill "${field.label}" yourself: the candidate's profile has no answer for it.` }
+          : { skip: 'Optional; not in the profile.' };
+      }
       const option = pickOption(field, DECLINE);
       if (option) return { value: option, source: 'rule' };
       if (!field.required) return { skip: 'Optional diversity question left unanswered.' };
@@ -640,6 +773,27 @@
     // Personal facts come from the candidate's own profile when it has them, before any reusable answer.
     const own = aboutSomeoneElse ? null : personalAnswer(field, label, candidate, context);
     if (own) return own;
+    // Normal Apply: the Manager's saved answers by meaning, whatever the wording (decision 2026-11-07).
+    // Sure → filled; similar wording only → offered in the panel ([Use]), never filled.
+    let offer = null;
+    if (context.normalApply === true && meaning && !aboutSomeoneElse && answerFeature('answerSemanticV1')) {
+      const asked = meaning.topicOf(field.label)?.id;
+      // Salary, notice, start date and work rights keep their own checks (currency, period, country).
+      // Consent questions have their own rule (ticked only for a saved Yes, never marketing).
+      const GUARDED = new Set(['salary', 'currentSalary', 'notice', 'startDate', 'sponsorship', 'workAuthorization', 'languageLevels', 'futureConsent']);
+      const rows = GUARDED.has(asked) ? [] : (savedAnswers || []).filter((row) => ['application', 'candidate', 'manager'].includes(row.scope)
+        && !GUARDED.has(meaning.topicOf(row.questionText)?.id));
+      const match = rows.length ? meaning.matchSaved(field.label, rows) : null;
+      if (match) {
+        const reused = reusableAnswer(field, match.row);
+        if (reused.value !== undefined && match.confidence === 'high') {
+          return { ...reused, provenance: { policy: 'normal-apply', authority: match.row.scope, meaning: match.why, savedAnswerId: match.row.id || null } };
+        }
+        if (reused.value !== undefined) {
+          offer = { savedAnswerId: match.row.id || null, question: match.row.questionText, answer: String(match.row.answer), value: reused.value, level: match.row.scope, why: match.why };
+        }
+      }
+    }
     const exactRow = aboutSomeoneElse ? null : (savedAnswers || []).find((row) => row.questionKey === normalizeQuestionKey(field.label));
     if (exactRow && !candidate.factRows?.has(exactRow)) return reusableAnswer(field, exactRow);
     // 1. Super Admin's reusable answers for their topics (right to work, employment type, ...);
@@ -658,7 +812,9 @@
     const reusable = matchSavedAnswer(field, savedAnswers, { sameMeaning: context.autoApply === true });
     if (reusable) return reusableAnswer(field, reusable);
     if (fromProfile) return fromProfile;
-    if (/how did you (hear|find|learn)|where did you (hear|find)|referral source|^source$/.test(label)) {
+    if (offer) return { offer };
+    // Auto Apply only: Normal Apply never fills an answer written in code; it uses the Manager's saved answer.
+    if (context.normalApply !== true && /how did you (hear|find|learn)|where did you (hear|find)|referral source|^source$/.test(label)) {
       const option = pickOption(field, /linkedin/i) ?? pickOption(field, /job (board|site)|online|internet|website/i);
       if (option) return { value: option, source: 'rule' };
       if (!hasOptions(field)) return { value: 'LinkedIn', source: 'rule' };
@@ -1016,7 +1172,8 @@
     const transformed = representations.convert(source, target, { ...description, ...source.conversionContext,
       callingCode: field.phoneCallingCode || source.context?.callingCode,
       rates: context.exchangeRates?.rates, baseDate,
-      periodFactors: context.salaryPeriodFactors });
+      // Hours in each pay period (40 h/week, 8 h/day) unless the caller gives its own (decision 2026-11-06).
+      periodFactors: context.salaryPeriodFactors || HOURS_IN });
     if (!transformed.ok) return { skip: transformed.reason, byHand: transformed.reason };
     const checked = checkAnswer(field, Array.isArray(transformed.value) ? transformed.value.join(' | ') : transformed.value);
     if (!checked.ok) return { skip: checked.reason, byHand: `The transformed answer is invalid: ${checked.reason}` };
@@ -1086,6 +1243,16 @@
       && (semantics.recognize(row.questionText)?.representation?.nameOrder === 'family-given' || row.variants?.some((entry) => entry.answer === row.answer && entry.representation?.nameOrder === 'family-given'))) return true;
     if ([a.definition.id, b.definition.id].every((id) => ['candidate.phone', 'candidate.phoneNationalNumber', 'candidate.phoneCallingCode'].includes(id))) return true;
     if (a.definition.id === 'candidate.startDate' && b.definition.id === 'candidate.noticeDuration') return true;
+    // Work rights and sponsorship (2026-11-06 decision): a saved Yes/No is the candidate's (or the
+    // Manager's default) answer whatever country or employer the wording names. Only for choice
+    // boxes (Yes/No, radio, dropdown), never a free-text box such as "which visa do you need?",
+    // and only for the same time frame ("now or in the future" answers both forms of that).
+    if (a.definition.id === b.definition.id && ['application.workAuthorization', 'application.sponsorship'].includes(a.definition.id)) {
+      if (!hasOptions(field)) return false;
+      if (a.context.time === b.context.time || a.context.time === 'unspecified' || b.context.time === 'unspecified') return true;
+      // "No sponsorship now or in the future" also means no sponsorship now; a Yes does not.
+      return a.context.time === 'current' && b.context.time === 'future' && /^no\b/i.test(String(row.answer).trim());
+    }
     return a.definition.valueType === 'money' && a.definition.id === b.definition.id && !a.context.wording && !b.context.wording
       && a.context.country === b.context.country && a.context.time === b.context.time && a.context.basis === b.context.basis;
   }
@@ -1163,6 +1330,13 @@
       const own = personalAnswer({ ...field, label: definition.canonicalLabel }, labelOf({ label: definition.canonicalLabel }), candidate, context);
       if (own) return { ...own, provenance: { authority: 'candidate-profile', meaning: definition.id, registryVersion: semantics.version, operation: 'existing-profile-rule' } };
     }
+    // Salary: the saved figure ("5000 EUR monthly"), already read into amount, currency and period, is
+    // converted to what this box asks (currency, period, number or text) before any raw saved text is tried.
+    if (definition.valueType === 'money' && candidate.salaryExpectationAmount != null && candidate.salaryExpectationAmount !== '') {
+      const converted = resolveSalary(field, labelOf(field), candidate, context.exchangeRates, context.salaryUnitsOnPage === true);
+      if (converted?.skip) return converted;
+      if (converted && converted.value !== undefined) return { ...converted, source: candidate.reusableTopics?.has('salary') ? 'reusable' : converted.source };
+    }
     const matching = rows.filter((row) => definition.allowedScopes.includes(row.scope) && relatedRepresentation(field, row));
     for (const scope of ['application', 'candidate', 'manager']) {
       const scoped = matching.filter((row) => row.scope === scope);
@@ -1190,6 +1364,21 @@
       return manual('This specific fact is not available. Save an explicit candidate-specific answer.');
     }
     return null;
+  }
+
+  /**
+   * The affirmative answer to an acknowledgment, consent or attestation: a lone check box ticked, the
+   * single option of a one-choice control, or the one "I agree" / "Yes" choice of a list. Null when
+   * the choices give no single clear affirmative (the Manager decides).
+   */
+  function agreementAnswer(field) {
+    if (field.kind === 'checkbox' && !hasOptions(field)) return { value: true, source: 'consent' };
+    if (!hasOptions(field)) return null;
+    if (field.options.length === 1) return { value: field.kind === 'checkbox-group' ? [field.options[0]] : field.options[0], source: 'consent' };
+    const affirmative = field.options.filter((option) => YES_START.test(String(option).trim())
+      || /^(?:i\s+)?(?:have read|agree|accept|consent|acknowledge|certify|attest|confirm)\b/i.test(String(option).trim()));
+    if (affirmative.length !== 1) return null;
+    return { value: field.kind === 'checkbox-group' ? [affirmative[0]] : affirmative[0], source: 'consent' };
   }
 
   function controlledAnswer(field, rows = []) {
@@ -1352,15 +1541,27 @@
    */
   function resolveFields(fields, profile, savedAnswerRows, givenContext = {}) {
     const savedAnswers = savedAnswerRows || [];
-    const context = { ...givenContext, generalUploadId: generalUploadId(fields) };
-    const factRows = context.normalApply ? savedAnswers.filter((row) => (row.scope === 'candidate' || row.scope === 'application')
-      && !['notice', 'salary'].includes(topicOf(row.questionText)) && !semantics?.recognize(row.questionText)?.definition?.contextDimensions.length) : savedAnswers;
+    const context = { ...givenContext, generalUploadId: generalUploadId(fields),
+      // A salary period choice on the page (Manatal: amount + currency + period): a bare amount box then
+      // takes the saved period's figure, and that choice is set to the saved period.
+      salaryUnitsOnPage: fields.some((entry) => hasOptions(entry) && SALARY_QUESTION.test(labelOf(entry))
+        && entry.options.filter((option) => periodIn(option)).length >= 2) };
+    // Salary and notice (decision 2026-11-06): the Manager types one figure ("5000 EUR monthly", B2B
+    // gross) and QTS converts it for every site; this job's, then the candidate's, then the Manager's
+    // saved answer is used. Other contextual facts stay with the candidate or application.
+    const SCOPE_ORDER = { application: 0, candidate: 1, manager: 2 };
+    const factRows = context.normalApply ? savedAnswers.filter((row) => {
+      if (['notice', 'salary'].includes(topicOf(row.questionText))) return row.scope in SCOPE_ORDER;
+      return (row.scope === 'candidate' || row.scope === 'application') && !semantics?.recognize(row.questionText)?.definition?.contextDimensions.length;
+    }).sort((a, b) => (SCOPE_ORDER[a.scope] ?? 3) - (SCOPE_ORDER[b.scope] ?? 3)) : savedAnswers;
     const candidate = withReusableFacts(profile, factRows, context.exchangeRates);
     const answers = {};
     const open = [];
     const missing = [];
     // Fields intentionally left for the Manager (for example an unclear field in assisted Apply).
     const byHand = [];
+    // Saved answers whose wording is only similar: offered in the Normal Apply panel, never filled.
+    const offers = [];
     for (const field of fields) {
       if (field.hidden || field.disabled) continue;
       const resolved = resolveField(field, candidate, savedAnswers, context);
@@ -1376,6 +1577,11 @@
           continue;
         }
         if (field.kind !== 'checkbox' || field.required) open.push(field);
+        continue;
+      }
+      // Normal Apply: a saved answer with similar wording only, offered in the panel ([Use]), not filled.
+      if (resolved.offer) {
+        offers.push({ id: field.id, label: field.label, ...resolved.offer });
         continue;
       }
       if (resolved.missing) {
@@ -1399,9 +1605,21 @@
         if (resolved.byHand && field.required) byHand.push({ id: field.id, label: field.label, message: resolved.byHand });
         continue;
       }
+      // Normal Apply: where the candidate's or this job's own saved answer differs from the Manager's
+      // default for all candidates, the panel shows both (decision 2026-11-06).
+      if (context.normalApply && resolved.value !== undefined && resolved.source !== 'profile'
+        && !['manager', 'candidate-profile'].includes(resolved.provenance?.authority)
+        && savedAnswers.some((row) => row.scope === 'candidate' || row.scope === 'application')) {
+        const managerRows = savedAnswers.filter((row) => row.scope === 'manager');
+        const fallback = managerRows.length ? resolveField(field, {}, managerRows, context) : null;
+        if (fallback && fallback.value !== undefined && JSON.stringify(fallback.value) !== JSON.stringify(resolved.value)) {
+          resolved.managerDefault = fallback.value;
+          resolved.level = resolved.provenance?.authority === 'application' ? 'application' : 'candidate';
+        }
+      }
       answers[field.id] = resolved;
     }
-    return { answers, open, missing, byHand };
+    return { answers, open, missing, byHand, offers };
   }
 
   // The answer prompt Super Admin edits in Settings uses these placeholders; this is the default
@@ -1808,7 +2026,20 @@
     return { ok: true };
   }
 
-  const api = { changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
+  /**
+   * Normal Apply: whether a list whose choices are not loaded yet is worth opening, because the profile
+   * (languages, work history, country, nationality) or a saved answer of the same meaning may answer it.
+   */
+  function worthReading(field, profile, savedAnswerRows, context = {}) {
+    if (!meaning || !['select', 'menu', 'combobox', 'radio'].includes(field.kind)) return false;
+    const label = labelOf(field);
+    if (meaning.languageAnswer({ ...field, options: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'] }, () => ({ '*': 1 }))) return true;
+    if (meaning.employerAnswer({ ...field, options: ['Yes', 'No'] }, context.experiences, context.jobCompany)) return true;
+    if (LOCATED_QUESTION.test(label) || WORK_RIGHT_QUESTION.test(label) || /sponsor/.test(label)) return true;
+    return Boolean(meaning.matchSaved(field.label, (savedAnswerRows || []).filter((row) => ['application', 'candidate', 'manager'].includes(row.scope))));
+  }
+
+  const api = { changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

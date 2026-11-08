@@ -27,9 +27,13 @@ function fixture() {
 }
 
 test('an already-loaded child application tab gets its owned panel without waiting for another load event', async () => {
-  const f = fixture(); f.events.created({ id: 2, openerTabId: 1, status: 'complete', url: 'https://employer.test/apply' }); await settle();
+  const f = fixture(); f.state.tabs.set(2, { id: 2, status: 'complete', url: 'https://employer.test/apply' });
+  f.events.created({ id: 2, openerTabId: 1, status: 'complete', url: 'https://employer.test/apply' });
+  for (let i = 0; i < 20; i += 1) await settle();
+  // Judged the next step (a form): the panel moves there, the job page closes, filling goes on there.
   assert.equal(f.review.tabIds.has(2), true); assert.equal(f.renders.length, 1); assert.equal(f.renders[0].tabId, 2);
-  assert.equal(f.state.pokes, 0, 'panel restoration alone must not restart autofill');
+  assert.deepEqual(f.state.closed, [1]);
+  assert.equal(f.state.pokes, 1, 'only the confirmed next step is filled, once');
 });
 
 test('activating an owned tab restores a missing panel but preserves healthy panels and ignores unrelated tabs', async () => {

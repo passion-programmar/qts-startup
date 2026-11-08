@@ -18,8 +18,8 @@
   // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
-  const START_TEXT = /^(apply|apply now|apply (for|to) (this|the) (job|position|role|vacancy|opening)|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?|apply (directly )?(on|at|via|through) (the )?(employer|company|hiring company|recruiter)['’]?s? (site|website|page|career(s)? (site|page))|apply (on|at) (company|employer) (site|website)|apply externally|apply on website|(continue|go|proceed) to (the )?(application|apply|employer['’]?s? site))$/i;
-  const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|enter (your )?(details|information) manually|continue (manually|without .{1,30}))$/i;
+  const START_TEXT = /^(apply|apply now|apply (for|to) (this |the |a )?[^|]{2,60}|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?|apply (directly )?(on|at|via|through) (the )?(employer|company|hiring company|recruiter)['’]?s? (site|website|page|career(s)? (site|page))|apply (on|at) (company|employer) (site|website)|apply externally|apply on website|(continue|go|proceed) to (the )?(application|apply|employer['’]?s? site))$/i;
+  const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|enter (your )?(details|information) manually|continue (manually|without .{1,30})|(continue|apply|proceed|check ?out) as (a )?guest|guest (application|apply|checkout)|skip( for now| this step| sign[ -]?in| login)?|i don['’]?t have an account)$/i;
   const ACCOUNT_ACTION_TEXT = /^(sign ?in|log ?in|register|sign ?up|create (an |your )?account|candidate login|candidate portal|apply with an account)$/i;
   const NOT_START = /linkedin|indeed|seek|xing|glassdoor|easy apply|with (google|facebook|apple|github|resume|cv)|later|save|share|refer|alert|similar|sign ?in|log ?in|register|autofill/i;
   // Job-site systems whose form a company page embeds in a frame; opening the frame shows the form.
@@ -1140,6 +1140,16 @@
       await sleep(300);
       list = listFor(input, before);
     }
+    // React Select (Greenhouse's new job boards) opens only when its outer box is pressed, the way a
+    // person's mouse does it: a press on the box around the text input.
+    if (!list || !deepQuery(list, '[role="option"]').length) {
+      const box = input.closest('[class*="control"], [class*="Control"]') || input.parentElement;
+      if (box) {
+        box.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, view: window }));
+        await sleep(400);
+        list = listFor(input, before);
+      }
+    }
     // A list that opened empty, or says it is loading (aria-busy, "Loading…"), is waited for while it
     // loads: up to 1.5 seconds when it gives no sign, 3 seconds while it says it is loading.
     const loading = (element) => element?.getAttribute('aria-busy') === 'true' || /^(loading|searching|please wait)\b/i.test(textOf(element));
@@ -1256,7 +1266,22 @@
       || textOf(control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
       // A radio inside a page component (<x-radio>Yes</x-radio>): the component's own words.
       || worded(textOf(control.getRootNode().host))
-      || control.value;
+      // Text written right after the box with no <label> (Manatal: <input type=checkbox value="checked">
+      // <span>I agree to the terms…</span>): the words a person reads beside it.
+      || siblingText(control)
+      // A value that is only a state word ("checked", "on", "true") is not the question.
+      || (/^(checked|on|true|false|yes|no|1|0|selected)$/i.test(String(control.value || '').trim()) ? '' : control.value);
+  }
+
+  /** The words right after a control, up to a line break or the next control. */
+  function siblingText(control) {
+    const parts = [];
+    for (let node = control.nextSibling; node; node = node.nextSibling) {
+      if (node.nodeType === 1 && (node.tagName === 'BR' || node.matches?.('input, select, textarea, button') || node.querySelector?.('input, select, textarea, button'))) break;
+      parts.push(node.textContent || '');
+      if (parts.join(' ').length > 400) break;
+    }
+    return cleanText(parts.join(' '));
   }
 
   // Same type only: Rails pairs a checkbox with a hidden input of the same name.
@@ -2547,10 +2572,30 @@
    * form takes priority over that fallback.
    * { ok, text } | { ok, frameUrl } | { email } | { ok: false }.
    */
-  function clickStart(alreadyClicked = [], { assistant = false } = {}) {
+  /**
+   * A sign-in or create-account form around a control: one with a password box, or one asking only for
+   * an email. Its Continue / Next is signing in, never a start or continue signal (Normal Apply).
+   */
+  function insideAccountForm(element) {
+    const form = element.closest('form');
+    if (!form) return false;
+    const boxes = [...form.querySelectorAll('input, select, textarea')].filter((box) => isShown(box)
+      && !['hidden', 'submit', 'button', 'image', 'reset', 'checkbox', 'radio'].includes((box.type || '').toLowerCase()));
+    if (boxes.some((box) => box.type === 'password')) return true;
+    return boxes.length === 1 && (boxes[0].type === 'email' || /e-?mail/i.test(labelFor(boxes[0])));
+  }
+
+  /**
+   * The page's way into the application form, clicked (or, probe, only named). Normal Apply (assistant)
+   * takes a start / continue / guest signal even beside a sign-in or register form, never one inside
+   * it, and never Sign in / Register / Create account itself; with several Continue buttons, the main one.
+   */
+  function clickStart(alreadyClicked = [], { assistant = false, probe = false } = {}) {
     const tried = new Set(alreadyClicked);
-    const candidates = allElements().filter((element) => clickable(element) && !tried.has(startText(element)));
+    const candidates = allElements().filter((element) => clickable(element) && !tried.has(startText(element))
+      && !(assistant && insideAccountForm(element)));
     const manual = candidates.find((element) => MANUAL_TEXT.test(startText(element)) && !/linkedin|indeed/i.test(startText(element)));
+    const area = (element) => element.getBoundingClientRect().width * element.getBoundingClientRect().height;
     const starts = candidates
       .filter((element) => START_TEXT.test(startText(element)) && !NOT_START.test(startText(element)))
       .sort((a, b) => {
@@ -2564,6 +2609,7 @@
       ? starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || manual || null
       : null;
     if (button) {
+      if (probe) return { ok: true, action: 'application', text: startText(button) };
       button.scrollIntoView({ block: 'center' });
       button.click();
       // A link's own address, for when the page catches the click instead (an aggregator's sign-up box).
@@ -2575,8 +2621,10 @@
     if (starts.length && !hasApplicationFields) return { ok: false, email: true };
     if (!hasApplicationFields) {
       const continuations = candidates.filter((element) => NEXT_TEXT.test(startText(element)));
-      if (continuations.length === 1) {
-        const continuation = continuations[0];
+      // Several Continue buttons: Normal Apply takes the main (largest) one; otherwise only a single one.
+      if (continuations.length === 1 || (assistant && continuations.length > 1)) {
+        const continuation = [...continuations].sort((a, b) => area(b) - area(a))[0];
+        if (probe) return { ok: true, action: 'application', text: startText(continuation) };
         continuation.scrollIntoView({ block: 'center' });
         continuation.click();
         return { ok: true, action: 'application', text: startText(continuation) };
@@ -2585,7 +2633,8 @@
     const frame = allElements().find((element) => element.tagName === 'IFRAME' && isShown(element)
       && /^https?:/i.test(element.src || '') && FORM_FRAME.test(element.src));
     if (frame) return { ok: true, action: 'application', frameUrl: frame.src };
-    const account = candidates.find((element) => ACCOUNT_ACTION_TEXT.test(startText(element)));
+    // Normal Apply never clicks Sign in / Register / Create account: those are the Manager's.
+    const account = assistant ? null : candidates.find((element) => ACCOUNT_ACTION_TEXT.test(startText(element)));
     if (account) {
       account.scrollIntoView({ block: 'center' });
       account.click();
@@ -2745,6 +2794,7 @@
     pageOutcome,
     pageText: () => cleanText(document.body?.innerText || '').slice(0, 20000),
     currentAnswers,
+    panelQuestions,
     focusField,
     markProblemFields,
     isSubmitControl,
@@ -2778,6 +2828,73 @@
       value = isEditorHost(element) ? textOf(element) : String(element.value || '');
     }
     return cleanText(value).slice(0, 2000);
+  }
+
+  /**
+   * Every application question on the page with its current value, for the panel's "Questions on this
+   * page" list (read only; nothing is changed). Files show their name; passwords are never read.
+   */
+  function panelQuestions() {
+    const shown = (value) => {
+      if (Array.isArray(value)) return value.map(String).join(', ').slice(0, 120);
+      if (typeof value === 'boolean') return value;
+      return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    };
+    const isShown = (node) => Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length);
+    const clean = (text) => String(text || '').replace(/\s+/g, ' ').replace(/\s*\*\s*$/, '').trim();
+    /**
+     * Separate tick boxes under one question (Ashby: "Which tools have you used?" with Notion, Loom…):
+     * the nearest block holding two or more visible tick boxes and no other kind of question. Its
+     * question is the block's first line of text that is not one of the options.
+     */
+    const groupOf = (element) => {
+      for (let node = element.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth += 1) {
+        const boxes = [...node.querySelectorAll('input[type="checkbox"]')].filter(isShown);
+        if (boxes.length < 2) continue;
+        if ([...node.querySelectorAll('input:not([type="checkbox"]):not([type="hidden"]), select, textarea')].some(isShown)) return null;
+        const options = boxes.map((box) => clean(choiceText(box)));
+        const raw = String(node.innerText || '').split('\n').find((line) => clean(line).length > 3 && !options.includes(clean(line)));
+        return raw ? { node, boxes, options, question: clean(raw), required: /\*\s*$/.test(raw.trim()) } : null;
+      }
+      return null;
+    };
+    const groups = new Map();
+    const rows = [];
+    for (const field of scanForAssist()) {
+      if (field.hidden || field.disabled || field.unrelated || field.account || field.kind === 'password') continue;
+      const element = findField(field.id);
+      if (!element || element.type === 'password') continue;
+      // A human check (reCAPTCHA, hCaptcha) is never a question.
+      if (/captcha/i.test(`${element.getAttribute('name') || ''} ${element.id || ''} ${element.className || ''}`)) continue;
+      if (field.kind === 'checkbox' && element.type === 'checkbox') {
+        const group = groupOf(element);
+        if (group) {
+          const key = group.node;
+          if (!groups.has(key)) {
+            const row = { id: field.id, memberIds: [], label: group.question.slice(0, 160), kind: 'checkbox-group', options: group.options,
+              required: group.required || Boolean(field.required), value: [] };
+            groups.set(key, row);
+            rows.push(row);
+          }
+          const row = groups.get(key);
+          row.memberIds.push(field.id);
+          if (element.checked) row.value.push(clean(choiceText(element)));
+          continue;
+        }
+        rows.push({ id: field.id, label: String(field.label || 'Question').slice(0, 160), kind: 'checkbox', required: Boolean(field.required), value: element.checked });
+        continue;
+      }
+      // A site may redraw its upload box after accepting a file and show the name beside it (Manatal).
+      const shownFile = String(field.label || '').match(/[^\s/\\]+\.(?:pdf|docx?|rtf|txt)\b/i)?.[0];
+      // A list still showing its placeholder ("Select...", "Choose") has no answer yet.
+      const value = field.kind === 'file'
+        ? (element.files?.[0]?.name || shownFile || (field.filled ? 'Attached' : ''))
+        : ['select', 'menu', 'combobox'].includes(field.kind) && isUnanswered(field) ? ''
+          : shown(valueOf(field, element));
+      rows.push({ id: field.id, label: String(field.label || 'Question').slice(0, 160), kind: field.kind, required: Boolean(field.required), value,
+        ...(Array.isArray(field.options) && field.options.length ? { options: field.options.map(String).slice(0, 60) } : {}) });
+    }
+    return rows;
   }
 
   function currentAnswers() {

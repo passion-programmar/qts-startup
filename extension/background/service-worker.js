@@ -30,6 +30,7 @@ importScripts(
   '../shared/semantic-fields.js',
   '../shared/answer-identity.js',
   '../shared/answer-representations.js',
+  '../shared/answer-meaning.js',
   '../shared/apply-answers.js',
   '../shared/apply-recipes.js',
   '../shared/apply-pdf.js',
@@ -5789,9 +5790,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         const currentStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
-          sendResponse(await self.__qtsAutoApply.isOn()
-            ? { ok: false, error: 'Auto Apply is running in this Chrome. Stop it first, or run Apply in another Chrome.' }
-            : { ok: true, status: 'apply', message: 'Apply is already running.' });
+          if (await self.__qtsAutoApply.isOn()) {
+            sendResponse({ ok: false, error: 'Auto Apply is running in this Chrome. Stop it first, or run Apply in another Chrome.' });
+            return;
+          }
+          // A Chrome that restarted with Apply on keeps "Apply" saved but its job loop is not running
+          // yet: a click starts it again (open job pages are taken up first) instead of doing nothing.
+          const restart = !self.__qtsApplyRunner.isQueueRunning();
+          sendResponse({ ok: true, status: 'apply', message: restart ? 'Apply started again: looking for the next ready job.' : 'Apply is already running.' });
+          if (restart) {
+            self.__qtsApplyRunner.processApplyQueue().catch((error) => {
+              console.error('[QTS Apply] Queue worker failed:', error);
+            });
+          }
           return;
         }
         if (currentStatus[EXTENSION_STATUS_KEY] === 'generation') {

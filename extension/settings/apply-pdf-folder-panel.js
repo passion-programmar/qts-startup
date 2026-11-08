@@ -140,9 +140,11 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && (changes.authExpiresAt || changes.qtsSessionUser)) refresh();
   });
-  window.addEventListener('focus', () => refresh());
+  // Closing Windows' folder dialog gives this window focus back. A re-check then would start a new
+  // revision and silently drop the folder just chosen, so none runs while a choice is in progress.
+  window.addEventListener('focus', () => { if (!busy) refresh(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refresh();
+    if (document.visibilityState === 'visible' && !busy) refresh();
   });
   refresh();
 })();

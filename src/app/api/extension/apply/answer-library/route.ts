@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { neonSql } from "@/lib/db";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
-import { answerAttemptQuery, editAnswerQuery, parseAnswerEdit } from "@/server/apply/manager-answer-editor";
+import { answerAttemptQuery, editAnswerQuery, linkWordingQuery, parseAnswerEdit } from "@/server/apply/manager-answer-editor";
 import { loadApplicationAnswers } from "@/server/apply/manager-answers";
 import { profileField } from "@/server/apply/manager-answer-values";
 import identity from "../../../../../../extension/shared/answer-identity.js";
@@ -18,16 +18,26 @@ export async function POST(request: Request): Promise<NextResponse> {
     const text = await request.text();
     if (text.length > 64000) return reply(400, "The answer request is too large.");
     const body = JSON.parse(text);
-    if (!isUuid(body?.attemptId) || !["load", "save", "delete"].includes(body?.action)) return reply(400, "A valid application and answer action are required.");
+    if (!isUuid(body?.attemptId) || !["load", "save", "delete", "link"].includes(body?.action)) return reply(400, "A valid application and answer action are required.");
     if (body.action !== "load" && (compareExtensionVersions(auth.browser.extensionVersion || "", "1.46.0") ?? -1) < 0) return reply(426, "Update QTS to version 1.46.0 or newer before editing reusable answers. Existing autofill and other workflows remain available.");
     const owner = { managerId: auth.manager.id, browserId: auth.browser.id, authVersion: auth.manager.authVersion };
     const context = dialect.sqlToQuery(answerAttemptQuery(owner, body.attemptId));
     const [held] = await neonSql.query(context.sql, context.params) as { candidateId: string; jobId: string; profile?: Record<string, string | null> }[];
     if (!held) return reply(409, "This application is no longer held by this Chrome.");
     let profileUpdate = null;
-    if (body.action !== "load") {
+    if (body.action === "link") {
+      // [Use] in the panel: this wording now means that saved answer (the answer itself is unchanged).
+      const link = linkWordingQuery(owner.managerId, held, body.answer);
+      if (typeof link === "string") return reply(400, link);
+      const query = dialect.sqlToQuery(link);
+      await neonSql.query(query.sql, query.params);
+    } else if (body.action !== "load") {
       const parsed = parseAnswerEdit({ ...body.answer, action: body.action });
-      if (typeof parsed === "string") return reply(400, parsed);
+      if (typeof parsed === "string") {
+        // The reason only (no answer text), so a refused save can be traced.
+        console.warn("Answer save refused:", parsed);
+        return reply(400, parsed);
+      }
       const knownRows = await loadApplicationAnswers(owner.managerId, held.candidateId, held.jobId, true);
       const query = dialect.sqlToQuery(editAnswerQuery(owner, body.attemptId, parsed, knownRows));
       const [changed] = await neonSql.transaction([neonSql.query(query.sql, query.params)], { isolationLevel: "Serializable" });

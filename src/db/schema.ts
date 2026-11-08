@@ -747,6 +747,23 @@ export const candidateSavedAnswers = pgTable(
 // earlier versions are kept in reusable_answer_versions, so code that reads only this table (Apply,
 // or an older release) never sees an unreviewed answer.
 // Manager corrections are immediately usable, isolated from the Super Admin global library.
+// The Manager's "Needs answer" list (decision 2026-11-06/07): questions Normal Apply met that no saved
+// answer or profile fact answers, one row per question per Manager (never per application), so the
+// Manager answers each once. Rows unseen for 90 days are removed.
+export const managerUnansweredQuestions = pgTable("manager_unanswered_questions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  managerId: uuid("manager_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  questionKey: text("question_key").notNull(),
+  questionText: text("question_text").notNull(),
+  kind: text("kind").default("text").notNull(),
+  options: jsonb("options").$type<string[]>().default([]).notNull(),
+  timesSeen: integer("times_seen").default(1).notNull(),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("manager_unanswered_questions_unique").on(table.managerId, table.questionKey),
+]);
+
 export const managerApplyAnswers = pgTable("manager_apply_answers", {
   id: uuid("id").defaultRandom().primaryKey(),
   managerId: uuid("manager_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -757,7 +774,8 @@ export const managerApplyAnswers = pgTable("manager_apply_answers", {
   questionKey: text("question_key").notNull(),
   questionText: text("question_text").notNull(),
   answer: text("answer").notNull(),
-  variants: jsonb("variants").$type<{ kind: string; options: string[]; answer: string }[]>().default([]).notNull(),
+  // A wording linked with [Use] in the Normal Apply panel carries questionText (the site's question).
+  variants: jsonb("variants").$type<{ kind: string; options: string[]; answer: string; questionText?: string }[]>().default([]).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("manager_apply_answers_context_unique").on(table.managerId, table.contextKey, table.questionKey),

@@ -1,6 +1,9 @@
 // One source for worker recognition and server validation. No record writes or transformations.
 (function init(global) {
   const normalize = (text) => String(text || '').normalize('NFKC').toLowerCase().replace(/[‘’]/g, "'").replace(/\(\s*(required|optional)\s*\)/g, ' ').replace(/[?*:]/g, '').replace(/\s+/g, ' ').trim().replace(/[.!]+$/, '');
+  // Not identity: a Manager may set one default for all candidates (2026-11-06 decision).
+  const MANAGER_DEFAULT_FACTS = new Set(['candidate.yearsExperience', 'candidate.salaryCurrency', 'candidate.salaryPeriod',
+    'candidate.programmingLanguages', 'candidate.noticeDuration', 'candidate.startDate', 'candidate.interviewFormat']);
   const definitions = [
     ['candidate.givenName', 'First name', 'firstName', 'firstName', 'string', ['first name', 'given name', 'forename', 'prénom', 'prenom', 'vorname', 'imię', 'imie', 'nombre']],
     ['candidate.familyName', 'Last name', 'lastName', 'lastName', 'string', ['last name', 'family name', 'surname', 'nom de famille', 'nachname', 'nazwisko', 'apellido', 'apellidos', 'nom']],
@@ -30,21 +33,39 @@
     ['candidate.interviewFormat', null, null, null, 'choice', ['preferred interview format', 'preferred interview channel', 'preferred interview method']],
     ['application.source', null, null, null, 'choice', ['application source', 'how did you hear about us', 'where did you hear about this job', 'how did you find this position', 'where did you learn about this opportunity']],
   ].map(([id, canonicalLabel, profileKey, profileField, valueType, aliases]) => Object.freeze({ id, canonicalLabel, profileKey, profileField, valueType,
+    // Candidate facts that are not identity may also have a Manager default ("all my candidates"),
+    // which each candidate's or application's own answer overrides.
     aliases: Object.freeze(aliases), authority: id.startsWith('candidate.') ? 'candidate' : 'manager',
     defaultScope: id.startsWith('candidate.') ? 'candidate' : 'manager', contextDimensions: Object.freeze([]),
-    allowedScopes: Object.freeze(id.startsWith('candidate.') ? ['candidate', 'application'] : ['application', 'candidate', 'manager']),
+    allowedScopes: Object.freeze(id.startsWith('candidate.') && !MANAGER_DEFAULT_FACTS.has(id) ? ['candidate', 'application'] : ['application', 'candidate', 'manager']),
     representations: Object.freeze(['text', 'textarea', 'email', 'tel', 'url', 'number', 'range', 'date', 'select', 'radio', 'combobox', 'menu', 'checkbox-group', 'multiselect']) }));
   const sensitive = [
     { id: 'application.workAuthorization', pattern: /authori[sz].*work|right to work|(?:eligible|allowed|permitted|entitled) to work/, valueType: 'boolean' },
     { id: 'application.sponsorship', pattern: /sponsor/, valueType: 'boolean' },
     { id: 'candidate.salaryExpectation', pattern: /^(expected |desired |annual |yearly |monthly |hourly |daily |gross |net )*(salary|compensation)( expectation| expectations)?\b/, valueType: 'money' },
-  ].map((entry) => Object.freeze({ ...entry, authority: 'candidate', defaultScope: 'application', contextDimensions: Object.freeze(['country', 'time', 'currency', 'period', 'basis', 'wording']), allowedScopes: Object.freeze(['application', 'candidate']), representations: Object.freeze(['text', 'number', 'select', 'radio', 'combobox', 'menu', 'checkbox']) }));
+  ].map((entry) => Object.freeze({ ...entry, authority: 'candidate', defaultScope: 'application', contextDimensions: Object.freeze(['country', 'time', 'currency', 'period', 'basis', 'wording']), allowedScopes: Object.freeze(['application', 'candidate', 'manager']), representations: Object.freeze(['text', 'number', 'select', 'radio', 'combobox', 'menu', 'checkbox']) }));
+  // Consent to be considered for future roles or kept in a talent pool, in any company's wording
+  // (decision 2026-11-06): one reusable answer; Yes ticks it whether required or not. Pure marketing
+  // (newsletters, promotions, news, updates) is never this answer.
+  const futureRecruitmentConsent = Object.freeze({ id: 'application.futureRecruitmentConsent', canonicalLabel: null, profileKey: null, profileField: null,
+    valueType: 'boolean', aliases: Object.freeze(['consent to future recruitment', 'future recruitment consent', 'talent pool consent']),
+    authority: 'manager', defaultScope: 'manager', contextDimensions: Object.freeze([]), allowedScopes: Object.freeze(['application', 'candidate', 'manager']),
+    representations: Object.freeze(['checkbox', 'checkbox-group', 'radio', 'select', 'combobox', 'menu']) });
+  const FUTURE_RECRUITMENT = /\b(future|other|new|upcoming|subsequent) (recruitment|recruiting|hiring|jobs?|roles?|opportunit\w*|vacanc\w*|positions?|openings?)\b|\btalent (pool|community|network|database)\b/;
+  const MARKETING_ONLY = /\b(marketing|newsletters?|promotion\w*|offers|news|updates|sms|text messages?)\b/;
   function recognize(question, hints = {}) {
     const original = normalize(question);
+    if (futureRecruitmentConsent.aliases.includes(original)
+      || (FUTURE_RECRUITMENT.test(original) && !MARKETING_ONLY.test(original))) {
+      return { definition: futureRecruitmentConsent, context: {}, key: futureRecruitmentConsent.id };
+    }
     if (/\b(employer|company|referee|recruiter|emergency contact|previous employment)\b/.test(normalize(`${hints.note || ''} ${hints.section || ''}`))) return { blocked: true, reason: 'contextual-subject' };
     if (/privacy|consent|\bterms\b|\bagree\b|acknowledg|attest|certif|marketing|newsletter|data processing/.test(original)) return { blocked: true, reason: 'policy-excluded' };
     if (/\b(referr\w*|referee|recruiter|emergency|next of kin|someone else|their|previous employer)\b/.test(original)) return { blocked: true, reason: 'other-person-or-employer' };
-    if (/\b(employer|company)\b/.test(original) && /\b(name|email|phone|address|country|city)\b/.test(original)) return { blocked: true, reason: 'other-person-or-employer' };
+    // "Employer's name / company address" is about someone else; "employer sponsorship to work in your
+    // country" (Ashby, Oyster) is the candidate's own work right and is not blocked.
+    if (/\b(employer|company)\b/.test(original) && /\b(name|email|phone|address|country|city)\b/.test(original)
+      && !/sponsor|authori[sz]|right to work|(?:eligible|allowed|permitted|entitled) to work/.test(original)) return { blocked: true, reason: 'other-person-or-employer' };
     const label = original.replace(/^(?:please (?:enter|provide|specify)|what is|what's)\s+(?:your\s+)?/, '').replace(/^your\s+/, '');
     const matches = definitions.filter((entry) => entry.aliases.includes(label));
     if (matches.length === 1) return { definition: matches[0], context: {}, key: matches[0].id };
@@ -88,7 +109,7 @@
   }
   const representationDefinitions = Object.freeze({ scalar: Object.freeze({ operation: 'existing-profile-rule-and-control-validation', transforms: false }),
     choice: Object.freeze({ operation: 'existing-controlled-answer-option-validation', transforms: false }) });
-  const api = Object.freeze({ version: 1, definitions: Object.freeze([...definitions, ...sensitive]), representationDefinitions, recognize, compatible });
+  const api = Object.freeze({ version: 1, definitions: Object.freeze([...definitions, ...sensitive, futureRecruitmentConsent]), representationDefinitions, recognize, compatible });
   global.__qtsSemanticFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

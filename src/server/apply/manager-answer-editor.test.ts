@@ -16,7 +16,8 @@ test('explicit saves share eligible answers but preserve personal/context bounda
     assert.equal(typeof parseAnswerEdit({ action: 'save', question, answer: 'Value', confirmShared: true }), 'string');
   }
   assert.equal((input({}) as Extract<AnswerEdit, { action: 'save' }>).scope, 'application');
-  for (const question of ['Phone', 'Email', 'First name']) assert.equal((input({ question, answer: question === 'Email' ? 'one@example.test' : 'Value' }) as Extract<AnswerEdit, { action: 'save' }>).scope, 'candidate');
+  // Applying never changes the profile (decision 2026-11-07): profile facts are not saved from the panel.
+  for (const question of ['Phone', 'Email', 'First name']) assert.match(String(parseAnswerEdit({ action: 'save', kind: 'text', question, answer: question === 'Email' ? 'one@example.test' : 'Value' })), /profile fact/i);
   assert.equal((input({ question: 'Why this company?' }) as Extract<AnswerEdit, { action: 'save' }>).scope, 'application');
   assert.equal(typeof parseAnswerEdit({ action: 'save', question: 'Password', answer: 'secret' }), 'string');
   assert.equal(typeof parseAnswerEdit({ action: 'delete', id: ids.job }), 'string');
@@ -65,7 +66,8 @@ test('actual PostgreSQL answer CRUD enforces ownership, live attempts, atomic pr
     await scenario('legacy semantic duplicate detection does not rewrite old records', async () => {
       await pg.query(`insert into manager_apply_answers(manager_id,candidate_id,scope,context_key,question_key,question_text,answer,variants)
         values ($1,$2,'candidate',$3,'telephone','Telephone','legacy number','[]')`, [ids.manager, ids.candidate, `candidate:${ids.candidate}`]);
-      assert.equal((await run(editAnswerQuery(owner, ids.attempt, input({ question: 'Phone number', answer: '+40 1234' })))).length, 0);
+      // A profile fact is refused before any write, so the legacy row stays as it was.
+      assert.equal(typeof parseAnswerEdit({ action: 'save', kind: 'text', question: 'Phone number', answer: '+40 1234' }), 'string');
       assert.equal((await row()).answer, 'legacy number');
       assert.deepEqual((await row()).variants, []);
     });
@@ -103,19 +105,12 @@ test('actual PostgreSQL answer CRUD enforces ownership, live attempts, atomic pr
       const latest = await row();
       assert.equal((await run(editAnswerQuery(owner, ids.attempt, { action: 'delete', id: String(latest.id), version: String(latest.version) }))).length, 1);
     });
-    await scenario('candidate profile and saved correction change together; stale edit changes neither', async () => {
-      assert.equal((await run(editAnswerQuery(owner, ids.attempt, input({ question: 'Phone', answer: '+40 4686441' })))).length, 1);
-      const before = await row(); assert.equal(before.scope, 'candidate');
-      assert.equal((await pg.query('select phone from profiles')).rows[0].phone, '+40 4686441');
-      assert.equal((await run(editAnswerQuery(owner, ids.attempt, input({ id: before.id, version: '1.000000', question: 'Phone', answer: 'wrong' })))).length, 0);
-      assert.equal((await pg.query('select phone from profiles')).rows[0].phone, '+40 4686441');
-    });
-    await scenario('recognized contact aliases update only the owned candidate profile and preserve legacy keys', async () => {
-      await run(editAnswerQuery(owner, ids.attempt, input({ question: 'Please enter your telephone number', answer: '+40 711222333' })));
-      const before = await row();
-      assert.equal(before.scope, 'candidate'); assert.equal(before.question_key, 'please enter your telephone number');
-      assert.equal((await pg.query('select phone from profiles')).rows[0].phone, '+40 711222333');
-      assert.equal((await run(editAnswerQuery({ ...owner, managerId: ids.other }, ids.attempt, input({ question: 'Contact email', answer: 'foreign@example.test' })))).length, 0);
+    await scenario('applying never changes the profile: profile facts are refused and the profile stays as it was', async () => {
+      for (const question of ['Phone', 'Please enter your telephone number', 'Contact email']) {
+        assert.match(String(parseAnswerEdit({ action: 'save', kind: 'text', question, answer: question.includes('email') ? 'x@example.test' : '+40 711222333' })), /profile fact/i, question);
+      }
+      assert.equal((await pg.query('select phone from profiles')).rows[0].phone, 'old phone');
+      assert.equal((await pg.query('select count(*)::int as n from manager_apply_answers')).rows[0].n, 0);
     });
     await scenario('explicit edits preserve equivalent approved variants and discard a different meaning', async () => {
       await run(editAnswerQuery(owner, ids.attempt, input({ question: 'How did you hear about us?', answer: 'LinkedIn' })));

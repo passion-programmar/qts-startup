@@ -40,9 +40,16 @@ export function parseAnswerEdit(input: unknown): AnswerEdit | string {
   }
   const parsed = parseCorrection(raw, { normalApply: true });
   if (typeof parsed === "string") return parsed;
+  // Applying never changes the candidate's profile (decision 2026-11-07): a question the profile
+  // answers (name, email, phone, city, LinkedIn…) is not saved from the Apply panel.
+  if (profileField(parsed.questionText, true)) return "This is a profile fact. Change it on the candidate's Profile page; applying never changes the profile.";
   // New unknown questions stay local. Sharing is an explicit, separate confirmation.
   if (raw.confirmShared === true && !canShareQuestion(parsed.questionText, true)) return "Personal or contextual answers cannot be shared.";
-  const scope = raw.confirmShared === true ? "manager" : parsed.scope;
+  // The panel's question list names the level the Manager chose: this job, this candidate, or all
+  // candidates (2026-11-06). Identity facts are never saved for all candidates.
+  const level = raw.level === "application" || raw.level === "candidate" || raw.level === "manager" ? raw.level : null;
+  if (level === "manager" && !canShareQuestion(parsed.questionText, true)) return "This question is personal to each candidate. Save it for this candidate or this job.";
+  const scope = level ?? (raw.confirmShared === true ? "manager" : parsed.scope);
   return { action: "save", id: id as string | null, version: version as string | null, question: parsed.questionText,
     questionKey: parsed.questionKey, answer: parsed.answer, kind: parsed.kind, options: parsed.options, policyContext: parsed.policyContext, representation: parsed.representation, scope, profileField: profileField(parsed.questionText, true) };
 }
@@ -50,7 +57,7 @@ export function parseAnswerEdit(input: unknown): AnswerEdit | string {
 // One locked attempt authorizes both reads and writes. Browser/candidate IDs never come from UI.
 export function answerAttemptQuery(owner: AnswerOwner, attemptId: string, lock = false) {
   return sql`select a.candidate_id as "candidateId", a.job_id as "jobId",
-    jsonb_build_object('firstName', p.first_name, 'lastName', p.last_name, 'email', coalesce(p.candidate_email, u.email),
+    jsonb_build_object('firstName', p.first_name, 'lastName', p.last_name, 'email', p.candidate_email,
       'phone', p.phone, 'city', p.city, 'linkedinUrl', p.linkedin_url) as profile
     from apply_attempts a join users u on u.id = a.candidate_id
     join profiles p on p.user_id = u.id
@@ -62,6 +69,32 @@ export function answerAttemptQuery(owner: AnswerOwner, attemptId: string, lock =
       and m.role = 'manager' and m.blocked_at is null and m.can_use_apply = true and m.auth_version = ${owner.authVersion}
       and u.blocked_at is null and a.status in ('claimed', 'waiting_review') and a.lease_expires_at > clock_timestamp()
     ${lock ? sql`for update of a, u, m, j, b nowait` : sql``}`;
+}
+
+/**
+ * [Use] in the Normal Apply panel (decision 2026-11-07): links a site's wording to an existing saved
+ * answer, so that wording is answered by itself next time. Adds { questionText, kind, options, answer }
+ * to the answer's variants (at most 40 kept); the answer itself never changes. Only an answer this
+ * application may use: the Manager's own, this candidate's, or this job's. A wording already linked is
+ * left as it is. Returns the query, or the reason the request is refused.
+ */
+export function linkWordingQuery(managerId: string, held: { candidateId: string; jobId: string }, input: unknown) {
+  const raw = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const question = typeof raw.question === "string" ? raw.question.replace(/\s+/g, " ").trim() : "";
+  if (!isUuid(raw.id)) return "Choose the saved answer to use.";
+  if (!question || question.length > 300) return "The question must be 1 to 300 characters.";
+  const kind = typeof raw.kind === "string" && /^[a-z-]{1,30}$/.test(raw.kind) ? raw.kind : "text";
+  const options = Array.isArray(raw.options) ? raw.options.filter((option): option is string => typeof option === "string").map((option) => option.slice(0, 200)).slice(0, 100) : [];
+  return sql`update manager_apply_answers
+    set variants = (case when jsonb_array_length(variants) >= 40 then variants - 0 else variants end)
+      || jsonb_build_array(jsonb_build_object('questionText', ${question}::text, 'kind', ${kind}::text, 'options', ${JSON.stringify(options)}::jsonb, 'answer', answer)),
+      updated_at = clock_timestamp()
+    where id = ${raw.id}::uuid and manager_id = ${managerId}::uuid
+      and (scope = 'manager' or (scope = 'candidate' and candidate_id = ${held.candidateId}::uuid)
+        or (scope = 'application' and candidate_id = ${held.candidateId}::uuid and job_id = ${held.jobId}::uuid))
+      and lower(question_text) <> lower(${question}::text)
+      and not exists (select 1 from jsonb_array_elements(variants) v where lower(v->>'questionText') = lower(${question}::text))
+    returning id`;
 }
 
 export function editAnswerQuery(owner: AnswerOwner, attemptId: string, edit: AnswerEdit, knownRows: {questionText: string}[] = []) {

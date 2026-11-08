@@ -239,7 +239,9 @@ test('the panel shows the account, the job, two copy buttons, the profile cards,
       assert.ok(text.includes(shown), `shows "${shown}"`);
     }
     assert.ok(!text.includes('QTS filled'));
-    assert.ok(!text.includes('Fill again'));
+    assert.ok(text.includes('Fill again'));
+    await panel.click('.fill-again', 'Fill again');
+    assert.deepEqual((await panel.sent()).filter((m) => m.action !== 'fields_changed').map((m) => m.action), ['fill_again']);
     // Experience, education and reusable answers start closed; the page moves aside for the panel.
     assert.ok(!text.includes('Initech'));
     assert.equal(await page.evaluate(() => document.documentElement.dataset.qtsApplyDocked), 'true');
@@ -271,6 +273,90 @@ test('a paused PDF error stays actionable and offers an explicit Retry autofill 
     await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), STATE);
     assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.retry-fill')), null);
     assert.match(await panel.text(), /Submitted.*Cancel/s);
+  });
+});
+
+test('"Questions on this page" lists every question with status and source; a click scrolls to the box', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    const ids = await page.evaluate(() => globalThis.__qtsApplyForm.panelQuestions().map((entry) => ({ id: entry.id, label: entry.label })));
+    assert.ok(ids.length >= 2, 'the page has questions');
+    const questions = [
+      { id: ids[0].id, label: ids[0].label, kind: 'text', required: true, value: 'Radu Star', status: 'filled', source: 'profile' },
+      { id: ids[1].id, label: ids[1].label, kind: 'text', required: true, value: '', status: 'need', reason: 'QTS has an answer but the box is empty: copy it, or use Fill again.', suggestion: 'ana@example.com' },
+    ];
+    await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), { ...STATE, questions });
+    const text = await panel.text();
+    assert.match(text, /Questions on this page/i);
+    assert.match(text, /✓ 1 filled/); assert.match(text, /! 1 need you/);
+    assert.match(text, /Radu Star/); assert.match(text, /profile/); assert.match(text, /QTS has an answer but the box is empty/); assert.match(text, /Copy: ana@example.com/);
+    // "Needs you" shows only the empty required one.
+    await panel.click('.question-filters button', 'Needs you');
+    assert.doesNotMatch(await panel.text(), /Radu Star/);
+    // A click on a row scrolls the page to that box and outlines it.
+    await panel.click('.question', ids[1].label);
+    const outlined = await page.evaluate((id) => {
+      const box = document.querySelector(`[data-qts-apply-field="${id}"]`);
+      const holder = box.closest('label, fieldset, [class*="field" i], [class*="question" i]') || box;
+      return holder.style.outline;
+    }, ids[1].id);
+    assert.match(outlined, /3px/);
+    // Copy gives what QTS knows for the empty box, without jumping to it.
+    await panel.click('.q-copy', 'Copy');
+    assert.deepEqual(await panel.copied(), ['ana@example.com']);
+    // Save answer in the row: the editor starts with what QTS knows; the Manager picks the level and saves.
+    await panel.click('.q-copy', 'Save answer');
+    const shadow = () => 'document.querySelector("[data-qts-apply-assist]").shadowRoot';
+    assert.equal(await page.evaluate(`${shadow()}.querySelector('.q-editor textarea').value`), 'ana@example.com');
+    await page.evaluate(`(() => { const root = ${shadow()};
+      const text = root.querySelector('.q-editor textarea'); text.value = 'radu@example.com'; text.dispatchEvent(new Event('input'));
+      const level = root.querySelectorAll('.q-editor select')[0]; level.value = 'candidate'; level.dispatchEvent(new Event('change')); })()`);
+    await panel.click('.q-save', 'Save and fill');
+    const saved = (await panel.sent()).find((message) => message.action === 'save_question_answer');
+    // The row says it was saved, and where.
+    assert.match(await panel.text(), /Saved for This candidate and filled/);
+    assert.deepEqual({ fieldId: saved.fieldId, question: saved.question, answer: saved.answer, level: saved.level, kind: saved.kind },
+      { fieldId: ids[1].id, question: ids[1].label.replace(/\s*\*\s*$/, '').replace(/:\s*$/, ''), answer: 'radu@example.com', level: 'candidate', kind: 'text' });
+  });
+});
+
+test('a box the Manager changed: the panel opens, shows the change and saves it at the chosen level only on click', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    const ids = await page.evaluate(() => globalThis.__qtsApplyForm.panelQuestions().map((entry) => ({ id: entry.id, label: entry.label })));
+    // The Manager hid the panel, then changed a box on the site.
+    await panel.click('.hide');
+    assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.panel').hidden), true);
+    const questions = [{ id: ids[1].id, label: ids[1].label, kind: 'text', required: true, value: 'Masters', status: 'page',
+      edit: { before: '', levels: ['manager', 'candidate', 'application'] } }];
+    await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), { ...STATE, questions, questionsPrompt: { id: ids[1].id, at: Date.now() } });
+    const shown = await page.evaluate(() => {
+      const root = document.querySelector('[data-qts-apply-assist]').shadowRoot;
+      return { hidden: root.querySelector('.panel').hidden, flashed: Boolean(root.querySelector('.question.flash')) };
+    });
+    assert.deepEqual(shown, { hidden: false, flashed: true }, 'the panel opened at the changed question');
+    const text = await panel.text();
+    assert.match(text, /You entered: Masters\s+\(was empty\)/);
+    assert.match(text, /1 change not saved yet/);
+    // Nothing is sent until a level is clicked.
+    assert.equal((await panel.sent()).filter((message) => message.action === 'save_question_answer').length, 0);
+    await panel.click('.q-level', 'This candidate');
+    const saved = (await panel.sent()).find((message) => message.action === 'save_question_answer');
+    assert.deepEqual({ answer: saved.answer, level: saved.level, fieldId: saved.fieldId }, { answer: 'Masters', level: 'candidate', fieldId: ids[1].id });
+    assert.match(await panel.text(), /Saved for This candidate/);
+  });
+});
+
+test('answers that differ from the Manager defaults are listed with both values; none means no box', { skip }, async () => {
+  const differences = [
+    { question: 'Are you open to relocation?', used: 'Yes', managerDefault: 'No', level: 'candidate' },
+    { question: 'Notice period', used: '2 months', managerDefault: '1 month', level: 'application' },
+  ];
+  await withPanel(FORM, { ...STATE, differences }, async (page, panel) => {
+    const text = await panel.text();
+    assert.match(text, /Different from your defaults \(2\)/);
+    assert.match(text, /Are you open to relocation\?: used "Yes" \(this candidate\) · your default "No"/);
+    assert.match(text, /Notice period: used "2 months" \(this job\) · your default "1 month"/);
+    await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), STATE);
+    assert.doesNotMatch(await panel.text(), /Different from your defaults/);
   });
 });
 
@@ -494,5 +580,23 @@ test('after the extension restarted, a panel says what to do instead of doing no
     assert.ok(text.includes('QTS was restarted or updated'), text.slice(-300));
     // Not stuck: the button can be clicked again.
     assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.submitted').disabled), false);
+  });
+});
+
+test('a saved answer with similar wording is offered with [Use]; one click asks QTS to fill it and link the wording', { skip }, async () => {
+  await withPanel(FORM, STATE, async (page, panel) => {
+    const ids = await page.evaluate(() => globalThis.__qtsApplyForm.panelQuestions().map((entry) => ({ id: entry.id, label: entry.label })));
+    const questions = [{ id: ids[1].id, label: ids[1].label, kind: 'text', required: true, value: '', status: 'need',
+      reason: 'Looks like your saved answer "Are you willing to work remotely?". Use it if it means the same.',
+      offer: { value: 'Yes', question: 'Are you willing to work remotely?', answer: 'Yes', level: 'manager', why: 'similar wording', savedAnswerId: '00000000-0000-4000-8000-000000000001' } }];
+    await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), { ...STATE, questions });
+    const text = await panel.text();
+    assert.match(text, /Looks like: "Are you willing to work remotely\?" → Yes \(All my candidates\)/);
+    // Nothing is filled or saved until the Manager clicks Use.
+    assert.equal((await panel.sent()).filter((message) => message.action === 'use_offer').length, 0);
+    await panel.click('.q-use', 'Use: Yes');
+    const used = (await panel.sent()).filter((message) => message.action === 'use_offer');
+    assert.equal(used.length, 1);
+    assert.equal(used[0].fieldId, ids[1].id);
   });
 });

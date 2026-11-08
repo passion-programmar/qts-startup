@@ -306,6 +306,41 @@ test('live-site labels: Greenhouse uploads named by their group, Workable radios
   assert.deepEqual(radios, ['Gender']);
 });
 
+test('Normal Apply start signals: guest beats sign-in, never Sign in/Register or a Continue inside a sign-in form, main Continue', { skip }, async () => {
+  const signIn = `<form id="login"><label for="e">Email</label><input id="e" type="email"><label for="p">Password</label><input id="p" type="password"><button type="submit">Continue</button></form>`;
+  const run = (html, assistant = true) => onPage(html, `const r = api.clickStart([], { assistant: ${assistant} }); return r.ok ? r.text : (r.email ? 'email' : null);`);
+  // A guest way in beside the sign-in form is taken.
+  assert.equal(await run(`${signIn}<button type="button">Apply as guest</button><a href="/register">Create account</a>`), 'Apply as guest');
+  assert.equal(await run(`${signIn}<button type="button">Continue without an account</button>`), 'Continue without an account');
+  // Only sign-in / register on offer: nothing is clicked (not the form's own Continue, not Sign in).
+  assert.equal(await run(`${signIn}<a href="/signin">Sign in</a><a href="/register">Register</a>`), null);
+  // An email-only form's Continue is signing in too.
+  assert.equal(await run(`<form><label for="m">Email address</label><input id="m" type="email"><button type="submit">Continue</button></form>`), null);
+  // Several Continue buttons on a page with no questions: the main (largest) one.
+  assert.equal(await run(`<main><p>Before you apply, read this.</p><button style="width:60px;height:20px">Continue</button><button style="width:300px;height:48px" id="main">Continue</button></main>`), 'Continue');
+  assert.equal(await onPage(`<main><p>Read this.</p><button style="width:60px;height:20px" onclick="window.hit='small'">Continue</button><button style="width:300px;height:48px" onclick="window.hit='main'">Continue</button></main>`,
+    'api.clickStart([], { assistant: true }); return window.hit;'), 'main');
+  // Real sites: Manatal "Apply for Position", Breezy "Apply To Position", cord.com "Apply to <company>".
+  for (const label of ['Apply for Position', 'Apply To Position', 'Apply to Lead Forensics']) {
+    assert.equal(await run(`<main><h1>Engineer</h1><p>About the role.</p><a href="#apply">${label}</a></main>`), label);
+  }
+  // Still never: LinkedIn, Indeed, alerts, similar jobs.
+  for (const label of ['Apply with LinkedIn', 'Apply for a job alert', 'Apply to similar jobs', 'Apply via Indeed']) {
+    assert.equal(await run(`<main><h1>Engineer</h1><p>About the role.</p><a href="#x">${label}</a></main>`), null, label);
+  }
+  // Manatal (careers-page.com): an agreement box with value="checked" and its words in a span beside it.
+  const manatal = await onPage(`<form><div><label>Phone:</label><input name="phone"></div><div><input type="checkbox" name="terms_and_condition" value="checked"> <span>
+    I agree to the <a target="_blank" href="/t">terms and conditions</a> &amp; <a target="_blank" href="/p">privacy policy</a></span> <br></div></form>`, `
+    const box = api.scanForAssist().find((field) => field.kind === 'checkbox');
+    const plan = globalThis.__qtsApplyAnswers ? globalThis.__qtsApplyAnswers.resolveFields([box], {}, [], { normalApply: true }) : null;
+    return { label: box.label, answer: plan ? plan.answers[box.id]?.value : 'no-answers-module' };`);
+  assert.equal(manatal.label, 'I agree to the terms and conditions & privacy policy');
+  if (manatal.answer !== 'no-answers-module') assert.equal(manatal.answer, true);
+  // Auto Apply keeps its own account handling: it may still choose Sign in.
+  // ("#signin": the click must not navigate the test page, or closing it can hang.)
+  assert.equal(await run(`<main><p>Sign in to continue your application.</p><a href="#signin">Sign in</a></main>`, false), 'Sign in');
+});
+
 test('live-site pages: a cookie banner and a declared language switcher are not application questions', { skip }, async () => {
   // emagine (Cookiebot): the banner's tick boxes made a job page look like a form, so Apply was never clicked.
   const cookiebot = `<div id="CybotCookiebotDialog"><fieldset><label><input type="checkbox" id="c1" checked disabled> Necessary</label><label><input type="checkbox" id="c2"> Preferences</label><label><input type="checkbox" id="c3"> Statistics</label><label><input type="checkbox" id="c4"> Marketing</label></fieldset><button>Allow all</button></div>`;
@@ -644,4 +679,42 @@ test('a company page showing a job board\'s form in a frame of another site give
   assert.equal(await embedded(`<form><label for="a">First name</label><input id="a"><label for="b">Email</label><input id="b" type="email"></form>${frame}`), '');
   assert.equal(await embedded('<iframe src="https://job-boards.greenhouse.io/embed/job_app?token=1" style="width:100px;height:50px"></iframe>'), '');
   assert.equal(await embedded('<iframe src="https://www.youtube.com/embed/x" style="width:700px;height:400px"></iframe>'), '');
+});
+
+test('the panel question list groups separate tick boxes under their question and skips reCAPTCHA', { skip }, async () => {
+  // Ashby (Oyster): each tool is its own check box with its own name, under one question.
+  const rows = await onPage(`<form>
+    <div class="field"><label for="n">Full name *</label><input id="n" value="Radu Star"></div>
+    <div class="tools"><p>Which remote collaboration tools have you used professionally? (Select all that apply)*</p>
+      <label><input type="checkbox" name="Notion" checked> Notion</label>
+      <label><input type="checkbox" name="Loom"> Loom</label>
+      <label><input type="checkbox" name="Slack" checked> Slack</label></div>
+    <div class="privacy"><label><input type="checkbox" name="privacy"> I confirm I have read OysterHR's Privacy Notice</label></div>
+    <textarea name="g-recaptcha-response" style="width:10px;height:10px"></textarea>
+  </form>`, 'return api.panelQuestions();');
+  assert.deepEqual(rows.map((row) => row.label), ['Full name *', 'Which remote collaboration tools have you used professionally? (Select all that apply)',
+    "I confirm I have read OysterHR's Privacy Notice"]);
+  const tools = rows[1];
+  assert.equal(tools.kind, 'checkbox-group');
+  assert.deepEqual(tools.options, ['Notion', 'Loom', 'Slack']);
+  assert.deepEqual(tools.value, ['Notion', 'Slack']);
+  assert.equal(tools.required, true);
+  assert.equal(tools.memberIds.length, 3);
+  // A lone agreement box stays its own question; an unticked box is empty (false), not "filled".
+  assert.equal(rows[2].kind, 'checkbox'); assert.equal(rows[2].value, false);
+});
+
+test('a React Select list that opens only when its box is pressed is read, and a "Select..." placeholder is no answer', { skip }, async () => {
+  // Greenhouse's new job boards: the text input ignores clicks and keys; a press on the outer box opens it.
+  const result = await onPage(`<form><label for="q1">Are you currently employed by Exadel? *</label>
+    <div class="select__control"><div class="select__placeholder">Select...</div>
+      <input id="q1" class="select__input" role="combobox" aria-expanded="false" aria-haspopup="true"></div>
+    <div id="menu"></div></form>
+    <script>const box = document.querySelector('.select__control'), input = document.getElementById('q1'), menu = document.getElementById('menu');
+      box.addEventListener('mousedown', () => { input.setAttribute('aria-expanded', 'true'); input.setAttribute('aria-controls', 'react-select-q1-listbox');
+        menu.innerHTML = '<div id="react-select-q1-listbox" role="listbox"><div role="option">No</div><div role="option">Yes - Exadel</div><div role="option">Yes - Other</div></div>'; });
+      input.addEventListener('keydown', (event) => { if (event.key === 'Escape') { menu.innerHTML = ''; input.setAttribute('aria-expanded', 'false'); } });</script>`,
+  'const f = api.scanForm().find((x) => /exadel/i.test(x.label)); const read = await api.discoverComboboxChoices(f.id); const row = api.panelQuestions().find((x) => /exadel/i.test(x.label)); return { options: read.options, value: row.value };');
+  assert.deepEqual(result.options, ['No', 'Yes - Exadel', 'Yes - Other']);
+  assert.equal(result.value, '', 'the placeholder is not an answer');
 });

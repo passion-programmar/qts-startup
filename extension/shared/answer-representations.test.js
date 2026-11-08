@@ -91,12 +91,13 @@ test('salary requires explicit units, basis and conversion evidence; zero is not
   assert.equal(r.convert(source, { ...target, context: { ...target.context, basis: 'net' } }).ok, false);
   assert.equal(r.convert(source, { ...target, context: { ...target.context, period: 'year', currency: 'USD' } }, { rates: { EUR: 1, USD: 2 } }).value, 24000);
   assert.equal(normal(field('Expected annual salary EUR', { kind: 'number' }), { salaryExpectationAmount: 0, salaryExpectationCurrency: 'EUR', salaryExpectationPeriod: 'year' }).value, 0);
-  assert.equal(normal(field('Expected monthly salary EUR', { kind: 'number' }), { salaryExpectationAmount: 12000, salaryExpectationCurrency: 'EUR', salaryExpectationPeriod: 'year' }).value, undefined);
+  // Periods convert with the standard hours (40 h/week, 8 h/day; decision 2026-11-06).
+  assert.equal(normal(field('Expected monthly salary EUR', { kind: 'number' }), { salaryExpectationAmount: 12000, salaryExpectationCurrency: 'EUR', salaryExpectationPeriod: 'year' }).value, '1000');
   assert.equal(normal(field('Expected annual salary EUR', { kind: 'number', note: 'Net amount' }), { salaryExpectationAmount: 12000, salaryExpectationCurrency: 'EUR', salaryExpectationPeriod: 'year' }).value, undefined);
   assert.equal(normal(field('Expected annual salary EUR', { kind: 'number', note: 'USD required' }), { salaryExpectationAmount: 12000, salaryExpectationCurrency: 'EUR', salaryExpectationPeriod: 'year' }).value, undefined);
   assert.equal(normal(field('Salary currency', { kind: 'select', options: ['Euro (EUR)', 'US Dollar (USD)'] }), { salaryExpectationCurrency: 'EUR' }).value, 'Euro (EUR)');
   assert.equal(normal(field('Frequency', { kind: 'select', options: ['Annually', 'Monthly'] }), { salaryExpectationPeriod: 'year' }).value, 'Annually');
-  assert.equal(normal(field('Desired hourly rate USD', { kind: 'number' }), { salaryExpectationAmount: 12000, salaryExpectationCurrency: 'USD', salaryExpectationPeriod: 'year' })?.value, undefined);
+  assert.equal(normal(field('Desired hourly rate USD', { kind: 'number' }), { salaryExpectationAmount: 12000, salaryExpectationCurrency: 'USD', salaryExpectationPeriod: 'year' })?.value, '5.77');
 });
 
 test('typed sets map all values without flattening, guessing separators or selecting partial subsets', () => {

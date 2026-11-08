@@ -58,20 +58,28 @@ async function startPageTextHighlighter() {
     return loadAndApply().catch(error => handleError(error, 'Could not apply saved rules'));
   }
 
+  // One wait for <body>, shared by every caller: a second call while the first still waits (an
+  // extension reload, a page rebuilding its document) must not replace the first watcher, whose
+  // callback would then find the shared variable already cleared.
+  let bodyWait = null;
   function waitForDocumentBody() {
     if (document.body) return Promise.resolve();
-    return new Promise((resolve) => {
-      finishBodyWait = resolve;
-      bodyObserver = new MutationObserver(() => {
+    if (bodyWait) return bodyWait;
+    bodyWait = new Promise((resolve) => {
+      const observer = new MutationObserver(() => {
         if (!contextAvailable()) { dispose(); return; }
         if (!document.body) return;
-        bodyObserver.disconnect();
-        bodyObserver = null;
+        observer.disconnect();
+        if (bodyObserver === observer) bodyObserver = null;
         finishBodyWait = null;
+        bodyWait = null;
         resolve();
       });
-      bodyObserver.observe(document, { childList: true, subtree: true });
+      bodyObserver = observer;
+      finishBodyWait = () => { bodyWait = null; resolve(); };
+      observer.observe(document, { childList: true, subtree: true });
     });
+    return bodyWait;
   }
 
   function unwrapHighlights() {

@@ -4,6 +4,7 @@ import { KeyRound, LockKeyhole, MessageSquareText } from "lucide-react";
 import { redirect } from "next/navigation";
 import { ManagerAnswers } from "@/app/profile/manager-answers";
 import { listManagerAnswers } from "@/server/apply/manager-answers";
+import { listUnanswered } from "@/server/apply/unanswered-questions";
 import { ProfileForm } from "@/app/profile/profile-form";
 import { SiteAccountPasswordForm } from "@/app/profile/site-account-password-form";
 import { users } from "@/db/schema";
@@ -21,12 +22,13 @@ export const metadata: Metadata = {
 export default async function ProfilePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const [[siteAccount], managerAnswers] = user.role === "manager"
+  const [[siteAccount], managerAnswers, unanswered] = user.role === "manager"
     ? await Promise.all([
       db.select({ password: users.siteAccountPassword }).from(users).where(eq(users.id, user.id)).limit(1),
       listManagerAnswers(user.id),
+      listUnanswered(user.id),
     ])
-    : [[], []];
+    : [[], [], []];
 
   return (
     <WorkspaceShell activeHref="/profile" user={user}>
@@ -84,7 +86,7 @@ export default async function ProfilePage() {
                 Manage answers for your applications and candidates. Your shared answers are available to your candidates without approval. Apply does not use global answers.
               </p>
             </div>
-            <ManagerAnswers rows={managerAnswers} />
+            <ManagerAnswers rows={managerAnswers} unanswered={unanswered.map((row) => ({ id: row.id, questionText: row.questionText, kind: row.kind, options: row.options, timesSeen: row.timesSeen }))} />
 
           </section>
         )}

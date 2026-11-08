@@ -131,7 +131,7 @@ async function initializeGetJdReviewOnce() {
       .manager-settings-status.is-error { color: #b91c1c; }
       .manager-settings-highlight-form { display: flex; flex-direction: column; gap: 10px; }
       .manager-settings-view { display: flex; flex-direction: column; gap: 12px; }
-      .manager-settings-apply-pdf-frame { display: block; flex: 1 1 auto; width: 100%; min-height: 300px; border: 0; background: transparent; }
+      .manager-settings-apply-pdf-frame { display: block; flex: 1 1 auto; width: 100%; min-height: 520px; border: 0; background: transparent; }
       .manager-settings-group { display: flex; flex-direction: column; gap: 9px; }
       .manager-settings-group h3 { margin: 0; color: #1f2937; font-size: 13px; font-weight: 750; }
       .manager-settings-group p { margin: 0; color: #64748b; font-size: 11px; line-height: 1.45; }

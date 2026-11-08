@@ -7,26 +7,57 @@
   <style>
     :root { color-scheme: light; font: 13px/1.5 Inter, system-ui, sans-serif; color: #172033; background: transparent; }
     body { margin: 0; padding: 4px; }
-    main { display: flex; flex-direction: column; gap: 12px; }
+    main { display: flex; flex-direction: column; gap: 14px; }
+    section { display: flex; flex-direction: column; gap: 8px; }
+    h2 { margin: 0; font-size: 13px; color: #172033; }
     p { margin: 0; color: #64748b; }
+    ol { margin: 0; padding-left: 18px; color: #475569; }
+    label { font-weight: 600; color: #334155; }
+    input[type="text"] { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; }
+    .row { display: flex; flex-wrap: wrap; gap: 6px; }
     button { min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: #4f46e5; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
     button.secondary { border: 1px solid #cbd5e1; background: #fff; color: #334155; }
     button:disabled { opacity: .5; cursor: default; }
-    #folder-status { padding: 10px 12px; border-radius: 9px; background: #f1f5f9; overflow-wrap: anywhere; }
-    #folder-status[data-state="ready"] { background: #f0fdf4; color: #166534; }
-    #folder-status[data-state="error"], #folder-status[data-state="denied"], #folder-status[data-state="revoked"] { background: #fef2f2; color: #991b1b; }
+    #folder-status, #file-access-status { padding: 10px 12px; border-radius: 9px; background: #f1f5f9; overflow-wrap: anywhere; }
+    [data-state="ready"] { background: #f0fdf4 !important; color: #166534; }
+    [data-state="error"], [data-state="denied"], [data-state="revoked"] { background: #fef2f2 !important; color: #991b1b; }
+    #folder-picker-settings { border-top: 1px solid #e2e8f0; padding-top: 12px; }
     [hidden] { display: none !important; }
   </style>
 </head>
 <body>
   <main>
-    <p id="folder-help">Choose the folder where Generation saves PDFs. Apply and Auto Apply will read those same files to upload them; they will not create replacement résumés.</p>
-    <button id="choose-folder" type="button" disabled>Open folder chooser</button>
-    <button id="restore-access" class="secondary" type="button" hidden disabled>Allow saved folder access</button>
-    <p id="folder-status" role="status" aria-live="polite">Checking Apply access…</p>
+    <p id="folder-help">Apply and Auto Apply upload the PDFs Generation saved in QTS_Resume; they never create replacement résumés.</p>
+    <!-- Recommended: works with every QTS window closed and after Chrome restarts. -->
+    <section aria-labelledby="file-access-title">
+      <h2 id="file-access-title">Recommended: PDFs always available</h2>
+      <ol>
+        <li><button id="open-extension-details" class="secondary" type="button">Open Chrome's QTS settings</button> and turn on <strong>Allow access to file URLs</strong>.</li>
+        <li>Fill in the full QTS_Resume path (or let QTS find it) and save.</li>
+      </ol>
+      <label for="file-folder-path">Full Windows path to QTS_Resume</label>
+      <input id="file-folder-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\Users\YourName\Downloads\QTS_Resume" disabled>
+      <div class="row">
+        <button id="detect-path" class="secondary" type="button">Find path from QTS downloads</button>
+        <button id="save-file-access" type="button" disabled>Save</button>
+        <button id="use-picker-access" class="secondary" type="button" disabled>Use folder picker instead</button>
+      </div>
+      <p id="file-access-status" role="status" aria-live="polite">Checking local PDF access…</p>
+    </section>
+    <!-- Folder picker: Chrome keeps its permission only while a QTS page is open. -->
+    <section id="folder-picker-settings">
+      <h2>Folder picker (needs a QTS page open)</h2>
+      <p>Chrome may withdraw this folder permission when QTS windows close, and Apply then pauses uploads. Use the recommended setting above when you can.</p>
+      <button id="choose-folder" type="button" disabled>Open folder chooser</button>
+      <button id="restore-access" class="secondary" type="button" hidden disabled>Allow saved folder access</button>
+      <p id="folder-status" role="status" aria-live="polite">Checking Apply access…</p>
+    </section>
   </main>
   <script src="../shared/scanner-document-store.js"></script>
+  <script src="../shared/apply-file-access.js"></script>
   <script src="../shared/apply-local-pdfs.js"></script>
   <script src="apply-pdf-folder-panel.js"></script>
+  <script src="apply-pdf-file-access.js"></script>
+  <script src="apply-pdf-path-detect.js"></script>
 </body>
 </html>

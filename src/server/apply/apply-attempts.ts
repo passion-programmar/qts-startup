@@ -19,7 +19,6 @@ import type { ExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 import {
   APPLY_LEASE_SECONDS,
-  APPLY_PARALLEL_LIMIT,
   MAX_AUTO_APPLY_PARALLEL_LIMIT,
   APPLY_REVIEW_LEASE_SECONDS,
   type AppliedAnswer,
@@ -165,15 +164,14 @@ export async function claimNextApplication(
   selection?: WorkSelection,
   options: { autoApply?: boolean; requireMatchingNote?: boolean } = {},
 ): Promise<ClaimedApplication | null> {
-  let parallelLimit = APPLY_PARALLEL_LIMIT;
-  if (options.autoApply) {
-    const [managerSettings] = await db.select({ parallelLimit: users.autoApplyParallelLimit })
-      .from(users).where(and(eq(users.id, managerId), eq(users.role, "manager"))).limit(1);
-    if (!managerSettings) throw new Error("Manager Auto Apply settings are unavailable.");
-    parallelLimit = selection
-      ? 1
-      : Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
-  }
+  // Apply and Auto Apply both follow the Manager's "Maximum open applications" (per Chrome);
+  // an Auto Apply run on chosen jobs works one at a time.
+  const [managerSettings] = await db.select({ parallelLimit: users.autoApplyParallelLimit })
+    .from(users).where(and(eq(users.id, managerId), eq(users.role, "manager"))).limit(1);
+  if (!managerSettings) throw new Error("Manager Apply settings are unavailable.");
+  const parallelLimit = options.autoApply && selection
+    ? 1
+    : Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
   // Unscoped Apply and Auto Apply skip these domains; a submitted selection opts jobs in explicitly.
   const skipCustomUrlJobs = !selection;
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
@@ -187,8 +185,9 @@ export async function claimNextApplication(
             and length(regexp_replace(coalesce(p.jd_matching, ''), '\\s', '', 'g')) > 0)))
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
   )` : skipCustomUrlJobs ? sql`ARRAY(
-    select j.id from jobs j
-    where j.manager_id = ${managerId}
+    -- No alias: the Custom URL check names the table itself ("jobs"."job_url").
+    select ${jobs.id} from ${jobs}
+    where ${jobs.managerId} = ${managerId}
       and ${matchesManagerCustomUrl(managerId, jobs.jobUrl)}
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
   )` : sql`${`{${skipJobIds.join(",")}}`}::uuid[]`;

@@ -31,10 +31,13 @@ test('load returns editable profile corrections separately from autofill answers
   assert.equal(body.editableAnswers.length, 2); assert.equal(body.savedAnswers.length, 1);
   assert.equal(f.calls.length, 1); assert.equal(f.calls[0].sql.includes('changed as'), false);
 });
-test('save uses authorized Manager/browser/attempt and returns a profile update only after success', async () => {
-  const response = await POST(request({ action: 'save', managerId: 'forged', candidateId: 'forged', answer: { question: 'Phone', answer: '+40 1234', kind: 'text' } }));
+test('save uses authorized Manager/browser/attempt; a profile fact is refused and never changes the profile', async () => {
+  const refused = await POST(request({ action: 'save', answer: { question: 'Phone', answer: '+40 1234', kind: 'text' } }));
+  assert.equal(refused.status, 400); assert.match((await refused.json()).message, /profile fact/i);
+  f.calls = [];
+  const response = await POST(request({ action: 'save', managerId: 'forged', candidateId: 'forged', answer: { question: 'Are you open to relocation?', answer: 'No', kind: 'text' } }));
   assert.equal(response.status, 200);
-  assert.deepEqual((await response.json()).profileUpdate, { field: 'phone', value: '+40 1234' });
+  assert.equal((await response.json()).profileUpdate, null);
   assert.ok(f.calls[1].params.includes(manager)); assert.ok(f.calls[1].params.includes(browser)); assert.ok(f.calls[1].params.includes(attempt));
   assert.equal(f.calls[1].params.includes('forged'), false);
 });
