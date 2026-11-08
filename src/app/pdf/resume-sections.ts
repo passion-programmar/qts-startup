@@ -45,30 +45,28 @@ export function resumeSectionId(id: string | undefined, title: string): ResumeSe
   return null;
 }
 
-// The four orders of the printed sections after the summary. Education is always first or last,
-// and Selected Projects always follow Experience.
-const orderA = ["experience", "projects", "skills", "education"] as const;
-const orderB = ["skills", "experience", "projects", "education"] as const;
-const orderC = ["education", "experience", "projects", "skills"] as const;
-const orderD = ["education", "skills", "experience", "projects"] as const;
-export const sectionOrders = [orderA, orderB, orderC, orderD] as const;
+// The order of the printed sections after the summary, the same in every template: Experience
+// first, so a recruiter sees the latest job in the top half of page 1 (with Education or Skills
+// first it was at the bottom of page 1 or on page 2 in 7 of the 13 templates), then Selected
+// Projects, Skills, and Education last. Generation candidates always have work experience.
+// Templates differ in their design (fonts, header, titles, colour), not in this order.
+const experienceFirst = ["experience", "projects", "skills", "education"] as const;
+export const sectionOrders = [experienceFirst] as const;
 
-// Section order stays attached to each design ID so saved documents render as before. Generation
-// rotates only the active template IDs; its selection order is defined in pdf-templates.ts.
 export const templateSectionOrders: Record<PdfTemplate, readonly ResumeSectionId[]> = {
-  startup: orderA, // QTS Template 1
-  centered: orderB, // QTS Template 4
-  corporate: orderC, // QTS Template 5
-  ledger: orderD, // QTS Template 8
-  executive: orderD, // QTS Template 10
-  graphite: orderB, // QTS Template 12
-  minimal: orderA, // QTS Template 2
-  nordic: orderC, // QTS Template 7
-  academic: orderD, // QTS Template 11
-  classic: orderD, // QTS Template 3
-  "qts-standard": orderA, // QTS Template 13
-  creative: orderC, // QTS Template 6
-  banded: orderD, // QTS Template 9
+  startup: experienceFirst, // QTS Template 1
+  centered: experienceFirst, // QTS Template 4
+  corporate: experienceFirst, // QTS Template 5
+  ledger: experienceFirst, // QTS Template 8
+  executive: experienceFirst, // QTS Template 10
+  graphite: experienceFirst, // QTS Template 12
+  minimal: experienceFirst, // QTS Template 2
+  nordic: experienceFirst, // QTS Template 7
+  academic: experienceFirst, // QTS Template 11
+  classic: experienceFirst, // QTS Template 3
+  "qts-standard": experienceFirst, // QTS Template 13
+  creative: experienceFirst, // QTS Template 6
+  banded: experienceFirst, // QTS Template 9
 };
 
 type PrintableItem = {

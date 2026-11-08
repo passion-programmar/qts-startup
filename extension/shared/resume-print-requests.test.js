@@ -108,3 +108,12 @@ test('a finished print is never handed to a later request', async () => {
   const next = await prints.printOnce('later', () => ({ resume: 'new', 'cover-letter': 'new' }));
   assert.equal(next.resume, 'new');
 });
+
+test('the Resume page one-time layout settings in the theme are printed, not refused', () => {
+  // The installed extension only checks the template and data shape, so these reach the template page.
+  const value = job('classic');
+  value.data.theme = { ...value.data.theme, nameSize: 18, marginSide: 9, lineHeight: 1.15, fitPages: '2', titleStyle: 'band' };
+  const result = prints.checkPrintJob(value);
+  assert.equal(result.error, undefined);
+  assert.match(result.key, /"nameSize":18/);
+});

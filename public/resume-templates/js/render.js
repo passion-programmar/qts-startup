@@ -47,7 +47,7 @@
   // than MIN_TEXT_PT; otherwise it prints at normal size, within MAX_PAGES (fitToPages).
   const MIN_TEXT_PT = 10.5;
   // The denser layout tried before any text shrinks (shrinkToFit). Spacing and sizes only: the
-  // text and its order, which ATS parsers read, stay the same.
+  // text and its order, which ATS parsers read, stay the same. Each value only ever lowers.
   const DENSE_LAYOUT = Object.freeze({
     "--leading-body": "1.25",
     "--text-name": "22pt",
@@ -57,10 +57,50 @@
     "--summary-pad-inline": "8pt",
   });
   // Page margins live on the page itself (the page view measures with them) and in @page,
-  // which cannot read custom properties; the bottom margin stays 10mm.
-  const DENSE_MARGINS = Object.freeze({ top: "12mm", inline: "14mm", bottom: "10mm" });
+  // which cannot read custom properties.
+  const BASE_MARGINS_MM = Object.freeze({ top: 15, inline: 16, bottom: 10 });
+  const DENSE_MARGINS_MM = Object.freeze({ top: 12, inline: 14, bottom: 10 });
+  // The compact density's spacing (base.css section 12), kept no larger than a Manager's own values.
+  const COMPACT_TOKENS = ["--leading-body", "--space-header", "--space-section", "--space-title", "--space-item", "--space-bullet"];
   // font-size too: body text takes its size from <body> (base.css), so the résumé needs its own.
-  const SHRINK_PROPERTIES = ["--text-bullet", "--text-body", "--text-item", "font-size", ...Object.keys(DENSE_LAYOUT)];
+  const SHRINK_PROPERTIES = [...new Set([
+    "--text-bullet", "--text-body", "--text-item", "font-size", ...Object.keys(DENSE_LAYOUT), ...COMPACT_TOKENS,
+  ])];
+
+  // One-time layout settings from the Resume page (src/app/pdf/layout-settings.ts), in the
+  // document's theme: [token, unit, min, max]. They replace the template's values for this render.
+  const LAYOUT_TOKENS = Object.freeze({
+    nameSize: ["--text-name", "pt", 4, 72],
+    headlineSize: ["--text-headline", "pt", 4, 40],
+    contactSize: ["--text-contact", "pt", 4, 30],
+    sectionSize: ["--text-section", "pt", 4, 40],
+    itemSize: ["--text-item", "pt", 4, 40],
+    bodySize: ["--text-body", "pt", 4, 40],
+    bulletSize: ["--text-bullet", "pt", 4, 40],
+    metaSize: ["--text-meta", "pt", 4, 30],
+    sectionGap: ["--space-section", "pt", 0, 60],
+    itemGap: ["--space-item", "pt", 0, 60],
+    titleGap: ["--space-title", "pt", 0, 40],
+    headerGap: ["--space-header", "pt", 0, 60],
+    bulletGap: ["--space-bullet", "pt", 0, 30],
+    lineHeight: ["--leading-body", "", 0.8, 3],
+  });
+  const LAYOUT_MARGINS = Object.freeze({ marginTop: "top", marginSide: "inline", marginBottom: "bottom" });
+  const FIT_TARGETS = ["auto", "1", "2", "3", "4", "5"];
+  // This render's settings (applyDocumentSettings): the Manager's values by token, page margins in
+  // mm, the smallest text fitting may use, and the page target.
+  let layoutValues = {};
+  let marginsMm = { ...BASE_MARGINS_MM };
+  let customMargins = false;
+  let minTextPt = MIN_TEXT_PT;
+  let fitTarget = "auto";
+
+  const layoutNumber = (theme, key, min, max) => {
+    const raw = theme[key];
+    if (raw === undefined || raw === null || raw === "") return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= min && value <= max ? value : null;
+  };
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
   let MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
@@ -169,10 +209,14 @@
   // otherwise breaks the line after the hyphen, and reading-order text extraction
   // (most ATS) then drops the hyphen: "crossfunctional". Verified with pdftotext
   // in both reading and raw order on all 13 templates. (A WORD JOINER instead
-  // leaks into the PDF text and breaks keyword matching.)
+  // leaks into the PDF text and breaks keyword matching.) Only words up to
+  // NOBR_MAX_CHARACTERS: a longer chain could be wider than a line and, unable to
+  // break, run past the margin, where Chrome's print drops it; it wraps normally.
+  const NOBR_MAX_CHARACTERS = 40;
   function keepHyphenatedWords(node, value) {
     value.split(/([\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)+)/u).forEach((part, index) => {
-      if (part) node.append(index % 2 ? el("span", "nobr", part) : part);
+      if (!part) return;
+      node.append(index % 2 && part.length <= NOBR_MAX_CHARACTERS ? el("span", "nobr", part) : part);
     });
     return node;
   }
@@ -364,6 +408,27 @@
     const letter = text(theme.paper).toLowerCase() === "letter";
     tokens["--page-width"] = letter ? "215.9mm" : "";
     tokens["--page-height"] = letter ? "279.4mm" : "";
+    // One-time layout settings: each replaces the template's value, or is cleared when not given.
+    layoutValues = {};
+    for (const [key, [token, unit, min, max]] of Object.entries(LAYOUT_TOKENS)) {
+      const value = layoutNumber(theme, key, min, max);
+      tokens[token] = value === null ? "" : `${value}${unit}`;
+      if (value !== null) layoutValues[token] = value;
+    }
+    marginsMm = { ...BASE_MARGINS_MM };
+    customMargins = false;
+    for (const [key, side] of Object.entries(LAYOUT_MARGINS)) {
+      const value = layoutNumber(theme, key, 0, 60);
+      if (value !== null) {
+        marginsMm[side] = value;
+        customMargins = true;
+      }
+    }
+    for (const side of ["top", "inline", "bottom"]) {
+      tokens[`--page-margin-${side}`] = customMargins ? `${marginsMm[side]}mm` : "";
+    }
+    minTextPt = layoutNumber(theme, "minTextSize", 4, 20) ?? MIN_TEXT_PT;
+    fitTarget = FIT_TARGETS.includes(String(theme.fitPages)) ? String(theme.fitPages) : "auto";
     for (const [name, value] of Object.entries(tokens)) {
       if (value) root.style.setProperty(name, value);
       else root.style.removeProperty(name);
@@ -379,6 +444,7 @@
       );
     }
     if (letter) rules.push("@page { size: letter; }");
+    if (customMargins) rules.push(`@page { margin: ${marginsMm.top}mm ${marginsMm.inline}mm ${marginsMm.bottom}mm; }`);
     // Page numbers only when asked for: an ATS reads "Page 2 of 2" in the
     // middle of the entry that runs onto page 2.
     if (theme.showPageNumbers !== true) {
@@ -834,6 +900,32 @@
     return inPageFlow(article, () => Math.max(1, article.getClientRects().length));
   }
 
+  /* ---------- Headline ----------
+     A long headline ("Senior Engineer | Platform | MLOps | AWS | …") wrapped to two or three
+     lines under the name and looked messy. It steps down by 0.25pt until it fits one line, not
+     below HEADLINE_MIN_PT; if even that is not enough it keeps its normal size (two small lines
+     read worse than two normal ones). The text is never changed. */
+  const HEADLINE_MIN_PT = 9.5;
+
+  function headlineLines(node) {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    return new Set([...range.getClientRects()].filter((box) => box.width > 0).map((box) => Math.round(box.top))).size;
+  }
+
+  function fitHeadline(article) {
+    const headline = article.querySelector(".resume-header .candidate-headline");
+    if (!headline) return;
+    headline.style.removeProperty("font-size");
+    if (headlineLines(headline) <= 1) return;
+    const startPoints = (parseFloat(getComputedStyle(headline).fontSize) * 72) / 96;
+    for (let quarter = Math.ceil(startPoints * 4) - 1; quarter >= HEADLINE_MIN_PT * 4; quarter -= 1) {
+      headline.style.fontSize = `${quarter / 4}pt`;
+      if (headlineLines(headline) <= 1) return;
+    }
+    headline.style.removeProperty("font-size");
+  }
+
   /* ---------- Contact line ----------
      Email, phone, location and links always print on one line, inside the
      page area, with their text unchanged. When the line is too wide:
@@ -898,9 +990,10 @@
        1. Measure at normal size: N pages.
        2. If N > 1, try to fit one page fewer (N − 1, at most MAX_PAGES) with a
           controlled shrink, measuring after each step: compact spacing; the
-          denser layout (DENSE_LAYOUT, DENSE_MARGINS: line height, margins,
+          denser layout (DENSE_LAYOUT, DENSE_MARGINS_MM: line height, margins,
           name, gaps, summary box); bullets to 10.5pt; then body and role text
-          down by 0.5pt steps. Text never goes below MIN_TEXT_PT.
+          down by 0.5pt steps. Text never goes below minTextPt (default MIN_TEXT_PT;
+          the Resume page can set it, and its page target, once per render).
        3. If it still does not fit, undo it all: normal sizes on N pages.
        So 1.1 pages of content print on 1 page, 2.1 on 2, and 2.6 on 3 at normal size.
        Over MAX_PAGES even fully reduced: it prints reduced, on as many pages as
@@ -910,17 +1003,23 @@
     // The app's own preview (direct render) has no page view to measure with.
     const countPages = directRenderMode ? estimatePages : printedPages;
     article.classList.toggle("doc--compact", density === "compact");
+    if (density === "compact") keepManagerValues(article);
     let pages = countPages(article);
     if (density === "auto" && DOCUMENT === "resume" && pages > 1) {
-      const target = Math.min(pages - 1, MAX_PAGES);
-      const fitted = shrinkToFit(article, countPages, target);
-      // Over MAX_PAGES even fully reduced: it prints reduced, on as many pages as it needs
-      // (not rejected). Otherwise a résumé that did not fit one page fewer keeps normal sizes.
-      if (fitted != null) pages = fitted;
-      else if (pages > MAX_PAGES) pages = countPages(article);
-      else pages = normalSize(article, countPages);
+      // The page target: "auto" pulls a partly used last page back (one page fewer); a number
+      // (Resume page setting) aims for that many pages.
+      const target = fitTarget === "auto" ? Math.min(pages - 1, MAX_PAGES) : Number(fitTarget);
+      if (pages > target) {
+        const fitted = shrinkToFit(article, countPages, target);
+        // Over MAX_PAGES even fully reduced: it prints reduced, on as many pages as it needs
+        // (not rejected). Otherwise a résumé that did not reach the target keeps normal sizes.
+        if (fitted != null) pages = fitted;
+        else if (pages > MAX_PAGES) pages = countPages(article);
+        else pages = normalSize(article, countPages);
+      }
     } else if (density === "auto" && pages > MAX_PAGES) {
       article.classList.add("doc--compact");
+      keepManagerValues(article);
       pages = countPages(article);
     }
     if (pages > MAX_PAGES) {
@@ -931,7 +1030,8 @@
     return pages;
   }
 
-  // Back to the template's normal sizes and spacing; returns the page count.
+  // Back to the template's normal sizes and spacing (and the Manager's own values); returns the
+  // page count.
   function normalSize(article, countPages) {
     article.classList.remove("doc--compact", "doc--small-bullets");
     SHRINK_PROPERTIES.forEach((name) => article.style.removeProperty(name));
@@ -939,49 +1039,72 @@
     return countPages(article);
   }
 
-  // The denser page margins: the page tokens (what the page view measures) and a matching
-  // @page rule (what Chrome prints), added after the runtime style so it has the last word.
+  const tokenNumber = (node, name) => parseFloat(getComputedStyle(node).getPropertyValue(name));
+
+  // Compact density sets fixed spacing; a Manager's own smaller value stays.
+  function keepManagerValues(article) {
+    for (const name of COMPACT_TOKENS) {
+      const own = layoutValues[name];
+      if (own !== undefined && own < tokenNumber(article, name)) {
+        article.style.setProperty(name, name === "--leading-body" ? String(own) : `${own}pt`);
+      }
+    }
+  }
+
+  // Sets each value only where it is lower than the current one: fitting never enlarges anything.
+  function lowerTo(article, values) {
+    for (const [name, value] of Object.entries(values)) {
+      const current = tokenNumber(article, name);
+      if (!(current <= parseFloat(value))) article.style.setProperty(name, value);
+    }
+  }
+
+  // The denser page margins (never wider than the current ones): the page tokens (what the page
+  // view measures) and a matching @page rule (what Chrome prints), added after the runtime style
+  // so it has the last word. Off: back to this render's margins.
   function setDenseMargins(on) {
     styleRoot.querySelector("#resume-dense-margins")?.remove();
-    root.style.removeProperty("--page-margin-top");
-    root.style.removeProperty("--page-margin-inline");
-    root.style.removeProperty("--page-margin-bottom");
-    if (!on) return;
-    root.style.setProperty("--page-margin-top", DENSE_MARGINS.top);
-    root.style.setProperty("--page-margin-inline", DENSE_MARGINS.inline);
-    root.style.setProperty("--page-margin-bottom", DENSE_MARGINS.bottom);
-    if (directRenderMode) return; // the app preview has no printed pages
+    const margins = on
+      ? Object.fromEntries(Object.entries(marginsMm).map(([side, mm]) => [side, Math.min(mm, DENSE_MARGINS_MM[side])]))
+      : marginsMm;
+    for (const side of ["top", "inline", "bottom"]) {
+      if (on || customMargins) root.style.setProperty(`--page-margin-${side}`, `${margins[side]}mm`);
+      else root.style.removeProperty(`--page-margin-${side}`);
+    }
+    if (!on || directRenderMode) return; // the app preview has no printed pages
     const style = el("style");
     style.id = "resume-dense-margins";
-    style.textContent = `@page { margin: ${DENSE_MARGINS.top} ${DENSE_MARGINS.inline} ${DENSE_MARGINS.bottom}; }`;
+    style.textContent = `@page { margin: ${margins.top}mm ${margins.inline}mm ${margins.bottom}mm; }`;
     styleRoot.append(style);
   }
 
   // The controlled shrink, one step at a time; the page count once it fits within
   // `limit` pages, or null (sizes left shrunk) when even the smallest step does not.
+  // Every step only lowers values, so a Manager's own smaller settings are kept.
   function shrinkToFit(article, countPages, limit) {
     normalSize(article, countPages);
-    const tokenPt = (name) => parseFloat(getComputedStyle(article).getPropertyValue(name)) || 0;
+    const tokenPt = (name) => tokenNumber(article, name) || 0;
     const fits = () => {
       const pages = countPages(article);
       return pages <= limit ? pages : null;
     };
     // Sizes are multiplied by --font-scale (a few templates lower it in compact
-    // density), so the floor is set on the token that prints at MIN_TEXT_PT.
-    const floorToken = () => MIN_TEXT_PT / (tokenPt("--font-scale") || 1);
+    // density), so the floor is set on the token that prints at minTextPt.
+    const floorToken = () => minTextPt / (tokenPt("--font-scale") || 1);
 
     article.classList.add("doc--compact");
+    keepManagerValues(article);
     let pages = fits();
     if (pages != null) return pages;
 
     // Denser layout, text sizes unchanged: line height, page margins, name, gaps, summary box.
-    Object.entries(DENSE_LAYOUT).forEach(([name, value]) => article.style.setProperty(name, value));
+    lowerTo(article, DENSE_LAYOUT);
     setDenseMargins(true);
     pages = fits();
     if (pages != null) return pages;
 
     article.classList.add("doc--small-bullets");
-    article.style.setProperty("--text-bullet", `${Math.max(floorToken(), MIN_TEXT_PT)}pt`);
+    lowerTo(article, { "--text-bullet": `${Math.max(floorToken(), minTextPt)}pt` });
     pages = fits();
     if (pages != null) return pages;
 
@@ -989,17 +1112,17 @@
     const item = tokenPt("--text-item");
     for (let step = 1; ; step += 1) {
       const floor = floorToken();
-      const nextBody = Math.max(floor, body - 0.5 * step);
-      const nextItem = Math.max(floor, item - 0.5 * step);
+      const nextBody = Math.min(body, Math.max(floor, body - 0.5 * step));
+      const nextItem = Math.min(item, Math.max(floor, item - 0.5 * step));
       article.style.setProperty("--text-body", `${nextBody}pt`);
       article.style.setProperty("font-size", `calc(${nextBody}pt * var(--font-scale))`);
       article.style.setProperty("--text-item", `${nextItem}pt`);
       pages = fits();
       if (pages != null) return pages;
       if (nextBody <= floor && nextItem <= floor) return null;
+      if (nextBody === body && nextItem === item) return null; // already at or under the floor
     }
   }
-
 
   /* ---------- Filling pages ----------
      A page ends early when the next block (a heading with its first entry, a
@@ -1172,6 +1295,7 @@
     }
     if (run !== renderCount) return null;
 
+    fitHeadline(article);
     fitContactLine(article, warnings);
     const pages = fitToPages(article, settings.density, warnings);
     if (!directRenderMode) fillPages(article);

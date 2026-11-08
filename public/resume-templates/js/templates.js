@@ -51,7 +51,7 @@
     template("centered", "QTS Template 4",
       "Skills, Experience, Projects, Education · role and dates, then company and location · compact skills",
       "Gelasio + Arimo", {
-        entryLayout: "C", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "quote", skillsLayout: "compact", skillDetail: "dash", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "centered-rules", headerAlign: "center", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "dash", letterLayout: "modified",
       }),
     template("corporate", "QTS Template 5",
       "Education, Experience, Projects, Skills · role and dates, then company and location · rows skills",
@@ -71,12 +71,12 @@
     template("graphite", "QTS Template 12",
       "Skills, Experience, Projects, Education · role and dates, then company and location · rows skills",
       "Gelasio + Arimo", {
-        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "modified",
+        entryLayout: "C", headerStyle: "plain-rule", headerAlign: "start", contactStyle: "inline", titleStyle: "band", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "quote", skillsLayout: "rows", skillDetail: "bracket", letterLayout: "modified",
       }),
     template("minimal", "QTS Template 2",
       "Experience, Projects, Skills, Education · role and dates, then company and location · compact skills",
       "Carlito", {
-        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "bar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "compact", skillDetail: "dash", letterLayout: "block",
+        entryLayout: "C", headerStyle: "accent-top", headerAlign: "start", contactStyle: "inline", titleStyle: "bar", titleCase: "upper", bulletStyle: "disc", itemStyle: "bordered", summaryStyle: "plain", skillsLayout: "rows", skillDetail: "dash", letterLayout: "block",
       }),
     template("nordic", "QTS Template 7",
       "Education, Experience, Projects, Skills · role and dates, then company and location · rows skills",
@@ -86,7 +86,7 @@
     template("academic", "QTS Template 11",
       "Education, Skills, Experience, Projects · role and dates, then company and location · rows skills",
       "Caladea", {
-        entryLayout: "C", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "topline", titleCase: "title", bulletStyle: "disc", itemStyle: "timeline", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
+        entryLayout: "C", headerStyle: "centered-plain", headerAlign: "center", contactStyle: "inline", titleStyle: "topline", titleCase: "title", bulletStyle: "disc", itemStyle: "plain", summaryStyle: "boxed", skillsLayout: "rows", skillDetail: "colon", letterLayout: "block",
       }),
     template("classic", "QTS Template 3",
       "Education, Skills, Experience, Projects · role and dates, then company and location · rows skills",

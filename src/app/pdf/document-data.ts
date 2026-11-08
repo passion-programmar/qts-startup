@@ -1,3 +1,4 @@
+import { parseLayoutTheme } from "@/app/pdf/layout-settings";
 import {
   orderResumeSections,
   printsInSection,
@@ -88,6 +89,8 @@ export type DocumentTheme = {
   showPageNumbers?: boolean;
   accentColor?: string;
   keywordColor?: string;
+  // One-time layout settings from the Resume page (layout-settings.ts), applied by render.js.
+  [layoutSetting: string]: string | number | boolean | string[] | undefined;
 };
 
 export type PdfPackage = {
@@ -571,6 +574,7 @@ function parseTheme(value: unknown): DocumentTheme | undefined {
     throw new Error("theme.showPageNumbers must be a boolean.");
   }
   return {
+    ...parseLayoutTheme(value),
     sectionOrder,
     hiddenSections,
     density: density as DocumentTheme["density"],

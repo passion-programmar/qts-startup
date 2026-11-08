@@ -211,20 +211,15 @@ test("a required section whose entries print nothing counts as missing", () => {
   );
 });
 
-test("each template shows its own sections in its own order, with its own layout", () => {
+test("every template prints Experience first, then Projects, Skills and Education, with its own layout", () => {
   const parsed = parsePdfPackage(JSON.stringify(generatedPackage));
-  const graphite = toResumeTemplateData(parsed, "graphite");
-  // Career Highlights are in the JSON but no template prints them.
-  assert.deepEqual(
-    graphite.resume.sections.map((section) => section.id),
-    ["skills", "experience", "projects", "education"],
-  );
-  assert.deepEqual(graphite.theme.sectionOrder, ["summary", "skills", "experience", "projects", "education"]);
+  for (const template of pdfTemplateValues) {
+    const adapted = toResumeTemplateData(parsed, template);
+    // Career Highlights are in the JSON but no template prints them.
+    assert.deepEqual(adapted.resume.sections.map((section) => section.id), ["experience", "projects", "skills", "education"], template);
+    assert.deepEqual(adapted.theme.sectionOrder, ["summary", "experience", "projects", "skills", "education"], template);
+  }
   const executive = toResumeTemplateData(parsed, "executive");
-  assert.deepEqual(
-    executive.resume.sections.map((section) => section.id),
-    ["education", "skills", "experience", "projects"],
-  );
   // Layout options are no longer forced; the template's own design applies.
   assert.equal("skillsLayout" in executive.theme, false);
   assert.equal("bulletStyle" in executive.theme, false);
@@ -235,7 +230,8 @@ test("every supported template preserves its Experience, Projects, Skills and Ed
     const order = templateSectionOrders[template];
     assert.ok(sectionOrders.includes(order as (typeof sectionOrders)[number]), template);
     assert.deepEqual([...order].sort(), ["education", "experience", "projects", "skills"], template);
-    assert.ok(order[0] === "education" || order.at(-1) === "education", template);
+    assert.equal(order[0], "experience", template);
+    assert.equal(order.at(-1), "education", template);
     assert.equal(order.indexOf("projects"), order.indexOf("experience") + 1, template);
   }
 });
@@ -282,9 +278,9 @@ test("the supplied full template sample parses and retains its content", () => {
   assert.deepEqual(
     adapted.resume.sections.map((section) => section.title),
     // Standard titles, whatever the JSON calls the sections.
-    ["Education", "Skills", "Professional Experience", "Selected Projects"],
+    ["Professional Experience", "Selected Projects", "Skills", "Education"],
   );
-  assert.equal(adapted.resume.sections[1].type, "skills");
+  assert.equal(adapted.resume.sections[2].type, "skills");
   assert.equal(adapted.coverLetter.recipient?.company, "Example Employer");
 });
 

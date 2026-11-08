@@ -115,18 +115,18 @@ test('the Resume page prints in this Chrome: checked, once per request, retried 
     }
 
     // A valid résumé and cover letter.
-    const valid = await counting(() => ask({ type: 'print-documents', job: job('harvard') }));
+    const valid = await counting(() => ask({ type: 'print-documents', job: job('nordic') }));
     assert.equal(valid.result.ok, true);
     assert.ok(isPdf(valid.result.resume) && isPdf(valid.result.coverLetter));
     assert.equal(valid.most(), 1);
 
     // Invalid requests: refused with a reason, and no print tab is opened.
     for (const [bad, reason] of [
-      [{ ...job('harvard'), data: 'x' }, /no résumé data/],
-      [{ template: 'harvard' }, /no résumé data/],
-      [{ ...job('harvard'), data: { ...job('harvard').data, candidate: {} } }, /candidate name/],
+      [{ ...job('nordic'), data: 'x' }, /no résumé data/],
+      [{ template: 'nordic' }, /no résumé data/],
+      [{ ...job('nordic'), data: { ...job('nordic').data, candidate: {} } }, /candidate name/],
       [undefined, /no document/],
-      [{ ...job('harvard'), template: 'no-such-template' }, /QTS templates/],
+      [{ ...job('nordic'), template: 'no-such-template' }, /QTS templates/],
     ]) {
       const refused = await counting(() => ask({ type: 'print-documents', job: bad }));
       assert.equal(refused.result.ok, false);
@@ -157,10 +157,10 @@ test('the Resume page prints in this Chrome: checked, once per request, retried 
 
     // A print that fails answers { ok: false } (the page then asks the server); the retry prints.
     log.failTemplates = true;
-    const failed = await ask({ type: 'print-documents', job: job('swiss') });
+    const failed = await ask({ type: 'print-documents', job: job('ledger') });
     log.failTemplates = false;
     assert.deepEqual({ ok: failed.ok, invalid: failed.invalid }, { ok: false, invalid: undefined });
-    const retried = await ask({ type: 'print-documents', job: job('swiss') });
+    const retried = await ask({ type: 'print-documents', job: job('ledger') });
     assert.equal(retried.ok, true);
     assert.ok(isPdf(retried.resume));
 
@@ -170,7 +170,7 @@ test('the Resume page prints in this Chrome: checked, once per request, retried 
     const otherTab = await worker.evaluate(async (prefix) => (await chrome.tabs.query({})).find((tab) => tab.url.startsWith(prefix))?.id, `http://127.0.0.1:${OTHER_PORT}`);
     const direct = await worker.evaluate(async (tabId, j) => (await chrome.scripting.executeScript({
       target: { tabId }, func: (m) => chrome.runtime.sendMessage(m), args: [{ type: 'QTS_PRINT_DOCUMENTS', job: j }],
-    }))[0]?.result, otherTab, job('harvard'));
+    }))[0]?.result, otherTab, job('nordic'));
     assert.equal(direct.ok, false);
     assert.match(direct.error, /Only the QTS site/);
 

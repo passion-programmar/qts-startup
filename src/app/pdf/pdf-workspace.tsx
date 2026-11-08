@@ -1,13 +1,16 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, Download, ExternalLink } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { WorkspaceClocks } from "@/app/components/workspace-clocks";
 import type { PdfPackage } from "@/app/pdf/document-data";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
 // The JSON box starts with a Generation V2 sample, as ChatGPT returns it (no real person).
 import defaultResume from "@/app/pdf/default-resume.json";
+import { saveTemplateStyleAction } from "@/app/pdf/actions";
+import { layoutFormFromTheme, type LayoutTheme, layoutThemeFromForm } from "@/app/pdf/layout-settings";
+import { type LayoutForm, LayoutSettingsPanel } from "@/app/pdf/layout-settings-panel";
 import { TemplatePagesPreview } from "@/app/pdf/template-pages-preview";
 import {
   isPdfTemplate,
@@ -15,6 +18,7 @@ import {
   pdfTemplateValues,
   type PdfTemplate,
 } from "@/server/pdf/pdf-templates";
+import type { TemplateStyles } from "@/server/pdf/template-style-values";
 
 type PreviewDocumentType = "resume" | "cover-letter";
 
@@ -50,8 +54,10 @@ const samplePreviewData = parsePdfPackage(example);
 
 export function PdfWorkspace({
   managerName,
+  savedStyles: initialStyles,
 }: {
   managerName: string;
+  savedStyles: TemplateStyles;
 }) {
   const [selectedTemplate, setSelectedTemplate] = useState<PdfTemplate>("qts-standard");
   const [activeDocument, setActiveDocument] = useState<PreviewDocumentType>("resume");
@@ -81,6 +87,42 @@ export function PdfWorkspace({
   const busy = downloadStep !== null;
   const previewOutOfDate = source !== previewSource;
   const documentLabel = activeDocument === "resume" ? "Resume" : "Cover letter";
+  // One-time layout settings (layout-settings-panel.tsx): kept in this page only, never saved.
+  // The Manager's saved style per template (Generation uses it); the settings start from it.
+  const [savedStyles, setSavedStyles] = useState<TemplateStyles>(initialStyles);
+  const [layoutForm, setLayoutForm] = useState<LayoutForm>(() => layoutFormFromTheme(initialStyles[selectedTemplate]));
+  const [styleSaving, setStyleSaving] = useState(false);
+  const [styleMessage, setStyleMessage] = useState<string | null>(null);
+  const savedForm = useMemo(() => layoutFormFromTheme(savedStyles[selectedTemplate]), [savedStyles, selectedTemplate]);
+
+  function chooseTemplate(template: PdfTemplate) {
+    setSelectedTemplate(template);
+    setLayoutForm(layoutFormFromTheme(savedStyles[template]));
+    setStyleMessage(null);
+  }
+
+  async function saveStyle(form: LayoutForm) {
+    setStyleSaving(true);
+    setStyleMessage(null);
+    try {
+      const result = await saveTemplateStyleAction(selectedTemplate, form);
+      if (result.ok) {
+        setSavedStyles(result.styles);
+        setLayoutForm(layoutFormFromTheme(result.styles[selectedTemplate]));
+        setStyleMessage(result.styles[selectedTemplate]
+          ? `Saved. Your Generations with ${pdfTemplateLabels[selectedTemplate]} now use this style.`
+          : `Saved style removed. ${pdfTemplateLabels[selectedTemplate]} uses the template's own values again.`);
+      } else {
+        setStyleMessage(result.message);
+      }
+    } catch {
+      setStyleMessage("The style could not be saved. Check the connection and try again.");
+    } finally {
+      setStyleSaving(false);
+    }
+  }
+  const layoutTheme = useMemo(() => layoutThemeFromForm(layoutForm), [layoutForm]);
+  const previewData = useMemo(() => withLayout(previewPackage, layoutTheme), [previewPackage, layoutTheme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,10 +208,10 @@ export function PdfWorkspace({
         },
       );
       // Unchanged JSON and template: the PDFs printed last time are saved again, not printed again.
-      const printKey = `${selectedTemplate}\n${source}`;
+      const printKey = `${selectedTemplate}\n${JSON.stringify(layoutTheme)}\n${source}`;
       const printed = lastPrintedRef.current?.key === printKey
         ? lastPrintedRef.current.pdfs
-        : await printPdfPair(parsed, selectedTemplate, cancel.signal);
+        : await printPdfPair(withLayout(parsed, layoutTheme), selectedTemplate, cancel.signal);
       // The page closed while printing: nothing is saved.
       if (cancel.signal.aborted) return;
       // The simplified fallback is not kept, so the next click tries the template printer again.
@@ -249,11 +291,24 @@ export function PdfWorkspace({
           <div className="space-y-4 p-5">
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Resume and cover-letter template
               <select className={inputClass} id="pdf-template" onChange={(event) => {
-                if (isPdfTemplate(event.target.value)) setSelectedTemplate(event.target.value);
+                if (isPdfTemplate(event.target.value)) chooseTemplate(event.target.value);
               }} value={selectedTemplate}>
                 {pdfTemplateValues.map((template) => <option key={template} value={template}>{pdfTemplateLabels[template]}</option>)}
               </select>
             </label>
+            <LayoutSettingsPanel
+              form={layoutForm}
+              message={styleMessage}
+              onChange={(next) => {
+                setLayoutForm(next);
+                setStyleMessage(null);
+              }}
+              onSave={(form) => void saveStyle(form)}
+              savedForm={savedForm}
+              saving={styleSaving}
+              template={selectedTemplate}
+              templateLabel={pdfTemplateLabels[selectedTemplate]}
+            />
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-json">Generated document JSON</label><textarea className="theme-light h-[min(36vh,28rem)] min-h-[180px] w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" id="pdf-json" onChange={(event) => updateSource(event.target.value)} spellCheck={false} value={source} />
             {error && (
               <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-700" role="alert">
@@ -316,7 +371,7 @@ export function PdfWorkspace({
           <div className="relative">
             {previewDocuments.map((preview) => (
               <TemplatePagesPreview
-                data={previewPackage}
+                data={previewData}
                 documentType={preview.type}
                 hidden={preview.type !== activeDocument}
                 key={preview.type}
@@ -329,6 +384,11 @@ export function PdfWorkspace({
       </div>
     </main>
   );
+}
+
+// The document with this page's one-time layout settings in its theme (unchanged when there are none).
+function withLayout(document: PdfPackage, layout: LayoutTheme): PdfPackage {
+  return Object.keys(layout).length ? { ...document, theme: { ...document.theme, ...layout } } : document;
 }
 
 function tryParsePdfPackage(source: string): PdfPackage | null {

@@ -2,10 +2,11 @@ import "server-only";
 
 import { and, eq } from "drizzle-orm";
 import { type PdfPackage, parsePdfPackage } from "@/app/pdf/document-data";
-import { generationRuns, jobs, profiles } from "@/db/schema";
+import { generationRuns, jobs, profiles, settings } from "@/db/schema";
 import { db } from "@/lib/db";
 import { generationDownloadPaths } from "@/server/generation/generation-artifacts";
 import { isPdfTemplate, type PdfTemplate } from "@/server/pdf/pdf-templates";
+import { readTemplateStyles, templateStylesKey, withTemplateStyle } from "@/server/pdf/template-style-values";
 
 export type GenerationDocuments = {
   data: PdfPackage;
@@ -34,10 +35,13 @@ export async function loadGenerationDocuments(
       runTemplate: generationRuns.pdfTemplate,
       profileTemplate: profiles.pdfTemplate,
       createdAt: generationRuns.createdAt,
+      // The Manager's saved template styles (Resume page), read in the same query.
+      styles: settings.value,
     })
     .from(generationRuns)
     .innerJoin(jobs, eq(jobs.id, generationRuns.jobId))
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
+    .leftJoin(settings, eq(settings.key, templateStylesKey(managerId)))
     .where(and(
       eq(generationRuns.id, generationId),
       eq(generationRuns.managerId, managerId),
@@ -47,10 +51,12 @@ export async function loadGenerationDocuments(
     .limit(1);
   if (!row?.responseJson) return null;
 
-  const data = parsePdfPackage(JSON.stringify(row.responseJson));
+  const parsedData = parsePdfPackage(JSON.stringify(row.responseJson));
   // Runs from before template rotation have no saved template and use the account's.
   const savedTemplate = row.runTemplate ?? row.profileTemplate;
   const template = isPdfTemplate(savedTemplate) ? savedTemplate : "qts-standard";
+  // Printed with the Manager's style for this template, if saved; the page rule still runs on top.
+  const data = withTemplateStyle(parsedData, readTemplateStyles(row.styles), template);
   const candidateName = [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate";
   const paths = generationDownloadPaths({
     managerName,

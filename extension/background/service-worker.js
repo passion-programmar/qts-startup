@@ -114,6 +114,11 @@ let generationCancellationRequest = null;
 const generationHeartbeatOkAt = new Map();
 // The server lease lasts 20 minutes, so brief heartbeat outages are safe to ride out.
 const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
+// How often a running Generation asks QTS whether it is still on (and renews its 5-minute hold)
+// while it waits for ChatGPT or for downloads: each check is a server call with database work, so
+// every 20 s rather than every 3 s (~85% fewer calls). A Manager's cancel on the QTS site is seen
+// within 20 s; a cancel in this Chrome stops it at once.
+const GENERATION_SERVER_CHECK_MS = 20_000;
 // ChatGPT has this long from sending a prompt to finishing its answer.
 const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;
 // An answer that finished with no text, or ChatGPT never starting, is retried in a fresh tab
@@ -3805,7 +3810,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS) {
       await sleep(750);
       active.local();
-      if (Date.now() - lastStatusCheck >= 3000) {
+      if (Date.now() - lastStatusCheck >= GENERATION_SERVER_CHECK_MS) {
         await active.server();
         lastStatusCheck = Date.now();
       }
@@ -4237,7 +4242,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       chrome.downloads.onChanged.addListener(onChanged);
       statusPollId = setInterval(() => {
         ensureQueuedGenerationIsActive(jobId).catch(finish);
-      }, 3000);
+      }, GENERATION_SERVER_CHECK_MS);
       chrome.downloads.search({ id: downloadId }, (items) => {
         const error = chrome.runtime.lastError;
         if (error) {
