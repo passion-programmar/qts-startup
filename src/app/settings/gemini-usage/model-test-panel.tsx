@@ -17,8 +17,11 @@ import {
   type ModelTestRun,
   type ModelTestSettings,
 } from "@/server/gemini/model-test";
+import type { AiProvider } from "@/server/gemini/ai-models";
 
-export type ModelTestKeyOption = { number: number; keyId: string; prefix: string };
+export type ModelTestKeyOption = { number: number; keyId: string; prefix: string; provider: AiProvider };
+
+const keyName = (key: ModelTestKeyOption) => (key.provider === "groq" ? `Groq ${key.number}` : `Key ${key.number}`);
 
 type Draft = {
   enabled: Record<ModelTestModelId, boolean>;
@@ -77,6 +80,7 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 
+const clock = () => Date.now();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function shuffled<T>(items: T[]): T[] {
@@ -104,9 +108,9 @@ export function ModelTestPanel({
   const [settings, setSettings] = useState(initialSettings);
   const [draft, setDraft] = useState(() => toDraft(initialSettings));
   const [run, setRun] = useState(initialRun);
-  const [selected, setSelected] = useState<number[]>(() => {
-    const fromRun = keys.filter((key) => initialRun?.selectedKeyIds.includes(key.keyId)).map((key) => key.number);
-    return fromRun.length ? fromRun : keys.slice(0, maxModelTestKeys).map((key) => key.number);
+  const [selected, setSelected] = useState<string[]>(() => {
+    const fromRun = keys.filter((key) => initialRun?.selectedKeyIds.includes(key.keyId)).map((key) => key.keyId);
+    return fromRun.length ? fromRun : keys.filter((key) => key.provider === "gemini").slice(0, maxModelTestKeys).map((key) => key.keyId);
   });
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -136,9 +140,12 @@ export function ModelTestPanel({
     setDraft((current) => ({ ...current, enabled: { ...current.enabled, [id]: checked } }));
   }
 
-  function toggleKey(number: number, checked: boolean) {
-    setSelected((current) => (checked ? [...current, number].sort((a, b) => a - b) : current.filter((item) => item !== number)));
+  function toggleKey(keyId: string, checked: boolean) {
+    setSelected((current) => (checked ? [...current, keyId] : current.filter((item) => item !== keyId)));
   }
+
+  const selectedKeys = keys.filter((key) => selected.includes(key.keyId));
+  const tickedFor = (provider: AiProvider) => selectedKeys.filter((key) => key.provider === provider).length;
 
   async function changeSettings(body: Record<string, unknown>, done: string) {
     setSaving(true);
@@ -176,20 +183,22 @@ export function ModelTestPanel({
     setMessage({ tone: "info", text: "Test running. Keep this tab open." });
     let roundErrors = 0;
     try {
-      const started = await post<{ run: ModelTestRun }>({ action: "start", keyNumbers: selected });
+      const numbersFor = (provider: AiProvider) => selectedKeys.filter((key) => key.provider === provider).map((key) => key.number);
+      const started = await post<{ run: ModelTestRun }>({ action: "start", keyNumbers: numbersFor("gemini"), groqKeyNumbers: numbersFor("groq") });
       let current = started.run;
       setRun(current);
       const roundMs = 60_000 / settings.callsPerMinute;
 
       while (!stopRequested.current) {
-        const roundStartedAt = Date.now();
+        const roundStartedAt = clock();
         const results = await Promise.allSettled(
-          shuffled(selected).map(async (keyNumber, index) => {
+          shuffled(selectedKeys).map(async (key, index) => {
             await sleep(index * staggerMs);
             return post<{ keyId: string; key: ModelTestKeyState; done: boolean }>({
               action: "call",
               runId: current.runId,
-              keyNumber,
+              keyNumber: key.number,
+              provider: key.provider,
             });
           }),
         );
@@ -201,7 +210,7 @@ export function ModelTestPanel({
           if (result.value.done) finished += 1;
         }
         setRun(current);
-        setNow(Date.now());
+        setNow(clock());
 
         const failed = results.filter((result) => result.status === "rejected");
         const conflict = failed
@@ -216,13 +225,13 @@ export function ModelTestPanel({
           setMessage({ tone: "error", text: "The test stopped after repeated request errors. The counts are saved, so press Start to continue." });
           return;
         }
-        if (finished === selected.length) {
+        if (finished === selectedKeys.length) {
           setMessage({ tone: "success", text: "Test finished. Every ticked key has finished every ticked model." });
           return;
         }
 
         const wakeAt = roundStartedAt + roundMs;
-        while (!stopRequested.current && Date.now() < wakeAt) await sleep(Math.min(250, wakeAt - Date.now()));
+        while (!stopRequested.current && clock() < wakeAt) await sleep(Math.min(250, wakeAt - clock()));
       }
       setMessage({ tone: "info", text: "Test stopped. The counts are saved, so press Start to continue." });
     } catch (error) {
@@ -233,7 +242,10 @@ export function ModelTestPanel({
   }
 
   const runKeys = run ? keys.filter((key) => run.selectedKeyIds.includes(key.keyId)) : [];
-  const summary = run ? summarizeModelTestRun(run, runKeys.map((key) => key.keyId), settings) : null;
+  const providerByKeyId = new Map(keys.map((key) => [key.keyId, key.provider]));
+  const summary = run
+    ? summarizeModelTestRun(run, runKeys.map((key) => key.keyId), settings, (keyId) => providerByKeyId.get(keyId) ?? "gemini")
+    : null;
 
   return (
     <div className="space-y-6">
@@ -246,10 +258,10 @@ export function ModelTestPanel({
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <h2 className="text-sm font-semibold text-slate-800">Test settings</h2>
         <p className="mt-1 text-xs text-slate-500">
-          Used only by this test. The live limits on the first tab are not read or changed, and live work does not see these calls.
+          These limits are only for this test. Its calls do count toward each key and model&apos;s usage for the day, so a big test leaves less for live work.
         </p>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {modelTestModels.map((model) => (
             <div className="rounded-xl border border-slate-200 p-3" key={model.id}>
               <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
@@ -280,7 +292,7 @@ export function ModelTestPanel({
 
         {liteCalls > modelTestLiteWarningCalls ? (
           <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="alert">
-            Live Get JD and Apply use 3.5 Flash-Lite and can&apos;t see test calls. A high cap could use up Google&apos;s quota on that key and make live work fail there until midnight Pacific.
+            Live Get JD and Apply use 3.5 Flash-Lite. A high cap could use up Google&apos;s quota on that key, leaving it unavailable for live work until midnight Pacific.
           </p>
         ) : null}
 
@@ -342,23 +354,23 @@ export function ModelTestPanel({
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <h2 className="text-sm font-semibold text-slate-800">Run</h2>
         <p className="mt-1 text-xs text-slate-500">
-          Tick up to {maxModelTestKeys} keys and press Start once. Each round calls every ticked key once, in random order. The test stops by itself when every ticked key has finished every ticked model. Keep this tab open.
+          Tick up to {maxModelTestKeys} Gemini keys and {maxModelTestKeys} Groq keys, then press Start once. Each round calls every ticked key once, in random order. The test stops by itself when every ticked key has finished every ticked model. Keep this tab open.
         </p>
 
         {keys.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-600">No Gemini API keys are configured on the server.</p>
+          <p className="mt-3 text-sm text-slate-600">No Gemini or Groq API keys are configured on the server.</p>
         ) : (
           <div className="mt-3 flex flex-wrap gap-2">
             {keys.map((key) => (
               <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm" key={key.keyId}>
                 <input
-                  checked={selected.includes(key.number)}
+                  checked={selected.includes(key.keyId)}
                   className="accent-indigo-600"
-                  disabled={busy || (!selected.includes(key.number) && selected.length >= maxModelTestKeys)}
-                  onChange={(event) => toggleKey(key.number, event.target.checked)}
+                  disabled={busy || (!selected.includes(key.keyId) && tickedFor(key.provider) >= maxModelTestKeys)}
+                  onChange={(event) => toggleKey(key.keyId, event.target.checked)}
                   type="checkbox"
                 />
-                <span className="font-semibold">Key {key.number}</span>
+                <span className="font-semibold">{keyName(key)}</span>
                 <span className="font-mono text-xs text-slate-500">{key.prefix}</span>
               </label>
             ))}
@@ -487,17 +499,17 @@ function KeyResult({
   state: ModelTestKeyState | undefined;
 }) {
   if (!state) return null;
-  const step = nextModelTestStep(settings, state, now);
+  const step = nextModelTestStep(settings, state, now, option.provider);
   const stepLabel =
     step.kind === "done"
       ? "Finished"
       : `${step.kind === "wait" ? "Waiting on" : "Next"}: ${modelTestModels.find((model) => model.id === step.model)?.label}`;
-  const rows = modelTestModels.filter((model) => settings.models[model.id].enabled || state.models[model.id]);
+  const rows = modelTestModels.filter((model) => model.provider === option.provider && (settings.models[model.id].enabled || state.models[model.id]));
 
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-baseline gap-2">
-        <h3 className="text-sm font-semibold text-slate-800">Key {option.number}</h3>
+        <h3 className="text-sm font-semibold text-slate-800">{keyName(option)}</h3>
         <span className="font-mono text-xs text-slate-500">{option.prefix}</span>
         <span className="text-xs text-slate-500">{stepLabel}</span>
       </div>
@@ -554,7 +566,7 @@ function KeyResult({
 
 function Timeline({ keys, run }: { keys: ModelTestKeyOption[]; run: ModelTestRun }) {
   const events = keys
-    .flatMap((key) => (run.keys[key.keyId]?.timeline ?? []).map((event) => ({ ...event, keyNumber: key.number })))
+    .flatMap((key) => (run.keys[key.keyId]?.timeline ?? []).map((event) => ({ ...event, keyLabel: keyName(key) })))
     .sort((a, b) => a.at.localeCompare(b.at));
 
   return (
@@ -566,8 +578,8 @@ function Timeline({ keys, run }: { keys: ModelTestKeyOption[]; run: ModelTestRun
       ) : (
         <ol className="mt-2 max-h-72 space-y-1 overflow-y-auto rounded-xl border border-slate-200 p-3 font-mono text-xs">
           {events.map((event) => (
-            <li className={event.available ? "text-emerald-700" : "text-rose-700"} key={`${event.keyNumber}-${event.model}-${event.at}-${event.text}`}>
-              {formatPacificTime(event.at, true)} · Key {event.keyNumber} ·{" "}
+            <li className={event.available ? "text-emerald-700" : "text-rose-700"} key={`${event.keyLabel}-${event.model}-${event.at}-${event.text}`}>
+              {formatPacificTime(event.at, true)} · {event.keyLabel} ·{" "}
               {modelTestModels.find((model) => model.id === event.model)?.label} · {event.available ? event.text : `Not available: ${event.text}`}
             </li>
           ))}

@@ -9,16 +9,18 @@ import { createRequire } from "node:module";
 type Fixture = {
   user: { id: string; role: string } | null;
   keys: string[];
+  groqKeys: string[];
+  usage: Array<{ slot: string; operation: string; tokens: number }>;
   settings: Record<string, unknown>;
   run: { runId: string; pacificDay: string; keys: Record<string, { lastCallAt: string | null; version: number; models: Record<string, Record<string, number>> }> } | null;
-  google: Array<{ key: string; url: string; body: { generationConfig: { responseMimeType: string } } }>;
+  google: Array<{ key: string; url: string; slot: string; headers: Record<string, string>; body: { generationConfig: { responseMimeType: string }; model?: string; response_format?: { type: string } } }>;
   reply: () => { ok: boolean; status: number; body: string };
   failNextKeySave: boolean;
 };
 
 const answer = JSON.stringify({ isJobPage: true, job: {} });
 const okReply = () => ({ ok: true, status: 200, body: JSON.stringify({ modelVersion: "m", candidates: [{ content: { parts: [{ text: answer }] } }] }) });
-const fixture: Fixture = { user: null, keys: [], settings: {}, run: null, google: [], reply: okReply, failNextKeySave: false };
+const fixture: Fixture = { user: null, keys: [], groqKeys: [], usage: [], settings: {}, run: null, google: [], reply: okReply, failNextKeySave: false };
 (globalThis as Record<string, unknown>).__qtsModelTest = fixture;
 
 let POST: (request: Request) => Promise<Response>;
@@ -29,8 +31,8 @@ test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/session": `export const getCurrentUser=async()=>${f}.user;`,
-    // Only these two: a route that also used the live counters or leases would not build here.
-    "@/lib/gemini-usage": `export const getGeminiApiKeys=()=>${f}.keys;export const requestGeminiApi=async(key,kind,url,options)=>{${f}.google.push({key,url,body:JSON.parse(options.body)});return ${f}.reply();};`,
+    // No leases or live limit checks: a route that used them would not build against this mock.
+    "@/lib/gemini-usage": `export const getGeminiApiKeys=()=>${f}.keys;export const getGroqApiKeys=()=>${f}.groqKeys;export const getGeminiApiKeyHash=(key)=>'hash-'+key;export const recordAiSlotCall=async(slot,operation,tokens)=>{${f}.usage.push({slot,operation,tokens})};export const requestGeminiApi=async(key,kind,url,options,counts,slot)=>{${f}.google.push({key,url,slot,headers:options.headers,body:JSON.parse(options.body)});return ${f}.reply();};`,
     "@/server/gemini/model-test-store": `
       export const modelTestKeyId=(key)=>'id-'+key.slice(0,4);
       export const readModelTestState=async()=>({settings:${f}.settings,run:${f}.run?structuredClone(${f}.run):null});
@@ -71,6 +73,8 @@ function reset() {
   process.env.VERCEL_ENV = "production";
   fixture.user = { id: "admin", role: "super_admin" };
   fixture.keys = ["AIzaKEYONE", "BIzaKEYTWO", "CIzaKEYTHREE", "DIzaKEYFOUR"];
+  fixture.groqKeys = ["gskaKEYONE", "gskbKEYTWO"];
+  fixture.usage = [];
   fixture.settings = defaults();
   fixture.run = null;
   fixture.google = [];
@@ -128,6 +132,7 @@ test("one call sends one Google request to the best model, with Get JD's JSON se
   assert.equal(body.result, "called");
   assert.equal(fixture.google.length, 1);
   assert.match(fixture.google[0].url, /models\/gemini-3\.8-flash:generateContent$/);
+  assert.equal(fixture.google[0].slot, "hash-AIzaKEYONE|gemini-3.8-flash");
   assert.equal(fixture.google[0].key, "AIzaKEYONE");
   assert.equal(fixture.google[0].body.generationConfig.responseMimeType, "application/json");
   assert.equal(body.key.models["gemini-3.8-flash"].worked, 1);
@@ -259,6 +264,59 @@ test("settings are checked before they are saved, and can go back to the default
   const restored = await (await send({ action: "reset_settings" })).json();
   assert.equal(restored.settings.callsPerMinute, 2);
   assert.deepEqual(fixture.settings, { cleared: true });
+});
+
+test("a Groq key is called on Groq's model, at Groq's address, with its own header", async () => {
+  reset();
+  await send({ action: "start", groqKeyNumbers: [1] });
+  fixture.reply = () => ({ ok: true, status: 200, body: JSON.stringify({ model: "openai/gpt-oss-120b", choices: [{ message: { content: answer } }] }) });
+  const body = await (await send({ action: "call", runId: fixture.run!.runId, keyNumber: 1, provider: "groq" })).json();
+  assert.equal(body.result, "called");
+  assert.match(fixture.google[0].url, /^https:\/\/api\.groq\.com\/openai\/v1\/chat\/completions$/);
+  assert.equal(fixture.google[0].headers.Authorization, "Bearer gskaKEYONE");
+  assert.equal(fixture.google[0].body.model, "openai/gpt-oss-120b");
+  assert.deepEqual(fixture.google[0].body.response_format, { type: "json_object" });
+  assert.equal(body.key.models["openai/gpt-oss-120b"].validJson, 1);
+});
+
+test("a Gemini key never gets Groq's model", async () => {
+  reset();
+  (fixture.settings as { models: Record<string, { enabled: boolean }> }).models["gemini-3.8-flash"].enabled = false;
+  (fixture.settings as { models: Record<string, { enabled: boolean }> }).models["gemini-3.6-flash"].enabled = false;
+  (fixture.settings as { models: Record<string, { enabled: boolean; maxCalls: number }> }).models["gemini-3.5-flash-lite"].maxCalls = 1;
+  const run = await started();
+  await callKey(run.runId);
+  nextRound();
+  assert.equal((await (await callKey(run.runId)).json()).result, "done");
+  assert.equal(fixture.google.length, 1);
+  assert.match(fixture.google[0].url, /gemini-3\.5-flash-lite/);
+});
+
+test("Start takes up to three keys for each provider", async () => {
+  reset();
+  fixture.groqKeys = ["g1aaKEY", "g2aaKEY", "g3aaKEY", "g4aaKEY"];
+  assert.equal((await send({ action: "start", keyNumbers: [1, 2, 3], groqKeyNumbers: [1, 2, 3, 4] })).status, 400);
+  assert.equal((await send({ action: "start", keyNumbers: [1, 2, 3], groqKeyNumbers: [1, 2, 3] })).status, 200);
+  assert.equal(Object.keys(fixture.run!.keys).length, 6);
+});
+
+test("test calls on live models count toward that key and model's usage", async () => {
+  reset();
+  (fixture.settings as { models: Record<string, { enabled: boolean }> }).models["gemini-3.8-flash"].enabled = false;
+  const run = await started();
+  await callKey(run.runId);
+  assert.equal(fixture.usage.length, 1);
+  assert.equal(fixture.usage[0].slot, "hash-AIzaKEYONE|gemini-3.6-flash");
+  assert.equal(fixture.usage[0].operation, "generate_content");
+  assert.ok(fixture.usage[0].tokens > 0);
+});
+
+test("3.8 Flash isn't a live model, so test calls on it add no usage rows", async () => {
+  reset();
+  const run = await started();
+  await callKey(run.runId);
+  assert.equal(fixture.google.length, 1);
+  assert.equal(fixture.usage.length, 0);
 });
 
 test("Reset counts clears the saved run", async () => {

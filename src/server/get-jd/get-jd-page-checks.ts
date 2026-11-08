@@ -12,7 +12,8 @@ import { pageCheckKey } from "./page-check-key";
 
 const CHECKING_TTL_MS = 90_000;
 const VERDICT_TTL_MS = 10 * 60_000;
-const WAIT_FOR_VERDICT_MS = 25_000;
+// Long enough for the first Chrome's tries to finish, and inside the route's 60 seconds.
+const WAIT_FOR_VERDICT_MS = 50_000;
 const POLL_INTERVAL_MS = 2_000;
 type Claim = { role: "checker" } | { role: "replay"; result: unknown } | { role: "busy" };
 
@@ -75,7 +76,7 @@ export async function withPageCheck(
   }
   if (claim.role === "busy") {
     return NextResponse.json(
-      { success: false, message: "Another Chrome is checking this job right now. Try again in a moment." },
+      { success: false, message: "Another Chrome is checking this job right now. Try again in a moment.", autoRetry: { kind: "soon" } },
       { status: 409, headers: { "Cache-Control": "no-store" } },
     );
   }

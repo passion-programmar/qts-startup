@@ -11,6 +11,7 @@ importScripts(
   '../shared/job-detection-url-rules.js',
   '../shared/get-jd-save-payload.js',
   '../shared/get-jd-notifications.js',
+  '../shared/get-jd-auto-retry.js',
   '../shared/api-prefetch.js',
   '../shared/custom-gpt.js',
   '../shared/chatgpt-url.js',
@@ -1617,6 +1618,42 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     closeFinishedGetJdTab(Number(alarm.name.slice(GET_JD_CLOSE_ALARM.length))).catch(() => {});
   }
 });
+// Automatic retries when the AI providers are busy: the wait survives a worker restart, because
+// the plan is saved and an alarm wakes the worker. A closed tab, a new page, or Get JD turned off
+// ends the wait.
+const GET_JD_RETRY_ALARM = 'qtsGetJdRetry:';
+async function cancelGetJdAutoRetry(tabId) {
+  const key = `${GET_JD_RETRY_ALARM}${tabId}`;
+  await chrome.alarms.clear(key);
+  await chrome.storage.session.remove(key);
+}
+async function waitForGetJdAutoRetry(tabId, url, initialResult, plan, { attempt, force }) {
+  const key = `${GET_JD_RETRY_ALARM}${tabId}`;
+  await chrome.storage.session.set({ [key]: { url, attempt, force, runId: initialResult.runId } });
+  await chrome.alarms.create(key, { when: plan.at });
+  // Still "processing", under the same run id, so the job stays one entry in the Manager's history.
+  await saveGetJdResult(tabId, { ...initialResult, status: 'processing', message: plan.message, updatedAt: Date.now() });
+  await showGetJdNotice(tabId, url, plan.message, [], { tone: 'info' });
+}
+async function runGetJdAutoRetry(tabId) {
+  const key = `${GET_JD_RETRY_ALARM}${tabId}`;
+  const pending = (await chrome.storage.session.get(key))[key];
+  if (!pending) return;
+  await chrome.storage.session.remove(key);
+  const tab = await getTab(tabId);
+  if (tab?.url !== pending.url || !(await isGetJdActive())) return;
+  await processGetJdPage(tabId, pending.url, `retry:${Date.now()}`, { force: pending.force === true, autoRetryAttempt: pending.attempt + 1, autoRetryRunId: pending.runId });
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name.startsWith(GET_JD_RETRY_ALARM)) {
+    runGetJdAutoRetry(Number(alarm.name.slice(GET_JD_RETRY_ALARM.length))).catch((error) => {
+      console.warn('[QTS Get JD] Automatic retry failed:', error);
+    });
+  }
+});
+chrome.tabs.onRemoved.addListener((tabId) => { cancelGetJdAutoRetry(tabId).catch(() => {}); });
+// End of Get JD automatic retries.
+
 // The page Get JD last finished in each tab, and whether it is a search page showing one job.
 const getJdFinishedPageByTab = new Map();
 
@@ -1747,7 +1784,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
   const initialResult = {
     tabId,
     pageUrl: url,
-    runId: `${Date.now()}:${documentId}`,
+    runId: options.autoRetryRunId || `${Date.now()}:${documentId}`,
     pageTitle: tab.title || '',
     sessionOwner: self.__qtsGetJdNotifications.sessionKey(await chrome.storage.local.get(['authExpiresAt', 'qtsSessionUser'])),
     status: 'processing',
@@ -1756,7 +1793,17 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     classification: null,
   };
   let claimedJobKey = null;
+  const autoRetryAttempt = options.autoRetryAttempt ?? 0;
+  let waitingForRetry = false;
+  const retryLater = async (result) => {
+    const plan = self.__qtsGetJdAutoRetry.planRetry(result, autoRetryAttempt, Date.now());
+    if (!plan) return false;
+    waitingForRetry = true;
+    await waitForGetJdAutoRetry(tabId, url, initialResult, plan, { attempt: autoRetryAttempt, force: options.force === true });
+    return true;
+  };
   try {
+    await cancelGetJdAutoRetry(tabId);
     await saveGetJdResult(tabId, {
       ...initialResult,
       classification: { isJobPage: true },
@@ -1783,12 +1830,14 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
     const modeResult = await workerApiRequest('GET', '/api/extension/get-jd/mode');
     if (modeResult.success !== true) {
+      if (await retryLater(modeResult)) return;
       throw new Error(modeResult.message || 'Could not load the Get JD matching mode.');
     }
     let precheck = null;
     if (modeResult.mode === 'gemini') {
       precheck = await workerApiRequest('POST', '/api/extension/get-jd/check', { scope: 'global', job: identity }, { timeoutMs: 20000 });
       if (precheck.success !== true || typeof precheck.skip !== 'boolean') {
+        if (await retryLater(precheck)) return;
         throw new Error(precheck.message || 'Could not check Jobs and Bids. Refresh to retry; Gemini was not called.');
       }
       if (precheck.skip) {
@@ -1814,7 +1863,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       if (!pageText.trim()) throw new Error('Could not read the job text from the loaded page.');
       if (pageText.length > 100_000) throw new Error('The original JD exceeds the 100,000-character limit. Nothing was truncated or saved.');
       if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
-      await self.__qtsIdlePacing.noteActivity();
+      // A waiting job retrying on its own isn't the Manager being active.
+      if (!options.autoRetryAttempt) await self.__qtsIdlePacing.noteActivity();
       const geminiResult = await workerApiRequest('POST', '/api/extension/get-jd', {
         pageUrl: url,
         pageTitle: tab.title || documentId || url,
@@ -1826,6 +1876,13 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       if (geminiResult.success !== true) {
         // The diagnostic code (for example gemini_http_400) names the real cause for troubleshooting.
         console.warn('[QTS Get JD] Gemini evaluation failed:', geminiResult.diagnosticCode || `HTTP ${geminiResult._httpStatus || '?'}`);
+        if (await retryLater(geminiResult)) return;
+        if (self.__qtsGetJdAutoRetry.isFinalFailure(geminiResult)) {
+          const reason = geminiResult.message || 'The AI model could not read this page.';
+          await saveGetJdResult(tabId, { ...initialResult, status: 'error', message: reason, updatedAt: Date.now() });
+          await showGetJdNotice(tabId, url, reason, [], { tone: 'error' });
+          return;
+        }
         throw new Error(geminiResult.message || 'Gemini candidate matching failed.');
       }
       // Gemini's verdict is final, so a page it rejects closes like a finished one.
@@ -2080,7 +2137,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     });
     await showGetJdNotice(tabId, url, `Get JD couldn't finish: ${message}`, ['try_again'], { tone: 'error' });
   } finally {
-    await finishAbandonedGetJdResult(tabId, initialResult).catch((error) => console.warn('[QTS Get JD] Could not finalize stopped result:', error));
+    if (!waitingForRetry) await finishAbandonedGetJdResult(tabId, initialResult).catch((error) => console.warn('[QTS Get JD] Could not finalize stopped result:', error));
     getJdInFlightTabs.delete(tabId);
     if (claimedJobKey) getJdInFlightJobKeys.delete(claimedJobKey);
     // Only the navigation monitor admits subsequent pages; never scan a tab as a side effect.

@@ -14,17 +14,12 @@ import {
 import { type ExtensionManager, getExtensionManager } from "@/lib/extension-auth";
 import { withPageCheck } from "@/server/get-jd/get-jd-page-checks";
 import { db } from "@/lib/db";
-import {
-  geminiModel,
-  getGeminiApiKeys,
-  getGeminiApiLimits,
-  requestGeminiApi,
-} from "@/lib/gemini-usage";
-import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
+import { AiJobError, aiRequestBudgetMs } from "@/server/gemini/ai-job";
+import { runAiRequest } from "@/server/gemini/ai-request";
+import { geminiJobEvaluationGenerationConfig, groqJobEvaluationJsonHint } from "@/server/gemini/job-evaluation-config";
 import { candidatesWithJdNotes } from "@/server/gemini/candidates-with-jd-notes";
 import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
 import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-indexes";
-import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
 import {
   getJdAccountState,
@@ -33,19 +28,13 @@ import {
 } from "@/server/jobs/get-jd-jobs";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 import { getGetJdFailureMessage } from "@/server/gemini/get-jd-failure-message";
-import {
-  type GeminiTokenCounts,
-  readGeminiErrorMessage,
-  readGeminiText,
-  withAvailableGeminiKey,
-} from "@/server/gemini/gemini-keys";
 import { normalizeCompanyName } from "@/server/jobs/job-key";
 import { getPrecheckTickets } from "@/server/get-jd/precheck-ticket";
 import type { GetJdIdentity } from "@/server/get-jd/global-precheck";
 import type { GetJdDuplicate } from "@/server/jobs/get-jd-account-states";
 import { sourceSiteUrl } from "@/server/jobs/source-site";
 
-// Gemini may take up to 45 s (AbortSignal.timeout below). Without this, a Vercel project
+// The AI tries can take up to 55 s in total (see ai-job.ts). Without this, a Vercel project
 // with Fluid compute turned off would stop the function after 10 s.
 export const maxDuration = 60;
 
@@ -90,6 +79,7 @@ type GetJdClassification = {
 };
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const deadlineAt = Date.now() + aiRequestBudgetMs;
   const manager = await getExtensionManager(request);
   if (!manager) {
     return jsonResponse(
@@ -115,10 +105,28 @@ export async function POST(request: Request): Promise<NextResponse> {
   const identity = await getPrecheckTickets().verify(token, manager.id, requestedUrl);
   if (!identity) return jsonResponse({ success: false, message: "The Jobs/Bids precheck is missing or expired. Refresh the job page to retry." }, 409);
   // The existing in-progress claim/replay avoids repeated Gemini calls. It does not query Jobs/Bids.
-  return withPageCheck(manager.id, requestedUrl, false, () => evaluateGetJdPage(manager, body, identity));
+  return withPageCheck(manager.id, requestedUrl, false, () => evaluateGetJdPage(manager, body, identity, deadlineAt));
 }
 
-async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, identity: GetJdIdentity): Promise<NextResponse> {
+/** What the extension needs to know to wait and retry by itself, or to show the reason. */
+function aiFailureResponse(error: AiJobError): NextResponse {
+  logGetJdFailure(error.code);
+  const body = { success: false, message: error.message, diagnosticCode: error.code };
+  switch (error.code) {
+    case "ai_busy":
+      return jsonResponse({ ...body, autoRetry: { kind: "soon" } }, 503);
+    case "ai_quota_used_up":
+      return jsonResponse({ ...body, autoRetry: { kind: "at", at: error.retryAt } }, 429);
+    case "ai_too_large":
+      return jsonResponse(body, 413);
+    case "ai_bad_request":
+      return jsonResponse(body, 422);
+    case "ai_not_configured":
+      return jsonResponse(body, 503);
+  }
+}
+
+async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, identity: GetJdIdentity, deadlineAt: number): Promise<NextResponse> {
   const pageUrl = readString(body, "pageUrl", maxPageUrlLength);
   const pageTitle = readString(body, "pageTitle", maxPageTitleLength);
   const pageText = readString(body, "originalDescription", maxPageTextLength);
@@ -171,18 +179,6 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       );
     }
 
-    const apiKeys = getGeminiApiKeys();
-    if (apiKeys.length === 0) {
-      return jsonResponse(
-        {
-          success: false,
-          message:
-            "Gemini matching is unavailable right now. Ask your Super Admin to check the Gemini setup.",
-        },
-        503,
-      );
-    }
-
     const candidateContext = candidatesForEvaluation.map((candidate, index) => ({
       candidateIndex: index,
       candidateName: candidate.name,
@@ -196,31 +192,18 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       candidates: candidateContext,
     });
 
-    // A key Gemini answers "unavailable" is paused for 5 minutes and another key is asked.
-    const modelResult = await withAvailableGeminiKey(
-      apiKeys,
-      [{ role: "user", parts: [{ text: promptText }] }],
+    // Key rotation, model switching and pauses are all in runAiRequest. A reply that doesn't pass
+    // this check counts as unusable, so the next model is asked.
+    const classification = await runAiRequest({
+      contents: [{ role: "user", parts: [{ text: promptText }] }],
       generationConfig,
-      await getGeminiTokenCountMode(),
-      await getGeminiApiLimits(),
-      ({ apiKey, tokenCounts }) => requestGeminiJson(apiKey, promptText, tokenCounts),
-    );
-    if (modelResult === null) {
-      return jsonResponse(
-        {
-          success: false,
-          message:
-            "QTS is temporarily unable to process this request because all configured Gemini keys are busy or at their QTS usage limits. Try again shortly.",
-          diagnosticCode: "gemini_local_capacity_unavailable",
-        },
-        503,
-      );
-    }
-    const classification = validateClassification(
-      modelResult,
-      pageUrl,
-      candidatesForEvaluation,
-    );
+      jsonHint: groqJobEvaluationJsonHint,
+      deadlineAt,
+      parse: (text) => {
+        if (!text || Buffer.byteLength(text, "utf8") > maxGeminiResponseBytes) throw new Error("Empty or too large.");
+        return validateClassification(JSON.parse(text) as unknown, pageUrl, candidatesForEvaluation);
+      },
+    });
     classification.job.description = pageText;
     if (!classification.isJobPage) {
       return jsonResponse({
@@ -336,6 +319,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
             : "Review Gemini's checked and unchecked candidate matches, then save.",
     });
   } catch (error) {
+    if (error instanceof AiJobError) return aiFailureResponse(error);
     const diagnosticCode = getGetJdFailureCode(error);
     logGetJdFailure(diagnosticCode, getGetJdProviderMessage(error));
     const status = /^gemini_(?:count_tokens_)?http_429$/.test(diagnosticCode)
@@ -397,63 +381,6 @@ async function loadManagerCandidateProfiles(
       currentEmployer: row.currentEmployer,
     })),
   };
-}
-
-async function requestGeminiJson(
-  apiKey: string,
-  prompt: string,
-  tokenCounts: GeminiTokenCounts,
-): Promise<unknown> {
-  // One request with this key; a 5xx sends the request to another key (withAvailableGeminiKey).
-  const response = await requestGeminiApi(
-    apiKey,
-    "generate_content",
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig,
-      }),
-      signal: AbortSignal.timeout(45_000),
-      cache: "no-store",
-    },
-    tokenCounts,
-  );
-
-  if (!response.ok) {
-    throw getJdError(
-      `gemini_http_${response.status}`,
-      `Gemini API returned HTTP ${response.status}.`,
-      readGeminiErrorMessage(response.body, apiKey),
-    );
-  }
-
-  let data: unknown;
-  try {
-    data = JSON.parse(response.body) as unknown;
-  } catch {
-    throw getJdError(
-      "gemini_invalid_http_response",
-      "Gemini returned an invalid HTTP response.",
-    );
-  }
-  const text = readGeminiText(data);
-  if (!text || Buffer.byteLength(text, "utf8") > maxGeminiResponseBytes) {
-    throw getJdError(
-      "gemini_empty_response",
-      "Gemini response was empty or too large.",
-    );
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw getJdError("gemini_invalid_json", "Gemini returned invalid JSON.");
-  }
 }
 
 function validateClassification(

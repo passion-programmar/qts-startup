@@ -19,9 +19,8 @@ export type GeminiApiOperation = "generate_content" | "count_tokens";
 
 const maxStoredGeminiResponseBytes = 1_000_000;
 
-// Google response records are kept for today and the two previous Pacific days.
-// Records from three or more days ago are removed only when a Super Admin opens
-// Gemini Usage, and only if any exist.
+// Provider response records are kept for today and the two previous Pacific days. Older ones are
+// removed by the daily clean-up, and when a Super Admin opens Gemini Usage.
 export async function removeOldGeminiApiCallLogs(): Promise<number> {
   const olderThanKeptDays = sql`${geminiApiCallLogs.startedAt} < (
     date_trunc('day', now() at time zone 'America/Los_Angeles') - interval '2 days'
@@ -38,17 +37,22 @@ export async function removeOldGeminiApiCallLogs(): Promise<number> {
   }
 }
 
+/**
+ * One request to Gemini or Groq, recorded in the responses list. `logKey` files the record under a
+ * key + model slot; without it the record goes under the key alone.
+ */
 export async function requestGeminiApi(
   apiKey: string,
   operation: GeminiApiOperation,
   url: string,
   init: RequestInit,
   tokenCounts: { local?: number | null; gemini?: number | null } = {},
-): Promise<{ ok: boolean; status: number; body: string }> {
+  logKey?: string,
+): Promise<{ ok: boolean; status: number; body: string; retryAfter: string | null }> {
   const [log] = await db
     .insert(geminiApiCallLogs)
     .values({
-      keyHash: getGeminiApiKeyHash(apiKey),
+      keyHash: logKey ?? getGeminiApiKeyHash(apiKey),
       operation,
       status: "pending",
       localInputTokens: tokenCounts.local ?? null,
@@ -95,9 +99,10 @@ export async function requestGeminiApi(
     })
     .where(eq(geminiApiCallLogs.id, log.id));
 
-  return { ok: response.ok, status: response.status, body };
+  return { ok: response.ok, status: response.status, body, retryAfter: response.headers.get("retry-after") };
 }
 
+/** The per-key limits still used by the token comparison tool. Live requests use per-model limits. */
 export async function getGeminiApiLimits(): Promise<GeminiApiLimits> {
   const [row] = await db
     .select({ value: settings.value })
@@ -109,16 +114,16 @@ export async function getGeminiApiLimits(): Promise<GeminiApiLimits> {
   if (!limits) {
     throw new Error("Saved Gemini API limits are invalid. Update them in Gemini Usage settings.");
   }
-  // No key is called more than twice a minute, whatever was saved before this rule.
   return { ...limits, requestsPerMinute: Math.min(limits.requestsPerMinute, maxGeminiRequestsPerMinute) };
 }
 
+const parseKeyList = (value: string | undefined): string[] => [
+  ...new Set((value ?? "").split(",").map((apiKey) => apiKey.trim()).filter(Boolean)),
+];
+
 export function getGeminiApiKeys(): string[] {
-  const configuredKeys = process.env.GEMINI_API_KEYS
-    ?.split(",")
-    .map((apiKey) => apiKey.trim())
-    .filter(Boolean);
-  if (configuredKeys?.length) return [...new Set(configuredKeys)];
+  const configuredKeys = parseKeyList(process.env.GEMINI_API_KEYS);
+  if (configuredKeys.length) return configuredKeys;
 
   const singleKey =
     process.env.GEMINI_API_KEY?.trim() ||
@@ -126,18 +131,21 @@ export function getGeminiApiKeys(): string[] {
   return singleKey ? [singleKey] : [];
 }
 
+export function getGroqApiKeys(): string[] {
+  return parseKeyList(process.env.GROQ_API_KEYS);
+}
+
 export function getGeminiApiKeyHash(apiKey: string): string {
   return createHash("sha256").update(apiKey).digest("hex");
 }
 
-export async function acquireGeminiKey(
-  apiKey: string,
-  limits: GeminiApiLimits,
-): Promise<string | null> {
-  const keyHash = getGeminiApiKeyHash(apiKey);
+type SlotLimits = Pick<GeminiApiLimits, "requestsPerMinute" | "requestsPerDay" | "inputTokensPerMinute">;
+
+/** Takes a key + model slot for one request, if it's free and under its limits. */
+export async function acquireAiSlot(slotId: string, limits: SlotLimits): Promise<string | null> {
   const result = await db.execute<{ leaseId: string | null }>(sql`
     select try_acquire_gemini_key(
-      ${keyHash},
+      ${slotId},
       ${limits.requestsPerMinute},
       ${limits.requestsPerDay}
     )::text as "leaseId"
@@ -145,16 +153,11 @@ export async function acquireGeminiKey(
   return result.rows[0]?.leaseId ?? null;
 }
 
-export async function reserveGeminiGeneration(
-  apiKey: string,
-  leaseId: string,
-  inputTokens: number,
-  limits: GeminiApiLimits,
-): Promise<boolean> {
-  const keyHash = getGeminiApiKeyHash(apiKey);
+/** Counts the call against the slot's limits. False means the slot had no room after all. */
+export async function reserveAiSlot(slotId: string, leaseId: string, inputTokens: number, limits: SlotLimits): Promise<boolean> {
   const result = await db.execute<{ allowed: boolean }>(sql`
     select reserve_gemini_generation(
-      ${keyHash},
+      ${slotId},
       ${leaseId}::uuid,
       ${inputTokens},
       ${limits.requestsPerMinute},
@@ -165,37 +168,24 @@ export async function reserveGeminiGeneration(
   return result.rows[0]?.allowed === true;
 }
 
-/**
- * Leaves a key alone for some minutes (Gemini answered it "unavailable"): a lease of its own that
- * the request releasing its key does not remove, so no request picks the key until it ends.
- */
-export async function pauseGeminiKey(apiKey: string, minutes: number): Promise<void> {
+export async function releaseAiSlot(slotId: string, leaseId: string): Promise<void> {
   await db.execute(sql`
-    insert into gemini_key_busy_leases (key_hash, lease_id, expires_at)
-    values (${getGeminiApiKeyHash(apiKey)}, gen_random_uuid(), now() + make_interval(mins => ${minutes}))
-    on conflict (key_hash) do update
-    set lease_id = excluded.lease_id,
-      expires_at = greatest(gemini_key_busy_leases.expires_at, excluded.expires_at)
+    select release_gemini_key(${slotId}, ${leaseId}::uuid)
   `);
 }
 
-export async function releaseGeminiKey(
-  apiKey: string,
-  leaseId: string,
-): Promise<void> {
-  const keyHash = getGeminiApiKeyHash(apiKey);
-  await db.execute(sql`
-    select release_gemini_key(${keyHash}, ${leaseId}::uuid)
-  `);
-}
-
-export async function recordGeminiApiCall(
-  apiKey: string,
-  operation: "generate_content" | "count_tokens",
+export async function recordAiSlotCall(
+  slotId: string,
+  operation: GeminiApiOperation,
   inputTokens = 0,
 ): Promise<void> {
   await db.execute(sql`
     insert into gemini_key_usage_events (key_hash, operation, input_tokens)
-    values (${getGeminiApiKeyHash(apiKey)}, ${operation}, ${inputTokens})
+    values (${slotId}, ${operation}, ${inputTokens})
   `);
 }
+
+export const acquireGeminiKey = (apiKey: string, limits: GeminiApiLimits) => acquireAiSlot(getGeminiApiKeyHash(apiKey), limits);
+export const releaseGeminiKey = (apiKey: string, leaseId: string) => releaseAiSlot(getGeminiApiKeyHash(apiKey), leaseId);
+export const recordGeminiApiCall = (apiKey: string, operation: GeminiApiOperation, inputTokens = 0) =>
+  recordAiSlotCall(getGeminiApiKeyHash(apiKey), operation, inputTokens);

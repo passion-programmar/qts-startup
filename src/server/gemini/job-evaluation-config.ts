@@ -47,6 +47,11 @@ export const geminiJobEvaluationGenerationConfig = {
   temperature: 0.2,
 } as const;
 
+/** Groq can't be given a response schema, so it gets the same shape in words. */
+export const groqJobEvaluationJsonHint =
+  `Use exactly this JSON shape, with every required field: ${JSON.stringify(geminiJobEvaluationResponseSchema)}. ` +
+  "Keep job.description to one short sentence.";
+
 export function isGetJdEvaluationAccepted(decision: {
   isJobPage: boolean;
   isRemote: boolean;

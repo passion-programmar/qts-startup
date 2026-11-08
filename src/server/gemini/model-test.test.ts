@@ -11,6 +11,7 @@ import {
   isModelTestAllowed,
   isModelTestCallTooSoon,
   modelTestModels,
+  modelTestOutcomeFromAi,
   nextModelTestStep,
   nextPacificMidnight,
   pacificDay,
@@ -327,6 +328,43 @@ test("the daily reset is midnight Pacific, across clock changes", () => {
   assert.equal(new Date(nextPacificMidnight(Date.parse("2026-03-08T20:00:00Z"))).toISOString(), "2026-03-09T07:00:00.000Z");
   // Clocks go back on 1 November 2026: midnight that night is PST.
   assert.equal(new Date(nextPacificMidnight(Date.parse("2026-11-01T20:00:00Z"))).toISOString(), "2026-11-02T08:00:00.000Z");
+});
+
+test("settings saved before Groq was added still load, and Groq starts from its defaults", () => {
+  const settings = JSON.parse(JSON.stringify(defaultModelTestSettings())) as ModelTestSettings;
+  delete (settings.models as Record<string, unknown>)["openai/gpt-oss-120b"];
+  settings.callsPerMinute = 5;
+  const parsed = parseModelTestSettings(settings);
+  assert.equal(parsed?.callsPerMinute, 5);
+  assert.deepEqual(parsed?.models["openai/gpt-oss-120b"], { enabled: true, maxCalls: 5 });
+});
+
+test("a key only ever gets its own provider's models", () => {
+  const settings = settingsWith({}, { "openai/gpt-oss-120b": 1 });
+  assert.deepEqual(nextModelTestStep(settings, freshKey(), now, "groq"), { kind: "call", model: "openai/gpt-oss-120b" });
+  assert.deepEqual(nextModelTestStep(settings, freshKey(), now, "gemini"), { kind: "call", model: flash38 });
+  const key = applyModelTestOutcome(reserveModelTestCall(freshKey(), "openai/gpt-oss-120b", now), "openai/gpt-oss-120b", ok, settings, now);
+  assert.equal(nextModelTestStep(settings, key, now, "groq").kind, "done");
+});
+
+test("a reply that wasn't valid JSON is a retryable failure, not a refusal", () => {
+  const settings = settingsWith();
+  const outcome = modelTestOutcomeFromAi({ kind: "blocked", reason: "broken_reply", httpStatus: 400, durationMs: 1, detail: "x" });
+  assert.equal(outcome.kind, "failed");
+  const key = step(freshKey(), settings, outcome).key;
+  assert.equal(key.models[flash38]?.finished, false);
+  assert.equal(key.models[flash38]?.unavailable?.text, "Reply wasn't valid JSON");
+});
+
+test("the total counts each key only on its own provider's models", () => {
+  const settings = settingsWith();
+  const run = createModelTestRun("run", ["g"], now);
+  run.keys.g = step(run.keys.g, settings, ok, now).key;
+  assert.deepEqual(summarizeModelTestRun(run, ["g"], settings, () => "groq"), { total: 0, exact: false });
+});
+
+test("a new run is already counted live, so it's never counted twice", () => {
+  assert.equal(createModelTestRun("run", ["k"], now).countedInLiveUsage, true);
 });
 
 test("the test can only be used on the Production deployment", () => {

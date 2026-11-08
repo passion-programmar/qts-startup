@@ -65,16 +65,20 @@ For another environment, generate a separate secret and store it only in that
 environment's secret store. Never reuse secrets between environments or commit
 them.
 
-`OPENAI_API_KEY` and Gemini keys are used only by their respective server-side
-integrations. For local Get JD, set `GEMINI_API_KEYS` in `.env.local` to a
-comma-separated list of Gemini API keys. QTS selects one key per request. For
-one key, `GEMINI_API_KEY` is still supported; the older
-`JD_READ_PROMPT_GEMINI_API_KEY_1` variable is also accepted for compatibility.
-QTS defaults to these per-key caps: 9 Gemini API requests in any rolling
-60-second window, 200 requests per day (resetting at midnight Pacific), and
-25,000 estimated input tokens per rolling 60 seconds. Super Admin can change
-these caps on the Gemini Usage page. Request limits count GenerateContent and
-CountTokens calls; the input-token limit applies to GenerateContent requests.
+`OPENAI_API_KEY`, Gemini keys and Groq keys are used only by their respective
+server-side integrations. Set `GEMINI_API_KEYS` and `GROQ_API_KEYS` to
+comma-separated lists of keys. For one Gemini key, `GEMINI_API_KEY` is still
+supported; the older `JD_READ_PROMPT_GEMINI_API_KEY_1` variable is also accepted
+for compatibility.
+
+Each request tries models in the order in `src/server/gemini/ai-models.ts`: Gemini
+3.6 Flash, Gemini 3.5 Flash-Lite, then Groq GPT-OSS 120B. Each model has its own
+key rotation, in random order, and no key is called twice on a model until all
+have been called. On an error the same key tries the next model; if that fails
+too, the next key starts again from the first model. Every key + model pair has
+its own limits, usage and pauses. Super Admin sets the limits per model on the
+Gemini Usage page, where they count GenerateContent and CountTokens calls, and
+Model test calls. Daily usage resets at midnight Pacific.
 Before a Get JD
 evaluation, the server estimates input tokens locally using a production-
 calibrated character and word formula. It uses the larger result, counts

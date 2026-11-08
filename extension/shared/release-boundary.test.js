@@ -993,13 +993,14 @@ test('Local Count never calls CountTokens; Gemini Count records both counts on t
   const root = path.join(extensionRoot, '..');
   const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
   // Key selection and token counting are shared by Get JD and Apply's Gemini answers.
-  const route = read('src', 'server', 'gemini', 'gemini-keys.ts');
+  const route = read('src', 'server', 'gemini', 'ai-request.ts');
   const usage = read('src', 'lib', 'gemini-usage.ts');
   const page = read('src', 'app', 'settings', 'gemini-usage', 'page.tsx');
   const modeForm = read('src', 'app', 'settings', 'gemini-usage', 'token-count-mode-form.tsx');
 
-  assert.ok(route.includes('local: estimateGeminiInputTokens(promptText, config)'));
-  assert.ok(route.includes('gemini: tokenCountMode === "gemini" ? await requestGeminiTokenCount(apiKey, contents, config) : null'));
+  assert.ok(route.includes('estimateGeminiInputTokens(promptText, request.generationConfig)'));
+  assert.ok(route.includes('gemini: tokenCountMode === "gemini" && slot.model.provider === "gemini"'));
+  assert.ok(route.includes('await requestGeminiTokenCount(slot.key.apiKey, slot.model.id, slot.slotId, request.contents, request.generationConfig)'));
   assert.ok(usage.includes('localInputTokens: tokenCounts.local ?? null'));
   assert.ok(usage.includes('geminiInputTokens: tokenCounts.gemini ?? null'));
   assert.ok(page.includes('{ label: "No",'));

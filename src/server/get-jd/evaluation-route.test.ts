@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 
 const original = "Build Python services using FastAPI.\nPreserve PostgreSQL, requirements, benefits and Unicode: São Paulo.";
-const fixture = { calls: 0, saves: [] as Array<{ description: string }>, prompts: [] as string[], remote: true };
+const fixture: { calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, failure: null };
 (globalThis as Record<string, unknown>).__qtsEvaluationFixture = fixture;
 let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
@@ -17,9 +17,8 @@ test.before(async () => {
     "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>evaluate();`,
     "@/server/database/database-usage": `export const scheduleDailyCleanup=()=>{};`,
     "@/server/jobs/get-jd-mode": `export const getGetJdMatchingMode=async()=> 'gemini';`,
-    "@/server/gemini/token-count-mode": `export const getGeminiTokenCountMode=async()=> 'local';`,
-    "@/lib/gemini-usage": `export const geminiModel='local';export const getGeminiApiKeys=()=>['synthetic'];export const getGeminiApiLimits=async()=>({});export const requestGeminiApi=async(key,kind,url,options)=>{const f=globalThis.__qtsEvaluationFixture;f.calls++;f.prompts.push(JSON.parse(options.body).contents[0].parts[0].text);return {ok:true,body:JSON.stringify({text:JSON.stringify({isJobPage:true,isRemote:f.remote,matchingProfileIndexes:[0],job:{title:'Engineer',company:'Example',description:'GEMINI REWRITE MUST NOT BE SAVED',location:'Remote',employmentType:'Full-time',workplaceType:'Remote',salary:'',jobUrl:'https://example.test/jobs/1',reason:'Remote eligible.'}})})}};`,
-    "@/server/gemini/gemini-keys": `export const withAvailableGeminiKey=async(keys,contents,config,mode,limits,request)=>request({apiKey:'synthetic',tokenCounts:{}});export const readGeminiText=data=>data.text;export const readGeminiErrorMessage=()=>'';`,
+    "@/server/gemini/ai-job": `export class AiJobError extends Error{constructor(code,message,retryAt=null){super(message);this.code=code;this.retryAt=retryAt}};export const aiRequestBudgetMs=55000;globalThis.__AiJobError=AiJobError;`,
+    "@/server/gemini/ai-request": `export const runAiRequest=async({contents,parse})=>{const f=globalThis.__qtsEvaluationFixture;f.calls++;f.prompts.push(contents[0].parts[0].text);if(f.failure)throw f.failure();return parse(JSON.stringify({isJobPage:true,isRemote:f.remote,matchingProfileIndexes:[0],job:{title:'Engineer',company:'Example',description:'GEMINI REWRITE MUST NOT BE SAVED',location:'Remote',employmentType:'Full-time',workplaceType:'Remote',salary:'',jobUrl:'https://example.test/jobs/1',reason:'Remote eligible.'}}));};`,
     "@/server/jobs/get-jd-jobs": `export {getJdAccountState,summarizeAccountStates} from '@/server/jobs/get-jd-account-states';export const insertGetJdJob=async(job)=>{globalThis.__qtsEvaluationFixture.saves.push(job);return {status:'saved',jobId:'local-job'}};`,
   };
   const bundled = await build({ absWorkingDir: process.cwd(), tsconfig: resolve("tsconfig.json"),
@@ -33,6 +32,8 @@ test.before(async () => {
   new Function("require", "module", "exports", bundled.outputFiles[0].text)(createRequire(resolve("package.json")), loaded, loaded.exports);
   POST = loaded.exports.POST;
 });
+const aiError = (code: string, message: string, retryAt?: number) =>
+  new (globalThis as unknown as { __AiJobError: new (code: string, message: string, retryAt?: number) => Error }).__AiJobError(code, message, retryAt);
 const request = (extra = {}) => new Request("http://localhost/api/extension/get-jd", { method: "POST", body: JSON.stringify({
   pageUrl: "https://example.test/jobs/1", pageTitle: "Engineer", precheckToken: "valid", originalDescription: original, ...extra,
 }) });
@@ -56,4 +57,31 @@ test("existing remote eligibility rejection still prevents saving", async () => 
   fixture.remote = false; fixture.saves = [];
   const response = await POST(request()); const body = await response.json(); fixture.remote = true;
   assert.equal(body.classification.isRemote, false); assert.equal(fixture.saves.length, 0);
+});
+test("when the AI providers are busy, the extension is told to retry by itself and nothing is saved", async () => {
+  fixture.saves = [];
+  fixture.failure = () => aiError("ai_busy", "Busy.");
+  const response = await POST(request()); const body = await response.json();
+  fixture.failure = null;
+  assert.equal(response.status, 503);
+  assert.deepEqual(body.autoRetry, { kind: "soon" });
+  assert.equal(body.diagnosticCode, "ai_busy");
+  assert.equal(fixture.saves.length, 0);
+});
+test("a used-up quota tells the extension when to retry", async () => {
+  fixture.failure = () => aiError("ai_quota_used_up", "Used up.", 123456);
+  const response = await POST(request()); const body = await response.json();
+  fixture.failure = null;
+  assert.equal(response.status, 429);
+  assert.deepEqual(body.autoRetry, { kind: "at", at: 123456 });
+});
+test("a page too long or a refused request gets a reason and no automatic retry", async () => {
+  for (const [code, status] of [["ai_too_large", 413], ["ai_bad_request", 422]] as const) {
+    fixture.failure = () => aiError(code, "Reason.");
+    const response = await POST(request()); const body = await response.json();
+    fixture.failure = null;
+    assert.equal(response.status, status);
+    assert.equal(body.autoRetry, undefined);
+    assert.equal(body.message, "Reason.");
+  }
 });

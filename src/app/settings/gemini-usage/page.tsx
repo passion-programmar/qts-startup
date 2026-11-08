@@ -4,26 +4,27 @@ import { redirect } from "next/navigation";
 import {
   geminiApiCallLogs,
   geminiKeyBusyLeases,
-  geminiKeyUsageEvents,
 } from "@/db/schema";
 import { db } from "@/lib/db";
 import {
   getGeminiApiKeyHash,
   getGeminiApiKeys,
-  getGeminiApiLimits,
+  getGroqApiKeys,
   removeOldGeminiApiCallLogs,
 } from "@/lib/gemini-usage";
 import { requireUser } from "@/lib/session";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
-import { GeminiApiLimitsForm } from "./limits-form";
+import { AiLimitsForm } from "./model-limits-form";
 import { ModelTestPanel } from "./model-test-panel";
 import { TokenComparisonForm } from "./token-comparison-form";
 import { TokenCountModeForm } from "./token-count-mode-form";
 import { ResponseDetailsButton } from "./response-details";
 import { ZoneClock } from "@/app/components/zone-clock";
 import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
+import { aiModelLabel, aiModels, aiSlotId, describeAiSlot, emptyAiSlotUsage, parseAiSlotId, type AiProvider } from "@/server/gemini/ai-models";
+import { readAiSettings, readAiSlotUsage } from "@/server/gemini/ai-store";
 import { isModelTestAllowed } from "@/server/gemini/model-test";
 import { modelTestKeyId, readModelTestState } from "@/server/gemini/model-test-store";
 
@@ -53,53 +54,22 @@ export default async function GeminiUsagePage({
   const modelTest = activeTab === "test" ? await readModelTestState() : null;
 
   const keys = getGeminiApiKeys();
-  const limits = await getGeminiApiLimits();
+  const groqKeys = getGroqApiKeys();
   const keyHashes = keys.map(getGeminiApiKeyHash);
+  const groqKeyHashes = groqKeys.map(getGeminiApiKeyHash);
+  const hashesOf = (provider: AiProvider) => (provider === "groq" ? groqKeyHashes : keyHashes);
+  const slotIds = aiModels.flatMap((model) => hashesOf(model.provider).map((hash) => aiSlotId(hash, model.id)));
   const pacificDayStart = sql`
     date_trunc('day', now() at time zone 'America/Los_Angeles')
       at time zone 'America/Los_Angeles'
   `;
   // Each tab loads only the data it shows.
-  const usageRows = keyHashes.length && activeTab === "limits"
-    ? await db
-        .select({
-          keyHash: geminiKeyUsageEvents.keyHash,
-          minuteRequests: sql<number>`
-            (count(*) filter (
-              where ${geminiKeyUsageEvents.occurredAt} > now() - interval '1 minute'
-            ))::integer
-          `.mapWith(Number),
-          minuteInputTokens: sql<number>`
-            (coalesce(sum(${geminiKeyUsageEvents.inputTokens}) filter (
-              where ${geminiKeyUsageEvents.occurredAt} > now() - interval '1 minute'
-            ), 0))::integer
-          `.mapWith(Number),
-          dayRequests: sql<number>`
-            count(*)::integer
-          `.mapWith(Number),
-          dayGenerateCalls: sql<number>`
-            (count(*) filter (where ${geminiKeyUsageEvents.operation} = 'generate_content'))::integer
-          `.mapWith(Number),
-          dayCountTokenCalls: sql<number>`
-            (count(*) filter (where ${geminiKeyUsageEvents.operation} = 'count_tokens'))::integer
-          `.mapWith(Number),
-          updatedAt: sql<Date>`max(${geminiKeyUsageEvents.occurredAt})`
-            .mapWith(Date),
-        })
-        .from(geminiKeyUsageEvents)
-        .where(
-          and(
-            inArray(geminiKeyUsageEvents.keyHash, keyHashes),
-            gte(
-              geminiKeyUsageEvents.occurredAt,
-              pacificDayStart,
-            ),
-          ),
-        )
-        .groupBy(geminiKeyUsageEvents.keyHash)
-    : [];
-  const usageByKey = new Map(usageRows.map((row) => [row.keyHash, row]));
-  const recentApiCalls = keyHashes.length && activeTab === "responses"
+  const [aiSettings, slotUsage] = activeTab === "limits"
+    ? await Promise.all([readAiSettings(), readAiSlotUsage(slotIds)])
+    : [null, new Map<string, typeof emptyAiSlotUsage>()];
+  // Calls before the switch to key + model slots were filed under the key alone.
+  const logKeys = [...keyHashes, ...groqKeyHashes, ...slotIds];
+  const recentApiCalls = logKeys.length && activeTab === "responses"
     ? await db
         .select({
           id: geminiApiCallLogs.id,
@@ -118,35 +88,77 @@ export default async function GeminiUsagePage({
         .from(geminiApiCallLogs)
         .where(
           and(
-            inArray(geminiApiCallLogs.keyHash, keyHashes),
+            inArray(geminiApiCallLogs.keyHash, logKeys),
             gte(geminiApiCallLogs.startedAt, pacificDayStart),
           ),
         )
         .orderBy(desc(geminiApiCallLogs.startedAt))
         .limit(100)
     : [];
-  const keyNumberByHash = new Map(keyHashes.map((hash, index) => [hash, index + 1]));
-  const busyRows = keyHashes.length && activeTab === "limits"
+  const keyNameByHash = new Map([
+    ...keyHashes.map((hash, index) => [hash, `Key ${index + 1}`] as const),
+    ...groqKeyHashes.map((hash, index) => [hash, `Groq ${index + 1}`] as const),
+  ]);
+  const busyRows = slotIds.length && activeTab === "limits"
     ? await db
-        .select({
-          keyHash: geminiKeyBusyLeases.keyHash,
-          expiresAt: geminiKeyBusyLeases.expiresAt,
-          paused: sql<boolean>`${geminiKeyBusyLeases.expiresAt} > now() + interval '2 minutes'`,
-        })
+        .select({ slotId: geminiKeyBusyLeases.keyHash })
         .from(geminiKeyBusyLeases)
         .where(
           and(
-            inArray(geminiKeyBusyLeases.keyHash, keyHashes),
+            inArray(geminiKeyBusyLeases.keyHash, slotIds),
             gte(geminiKeyBusyLeases.expiresAt, sql`now()`),
           ),
         )
     : [];
-  const busyKeys = new Set(busyRows.map((row) => row.keyHash));
-  // A request holds a key for at most 2 minutes; a longer hold is a pause after Gemini answered it
-  // "unavailable" (5 minutes), shown with the time it ends.
-  const pausedUntil = new Map(busyRows
-    .filter((row) => row.paused)
-    .map((row) => [row.keyHash, row.expiresAt]));
+  const busySlots = new Set(busyRows.map((row) => row.slotId));
+  const statusAt = modelTest?.readAt ?? await currentTime();
+
+  function keyStatusTable(title: string, provider: AiProvider) {
+    if (!aiSettings) return null;
+    const settings = aiSettings;
+    const models = aiModels.filter((model) => model.provider === provider);
+    const hashes = hashesOf(provider);
+    if (!hashes.length) return null;
+    return (
+      <div className="mb-6" key={provider}>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{title}</h3>
+        <PaginatedTable
+          columns={[
+            { label: "API key", className: "w-[20%]" },
+            ...models.map((model) => ({ label: model.label })),
+          ]}
+          emptyMessage="No API keys configured"
+          rows={hashes.map((hash) => ({
+            id: hash,
+            cells: [
+              <div key="key">
+                <div className="font-semibold">{keyNameByHash.get(hash)}</div>
+                <div className="mt-1 font-mono text-xs text-slate-500">{hash.slice(0, 10)}</div>
+              </div>,
+              ...models.map((model) => {
+                const slotId = aiSlotId(hash, model.id);
+                const view = describeAiSlot(
+                  settings.limits[model.id],
+                  slotUsage.get(slotId) ?? emptyAiSlotUsage,
+                  settings.pauses[slotId],
+                  busySlots.has(slotId),
+                  statusAt,
+                );
+                return (
+                  <div key={model.id}>
+                    <div className="font-semibold tabular-nums text-slate-800">{view.used}</div>
+                    <span className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${slotToneClass[view.tone]}`}>
+                      {view.status}
+                    </span>
+                  </div>
+                );
+              }),
+            ],
+          }))}
+        />
+      </div>
+    );
+  }
 
   return (
     <WorkspaceShell activeHref="/settings/gemini-usage" user={currentUser}>
@@ -200,105 +212,29 @@ export default async function GeminiUsagePage({
             enabled={isModelTestAllowed(process.env)}
             initialRun={modelTest.run}
             initialSettings={modelTest.settings}
-            keys={keys.map((key, index) => ({
-              number: index + 1,
-              keyId: modelTestKeyId(key),
-              prefix: keyHashes[index].slice(0, 10),
-            }))}
+            keys={[
+              ...keys.map((key, index) => ({ number: index + 1, keyId: modelTestKeyId(key), prefix: keyHashes[index].slice(0, 10), provider: "gemini" as const })),
+              ...groqKeys.map((key, index) => ({ number: index + 1, keyId: modelTestKeyId(key), prefix: groqKeyHashes[index].slice(0, 10), provider: "groq" as const })),
+            ]}
             serverNow={modelTest.readAt}
           />
         ) : activeTab === "limits" ? (
         <>
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-sm font-semibold text-slate-800">Per-key usage limits</h2>
-          <GeminiApiLimitsForm
-            inputTokensPerMinute={limits.inputTokensPerMinute}
-            requestsPerDay={limits.requestsPerDay}
-            requestsPerMinute={limits.requestsPerMinute}
-          />
+          <h2 className="mb-4 text-sm font-semibold text-slate-800">Limits per model</h2>
+          {aiSettings ? <AiLimitsForm limits={aiSettings.limits} /> : null}
         </section>
 
-        <h2 className="mb-3 text-sm font-semibold text-slate-800">Key status</h2>
-        {keys.length === 0 ? (
+        <h2 className="mb-3 text-sm font-semibold text-slate-800">Status of each key and model today</h2>
+        {keys.length === 0 && groqKeys.length === 0 ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
-            No Gemini API keys are configured on the server.
+            No Gemini or Groq API keys are configured on the server.
           </section>
         ) : (
-          <PaginatedTable
-            columns={[
-              { label: "API key", className: "w-[14%]" },
-              { label: "Requests / rolling min", className: "w-[17%]" },
-              { label: "Requests / Pacific day", className: "w-[17%]" },
-              { label: "Calls today", className: "w-[16%]" },
-              { label: "Generate input / rolling min", className: "w-[20%]" },
-              { label: "Status", className: "w-[9%]" },
-              { label: "Last request", className: "w-[14%]" },
-            ]}
-            emptyMessage="No API keys configured"
-            rows={keys.map((_key, index) => {
-              const hash = keyHashes[index];
-              const usage = usageByKey.get(hash);
-              const isBusy = busyKeys.has(hash);
-              const minuteRequests = usage?.minuteRequests ?? 0;
-              const minuteInputTokens = usage?.minuteInputTokens ?? 0;
-              const dayRequests = usage?.dayRequests ?? 0;
-              const isLimited =
-                minuteRequests >= limits.requestsPerMinute ||
-                minuteInputTokens >= limits.inputTokensPerMinute ||
-                dayRequests >= limits.requestsPerDay;
-
-              return {
-                id: hash,
-                cells: [
-                  <div key="key">
-                    <div className="font-semibold">Request {index + 1}</div>
-                    <div className="mt-1 font-mono text-xs text-slate-500">
-                      {hash.slice(0, 10)}
-                    </div>
-                  </div>,
-                  <UsageMetric
-                    key="minute-requests"
-                    used={minuteRequests}
-                    limit={limits.requestsPerMinute}
-                  />,
-                  <UsageMetric
-                    key="day-requests"
-                    used={dayRequests}
-                    limit={limits.requestsPerDay}
-                  />,
-                  <div className="text-xs" key="api-operations">
-                    <div>Generate: {usage?.dayGenerateCalls ?? 0}</div>
-                    <div className="mt-1 text-slate-500">CountTokens: {usage?.dayCountTokenCalls ?? 0}</div>
-                  </div>,
-                  <UsageMetric
-                    key="minute-tokens"
-                    used={minuteInputTokens}
-                    limit={limits.inputTokensPerMinute}
-                  />,
-                  <span
-                    className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
-                      isBusy
-                        ? "bg-amber-50 text-amber-700"
-                        : isLimited
-                          ? "bg-rose-50 text-rose-700"
-                          : "bg-emerald-50 text-emerald-700"
-                    }`}
-                    key="status"
-                  >
-                    {pausedUntil.has(hash)
-                      ? `Paused until ${pausedUntil.get(hash)!.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "America/Los_Angeles" })} PT`
-                      : isBusy ? "Busy" : isLimited ? "Limit reached" : "Available"}
-                  </span>,
-                  usage
-                    ? new Intl.DateTimeFormat("en", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      }).format(new Date(usage.updatedAt))
-                    : "—",
-                ],
-              };
-            })}
-          />
+          <>
+            {keyStatusTable("Gemini keys", "gemini")}
+            {keyStatusTable("Groq keys", "groq")}
+          </>
         )}
         </>
         ) : (
@@ -337,7 +273,8 @@ export default async function GeminiUsagePage({
                 timeStyle: "medium",
                 timeZone: "America/Los_Angeles",
               }).format(call.startedAt);
-              const keyLabel = `Key ${keyNumberByHash.get(call.keyHash) ?? "?"} · ${call.keyHash.slice(0, 10)}`;
+              const slot = parseAiSlotId(call.keyHash);
+              const keyLabel = [keyNameByHash.get(slot.keyHash) ?? "Key ?", ...(slot.modelId ? [aiModelLabel(slot.modelId)] : []), slot.keyHash.slice(0, 10)].join(" · ");
               const operationLabel = call.operation === "count_tokens" ? "CountTokens" : "GenerateContent";
               const durationLabel = call.durationMs === null ? "—" : `${call.durationMs.toLocaleString()} ms`;
               const reason = readCallReason(call);
@@ -420,6 +357,18 @@ export default async function GeminiUsagePage({
   );
 }
 
+const slotToneClass = {
+  ok: "bg-emerald-50 text-emerald-700",
+  busy: "bg-amber-50 text-amber-700",
+  out: "bg-slate-100 text-slate-600",
+  problem: "bg-rose-50 text-rose-700",
+} as const;
+
+/** The status column's "now", outside the component so that it stays a pure render. */
+async function currentTime(): Promise<number> {
+  return Date.now();
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
@@ -464,6 +413,12 @@ function readCallReason(call: {
       ? `Counted ${body.totalTokens.toLocaleString()} tokens`
       : "No token count in the response.";
   }
+  if (Array.isArray(body.choices)) {
+    const choice = body.choices[0];
+    const finish = isRecord(choice) ? choice.finish_reason : undefined;
+    const tokens = isRecord(body.usage) ? body.usage.completion_tokens : undefined;
+    return `${finish === "stop" ? "Finished normally" : "Stopped"} (${String(finish)})${typeof tokens === "number" ? ` · ${tokens.toLocaleString()} output tokens` : ""}`;
+  }
   const blockReason = isRecord(body.promptFeedback) ? body.promptFeedback.blockReason : undefined;
   if (typeof blockReason === "string") return `Prompt blocked (${blockReason})`;
   const candidate = Array.isArray(body.candidates) ? body.candidates[0] : undefined;
@@ -491,40 +446,5 @@ function TokenCount({ value, compareTo }: { value: number | null; compareTo?: nu
         </span>
       ) : null}
     </span>
-  );
-}
-
-function UsageMetric({
-  used,
-  limit,
-}: {
-  used: number;
-  limit: number;
-}) {
-  const remaining = Math.max(0, limit - used);
-  const progress = Math.min(100, (used / limit) * 100);
-  return (
-    <div className="min-w-0">
-      <div className="font-semibold tabular-nums text-slate-800">
-        {used.toLocaleString()}{" "}
-        <span className="text-xs font-normal text-slate-500">
-          / {limit.toLocaleString()}
-        </span>
-      </div>
-      <div
-        aria-label={`${used.toLocaleString()} of ${limit.toLocaleString()}`}
-        aria-valuemax={limit}
-        aria-valuemin={0}
-        aria-valuenow={used}
-        className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"
-        role="progressbar"
-      >
-        <div
-          className="h-full rounded-full bg-indigo-500 transition-[width]"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-      <div className="mt-1 text-[10px] text-slate-500">{remaining.toLocaleString()} left</div>
-    </div>
   );
 }

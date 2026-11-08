@@ -101,7 +101,7 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     for(const type of ['jobs-url','bids-url','jobs-title','bids-title','precheck-error']){
       const pathname=type==='precheck-error'?'/jobs/precheck-error':'/jobs/duplicate-'+type;const n=prechecks().length;
       const tab=await worker.evaluate(async url=>chrome.tabs.create({url,active:false}),base+pathname);
-      await until('precheck '+type,()=>prechecks().length===n+1);await until('skip/error recorded',async()=>['duplicate','error'].includes((await result(tab.id))?.status));
+      await until('precheck '+type,()=>prechecks().length===n+1);await until('skip/error recorded',async()=>{const stored=await result(tab.id);return ['duplicate','error'].includes(stored?.status)||/retrying automatically/.test(stored?.message||'');});
       assert.equal(gemini().length,1,'duplicate/precheck failure must not reach Gemini');
       const loaded=await worker.evaluate(async id=>(await chrome.scripting.executeScript({target:{tabId:id},func:()=>typeof globalThis.__qtsReadOriginalJobDescription}))[0].result,tab.id);
       assert.equal(loaded,'undefined','full JD reader never loaded for skipped jobs');

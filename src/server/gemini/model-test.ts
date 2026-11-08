@@ -1,28 +1,42 @@
 import { parsePositiveInteger } from "@/server/gemini/gemini-api-limits";
 import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
+import {
+  classifyAiNetworkError,
+  classifyGeminiReply,
+  type AiBlockedReason,
+  type AiFailedReason,
+  type AiOutcome,
+} from "@/server/gemini/ai-reply";
+import { formatPacificTime, formatWait, nextPacificMidnight, pacificDay, type AiProvider } from "@/server/gemini/ai-models";
 
-// Gemini Usage's "Model test" tab: how many calls each chosen key and model can really make.
-// It has its own settings and counts, apart from the live limits, and Get JD and Apply never read
-// them. This file is the rules only (no database, no network), so the page can share it.
+export { formatPacificTime, nextPacificMidnight, pacificDay };
+
+// Gemini Usage's "Model test" tab: how many calls each chosen key and model can really make. It
+// has its own settings and saved results, and its calls count toward each slot's usage for the
+// day. This file is the rules only (no database, no network), so the page can share it.
 
 export const modelTestModels = [
-  { id: "gemini-3.8-flash", label: "3.8 Flash", defaultMaxCalls: 25, reportedDailyLimit: 20 },
-  { id: "gemini-3.6-flash", label: "3.6 Flash", defaultMaxCalls: 25, reportedDailyLimit: 20 },
-  { id: "gemini-3.5-flash-lite", label: "3.5 Flash-Lite", defaultMaxCalls: 5, reportedDailyLimit: null },
+  { id: "gemini-3.8-flash", provider: "gemini", label: "3.8 Flash", defaultMaxCalls: 25, reportedDailyLimit: 20 },
+  { id: "gemini-3.6-flash", provider: "gemini", label: "3.6 Flash", defaultMaxCalls: 25, reportedDailyLimit: 20 },
+  { id: "gemini-3.5-flash-lite", provider: "gemini", label: "3.5 Flash-Lite", defaultMaxCalls: 5, reportedDailyLimit: null },
+  { id: "openai/gpt-oss-120b", provider: "groq", label: "Groq GPT-OSS 120B", defaultMaxCalls: 5, reportedDailyLimit: null },
 ] as const;
 
 export type ModelTestModelId = (typeof modelTestModels)[number]["id"];
 
+/** The saved results' setting. Live requests read it once, to count calls made before they counted. */
+export const modelTestRunSetting = "gemini_model_test_run";
+
+/** Up to this many keys for each provider. */
 export const maxModelTestKeys = 3;
 const maxModelTestCalls = 5_000;
 const maxCallsPerMinute = 60;
 const maxFailuresBeforeNextModel = 100;
 export const maxModelTestTextLength = 100_000;
-/** Above this many Flash-Lite calls the page warns: live work uses Flash-Lite and can't see test calls. */
+/** Above this many Flash-Lite calls the page warns: test calls use up what live work can use. */
 export const modelTestLiteWarningCalls = 20;
 const maxTimelineEvents = 100;
 const defaultMinuteWaitSeconds = 60;
-const pacificTimeZone = "America/Los_Angeles";
 
 export type ModelTestSettings = {
   models: Record<ModelTestModelId, { enabled: boolean; maxCalls: number }>;
@@ -51,9 +65,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export function parseModelTestSettings(value: unknown): ModelTestSettings | null {
   if (!isRecord(value) || !isRecord(value.models)) return null;
+  const defaults = defaultModelTestSettings().models;
   const models = {} as ModelTestSettings["models"];
   for (const { id } of modelTestModels) {
     const entry = value.models[id];
+    // A model added to the test since these settings were saved starts from its defaults.
+    if (entry === undefined) {
+      models[id] = defaults[id];
+      continue;
+    }
     if (!isRecord(entry) || typeof entry.enabled !== "boolean") return null;
     const maxCalls = parsePositiveInteger(entry.maxCalls, maxModelTestCalls);
     if (maxCalls === null) return null;
@@ -87,8 +107,8 @@ export function buildModelTestPrompt(testText: string): string {
 
 export type ModelTestReason =
   | "daily_limit" | "no_quota" | "minute_limit"
-  | "overloaded" | "timeout" | "network"
-  | "model_missing" | "no_access" | "bad_request";
+  | "overloaded" | "timeout" | "network" | "broken_reply"
+  | "model_missing" | "no_access" | "bad_key" | "too_large" | "bad_request";
 
 export type ModelTestCell = {
   /** Every attempt, whatever came back. The test's call cap counts these. */
@@ -127,6 +147,8 @@ export type ModelTestRun = {
   startedAt: string;
   selectedKeyIds: string[];
   keys: Record<string, ModelTestKeyState>;
+  /** Set on runs whose calls are already in the live usage. */
+  countedInLiveUsage?: boolean;
 };
 
 const emptyKeyState = (): ModelTestKeyState => ({ version: 0, lastCallAt: null, models: {}, timeline: [] });
@@ -149,6 +171,7 @@ export function createModelTestRun(runId: string, keyIds: string[], nowMs: numbe
     startedAt: new Date(nowMs).toISOString(),
     selectedKeyIds: keyIds,
     keys: Object.fromEntries(keyIds.map((keyId) => [keyId, emptyKeyState()])),
+    countedInLiveUsage: true,
   };
 }
 
@@ -167,8 +190,14 @@ export type ModelTestStep =
   | { kind: "done" };
 
 /** The best ticked model not finished on this key. A per-minute limit waits on the same model. */
-export function nextModelTestStep(settings: ModelTestSettings, key: ModelTestKeyState, nowMs: number): ModelTestStep {
-  for (const { id } of modelTestModels) {
+export function nextModelTestStep(
+  settings: ModelTestSettings,
+  key: ModelTestKeyState,
+  nowMs: number,
+  provider: AiProvider = "gemini",
+): ModelTestStep {
+  for (const { id, provider: modelProvider } of modelTestModels) {
+    if (modelProvider !== provider) continue;
     const config = settings.models[id];
     if (!config.enabled) continue;
     const cell = key.models[id] ?? emptyCell();
@@ -209,8 +238,8 @@ export type ModelTestOutcome =
   | { kind: "worked"; httpStatus: number; durationMs: number; modelVersion: string | null; validJson: boolean }
   | (ReplyFacts & { kind: "daily_limit"; limit: number | null })
   | (ReplyFacts & { kind: "minute_limit"; limit: number | null; retryAfterSeconds: number | null })
-  | (ReplyFacts & { kind: "failed"; reason: "overloaded" | "timeout" | "network" })
-  | (ReplyFacts & { kind: "blocked"; reason: "no_quota" | "model_missing" | "no_access" | "bad_request" });
+  | (ReplyFacts & { kind: "failed"; reason: AiFailedReason | "broken_reply" })
+  | (ReplyFacts & { kind: "blocked"; reason: Exclude<AiBlockedReason, "broken_reply"> });
 
 function parseJson(text: string): unknown {
   try {
@@ -220,72 +249,37 @@ function parseJson(text: string): unknown {
   }
 }
 
-function readReplyText(data: unknown): string {
-  if (!isRecord(data) || !Array.isArray(data.candidates) || !isRecord(data.candidates[0])) return "";
-  const content = data.candidates[0].content;
-  if (!isRecord(content) || !Array.isArray(content.parts)) return "";
-  return content.parts.map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : "")).join("").trim();
-}
-
 /** The answer Get JD would need: JSON with the job page decision and the job fields. */
 function isUsableAnswer(text: string): boolean {
   const answer = parseJson(text);
   return isRecord(answer) && typeof answer.isJobPage === "boolean" && isRecord(answer.job);
 }
 
-function readQuotaValue(violation: Record<string, unknown> | undefined): number | null {
-  if (!violation || violation.quotaValue === undefined) return null;
-  const value = Number(violation.quotaValue);
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function classifyLimitReply(error: Record<string, unknown>, facts: ReplyFacts): ModelTestOutcome {
-  const details = Array.isArray(error.details) ? error.details.filter(isRecord) : [];
-  const violations = details.flatMap((detail) => (Array.isArray(detail.violations) ? detail.violations.filter(isRecord) : []));
-  const findQuota = (pattern: RegExp) => violations.find((violation) => typeof violation.quotaId === "string" && pattern.test(violation.quotaId));
-
-  const daily = findQuota(/PerDay/i);
-  if (daily || /per[ _]day|daily/i.test(facts.detail ?? "")) {
-    const limit = readQuotaValue(daily);
-    return limit === 0 ? { kind: "blocked", reason: "no_quota", ...facts } : { kind: "daily_limit", limit, ...facts };
+/** A live outcome, as the test records it. A reply that wasn't valid JSON is a retryable failure. */
+export function modelTestOutcomeFromAi(outcome: AiOutcome): ModelTestOutcome {
+  if (outcome.kind === "worked") {
+    const { text, ...rest } = outcome;
+    return { ...rest, validJson: isUsableAnswer(text) };
   }
-  // A per-minute token limit also lands here, but its number isn't a count of calls.
-  const limit = readQuotaValue(findQuota(/Requests?PerMinute/i));
-  if (limit === 0) return { kind: "blocked", reason: "no_quota", ...facts };
-  const retryDelay = details.map((detail) => detail.retryDelay).find((value) => typeof value === "string");
-  const seconds = typeof retryDelay === "string" ? Math.ceil(Number.parseFloat(retryDelay)) : Number.NaN;
-  return { kind: "minute_limit", limit, retryAfterSeconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null, ...facts };
+  if (outcome.kind === "blocked" && outcome.reason === "broken_reply") return { ...outcome, kind: "failed", reason: "broken_reply" };
+  return outcome as ModelTestOutcome;
 }
 
-export function classifyModelTestReply(httpStatus: number, body: string, durationMs: number): ModelTestOutcome {
-  const data = parseJson(body);
-  if (httpStatus >= 200 && httpStatus < 300) {
-    const modelVersion = isRecord(data) && typeof data.modelVersion === "string" ? data.modelVersion : null;
-    return { kind: "worked", httpStatus, durationMs, modelVersion, validJson: isUsableAnswer(readReplyText(data)) };
-  }
-  const error = isRecord(data) && isRecord(data.error) ? data.error : {};
-  const message = typeof error.message === "string" ? error.message.replace(/\s+/g, " ").trim().slice(0, 300) : "";
-  const facts: ReplyFacts = { httpStatus, durationMs, detail: message || null };
-  if (httpStatus === 429) return classifyLimitReply(error, facts);
-  if (httpStatus >= 500) return { kind: "failed", reason: "overloaded", ...facts };
-  if (httpStatus === 404) return { kind: "blocked", reason: "model_missing", ...facts };
-  if (httpStatus === 401 || httpStatus === 403) return { kind: "blocked", reason: "no_access", ...facts };
-  return { kind: "blocked", reason: "bad_request", ...facts };
-}
+export const classifyModelTestReply = (httpStatus: number, body: string, durationMs: number): ModelTestOutcome =>
+  modelTestOutcomeFromAi(classifyGeminiReply(httpStatus, body, durationMs));
 
-/** No HTTP reply at all. Only the error's name is kept, never its message. */
-export function classifyModelTestNetworkError(errorName: string, durationMs: number): ModelTestOutcome {
-  const timedOut = errorName === "TimeoutError" || errorName === "AbortError";
-  return { kind: "failed", reason: timedOut ? "timeout" : "network", httpStatus: null, durationMs, detail: null };
-}
+export const classifyModelTestNetworkError = (errorName: string, durationMs: number): ModelTestOutcome =>
+  modelTestOutcomeFromAi(classifyAiNetworkError(errorName, durationMs));
 
 // ---- Saving what happened ----
 
-const blockedText: Record<"no_quota" | "model_missing" | "no_access" | "bad_request", string> = {
+const blockedText: Record<Exclude<AiBlockedReason, "broken_reply">, string> = {
   no_quota: "No quota for this model on this project",
   model_missing: "Model not found",
   no_access: "No access to this model",
-  bad_request: "Google refused the request",
+  bad_key: "Bad or revoked key",
+  too_large: "Test text is too long for this model",
+  bad_request: "The provider refused the request",
 };
 
 function pushEvent(key: ModelTestKeyState, event: ModelTestEvent): void {
@@ -358,6 +352,7 @@ export function applyModelTestOutcome(
       const failure =
         outcome.reason === "timeout" ? "Timed out"
         : outcome.reason === "network" ? "Network error"
+        : outcome.reason === "broken_reply" ? "Reply wasn't valid JSON"
         : `${outcome.httpStatus} overloaded`;
       const gaveUp = cell.failuresInRow >= settings.failuresBeforeNextModel;
       if (gaveUp) cell.finished = true;
@@ -383,44 +378,6 @@ export function applyModelTestOutcome(
 }
 
 // ---- Showing it ----
-
-const pacificDateFormat = new Intl.DateTimeFormat("en-CA", {
-  timeZone: pacificTimeZone, year: "numeric", month: "2-digit", day: "2-digit",
-});
-const pacificPartsFormat = new Intl.DateTimeFormat("en-US", {
-  timeZone: pacificTimeZone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric",
-  hour: "numeric", minute: "numeric", second: "numeric",
-});
-
-export function pacificDay(nowMs: number): string {
-  return pacificDateFormat.format(new Date(nowMs));
-}
-
-function pacificOffsetMs(ms: number): number {
-  const parts = pacificPartsFormat.formatToParts(new Date(ms));
-  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value);
-  const wall = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
-  return wall - Math.floor(ms / 1000) * 1000;
-}
-
-/** When Google's daily limits reset. Worked out twice, because the clock may change before then. */
-export function nextPacificMidnight(nowMs: number): number {
-  const [year, month, day] = pacificDay(nowMs).split("-").map(Number);
-  const wall = Date.UTC(year, month - 1, day + 1);
-  return wall - pacificOffsetMs(wall - pacificOffsetMs(nowMs));
-}
-
-export function formatPacificTime(value: string, withSeconds = false): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: pacificTimeZone, hour: "2-digit", minute: "2-digit", ...(withSeconds ? { second: "2-digit" } : {}),
-  }).format(new Date(value));
-}
-
-function formatWait(ms: number): string {
-  if (ms >= 3_600_000) return `${Math.floor(ms / 3_600_000)}h ${Math.floor((ms % 3_600_000) / 60_000)}m`;
-  if (ms >= 60_000) return `${Math.ceil(ms / 60_000)}m`;
-  return `${Math.ceil(ms / 1000)}s`;
-}
 
 export type ModelTestCellView = {
   worked: number;
@@ -469,7 +426,7 @@ export function describeModelTestCell(
   else if (unavailable && until) {
     availableAgain = `${formatPacificTime(until, unavailable.reason === "minute_limit")} (in ${formatWait(Date.parse(until) - nowMs)})`;
   } else if (unavailable) {
-    availableAgain = ["overloaded", "timeout", "network"].includes(unavailable.reason)
+    availableAgain = ["overloaded", "timeout", "network", "broken_reply"].includes(unavailable.reason)
       ? "Unknown until a retry works"
       : "Not until fixed";
   }
@@ -498,12 +455,17 @@ export function describeModelTestCell(
 }
 
 /** Google's stated daily limits where known, otherwise the calls that worked (so "at least"). */
-export function summarizeModelTestRun(run: ModelTestRun, keyIds: string[], settings: ModelTestSettings) {
+export function summarizeModelTestRun(
+  run: ModelTestRun,
+  keyIds: string[],
+  settings: ModelTestSettings,
+  providerOf: (keyId: string) => AiProvider = () => "gemini",
+) {
   let total = 0;
   let exact = true;
   for (const keyId of keyIds) {
-    for (const { id } of modelTestModels) {
-      if (!settings.models[id].enabled) continue;
+    for (const { id, provider } of modelTestModels) {
+      if (provider !== providerOf(keyId) || !settings.models[id].enabled) continue;
       const cell = run.keys[keyId]?.models[id];
       if (cell?.dailyLimit != null) {
         total += cell.dailyLimit;

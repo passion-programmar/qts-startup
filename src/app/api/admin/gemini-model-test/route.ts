@@ -1,20 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { getGeminiApiKeys, requestGeminiApi } from "@/lib/gemini-usage";
+import { getGeminiApiKeyHash, getGeminiApiKeys, getGroqApiKeys, recordAiSlotCall } from "@/lib/gemini-usage";
 import { getCurrentUser } from "@/lib/session";
+import { callAiModel } from "@/server/gemini/ai-call";
+import { aiSlotId, isAiModelId, type AiProvider } from "@/server/gemini/ai-models";
+import { estimateGroqInputTokens } from "@/server/gemini/ai-reply";
 import { estimateGeminiInputTokens } from "@/server/gemini/gemini-request";
-import { geminiJobEvaluationGenerationConfig } from "@/server/gemini/job-evaluation-config";
+import { geminiJobEvaluationGenerationConfig, groqJobEvaluationJsonHint } from "@/server/gemini/job-evaluation-config";
 import {
   applyModelTestOutcome,
   buildModelTestPrompt,
-  classifyModelTestNetworkError,
-  classifyModelTestReply,
   continueModelTestRun,
   createModelTestRun,
   defaultModelTestSettings,
   isModelTestAllowed,
   isModelTestCallTooSoon,
   maxModelTestKeys,
+  modelTestOutcomeFromAi,
   nextModelTestStep,
   pacificDay,
   parseModelTestSettings,
@@ -34,13 +36,13 @@ import {
   writeModelTestRun,
 } from "@/server/gemini/model-test-store";
 
-// Gemini Usage's Model test. Each "call" is one Google request; the page runs the rounds, because
-// one server request can't last as long as a whole test. Test calls don't touch the live per-key
-// counters or leases, and appear in the Google responses list like any other call.
+// Gemini Usage's Model test. Each "call" is one request to the provider; the page runs the rounds,
+// because one server request can't last as long as a whole test. The test has its own limits, but
+// every call it makes on a live model counts toward that key and model's usage for the day.
 
 export const maxDuration = 60;
 
-const googleTimeoutMs = 45_000;
+const providerTimeoutMs = 45_000;
 const saveAttempts = 3;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -54,37 +56,51 @@ function isSameOriginRequest(request: Request): boolean {
   return origin !== null && origin === new URL(request.url).origin;
 }
 
+const keysOf = (provider: AiProvider): string[] => (provider === "groq" ? getGroqApiKeys() : getGeminiApiKeys());
+
 function readKeyNumber(value: unknown, keyCount: number): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= keyCount ? value : null;
 }
 
-async function callGoogle(apiKey: string, model: ModelTestModelId, testText: string): Promise<ModelTestOutcome> {
-  const prompt = buildModelTestPrompt(testText);
-  const startedAt = Date.now();
-  try {
-    const response = await requestGeminiApi(
-      apiKey,
-      "generate_content",
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: geminiJobEvaluationGenerationConfig,
-        }),
-        signal: AbortSignal.timeout(googleTimeoutMs),
-        cache: "no-store",
-      },
-      { local: estimateGeminiInputTokens(prompt, geminiJobEvaluationGenerationConfig) },
-    );
-    return classifyModelTestReply(response.status, response.body.replaceAll(apiKey, "[redacted]"), Date.now() - startedAt);
-  } catch (error) {
-    return classifyModelTestNetworkError(error instanceof Error ? error.name : "Error", Date.now() - startedAt);
-  }
+/** The ticked keys of one provider, or null when the list isn't valid. */
+function readKeyIds(value: unknown, provider: AiProvider): string[] | null {
+  if (value === undefined) return [];
+  const keys = keysOf(provider);
+  if (!Array.isArray(value) || value.length > maxModelTestKeys) return null;
+  const numbers = value.map((entry) => readKeyNumber(entry, keys.length));
+  if (numbers.includes(null) || new Set(numbers).size !== numbers.length) return null;
+  return (numbers as number[]).map((number) => modelTestKeyId(keys[number - 1]));
 }
 
-/** Null when the run was reset while Google was answering. */
+async function callProvider(
+  provider: AiProvider,
+  apiKey: string,
+  slotId: string,
+  model: ModelTestModelId,
+  testText: string,
+): Promise<ModelTestOutcome> {
+  const prompt = buildModelTestPrompt(testText);
+  const contents = [{ role: "user" as const, parts: [{ text: prompt }] }];
+  const outcome = await callAiModel(
+    { provider, modelId: model, apiKey, slotId },
+    {
+      contents,
+      generationConfig: geminiJobEvaluationGenerationConfig,
+      jsonHint: groqJobEvaluationJsonHint,
+      timeoutMs: providerTimeoutMs,
+      tokenCounts: { local: estimateTokens(provider, prompt) },
+    },
+  );
+  return modelTestOutcomeFromAi(outcome);
+}
+
+function estimateTokens(provider: AiProvider, prompt: string): number {
+  return provider === "groq"
+    ? estimateGroqInputTokens([{ role: "user", parts: [{ text: prompt }] }], groqJobEvaluationJsonHint)
+    : estimateGeminiInputTokens(prompt, geminiJobEvaluationGenerationConfig);
+}
+
+/** Null when the run was reset while the provider was answering. */
 async function saveOutcome(
   runId: string,
   keyId: string,
@@ -106,15 +122,15 @@ async function saveOutcome(
 }
 
 async function start(body: Record<string, unknown>) {
-  const keys = getGeminiApiKeys();
-  const numbers = Array.isArray(body.keyNumbers) ? body.keyNumbers.map((value) => readKeyNumber(value, keys.length)) : [];
-  if (!numbers.length || numbers.length > maxModelTestKeys || numbers.includes(null) || new Set(numbers).size !== numbers.length) {
-    return failure(`Tick between 1 and ${maxModelTestKeys} keys.`, 400);
+  const geminiKeyIds = readKeyIds(body.keyNumbers, "gemini");
+  const groqKeyIds = readKeyIds(body.groqKeyNumbers, "groq");
+  if (!geminiKeyIds || !groqKeyIds || geminiKeyIds.length + groqKeyIds.length === 0) {
+    return failure(`Tick between 1 and ${maxModelTestKeys} keys for each provider.`, 400);
   }
-  const keyIds = (numbers as number[]).map((number) => modelTestKeyId(keys[number - 1]));
+  const keyIds = [...geminiKeyIds, ...groqKeyIds];
   const nowMs = Date.now();
   const { run: existing } = await readModelTestState();
-  // Google's daily limits have reset by a new Pacific day, so yesterday's counts no longer apply.
+  // The daily limits have reset by a new Pacific day, so yesterday's counts no longer apply.
   const run = existing?.pacificDay === pacificDay(nowMs)
     ? continueModelTestRun(existing, keyIds)
     : createModelTestRun(randomUUID(), keyIds, nowMs);
@@ -123,7 +139,8 @@ async function start(body: Record<string, unknown>) {
 }
 
 async function call(body: Record<string, unknown>) {
-  const keys = getGeminiApiKeys();
+  const provider: AiProvider = body.provider === "groq" ? "groq" : "gemini";
+  const keys = keysOf(provider);
   const keyNumber = readKeyNumber(body.keyNumber, keys.length);
   if (keyNumber === null || typeof body.runId !== "string") return failure("Invalid key or run.", 400);
   const apiKey = keys[keyNumber - 1];
@@ -133,15 +150,15 @@ async function call(body: Record<string, unknown>) {
   if (!run || run.runId !== body.runId) return failure("This test was reset. Press Start to begin again.", 409, "stale_run");
   const nowMs = Date.now();
   if (run.pacificDay !== pacificDay(nowMs)) {
-    return failure("A new Pacific day has started, so Google's limits have reset. Press Start for a new count.", 409, "new_day");
+    return failure("A new Pacific day has started, so the daily limits have reset. Press Start for a new count.", 409, "new_day");
   }
   const key = run.keys[keyId];
   if (!key) return failure("That key is not part of this test.", 400);
 
   const reply = (state: ModelTestKeyState, result: string) =>
-    NextResponse.json({ keyId, key: state, result, done: nextModelTestStep(settings, state, Date.now()).kind === "done" });
+    NextResponse.json({ keyId, key: state, result, done: nextModelTestStep(settings, state, Date.now(), provider).kind === "done" });
 
-  const step = nextModelTestStep(settings, key, nowMs);
+  const step = nextModelTestStep(settings, key, nowMs, provider);
   if (step.kind === "done") return reply(key, "done");
   if (step.kind === "wait") return reply(key, "waiting");
   if (isModelTestCallTooSoon(settings, key, nowMs)) return reply(key, "too_soon");
@@ -149,7 +166,12 @@ async function call(body: Record<string, unknown>) {
   const reserved = reserveModelTestCall(key, step.model, nowMs);
   if (!(await writeModelTestKey(run.runId, keyId, key.version, reserved))) return reply(key, "busy");
 
-  const outcome = await callGoogle(apiKey, step.model, settings.testText);
+  const slotId = aiSlotId(getGeminiApiKeyHash(apiKey), step.model);
+  // Only live models: 3.8 Flash isn't in use, so its usage rows would never be cleared.
+  if (isAiModelId(step.model)) {
+    await recordAiSlotCall(slotId, "generate_content", estimateTokens(provider, buildModelTestPrompt(settings.testText)));
+  }
+  const outcome = await callProvider(provider, apiKey, slotId, step.model, settings.testText);
   const saved = await saveOutcome(run.runId, keyId, reserved, step.model, outcome, settings);
   if (!saved) return failure("This test was reset. Press Start to begin again.", 409, "stale_run");
   return reply(saved, "called");

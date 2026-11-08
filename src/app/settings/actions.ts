@@ -2,7 +2,8 @@
 
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { maxGeminiRequestsPerMinute, parseGeminiApiLimits } from "@/server/gemini/gemini-api-limits";
+import { aiModels, parseAiLimits } from "@/server/gemini/ai-models";
+import { saveAiLimits } from "@/server/gemini/ai-store";
 import {
   isJobRecordTimeZone,
   jobRecordTimeZoneOptions,
@@ -382,53 +383,34 @@ export async function updateJobRecordTimeZoneAction(
   return { error: null, success: `New job records are dated in ${label} time (${timeZone}).` };
 }
 
-export async function saveGeminiApiLimitsAction(
+export async function saveAiLimitsAction(
   _previousState: PromptActionState,
   formData: FormData,
 ): Promise<PromptActionState> {
   const actor = await requireUser();
   if (actor.role !== "super_admin") {
-    return { ...emptyState, error: "Only Super Admin can change Gemini API limits." };
+    return { ...emptyState, error: "Only Super Admin can change the AI limits." };
   }
 
-  const limits = parseGeminiApiLimits({
-    requestsPerMinute: formData.get("requestsPerMinute"),
-    requestsPerDay: formData.get("requestsPerDay"),
-    inputTokensPerMinute: formData.get("inputTokensPerMinute"),
-  });
+  const limits = parseAiLimits(Object.fromEntries(aiModels.map((model) => [model.id, {
+    requestsPerMinute: formData.get(`${model.id}:requestsPerMinute`),
+    requestsPerDay: formData.get(`${model.id}:requestsPerDay`),
+    inputTokensPerMinute: formData.get(`${model.id}:inputTokensPerMinute`),
+    inputTokensPerDay: formData.get(`${model.id}:inputTokensPerDay`),
+  }])));
   if (!limits) {
-    return {
-      ...emptyState,
-      error: "Enter positive whole-number limits within the allowed ranges.",
-    };
-  }
-  if (limits.requestsPerMinute > maxGeminiRequestsPerMinute) {
-    return { ...emptyState, error: `Each key is called at most ${maxGeminiRequestsPerMinute} times a minute.` };
+    return { ...emptyState, error: "Enter positive whole numbers within the allowed ranges. Tokens per day may be left empty." };
   }
 
   try {
-    await db
-      .insert(settings)
-      .values({
-        key: "gemini_api_limits",
-        value: limits,
-        updatedByUserId: actor.id,
-      })
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: {
-          value: limits,
-          updatedByUserId: actor.id,
-          updatedAt: new Date(),
-        },
-      });
+    await saveAiLimits(limits, actor.id);
   } catch (error) {
-    logPromptActionFailure("updating Gemini API limits", error);
-    return { ...emptyState, error: "Gemini API limits could not be saved." };
+    logPromptActionFailure("updating AI model limits", error);
+    return { ...emptyState, error: "The AI limits could not be saved." };
   }
 
   revalidatePath("/settings/gemini-usage");
-  return { error: null, success: "Gemini API limits were updated." };
+  return { error: null, success: "The AI limits were updated." };
 }
 
 export async function updateManagerTextHighlightAccessAction(

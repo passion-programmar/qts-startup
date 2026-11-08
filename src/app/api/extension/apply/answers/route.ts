@@ -4,6 +4,7 @@ import { applyAttempts } from "@/db/schema";
 import { db } from "@/lib/db";
 import { askGeminiForApplyAnswers, parseApplyGeminiTurns } from "@/server/apply/apply-gemini";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
+import { AiJobError } from "@/server/gemini/ai-job";
 
 // Apply's answers in Gemini mode: the extension sends the same prompt it would give ChatGPT (and,
 // for a follow-up, the earlier turns); the server asks Gemini and returns its reply text. Only the
@@ -33,9 +34,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     return NextResponse.json({ success: true, reply: await askGeminiForApplyAnswers(turns) });
   } catch (error) {
-    const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "gemini_failed";
-    console.warn("Apply's Gemini answers failed:", code);
-    const status = code === "gemini_http_429" || code === "gemini_local_capacity_unavailable" ? 429 : 502;
-    return NextResponse.json({ success: false, message: error instanceof Error ? error.message : "Gemini did not answer." }, { status });
+    const code = error instanceof AiJobError ? error.code : "ai_failed";
+    console.warn("Apply's AI answers failed:", code);
+    // 429 is what the extension waits and retries on.
+    const status = code === "ai_busy" || code === "ai_quota_used_up" ? 429 : 502;
+    const message = error instanceof AiJobError ? error.message : "The AI model did not answer.";
+    return NextResponse.json({ success: false, message }, { status });
   }
 }

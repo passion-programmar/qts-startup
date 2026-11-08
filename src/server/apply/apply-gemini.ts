@@ -1,18 +1,11 @@
 import "server-only";
 
-import { geminiModel, getGeminiApiKeys, getGeminiApiLimits, requestGeminiApi } from "@/lib/gemini-usage";
-import {
-  type GeminiContent,
-  geminiError,
-  readGeminiErrorMessage,
-  readGeminiText,
-  withAvailableGeminiKey,
-} from "@/server/gemini/gemini-keys";
-import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
+import { runAiRequest } from "@/server/gemini/ai-request";
+import type { GeminiContent } from "@/server/gemini/gemini-keys";
 
 // Apply's answers in Gemini mode: the same prompt the extension would type into ChatGPT, sent by
-// the server to Gemini with the shared key pool and limits (the Gemini usage page counts them).
-// A follow-up for rejected answers carries the earlier turns, like ChatGPT's same chat.
+// the server through the shared key and model rules. A follow-up for rejected answers carries the
+// earlier turns, like ChatGPT's same chat.
 
 const generationConfig = { responseMimeType: "application/json", temperature: 0.2 };
 const MAX_TURNS = 3;
@@ -37,48 +30,15 @@ export function parseApplyGeminiTurns(value: unknown): ApplyGeminiTurn[] | strin
   return turns;
 }
 
-/** Gemini's reply text (the answers JSON) for the turns. Throws a coded error when it cannot answer. */
-export async function askGeminiForApplyAnswers(turns: ApplyGeminiTurn[]): Promise<string> {
-  const apiKeys = getGeminiApiKeys();
-  if (!apiKeys.length) throw geminiError("gemini_not_configured", "Gemini is not set up. Ask your Super Admin.");
+/** The model's reply text (the answers JSON) for the turns. Throws an AiJobError when it can't answer. */
+export function askGeminiForApplyAnswers(turns: ApplyGeminiTurn[]): Promise<string> {
   const contents: GeminiContent[] = turns.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] }));
-  // A key Gemini answers "unavailable" is paused for 5 minutes and another key is asked.
-  const text = await withAvailableGeminiKey(
-    apiKeys,
+  return runAiRequest({
     contents,
     generationConfig,
-    await getGeminiTokenCountMode(),
-    await getGeminiApiLimits(),
-    async ({ apiKey, tokenCounts }) => {
-      const response = await requestGeminiApi(
-        apiKey,
-        "generate_content",
-        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body: JSON.stringify({ contents, generationConfig }),
-          signal: AbortSignal.timeout(60_000),
-          cache: "no-store",
-        },
-        tokenCounts,
-      );
-      if (!response.ok) {
-        throw geminiError(`gemini_http_${response.status}`, `Gemini returned HTTP ${response.status}.`, readGeminiErrorMessage(response.body, apiKey));
-      }
-      let data: unknown;
-      try {
-        data = JSON.parse(response.body) as unknown;
-      } catch {
-        throw geminiError("gemini_invalid_http_response", "Gemini returned an invalid response.");
-      }
-      const reply = readGeminiText(data);
-      if (!reply || Buffer.byteLength(reply, "utf8") > MAX_REPLY_BYTES) throw geminiError("gemini_empty_response", "Gemini's answer was empty or too large.");
-      return reply;
+    parse: (text) => {
+      if (!text || Buffer.byteLength(text, "utf8") > MAX_REPLY_BYTES) throw new Error("The answer was empty or too large.");
+      return text;
     },
-  );
-  if (text === null) {
-    throw geminiError("gemini_local_capacity_unavailable", "Every Gemini key is busy or at its QTS limit. Try again shortly.");
-  }
-  return text;
+  });
 }

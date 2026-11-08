@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { getGeminiApiKeyHash } from "@/lib/gemini-usage";
 import {
   defaultModelTestSettings,
+  modelTestRunSetting,
   parseModelTestRun,
   parseModelTestSettings,
   type ModelTestKeyState,
@@ -17,7 +18,7 @@ import {
 // by the Super Admin, so they never grow into many rows.
 
 const settingsKey = "gemini_model_test_settings";
-const runKey = "gemini_model_test_run";
+const runKey = modelTestRunSetting;
 
 /** A short id for a key in saved counts and on the page. The key itself is never saved. */
 export const modelTestKeyId = (apiKey: string): string => getGeminiApiKeyHash(apiKey).slice(0, 16);
