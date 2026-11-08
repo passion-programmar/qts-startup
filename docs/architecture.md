@@ -53,7 +53,11 @@ The supported browser-extension workflow is deliberately narrow:
    Usage. The usage page shows per-key totals and the latest 100 Google API
    responses for the Pacific day. Usage events (operation, key hash, token
    count, timestamp) back the quota accounting only and are pruned by the normal
-   usage window; prompts and page content are not stored.
+   usage window; prompts and page content are not stored. The Model test tab
+   (Super Admin, Production deployment only) measures how many calls up to three
+   keys can make on each Gemini model. It keeps its own settings and counts in
+   two `settings` rows, and its calls don't touch the live per-key counters or
+   leases. Get JD and Apply don't read any of it.
 6. Generation claims the oldest eligible saved job whether or not a Manager
    manually queued it from the Jobs row. It requires a saved description, at
    least three candidate experience records, and no resume path. A JD-matching

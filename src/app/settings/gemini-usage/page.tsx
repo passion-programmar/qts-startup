@@ -18,19 +18,23 @@ import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { GeminiApiLimitsForm } from "./limits-form";
+import { ModelTestPanel } from "./model-test-panel";
 import { TokenComparisonForm } from "./token-comparison-form";
 import { TokenCountModeForm } from "./token-count-mode-form";
 import { ResponseDetailsButton } from "./response-details";
 import { ZoneClock } from "@/app/components/zone-clock";
 import { getGeminiTokenCountMode } from "@/server/gemini/token-count-mode";
+import { isModelTestAllowed } from "@/server/gemini/model-test";
+import { modelTestKeyId, readModelTestState } from "@/server/gemini/model-test-store";
 
 export const instant = false;
 
-type GeminiUsageTab = "limits" | "responses";
+type GeminiUsageTab = "limits" | "responses" | "test";
 
 const GEMINI_USAGE_TABS: { id: GeminiUsageTab; label: string; description: string }[] = [
   { id: "limits", label: "Usage limits & key status", description: "Per-key limits and each key's current usage." },
   { id: "responses", label: "Google responses & calibration", description: "Today's Google API responses and token calibration." },
+  { id: "test", label: "Model test", description: "How many calls each key and model can make." },
 ];
 
 export default async function GeminiUsagePage({
@@ -43,8 +47,10 @@ export default async function GeminiUsagePage({
   // Old Google response records (3+ Pacific days ago) are cleaned up only when a Super Admin visits.
   await removeOldGeminiApiCallLogs();
   // Sub tabs are links (?tab=responses), so each tab is server-rendered and can be bookmarked.
-  const activeTab: GeminiUsageTab = (await searchParams).tab === "responses" ? "responses" : "limits";
+  const requestedTab = (await searchParams).tab;
+  const activeTab: GeminiUsageTab = requestedTab === "responses" || requestedTab === "test" ? requestedTab : "limits";
   const tokenCountMode = activeTab === "responses" ? await getGeminiTokenCountMode() : "local";
+  const modelTest = activeTab === "test" ? await readModelTestState() : null;
 
   const keys = getGeminiApiKeys();
   const limits = await getGeminiApiLimits();
@@ -189,7 +195,19 @@ export default async function GeminiUsagePage({
         </nav>
         </div>
 
-        {activeTab === "limits" ? (
+        {modelTest ? (
+          <ModelTestPanel
+            enabled={isModelTestAllowed(process.env)}
+            initialRun={modelTest.run}
+            initialSettings={modelTest.settings}
+            keys={keys.map((key, index) => ({
+              number: index + 1,
+              keyId: modelTestKeyId(key),
+              prefix: keyHashes[index].slice(0, 10),
+            }))}
+            serverNow={modelTest.readAt}
+          />
+        ) : activeTab === "limits" ? (
         <>
         <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <h2 className="mb-4 text-sm font-semibold text-slate-800">Per-key usage limits</h2>

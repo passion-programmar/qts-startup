@@ -47,7 +47,7 @@ export function parseGeminiApiLimits(value: unknown): GeminiApiLimits | null {
   return { requestsPerMinute, requestsPerDay, inputTokensPerMinute };
 }
 
-function parsePositiveInteger(value: unknown, maximum: number): number | null {
+export function parsePositiveInteger(value: unknown, maximum: number): number | null {
   if (
     (typeof value !== "number" && typeof value !== "string") ||
     (typeof value === "string" && !/^\d+$/.test(value))
