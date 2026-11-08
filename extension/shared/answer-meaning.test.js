@@ -110,3 +110,33 @@ test('similar wording is offered, not filled; guarded topics and code never answ
   assert.equal(gender.answers.f, undefined);
   assert.match(gender.byHand[0].message, /profile has no answer/);
 });
+
+test('a saved Yes never answers an open question; other answers never a yes-or-no question (Oyster)', () => {
+  const rows = [{ id: 'r', scope: 'manager', questionText: 'Are you willing to work remotely?', answer: 'Yes', variants: [] },
+    { id: 's', scope: 'manager', questionText: 'How did you hear about us?', answer: 'LinkedIn', variants: [] }];
+  assert.equal(meaning.matchSaved('What attributes do you possess that set you up for success in a fully remote environment?', rows, { kind: 'textarea' }), null);
+  assert.equal(meaning.matchSaved('Which remote collaboration tools have you used professionally? (Select all that apply)', rows, { kind: 'checkbox-group', options: ['Notion', 'Slack'] }), null);
+  assert.equal(meaning.matchSaved('Did you hear about us on LinkedIn?', rows, { kind: 'radio', options: ['Yes', 'No'] }), null);
+  assert.equal(meaning.matchSaved('Are you able and willing to work remotely?', rows, { kind: 'radio', options: ['Yes', 'No'] })?.row.id, 'r');
+  assert.equal(meaning.asksYesNo('This role requires regular overlap with colleagues (UTC-4 to UTC+1). Can you work with this overlap?'), true);
+  assert.equal(meaning.asksYesNo('What attributes do you possess?'), false);
+});
+
+test('Oyster: local-currency salary, notice as a range, residence work rights and the citizen status', () => {
+  const rates = { base: 'EUR', date: '2026-11-06', rates: { EUR: 1, PLN: 4.3 } };
+  const rows = [
+    { id: 's', scope: 'manager', questionKey: 'salary expectations', questionText: 'Salary expectations', answer: '5000 EUR monthly B2B gross', variants: [] },
+    { id: 'n', scope: 'manager', questionKey: 'notice period', questionText: 'Notice period', answer: '1 month', variants: [] },
+  ];
+  const ask = (field) => answers.resolveFields([{ id: 'f', required: true, options: [], ...field }], candidate, rows,
+    { ...context, jobLocation: 'Remote', exchangeRates: rates, today: new Date('2026-11-07') }).answers.f?.value;
+  assert.equal(ask({ label: 'Salary Expectations', note: 'Gross annual base salary range (before tax), please use local currency', kind: 'number' }), '258000');
+  assert.equal(ask({ label: 'Earliest availability to start', kind: 'radio', options: ['Immediately', 'Within 2 weeks', 'Within 1 month', '1–2 months', '2 months +'] }), 'Within 1 month');
+  assert.equal(ask({ label: 'Are you legally authorised to work in your country of residence ?', kind: 'radio', options: ['Yes', 'No'] }), 'Yes');
+  assert.equal(ask({ label: 'Do you currently need, or will you need in the future, employer sponsorship to work legally in your country of residence?', kind: 'radio', options: ['Yes', 'No'] }), 'No');
+  assert.equal(ask({ label: 'Your Work Authorization Status Please select the option that best describes your authorization to work in your country of residence.', kind: 'radio',
+    options: ['I am a citizen/permanent resident with full work authorization', 'I have an existing work permit/visa that does not require employer sponsorship'] }), 'I am a citizen/permanent resident with full work authorization');
+  // Without a saved notice, nothing is chosen (no built-in default notice in Normal Apply).
+  assert.equal(answers.resolveFields([{ id: 'f', label: 'Earliest availability to start', kind: 'radio', required: true, options: ['Immediately', 'Within 1 month'] }],
+    candidate, [], { ...context, today: new Date('2026-11-07') }).answers.f?.value, undefined);
+});

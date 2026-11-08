@@ -85,7 +85,7 @@ async function readUnanswered(managerId: string): Promise<UnansweredRow[]> {
     db.select({ questionText: managerApplyAnswers.questionText, answer: managerApplyAnswers.answer, scope: managerApplyAnswers.scope, variants: managerApplyAnswers.variants })
       .from(managerApplyAnswers).where(and(eq(managerApplyAnswers.managerId, managerId), eq(managerApplyAnswers.scope, "manager"))),
   ]);
-  return rows.filter((row) => meaning.matchSaved(row.questionText, saved)?.confidence !== "high").slice(0, 50)
+  return rows.filter((row) => meaning.matchSaved(row.questionText, saved, { kind: row.kind, options: Array.isArray(row.options) ? row.options : [] })?.confidence !== "high").slice(0, 50)
     .map((row) => ({ ...row, options: Array.isArray(row.options) ? row.options : [] }));
 }
 

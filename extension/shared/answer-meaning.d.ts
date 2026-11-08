@@ -7,7 +7,8 @@ declare const api: {
   clean(text: unknown): string;
   topicOf(text: string): (MeaningTopic & { test: RegExp }) | null;
   meaningOf(text: string): Meaning;
-  matchSaved<T extends SavedRow>(question: string, rows: T[]): { row: T; confidence: "high" | "medium"; why: string } | null;
+  asksYesNo(question: string, options?: string[]): boolean;
+  matchSaved<T extends SavedRow>(question: string, rows: T[], field?: { kind?: string; options?: string[] }): { row: T; confidence: "high" | "medium"; why: string } | null;
   parseLanguageLevels(text: unknown): Record<string, number>;
   languageAnswer(field: { label: string; kind: string; options?: string[] }, levelsOf: () => Record<string, number>): { value: string | boolean; reason: string } | null;
   levelRank(text: string): number | null;

@@ -264,7 +264,22 @@
     return control.required
       || control.getAttribute('aria-required') === 'true'
       || /[*✱]\s*$|[*✱]\s|\(required\)|^[*✱]|^required\b/i.test(label)
-      || labelMarkedRequired(control);
+      || labelMarkedRequired(control)
+      || drawnRequired(control);
+  }
+
+  /**
+   * A question label whose asterisk the page draws with CSS (Ashby: class "_required_…" and ::after "*"),
+   * for a box or for a group of radio or tick boxes under one question.
+   */
+  function drawnRequired(control) {
+    const own = control.id ? control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`) : null;
+    const group = control.closest?.('fieldset, [role="radiogroup"], [role="group"]');
+    const heading = group?.querySelector(':scope > label, :scope > legend') || null;
+    const drawn = (element, part) => { try { return String(getComputedStyle(element, part).content || ''); } catch { return ''; } };
+    return [own, heading].some((label) => label && !label.contains(control) && (
+      (/(^|[\s_-])required([\s_-]|$)/i.test(String(label.className || '')) && !/not[-_]?required|optional/i.test(String(label.className || '')))
+      || /[*✱]/.test(drawn(label, '::after')) || /[*✱]/.test(drawn(label, '::before'))));
   }
 
   /** A <label for> styled "required" (Rails forms draw its asterisk with CSS). */
@@ -961,7 +976,28 @@
       .map((id) => textOf(root.getElementById?.(id) || document.getElementById(id)))
       .filter((entry) => entry && !NOT_HELP.test(entry))
       .join(' ');
-    return text.slice(0, 200);
+    return (text || inlineHelp(control)).slice(0, 200);
+  }
+
+  /**
+   * A hint written between a question's label and its box, not linked to the box (Ashby: "Gross annual
+   * base salary range (before tax), please use local currency"): short text with no box in it.
+   */
+  function inlineHelp(control) {
+    for (let node = control, depth = 0; node?.parentElement && depth < 4; node = node.parentElement, depth += 1) {
+      const parent = node.parentElement;
+      const label = [...parent.children].find((child) => child !== node && ['LABEL', 'LEGEND'].includes(child.tagName));
+      if (!label) continue;
+      const between = [];
+      let after = false;
+      for (const child of parent.children) {
+        if (child === label) { after = true; continue; }
+        if (child === node || child.contains(control)) break;
+        if (after && !child.querySelector('input, select, textarea, button, [role="radio"], [role="checkbox"], [role="combobox"]')) between.push(textOf(child));
+      }
+      return between.filter((entry) => entry && entry.length <= 300 && !NOT_HELP.test(entry)).join(' ');
+    }
+    return '';
   }
 
   const MULTIPLE_TEXT = /select all that apply|all that apply|select (one or more|several|multiple|any)|choose (all|one or more|several|multiple)|multiple (choices|answers|selections?)|(select|choose|pick) up to \d/i;
@@ -2887,12 +2923,15 @@
       // A site may redraw its upload box after accepting a file and show the name beside it (Manatal).
       const shownFile = String(field.label || '').match(/[^\s/\\]+\.(?:pdf|docx?|rtf|txt)\b/i)?.[0];
       // A list still showing its placeholder ("Select...", "Choose") has no answer yet.
+      // An upload the site took and shows as a file name with Replace (Ashby, Greenhouse) is attached.
       const value = field.kind === 'file'
-        ? (element.files?.[0]?.name || shownFile || (field.filled ? 'Attached' : ''))
+        ? (element.files?.[0]?.name || shownFile || (field.filled || uploadAccepted(field.id) ? 'Attached' : ''))
         : ['select', 'menu', 'combobox'].includes(field.kind) && isUnanswered(field) ? ''
           : shown(valueOf(field, element));
       rows.push({ id: field.id, label: String(field.label || 'Question').slice(0, 160), kind: field.kind, required: Boolean(field.required), value,
-        ...(Array.isArray(field.options) && field.options.length ? { options: field.options.map(String).slice(0, 60) } : {}) });
+        ...(Array.isArray(field.options) && field.options.length ? { options: field.options.map(String).slice(0, 60) } : {}),
+        // The box's hint ("annual, local currency") and unit, so the panel works out the same answer as the fill.
+        ...(field.note ? { note: String(field.note).slice(0, 200) } : {}), ...(field.unit ? { unit: field.unit } : {}) });
     }
     return rows;
   }

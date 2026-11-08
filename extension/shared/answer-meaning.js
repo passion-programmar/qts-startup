@@ -86,24 +86,42 @@
   }
 
   const SCOPE_ORDER = { application: 0, candidate: 1, manager: 2 };
+  // A bare yes or no ("Yes", "No.") and a question asked as yes or no (an auxiliary verb first, or Yes/No choices).
+  const YES_NO_ANSWER = /^(yes|no|y|n|true|false|tak|nie|ja|nein|oui|non|s[ií]|sim|n[aã]o)[\s.!]*$/i;
+  const AUXILIARY = /^(are|is|am|was|were|do|does|did|have|has|had|can|could|will|would|shall|should|may|might|must)\b/;
+  function asksYesNo(question, options = []) {
+    const choices = (options || []).map((option) => String(option).trim());
+    if (choices.length >= 2 && choices.length <= 4 && choices.some((option) => /^(yes|tak|ja|oui|s[ií]|sim)\b/i.test(option))
+      && choices.some((option) => /^(no|nie|nein|non|n[aã]o)\b/i.test(option))) return true;
+    // The sentence that asks ("This role requires … Can you work with this overlap?").
+    const sentences = clean(question).split(/(?<=[.?!])\s+/).filter(Boolean);
+    const asking = [...sentences].reverse().find((sentence) => sentence.endsWith('?')) || sentences[0] || '';
+    return AUXILIARY.test(asking.replace(/^[^\p{L}]+/u, ''));
+  }
+
   /**
    * The saved answer for a question, by meaning: { row, confidence: 'high' | 'medium', why } or null.
    * High (filled): the same question, a wording the Manager linked before, or the same topic asked the
    * same way. Medium (offered in the panel, never filled): most of the same words. The most specific
-   * level wins among equally good answers: this job, then this candidate, then all candidates.
+   * level wins among equally good answers: this job, then this candidate, then all candidates. A saved
+   * Yes/No answers only a question asked as yes or no ("What attributes … remote …?" never gets "Yes"),
+   * and other answers never a yes-or-no question; field: { kind, options } of the box, when known.
    */
-  function matchSaved(question, rows) {
+  function matchSaved(question, rows, field = {}) {
     const asked = meaningOf(question);
     if (asked.otherPerson && asked.topic !== 'relatives') return null;
     const key = clean(question);
+    const yesNoAsked = asksYesNo(question, field.options) || (field.kind === 'checkbox' && !(field.options || []).length);
     const ranked = [];
     for (const row of rows || []) {
       if (!row || row.answer == null || String(row.answer).trim() === '') continue;
       const saved = meaningOf(row.questionText);
       let confidence = null;
       let why = '';
+      const sameShape = YES_NO_ANSWER.test(String(row.answer).trim()) === yesNoAsked;
       if (clean(row.questionText) === key) { confidence = 'high'; why = 'same question'; }
       else if ((row.variants || []).some((variant) => variant?.questionText && clean(variant.questionText) === key)) { confidence = 'high'; why = 'a wording you linked'; }
+      else if (!sameShape) continue;
       else if (asked.key && asked.key === saved.key && asked.negated === saved.negated && !saved.otherPerson) { confidence = 'high'; why = `same meaning: ${asked.title}`; }
       else if (!asked.topic || !saved.topic || asked.topic === saved.topic) {
         const a = new Set(asked.words), b = new Set(saved.words);
@@ -323,7 +341,7 @@
     return option ? { value: option, reason } : null;
   }
 
-  const api = Object.freeze({ version: 1, TOPICS: Object.freeze(TOPICS.map(({ id, title }) => Object.freeze({ id, title }))), clean, topicOf, meaningOf, matchSaved,
+  const api = Object.freeze({ version: 1, TOPICS: Object.freeze(TOPICS.map(({ id, title }) => Object.freeze({ id, title }))), clean, topicOf, meaningOf, matchSaved, asksYesNo,
     parseLanguageLevels, languageAnswer, levelRank, employerAnswer, companyKey });
   global.__qtsAnswerMeaning = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -184,6 +184,15 @@
    * A salary question: the figure for the period and currency it asks, worked out here rather than by
    * the AI. A question naming no period gets the candidate's own wording, or the AI when only a number fits.
    */
+  // Each country's own currency, for salary questions that ask in "local currency".
+  const COUNTRY_CURRENCY = Object.fromEntries([
+    ...['AT', 'BE', 'BG', 'HR', 'CY', 'EE', 'FI', 'FR', 'DE', 'GR', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PT', 'SK', 'SI', 'ES'].map((code) => [code, 'EUR']),
+    ['PL', 'PLN'], ['CZ', 'CZK'], ['HU', 'HUF'], ['RO', 'RON'], ['SE', 'SEK'], ['DK', 'DKK'], ['NO', 'NOK'], ['IS', 'ISK'], ['CH', 'CHF'],
+    ['GB', 'GBP'], ['US', 'USD'], ['CA', 'CAD'], ['AU', 'AUD'], ['NZ', 'NZD'], ['JP', 'JPY'], ['CN', 'CNY'], ['IN', 'INR'], ['TR', 'TRY'],
+    ['UA', 'UAH'], ['RS', 'RSD'], ['IL', 'ILS'], ['BR', 'BRL'], ['MX', 'MXN'], ['ZA', 'ZAR'], ['SG', 'SGD'], ['HK', 'HKD'], ['KR', 'KRW'],
+    ['TH', 'THB'], ['MY', 'MYR'], ['ID', 'IDR'], ['PH', 'PHP'], ['AE', 'AED'],
+  ]);
+
   function resolveSalary(field, label, candidate, exchangeRates, unitsOnPage = false) {
     if (!candidate.salaryExpectationAmount) return { missing: 'salary expectation' };
     const ownPeriod = candidate.salaryExpectationPeriod;
@@ -225,7 +234,10 @@
     if (/\bcurrency\b/.test(label) && !/\b(amount|how much|figure|and currency|includ\w* (?:the )?currency|with (?:the )?currency)\b/.test(label)) {
       return { value: ownCurrency, source: 'profile' };
     }
-    const currency = askedCurrency || ownCurrency;
+    // "Please use local currency" (Ashby): the currency of the candidate's own country.
+    const local = !askedCurrency && /\b(local|your (own )?|home|national) currency\b|\bcurrency of (your|the) country\b|\bin your country'?s currency\b/i.test(asked)
+      ? COUNTRY_CURRENCY[countryCode(candidate.country || '')] || null : null;
+    const currency = askedCurrency || (local && (local === 'EUR' || exchangeRates?.rates?.[local]) ? local : null) || ownCurrency;
     // A bare number box: its period comes from the question, or from a period choice beside it on the page
     // (amount + currency + period, as on Manatal), which QTS sets to the saved period.
     if (!askedPeriod && field.kind === 'number' && !unitsOnPage) return null;
@@ -587,20 +599,38 @@
     // An EU/EEA/Swiss national applying to work in an EU/EEA country or Switzerland: authorized, no sponsorship.
     // "Authorized to work …?" is Yes; "need (visa) sponsorship?" is No. A question asking both at once
     // (not "… without sponsorship") is left alone: its Yes and No mean different things.
+    // Where the question asks about: a country it names, "your country of residence" (the profile's
+    // country), the EU, else the job's own country. Citizens may work in their own country; EU/EEA/Swiss
+    // nationals in any EU/EEA country and Switzerland.
+    const residenceAsked = /\b(country of residence|your (current )?country\b|where you (currently )?(live|reside|are based|are located)|country (you|where you) (live|reside))/.test(label);
+    const nationality = nationalityCode(candidate.nationality || '');
+    const targetOf = () => {
+      const named = countriesNamed(label);
+      if (named.length === 1) return named[0];
+      if (named.length) return null;
+      if (residenceAsked) return countryCode(candidate.country || '') || null;
+      if (EU_AREA.test(label)) return 'EU';
+      const fromJob = countriesNamed(context.jobLocation || '');
+      return fromJob.length === 1 ? fromJob[0] : null;
+    };
+    const mayWorkIn = (target) => Boolean(nationality && target && (nationality === target
+      || (FREE_MOVEMENT.has(nationality) && (target === 'EU' || FREE_MOVEMENT.has(target)))));
+    const where = (target) => (target === 'EU' ? 'the EU' : target === nationality ? `${candidate.country || target} (citizen)` : target);
     const workRight = WORK_RIGHT_QUESTION.test(label);
     const mentionsSponsorship = /sponsor/.test(label) || /\b(require|need)\w*\b.{0,30}\bvisa\b/.test(label);
     const combined = workRight && mentionsSponsorship && !/\bwithout\b.{0,30}\b(sponsor\w*|visa)\b/.test(label);
-    if (!negated && !combined && (workRight || mentionsSponsorship)) {
-      const nationality = nationalityCode(candidate.nationality || '');
-      if (nationality && FREE_MOVEMENT.has(nationality)) {
-        const named = countriesNamed(label);
-        const fromJob = countriesNamed(context.jobLocation || '');
-        const target = named.length === 1 ? named[0] : named.length ? null : EU_AREA.test(label) ? 'EU'
-          : fromJob.length === 1 ? fromJob[0] : null;
-        if (target && (target === 'EU' || FREE_MOVEMENT.has(target))) {
-          return fit(workRight, `${candidate.nationality} national, job in ${target === 'EU' ? 'the EU' : target}`);
-        }
+    // "Your work authorization status" as a choice list: a citizen of the country asked about picks the citizen choice.
+    if (!negated && hasOptions(field) && /\b(work )?authori[sz]ation (status|to work)\b|\bstatus that allows you to work\b|\bwork (permit|eligibility) status\b/.test(label)) {
+      const target = targetOf();
+      if (nationality && target === nationality) {
+        const citizen = field.options.filter((option) => /\bcitizen\b/i.test(String(option)) && !/\bnon-?citizen\b|\bnot a citizen\b/i.test(String(option)));
+        if (citizen.length === 1) return derived(citizen[0], `${candidate.nationality} citizen, ${where(target)}`);
       }
+      return null;
+    }
+    if (!negated && !combined && (workRight || mentionsSponsorship)) {
+      const target = targetOf();
+      if (mayWorkIn(target)) return fit(workRight, `${candidate.nationality} national, work in ${where(target)}`);
     }
     return null;
   }
@@ -685,6 +715,13 @@
         const exact = controlledAnswer(field, savedAnswers.filter((row) => row.scope === 'application' || row.scope === 'candidate'))
           || controlledAnswer(field, savedAnswers.filter((row) => row.scope === 'manager'));
         if (exact) return exact;
+        // Notice or start as a list of time ranges ("Immediately / Within 2 weeks / Within 1 month / 1–2
+        // months"): the saved notice takes the longest range it fits ("1 month" → "Within 1 month"). Only a
+        // notice the Manager saved; never a default written in code.
+        if (NOTICE_QUESTION.test(label) && !SALARY_QUESTION.test(label) && hasOptions(field) && hasNotice(candidate)) {
+          const notice = resolveNotice(field, label, candidate, context.today, candidate.reusableTopics?.has('notice') ? 'reusable' : 'profile');
+          if (notice?.value !== undefined) return notice;
+        }
         const id = NOTICE_QUESTION.test(label) ? (/\bdate\b|when|availability/.test(label) || field.kind === 'date' ? 'candidate.startDate' : 'candidate.noticeDuration') : 'candidate.salaryExpectation';
         const definition = semantics.definitions.find((entry) => entry.id === id);
         return contextualProfileRepresentation(field, candidate, definition, context) || { missing: id };
@@ -783,7 +820,7 @@
       const GUARDED = new Set(['salary', 'currentSalary', 'notice', 'startDate', 'sponsorship', 'workAuthorization', 'languageLevels', 'futureConsent']);
       const rows = GUARDED.has(asked) ? [] : (savedAnswers || []).filter((row) => ['application', 'candidate', 'manager'].includes(row.scope)
         && !GUARDED.has(meaning.topicOf(row.questionText)?.id));
-      const match = rows.length ? meaning.matchSaved(field.label, rows) : null;
+      const match = rows.length ? meaning.matchSaved(field.label, rows, { kind: field.kind, options: field.options || [] }) : null;
       if (match) {
         const reused = reusableAnswer(field, match.row);
         if (reused.value !== undefined && match.confidence === 'high') {
@@ -2036,7 +2073,7 @@
     if (meaning.languageAnswer({ ...field, options: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'] }, () => ({ '*': 1 }))) return true;
     if (meaning.employerAnswer({ ...field, options: ['Yes', 'No'] }, context.experiences, context.jobCompany)) return true;
     if (LOCATED_QUESTION.test(label) || WORK_RIGHT_QUESTION.test(label) || /sponsor/.test(label)) return true;
-    return Boolean(meaning.matchSaved(field.label, (savedAnswerRows || []).filter((row) => ['application', 'candidate', 'manager'].includes(row.scope))));
+    return Boolean(meaning.matchSaved(field.label, (savedAnswerRows || []).filter((row) => ['application', 'candidate', 'manager'].includes(row.scope)), { kind: field.kind, options: field.options || [] }));
   }
 
   const api = { changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };

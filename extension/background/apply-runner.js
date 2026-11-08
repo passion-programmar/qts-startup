@@ -3482,7 +3482,8 @@ async function refreshAssistQuestions(tabId, assistant, force = false, editedIds
   if (application && self.__qtsApplyAnswers?.resolveFields) {
     try {
       plan = self.__qtsApplyAnswers.resolveFields(scanned.map((question) => ({ id: question.id, label: question.label, kind: question.kind,
-        required: question.required, options: question.options || [] })), application.candidate, application.savedAnswers,
+        required: question.required, options: question.options || [], ...(question.note ? { note: question.note } : {}), ...(question.unit ? { unit: question.unit } : {}) })),
+      application.candidate, application.savedAnswers,
       { normalApply: true, exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job?.coverLetterText,
         experiences: application.profileDetails?.experiences || [], jobCompany: application.job?.company || '', jobLocation: application.job?.location || '' });
     } catch { plan = null; }
@@ -3531,8 +3532,10 @@ async function refreshAssistQuestions(tabId, assistant, force = false, editedIds
       status = question.required ? 'need' : 'optional';
       const known = suggestionOf(question);
       const offered = offerOf(question);
+      const written = question.kind === 'textarea' && !self.__qtsAnswerMeaning?.asksYesNo?.(question.label, question.options || []);
       reason = reasons.get(question.id) || plan?.byHand?.find((entry) => entry.id === question.id)?.message
         || (offered ? `Looks like your saved answer "${offered.question}". Use it if it means the same.` : null)
+        || (written && !known ? 'A written answer: write it yourself (Normal Apply does not write answers).' : null)
         || (known ? 'QTS has an answer but the box is empty: copy it, or use Fill again.' : null)
         || (filled ? 'QTS filled it, then the page cleared it. Use Fill again.'
           : question.required ? 'No saved answer. Fill it, or save one in Reusable answers.' : 'Optional; nothing saved for it.');
@@ -3567,7 +3570,11 @@ async function refreshAssistQuestions(tabId, assistant, force = false, editedIds
   // "Needs answer" list on the Manager page, once per question per application. Never profile or
   // diversity facts, agreements, files or passwords: only what a reusable answer can answer.
   assistant.reportedUnanswered ||= new Set();
+  // A box QTS filled (or is filling) is never listed; nor a written answer (an open question in a text
+  // area: "What attributes…?", "Which of these have you worked on…?"), which is not a reusable answer.
   const unanswered = rows.filter((row) => row.status === 'need' && !row.suggestion && !row.offer && !assistant.reportedUnanswered.has(row.label)
+    && !assistant.fillingTabs?.has(tabId)
+    && !(row.kind === 'textarea' && !self.__qtsAnswerMeaning?.asksYesNo?.(row.label, row.options || []))
     && !/\b(gender|sex|race|ethnic\w*|veteran|disabilit\w*|orientation|pronouns?|transgender|captcha|verification code)\b/i.test(row.label)
     && savePromptFor(row, plan?.answers?.[row.id]?.source || null, application?.job?.company || '')?.levels?.length === 3);
   if (unanswered.length && application?.attemptId) {

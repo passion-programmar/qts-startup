@@ -718,3 +718,21 @@ test('a React Select list that opens only when its box is pressed is read, and a
   assert.deepEqual(result.options, ['No', 'Yes - Exadel', 'Yes - Other']);
   assert.equal(result.value, '', 'the placeholder is not an answer');
 });
+
+test('Ashby: a CSS-drawn required mark, a hint between label and box, and an upload shown as a file name', { skip }, async () => {
+  const result = await onPage(`<style>._required_x::after { content: "*"; }</style><form>
+    <div><label class="_heading _required_x" for="sal">Salary Expectations&nbsp;</label><div><p><strong>Gross annual base salary range</strong> (before tax), please use local currency</p></div>
+      <input id="sal" type="number" placeholder="Type here..."></div>
+    <fieldset><label class="_heading _required_x" for="start">Earliest availability to start</label>
+      <div><input type="radio" id="s1" name="start"><label for="s1">Immediately</label></div>
+      <div><input type="radio" id="s2" name="start"><label for="s2">Within 1 month</label></div></fieldset>
+    <div><label for="cv">Resume</label><div><input id="cv" type="file" style="display:none"><div><span>Alex_Tester_CV.pdf</span><button type="button">Replace</button></div></div></div>
+    </form>`,
+  `const fields = api.scanForAssist().filter((f) => !f.hidden);
+   const salary = fields.find((f) => /salary/i.test(f.label)), start = fields.find((f) => /availability/i.test(f.label));
+   const cv = api.panelQuestions().find((q) => /resume/i.test(q.label));
+   return { salaryRequired: salary.required, note: salary.note, startRequired: start.required, cv: cv ? cv.value : 'not listed' };`);
+  assert.equal(result.salaryRequired, true);
+  assert.match(result.note, /Gross annual base salary range \(before tax\), please use local currency/);
+  assert.equal(result.startRequired, true, 'a radio question whose label draws the * is required');
+});
