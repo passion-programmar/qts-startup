@@ -719,6 +719,37 @@ test('a React Select list that opens only when its box is pressed is read, and a
   assert.equal(result.value, '', 'the placeholder is not an answer');
 });
 
+test('a form starts empty: old values go once, and what must stay stays', { skip }, async () => {
+  const result = await onPage(`<form>
+    <div><label for="city">City</label><input id="city" value="Berlin"></div>
+    <div><label for="why">Why us?</label><textarea id="why">Old text</textarea></div>
+    <div><label for="ctry">Country</label><select id="ctry"><option value="">Select…</option><option selected>Poland</option></select></div>
+    <div><label for="cur">Currency</label><select id="cur"><option>USD</option><option>EUR</option></select></div>
+    <fieldset><legend>Remote?</legend><label><input type="radio" name="r" checked>Yes</label><label><input type="radio" name="r">No</label></fieldset>
+    <div><label><input id="news" type="checkbox" checked> Keep me informed about new openings at the firm</label></div>
+    <div><label for="ref">Referral code</label><input id="ref" value="ABC1"></div>
+    <div><label for="post">Postal code</label><input id="post" value="00-001"></div>
+    <div><label for="role">Position</label><input id="role" value="Senior Developer"></div>
+    <div><label for="mine">Nickname</label><input id="mine" value="Typed by Manager" data-qts-manager-changed="1"></div>
+    <div><label for="locked">Locked</label><input id="locked" value="Fixed" disabled></div>
+    </form>`,
+  `const values = () => Object.fromEntries(['city','why','ctry','cur','ref','post','role','mine','locked'].map((id) => [id, document.getElementById(id).value]));
+   const first = await api.emptyOldAnswers({ keepValues: ['Senior Developer', 'Acme'] });
+   const after = { ...values(), remote: document.querySelector('input[name=r]:checked')?.value ?? null, news: document.querySelector('#news').checked };
+   document.querySelector('#city').value = 'Filled by QTS';
+   const again = await api.emptyOldAnswers({ known: first.keys });
+   const restarted = await api.emptyOldAnswers({ seedOnly: true });
+   return { first, after, again, restarted, city: document.querySelector('#city').value,
+     marked: api.scanForAssist().find((field) => field.label === 'Nickname').managerChanged };`);
+  assert.equal(result.first.newPage, true);
+  assert.deepEqual(result.after, { city: '', why: '', ctry: '', cur: 'USD', ref: 'ABC1', post: '', role: 'Senior Developer', mine: 'Typed by Manager', locked: 'Fixed', remote: null, news: false });
+  assert.deepEqual(result.first.stuck.map((box) => box.label), ['Currency'], 'a list with no blank choice cannot be emptied, and says so');
+  assert.equal(result.again.newPage, false, 'a page already met is not emptied again');
+  assert.equal(result.restarted.emptied.length, 0);
+  assert.equal(result.city, 'Filled by QTS');
+  assert.equal(result.marked, true);
+});
+
 test('Ashby: a CSS-drawn required mark, a hint between label and box, and an upload shown as a file name', { skip }, async () => {
   const result = await onPage(`<style>._required_x::after { content: "*"; }</style><form>
     <div><label class="_heading _required_x" for="sal">Salary Expectations&nbsp;</label><div><p><strong>Gross annual base salary range</strong> (before tax), please use local currency</p></div>

@@ -2748,6 +2748,130 @@
    * scanForm for the assistant: each question that is not the application's is marked unrelated
    * (search, newsletter, job alerts), and each of a sign-in or create-account form marked account.
    */
+  // ---- Normal Apply: a form starts empty (decision 2026-11-08) ----
+
+  // Set by the panel on a box the Manager typed in or picked (reviewing, or after Pause).
+  const MANAGER_ATTRIBUTE = 'data-qts-manager-changed';
+  // Boxes that say where the application came from, not who applies: the site's value stays.
+  const TRACKING_BOX = /referr|\bsource\b|\butm\b|\btoken\b|\b(promo|invite|invitation|tracking|campaign|job|requisition|reference)[ -]?(code|id|number)\b/i;
+
+  function managerChanged(element, field) {
+    const marked = (node) => Boolean(node.hasAttribute?.(MANAGER_ATTRIBUTE) || node.querySelector?.(`[${MANAGER_ATTRIBUTE}]`));
+    if (marked(element)) return true;
+    return element.tagName === 'INPUT' && ['radio', 'checkbox-group'].includes(field.kind) && controlsOfGroup(element).some(marked);
+  }
+
+  /** Empties one box the way its kind needs. Whether it worked is read afterwards. */
+  async function emptyBox(element, field) {
+    if (isEditorHost(element)) {
+      const owner = element.ownerDocument;
+      element.focus();
+      owner.getSelection()?.selectAllChildren(element);
+      if (!owner.execCommand('delete')) {
+        element.textContent = '';
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      const partner = editorPartner(element);
+      if (partner) setNativeValue(partner, '');
+      element.blur();
+      return;
+    }
+    if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) {
+      for (const item of groupItems(element).filter(isChosen)) press(item);
+      return;
+    }
+    if (element.tagName !== 'INPUT' && element.getAttribute('role') === 'checkbox') {
+      element.click();
+      return;
+    }
+    if (field.kind === 'menu' || field.kind === 'combobox') {
+      if (element.value) {
+        setNativeValue(element, '');
+        element.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+      // The clear (×) or remove-choice controls in this box alone.
+      const box = ownBox(element);
+      const controls = box ? [...box.querySelectorAll('button, [role="button"], [aria-label], [class*="clear" i], [class*="remove" i]')]
+        .filter((node) => node !== element && !node.contains(element)
+          && /clear|remove|delete/i.test(`${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''} ${node.getAttribute('class') || ''}`)) : [];
+      for (const control of controls) {
+        if (!control.isConnected) continue;
+        press(control);
+        await sleep(60);
+      }
+      return;
+    }
+    const type = (element.getAttribute('type') || '').toLowerCase();
+    if (type === 'radio') {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked').set;
+      for (const control of controlsOfGroup(element).filter((entry) => entry.checked)) {
+        setter.call(control, false);
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return;
+    }
+    if (type === 'checkbox') {
+      for (const control of field.kind === 'checkbox-group' ? controlsOfGroup(element) : [element]) if (control.checked) control.click();
+      return;
+    }
+    if (element.tagName === 'SELECT') {
+      if (element.multiple) {
+        for (const option of element.options) option.selected = false;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      const blank = [...element.options].find((option) => !option.value || PLACEHOLDER.test(optionText(option)));
+      if (blank) setNativeValue(element, blank.value);
+      return;
+    }
+    setNativeValue(element, '');
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
+
+  /**
+   * What a form already holds when a page is filled for the first time is old (the site's memory, the
+   * browser's, another candidate's): it is emptied first. A page counts as new when most of its boxes
+   * have not been met in this application (known: earlier results' keys), so going Back, boxes a fill
+   * revealed, and redraws empty nothing. Kept: what the Manager changed, tracking boxes, the job's own
+   * title or company, uploads and sliders. seedOnly only records the boxes (a restarted extension's
+   * open pages, a form the site filled from the résumé).
+   * { keys, newPage, emptied: [label], stuck: [{ id, label }] }
+   */
+  async function emptyOldAnswers({ known = [], seedOnly = false, keepValues = [] } = {}) {
+    const seen = new Set(known);
+    const page = `${location.origin}${location.pathname}${location.hash}`;
+    const count = new Map();
+    const boxes = scanForAssist().filter((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account).map((field) => {
+      const name = `${field.kind}|${cleanText(field.label).toLowerCase()}`;
+      count.set(name, (count.get(name) || 0) + 1);
+      return { field, key: `${page}|${name}|${count.get(name)}` };
+    });
+    const keys = boxes.map((box) => box.key);
+    const newPage = boxes.length > 0 && boxes.filter((box) => seen.has(box.key)).length / boxes.length < 0.5;
+    const emptied = [];
+    const stuck = [];
+    if (!newPage || seedOnly) return { keys, newPage, emptied, stuck };
+    const job = keepValues.map((value) => cleanText(value).toLowerCase()).filter(Boolean);
+    const touched = [];
+    for (const { field, key } of boxes) {
+      const element = seen.has(key) ? null : findField(field.id);
+      if (!element || ['file', 'range'].includes(field.kind) || isUnanswered(field) || managerChanged(element, field)
+        || TRACKING_BOX.test(field.label) || job.includes(cleanText(element.value || '').toLowerCase())) continue;
+      await emptyBox(element, field).catch(() => {});
+      touched.push(field);
+      await sleep(60);
+    }
+    if (touched.length) await sleep(250);
+    for (const field of touched) {
+      if (!findField(field.id) || isUnanswered(field)) emptied.push(field.label);
+      // A custom list with nothing to clear it with is not reported: its fill replaces the choice.
+      else if (!['menu', 'combobox'].includes(field.kind)) stuck.push({ id: field.id, label: field.label });
+    }
+    return { keys, newPage, emptied, stuck };
+  }
+
   function scanForAssist() {
     const fields = scanForm();
     const elements = new Map(allElements().filter((element) => element.hasAttribute(FIELD_ATTRIBUTE))
@@ -2772,6 +2896,7 @@
         ...(field.kind === 'range' ? { min: field.min ?? 0, max: field.max ?? 100 } : {}),
         ...(field.kind === 'date' ? { minDate: element.min || null, maxDate: element.max || null, dateStep: element.step === 'any' ? null : Number(element.step || 1) } : {}),
       };
+      if (managerChanged(element, field)) field = { ...field, managerChanged: true };
       if (unrelatedBox(element)) return { ...field, unrelated: true };
       return accountBox(element) ? { ...field, account: true } : field;
     });
@@ -2780,6 +2905,7 @@
   global.__qtsApplyForm = {
     scanForm,
     scanForAssist,
+    emptyOldAnswers,
     embeddedApplicationUrl,
     readComboboxOptions,
     discoverComboboxChoices,

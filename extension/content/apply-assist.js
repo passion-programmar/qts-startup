@@ -1014,6 +1014,17 @@
       send('fields_changed');
     }, 500);
   }
+  // What the Manager types or picks on the site is marked on the box itself, even one QTS has not read
+  // yet: QTS never empties or replaces it. QTS's own filling (state.filling) marks nothing.
+  const markManagerChange = (event) => {
+    if (!event.isTrusted || !state || state.mode !== 'assist' || state.filling || host.contains(event.target)) return;
+    const path = event.composedPath().filter((node) => node?.setAttribute);
+    const box = event.type === 'click'
+      ? path.find((node) => node.matches('[role="radio"], [role="checkbox"], [role="combobox"], [aria-pressed], [data-qts-apply-field]'))
+      : path[0];
+    box?.setAttribute('data-qts-manager-changed', '1');
+  };
+  for (const type of ['input', 'change', 'click']) document.addEventListener(type, markManagerChange, true);
   // The Manager changed a box on the site (decision 2026-11-07): when they leave it or pick a choice,
   // QTS is told which question changed, so the panel can offer to save it as a reusable answer.
   let valuesTimer = null;

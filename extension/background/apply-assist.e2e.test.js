@@ -40,14 +40,14 @@ const MANUAL_JOB_PAGE = page('Data Engineer at Acme', `
 
 const form = (number) => page(`Apply ${number}`, `
 <form id="app" onsubmit="event.preventDefault(); window.submitted = true;">
-  <div><label for="fn">First name *</label><input id="fn" required></div>
+  <div><label for="fn">First name *</label><input id="fn" required value="Old Candidate"></div>
   <div><label for="ln">Last name *</label><input id="ln" required></div>
   <div><label for="em">Email *</label><input id="em" type="email" required></div>
   <div><label for="ph">Phone *</label><input id="ph" type="tel" required></div>
   <div><label for="co">Country *</label><select id="co" required><option value="">Select…</option><option>Poland</option><option>Romania</option></select></div>
   <div><label for="np">Notice period *</label><input id="np" required></div>
   <div><label for="hear">How did you hear about us? *</label><select id="hear" required><option value="">Select…</option><option>LinkedIn</option><option>Friend</option></select></div>
-  <div><label for="why">Why do you want to join Acme? *</label><textarea id="why" required></textarea></div>
+  <div><label for="why">Why do you want to join Acme? *</label><textarea id="why" required>Old answer</textarea></div>
   <div><label for="cl">Cover letter</label><textarea id="cl"></textarea></div>
   <div><label for="cv">Resume *</label><input id="cv" type="file" accept=".pdf" required></div>
   <div><label><input type="checkbox" id="ok" required> I agree to the privacy policy *</label></div>

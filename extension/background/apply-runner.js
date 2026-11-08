@@ -1344,6 +1344,8 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     }
     return answersById;
   };
+  // The site has just filled this form from the résumé QTS attached in this pass.
+  let siteFilledNow = false;
   for (let round = 0; round < APPLY_FILL_ROUNDS + 1; round += 1) {
     // A caller that can be stopped (Auto Apply: Cancel, Stop all, a lost claim) stops between rounds.
     if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
@@ -1395,7 +1397,12 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     for (const field of fields || []) {
       if (field.hidden || field.disabled || seen.has(field.id)) continue;
       // The Manager's or the site's own text stays; a question met before is the Manager's now.
-      if (assist && (field.filled || field.unrelated || field.account || skip(field))) continue;
+      // Normal Apply: what the Manager changed always stays; a box QTS could not empty, or one the site
+      // filled from the résumé on this first fill, takes QTS's answer when it has one.
+      if (options.emptiesFirst && field.managerChanged) continue;
+      const replaces = options.emptiesFirst && field.filled
+        && (siteFilledNow || options.replaceFilled === true || options.replaceIds?.has(field.id));
+      if (assist && ((field.filled && !replaces) || field.unrelated || field.account || skip(field))) continue;
       // Drawn again by the page after its answer was picked (a new element): kept as it is.
       if (await stillAnswered(field)) {
         seen.add(field.id);
@@ -1440,6 +1447,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         const outcome = await fillAndCheck(tabId, autofill, { file: 'resume', source: 'documents' }, { ...documents.resume, mimeType: 'application/pdf' }, seen);
         if (outcome.ok) {
           application.siteFilledFromResume = true;
+          siteFilledNow = true;
           await waitForSiteFill(tabId);
           for (const field of fresh) if (field.id !== autofill.id) seen.delete(field.id);
           round -= 1;
@@ -1480,7 +1488,11 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     if (allowed) for (const [id, answer] of Object.entries(answers)) if (!allowed.has(answer.source)) delete answers[id];
     diag('resolved', { step, round, answered: Object.keys(answers).length, toAi: resolved.open.length, byHand: (resolved.byHand || []).length });
     // A personal fact the profile lacks is the Manager's to fill, never the AI's to guess.
-    for (const entry of resolved.byHand || []) problem(entry.message, entry, assist ? 'profile' : 'field');
+    for (const entry of resolved.byHand || []) {
+      // A box the site filled from the résumé already has its answer.
+      if (options.emptiesFirst && fresh.some((field) => field.id === entry.id && field.filled)) continue;
+      problem(entry.message, entry, assist ? 'profile' : 'field');
+    }
     // "Fill again" reuses this application's earlier answers instead of asking ChatGPT again.
     const open = resolved.open.filter((field) => {
       // What the site filled from the résumé is kept, not asked of the AI again.
@@ -1524,6 +1536,8 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       const answer = answers[field.id];
       if (!answer) {
+        // Normal Apply: QTS has no answer for this box, so what it holds stays as it is.
+        if (options.emptiesFirst) continue;
         // Filled by the site from the résumé: kept, and listed so the Manager can check it.
         if (field.filled && application.siteFilledFromResume) {
           const value = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownValue(id), [field.id]).catch(() => '');
@@ -3608,9 +3622,22 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive, {
   try {
     // The résumé and cover letter QTS attached, for the panel's list (uploads are not answers).
     const uploaded = new Map();
+    // Old values go first (decision 2026-11-08). A form the site filled from this résumé keeps them.
+    const fromResume = application.siteFilledFromResume === true;
+    assistant.knownBoxes ||= new Set();
+    const old = await inForm(tabId, (given) => globalThis.__qtsApplyForm.emptyOldAnswers(given), [{
+      known: [...assistant.knownBoxes],
+      seedOnly: assistant.resumedTabs?.delete(tabId) === true || fromResume,
+      keepValues: [application.job?.title, application.job?.company].filter(Boolean),
+    }]).catch(() => null);
+    for (const key of old?.keys || []) assistant.knownBoxes.add(key);
+    if (!active() || held()) return;
     const filled = await fillFormPage(tabId, application, keepAlive, 1, {
       assist: true,
       noAi: true,
+      emptiesFirst: true,
+      replaceIds: new Set((old?.stuck || []).map((box) => box.id)),
+      replaceFilled: fromResume && old?.newPage === true,
       skip: (field) => filledFields.has(field.id),
       uploadsPaused: () => Boolean(assistant.uploadError),
       stop: async () => !active() || held(),
@@ -3620,6 +3647,10 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive, {
     if (!active() || held()) return;
     for (const answer of Object.values(filled.used || {})) if (answer.fieldId) filledFields.add(answer.fieldId);
     assistant.problems = filled.problems || [];
+    const replaced = new Set(Object.values(filled.used || {}).map((answer) => answer.fieldId));
+    for (const box of old?.stuck || []) {
+      if (!replaced.has(box.id)) assistant.problems.push({ message: `"${box.label}" already had a value that QTS could not empty or replace. Check it.`, fieldId: box.id });
+    }
     // For the panel's question list: what QTS put in each box (value, source, level) and why others are empty.
     assistant.fillRecords ||= new Map();
     assistant.questionReasons ||= new Map();
@@ -3651,9 +3682,10 @@ async function fillVisibleAssistForm(tabId, application, assistant, keepAlive, {
       return;
     }
     const count = Object.keys(filled.used || {}).length;
-    assistant.status = count
+    const emptied = old?.emptied?.length ? ` Emptied ${old.emptied.length} old value${old.emptied.length === 1 ? '' : 's'} first.` : '';
+    assistant.status = (count
       ? `Filled ${count} saved answer${count === 1 ? '' : 's'}. Review them, complete the rest, then submit on the employer site.`
-      : 'Form ready. QTS found no additional saved values to fill; complete the form and submit on the employer site.';
+      : 'Form ready. QTS found no additional saved values to fill; complete the form and submit on the employer site.') + emptied;
   } catch (error) {
     if (!active() || held()) return;
     assistant.formSignatures.delete(tabId);
@@ -3792,6 +3824,10 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     pendingNavigation: new Set(),
     formSignatures: new Map(),
     filledFields: new Map(),
+    // Boxes already met in this application: a page is emptied once, at its first fill. A restarted
+    // extension's open pages are the Manager's review, so they are only recorded.
+    knownBoxes: new Set(),
+    resumedTabs: new Set(resumeTabIds || []),
     // The panel's question list: what QTS filled per box, why boxes stayed empty, and the last reading.
     fillRecords: new Map(),
     questionReasons: new Map(),
