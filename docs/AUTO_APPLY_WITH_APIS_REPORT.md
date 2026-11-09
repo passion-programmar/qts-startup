@@ -1,6 +1,10 @@
 # Auto Apply with APIs: build report
 
-Date: 2026-11-08. Extension version 1.50.0.
+Date: 2026-11-08. Extension version 1.51.0.
+
+Update: this flow no longer uses saved answers at any level. Facts such as sponsorship, relocation,
+notice and salary come from what Super Admin writes in the prompt. Normal Apply still uses saved
+answers. QTS cannot check facts that are only in the prompt, so the Manager should check them at review.
 
 ## 1. Where things stand
 
@@ -75,7 +79,7 @@ The Manager clicks Submit. QTS never does.
 | Fill nothing until the AI answers | If the AI gives no answers, the page stays empty and the panel offers "Ask AI again". |
 | The form must be clean first | Typed text, choices, ticks and attached files are removed once per page. |
 | The AI must not change facts | Each answer is compared with the profile. A changed fact is replaced by the profile's value and shown to the Manager. |
-| Missing facts are not guessed | The AI may say it has no answer. A fact the profile lacks is used only if it appears in the résumé or saved answers. |
+| Missing facts are not guessed | The AI may say it has no answer. Sponsorship, relocation, notice and salary are used only when the prompt covers them. Any other fact the profile lacks must appear in the résumé or the prompt. |
 | The prompt decides what is sent | Super Admin's "Gemini · Application-answer generation" prompt. The code adds only the JSON reply format. |
 | Few AI calls | One request per page, one more for questions that appear later, one follow-up if the site refuses answers. At most 10 per application. |
 | Never another candidate's data | Site check, cleaning, and a last check of the login, personal answers and documents. A failure holds the site's Submit. |
@@ -106,8 +110,8 @@ called.
 
 ```
 Server tests                       436 passed, 4 skipped
-Extension tests                    660 of 661 passed
-New tests in real Chrome           13 of 13 passed
+Extension tests                    663 of 664 passed
+New tests in real Chrome           14 of 14 passed
 Older Apply tests in real Chrome   20 passed, 3 optional ChatGPT tests skipped
 Type check and production build    passed
 ```
@@ -130,6 +134,7 @@ The new Chrome tests show that:
 - Another account appearing at the end holds the site's Submit.
 - A job reopened in a new tab fills again without a new AI request.
 - Choosing another candidate stops the work and gives the job back.
+- Saved answers play no part: what the prompt covers is filled, and what it does not goes to the Manager.
 
 Not tested:
 
@@ -153,7 +158,7 @@ Not tested:
 ## 8. What to do next
 
 ```
-You:  install extension 1.50.0
+You:  install extension 1.51.0
       -> check the prompt "Gemini · Application-answer generation" in Settings
       -> Super Admin turns on "Auto Apply with APIs" for ONE Manager
       -> run one real job on Production -> send me what happened

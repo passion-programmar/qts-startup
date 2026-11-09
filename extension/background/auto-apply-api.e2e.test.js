@@ -101,6 +101,12 @@ const SMALL_FORM = (body) => `<!doctype html><html lang="en"><head><meta charset
 </form>${FORM_END}
 </body></html>`;
 
+const FORM_FACTS = SMALL_FORM('').replace('<button type="submit" id="submit">', `
+  <div><label for="spon">Do you need visa sponsorship? *</label><select id="spon" required><option value="">Select…</option><option>Yes</option><option>No</option></select></div>
+  <div><label for="relo">Are you willing to relocate? *</label><select id="relo" required><option value="">Select…</option><option>Yes</option><option>No</option></select></div>
+  <div><label for="pay">Expected salary *</label><input id="pay" required></div>
+  <button type="submit" id="submit">`);
+
 const JOB_GUEST = `<!doctype html><html><body><h1>A job</h1>
   <a href="/account-login">Sign in</a> <a href="/account-login?register=1">Create account</a>
   <button id="guest" onclick="location.href='/small'">Apply as guest</button>
@@ -157,6 +163,9 @@ function aiReply(prompt) {
     if (/own a car/i.test(question.question)) return value('Yes');
     if (/car model/i.test(question.question)) return value('Dacia Logan');
     if (/colour/i.test(question.question)) return value('Blue');
+    if (/sponsorship/i.test(question.question)) return value('No');
+    if (/relocate/i.test(question.question)) return value('No');
+    if (/salary/i.test(question.question)) return value('5500');
     return { id: question.id, value: null, status: 'review', reason: 'not in the documents' };
   }) });
 }
@@ -189,6 +198,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/dyn') return html(FORM_DYN);
     if (url.pathname === '/steps') return html(FORM_STEPS);
     if (url.pathname === '/small') return html(SMALL_FORM(''));
+    if (url.pathname === '/facts') return html(FORM_FACTS);
     if (url.pathname === '/job-guest') return html(JOB_GUEST);
     if (url.pathname === '/job-blocked') return html(JOB_BLOCKED);
     if (url.pathname === '/account-login') return html(ACCOUNT_LOGIN);
@@ -641,6 +651,31 @@ test('a job taken up again in a new tab is filled again, from the answers it alr
     await until(async () => await valueOf(form, 'em') === 'ana.test@example.com', 30000, 'the page to be filled');
     assert.equal(await valueOf(form, 'fn'), 'Ana');
     assert.equal(mock.answers, 1, 'the answers already given are used again');
+  } finally { await browser.close(); }
+});
+
+test('saved answers play no part; what the prompt covers is filled, and what it does not goes to the Manager', { skip, timeout: 120000 }, async () => {
+  const job = application(16, 'facts');
+  job.savedAnswers = [
+    { questionKey: 'do you need visa sponsorship', questionText: 'Do you need visa sponsorship?', answer: 'Yes', note: null, scope: 'manager' },
+    { questionKey: 'expected salary', questionText: 'Expected salary', answer: '9999 EUR per month', note: null, scope: 'manager' },
+    { questionKey: 'notice', questionText: 'Notice period', answer: '3 months', note: null, scope: 'candidate' },
+  ];
+  // The prompt covers sponsorship and salary, and says nothing about relocating.
+  job.answerPrompt = { id: 'p', template: `Visa sponsorship needed: No. Expected salary: 5,000 - 6000 EUR/month.\n${PROMPT}` };
+  resetMock({ queue: [job] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/facts');
+    assert.equal(await valueOf(form, 'spon'), 'No', 'the prompt, not the saved Yes');
+    assert.equal(await valueOf(form, 'pay'), '5500');
+    assert.equal(await valueOf(form, 'relo'), '', 'nothing in the prompt about relocating: not filled');
+    await until_panel(form, /Are you willing to relocate\?[\s\S]*prompt and résumé do not give it/);
+    assert.equal(mock.prompts.length, 1);
+    for (const text of ['salaryExpectation', 'needsSponsorship', '9999', '3 months']) assert.ok(!mock.prompts[0].includes(text), text);
+    assert.match(mock.prompts[0], /Saved: \(none\)/);
   } finally { await browser.close(); }
 });
 

@@ -91,6 +91,8 @@ async function prepareAutoApplication(application) {
     application.minimalPrompt = false;
     application.aiRetryWaits = AUTO_APPLY_API_RETRY_WAITS;
     delete application.chatFocus;
+    // Saved answers play no part here, at any level: what they held, Super Admin writes in the prompt.
+    application.savedAnswers = [];
   }
   application.factSources = self.__qtsApplyAnswers.factSources({
     candidate: application.candidate,

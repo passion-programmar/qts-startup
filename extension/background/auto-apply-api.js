@@ -407,7 +407,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     const asked = new Map();
     const toAsk = [];
     const verify = (entry, answer) => {
-      const verdict = helpers.verifyApiAnswer(entry, answer, { evidence: application.factSources?.evidence || '' });
+      const verdict = helpers.verifyApiAnswer(entry, answer, { evidence: application.factSources?.evidence || '', instructions: application.answerPrompt?.template || '' });
       const { field } = entry;
       if (verdict.refused) {
         application.aiRefused?.set(field.label, verdict.refused);

@@ -24,6 +24,14 @@
   // Questions that use "accept"/"agree"/"confirm" but ask about the candidate, not about terms.
   const NOT_AN_AGREEMENT = /\b(willing|salary|compensation|relocat\w*|travel|overtime|lower|shift|weekends?|night)\b/i;
   // Auto Apply with APIs: declarations with legal weight. QTS and the AI never answer these; the Manager does.
+  // Auto Apply with APIs: facts Super Admin writes in the prompt, by the name a missing fact goes by.
+  // An answer about one of these is taken when the prompt covers its topic; QTS cannot check it further.
+  const PROMPT_TOPICS = {
+    'visa sponsorship': /sponsor|\bvisa\b/i,
+    relocation: /relocat/i,
+    'notice period': /\bnotice\b|start date|\bavailab/i,
+    'salary expectation': /salar|compensation|\bpay\b/i,
+  };
   const SENSITIVE_DECLARATION = /\b(criminal|convict(?:ed|ions?)?|felon(?:y|ies)?|misdemeanou?rs?|arrest(?:ed|s)?|offen[cs]es?|perjury|sworn|affidavit|drug (?:test|screen)\w*|security clearance|bankrupt\w*|debarred|disciplinary)\b/i;
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
@@ -2134,8 +2142,8 @@
       }
       // The prompt decides how to answer: no hint written here, except what the profile itself says.
       let sent = asked || field;
-      if (asked && (lacking.has(field.id) || /^Use the supplied candidate facts/.test(asked.hint || ''))) {
-        const { hint: _hint, ...rest } = asked;
+      if (asked && (lacking.has(field.id) || /^Use the (supplied candidate facts|generated cover letter)/.test(asked.hint || ''))) {
+        const { hint: _hint, intended: _intended, ...rest } = asked;
         sent = rest;
       }
       const exact = (savedAnswers || []).some((row) => row.questionKey === normalizeQuestionKey(field.label));
@@ -2168,9 +2176,10 @@
   /**
    * One AI answer checked before it is filled. A fact the profile states stays that fact: anything
    * else is replaced by the profile's value, and the Manager is told. A fact the profile lacks must
-   * show in the candidate's documents or saved answers. { answer, corrected? } or { refused: reason }.
+   * come from the prompt (instructions) or show in the candidate's documents.
+   * { answer, corrected? } or { refused: reason }.
    */
-  function verifyApiAnswer(entry, answer, { evidence = '' } = {}) {
+  function verifyApiAnswer(entry, answer, { evidence = '', instructions = '' } = {}) {
     const { field, check, lacking } = entry;
     if (check) {
       if (sameAsProfile(check, answer.value)) return { answer };
@@ -2183,8 +2192,11 @@
     if (lacking) {
       const said = plain(answerWords(answer.value));
       const digits = said.replace(/\D/g, '');
-      const shown = digits.length >= 5 ? String(evidence).replace(/\D/g, '').includes(digits) : Boolean(said) && plain(evidence).includes(said);
-      if (!shown || yesOrNo(said) !== null) return { refused: `the profile has no ${lacking}, and the résumé and saved answers do not show the AI's answer` };
+      const sources = `${evidence}\n${instructions}`;
+      const given = PROMPT_TOPICS[lacking]
+        ? PROMPT_TOPICS[lacking].test(instructions)
+        : yesOrNo(said) === null && (digits.length >= 5 ? sources.replace(/\D/g, '').includes(digits) : Boolean(said) && plain(sources).includes(said));
+      if (!given) return { refused: `the profile has no ${lacking}, and the prompt and résumé do not give it` };
     }
     return { answer };
   }

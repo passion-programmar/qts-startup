@@ -3019,7 +3019,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
               if (items.length) {
                 const result = await workerApiRequest('POST', '/api/extension/apply/check-answers', { attemptId: application.attemptId, items });
                 if (!result.success) throw new Error(result.message || 'Could not save corrections. Click Check to retry.');
-                application.savedAnswers = result.savedAnswers || application.savedAnswers;
+                if (!application.apiFlow) application.savedAnswers = result.savedAnswers || application.savedAnswers;
                 const baseline = new Map((checkBaselines.get(step) || []).map((entry) => [entry.id, entry]));
                 let saved = 0;
                 for (const [index, item] of items.entries()) {
@@ -3055,7 +3055,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
           try {
             const result = await workerApiRequest('POST', '/api/extension/apply/check-answers', { attemptId: application.attemptId, items: [], reuseAnswerId: decision.answerId });
             if (!result.success) throw new Error(result.message);
-            application.savedAnswers = result.savedAnswers || application.savedAnswers;
+            if (!application.apiFlow) application.savedAnswers = result.savedAnswers || application.savedAnswers;
             savedChanges = savedChanges.map((entry) => entry.id === decision.answerId ? { ...entry, scope: 'manager', canReuse: false } : entry);
             notice = 'Saved to your reusable answers. No approval needed.';
           } catch (error) { notice = `Not saved: ${error.message || error}`; }

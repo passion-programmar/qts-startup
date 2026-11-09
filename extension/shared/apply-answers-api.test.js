@@ -91,12 +91,40 @@ test('a yes stays a yes', () => {
   assert.equal(answers.verifyApiAnswer(entry, { value: 'Yes', source: 'ai' }).answer.value, 'No');
 });
 
-test('a fact the profile lacks must show in the documents', () => {
-  const entry = { field: field('dob', 'Phone'), lacking: 'phone' };
-  assert.ok(answers.verifyApiAnswer(entry, { value: '0711 222 333', source: 'ai' }, { evidence: 'CV. Call 0711222333.' }).answer);
-  assert.match(answers.verifyApiAnswer(entry, { value: '0711 222 333', source: 'ai' }, { evidence: 'CV.' }).refused, /no phone/);
-  const guess = { field: field('r', 'Willing to relocate?'), lacking: 'relocation' };
-  assert.ok(answers.verifyApiAnswer(guess, { value: 'Yes', source: 'ai' }, { evidence: 'Yes I can' }).refused);
+test('a personal fact the profile lacks must show in the résumé or the prompt', () => {
+  const entry = { field: field('p', 'Phone'), lacking: 'phone' };
+  const said = { value: '0711 222 333', source: 'ai' };
+  assert.ok(answers.verifyApiAnswer(entry, said, { evidence: 'CV. Call 0711222333.' }).answer);
+  assert.ok(answers.verifyApiAnswer(entry, said, { evidence: 'CV.', instructions: 'Phone to give: 0711 222 333' }).answer);
+  assert.match(answers.verifyApiAnswer(entry, said, { evidence: 'CV.' }).refused, /no phone/);
+});
+
+test('sponsorship, relocation, notice and salary are taken when the prompt covers them', () => {
+  const prompt = 'Visa sponsorship needed: No; willing to relocate: No; notice period: Immediately; expected salary: 5,000 - 6000 EUR/month';
+  for (const [lacking, label, value] of [
+    ['visa sponsorship', 'Do you need sponsorship?', 'No'],
+    ['relocation', 'Willing to relocate?', 'No'],
+    ['notice period', 'Notice period', 'Within 2 weeks'],
+    ['salary expectation', 'Expected salary', '5500'],
+  ]) {
+    const entry = { field: field('x', label), lacking };
+    const answer = { value, source: 'ai' };
+    assert.deepEqual(answers.verifyApiAnswer(entry, answer, { instructions: prompt }), { answer }, lacking);
+    assert.match(answers.verifyApiAnswer(entry, answer, { instructions: 'Answer the questions.' }).refused, /prompt and résumé do not give it/, lacking);
+  }
+});
+
+test('with no saved answers those facts are lacking, not made up', () => {
+  const result = plan([field('s', 'Do you need visa sponsorship?', { kind: 'select', options: ['Yes', 'No'] }), field('m', 'Expected salary'), field('n', 'Notice period')]);
+  assert.deepEqual(result.ai.map((entry) => entry.lacking), ['visa sponsorship', 'salary expectation', 'notice period']);
+  assert.deepEqual(result.ai.map((entry) => entry.field.hint), [undefined, undefined, undefined]);
+});
+
+test('a cover letter box too small for the letter is a question of its own: the letter is not sent', () => {
+  const result = answers.planApiFields([field('l', 'Cover letter', { kind: 'textarea', maxLength: 10 })], CANDIDATE, [], { today: new Date('2026-11-08'), coverLetterText: 'A letter that is longer than ten characters.' });
+  assert.equal(result.ai.length, 1);
+  assert.equal(result.ai[0].field.hint, undefined);
+  assert.equal(result.ai[0].field.intended, undefined);
 });
 
 test('an AI value picked for a list the profile can only hint at must keep the meaning', () => {

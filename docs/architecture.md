@@ -125,7 +125,8 @@ the form by itself, preferring a way in without an account; after filling a step
 it stops, and the Manager clicks Next and Submit. Each step is checked against the
 candidate before Submit, and what fails holds the site's Submit. Super Admin's
 "Gemini · Application-answer generation" prompt decides what the AI is told; the
-code adds only the reply format.
+code adds only the reply format. This flow ignores saved answers at every level:
+facts such as sponsorship, relocation, notice and salary come from that prompt.
 
 Application-session, scanner, and Gmail code remains unfinished product work.
 Assisted Apply and Auto Apply use the supported Manager-authenticated claim,
