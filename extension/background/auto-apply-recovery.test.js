@@ -7,16 +7,17 @@ const vm = require('node:vm');
 function fixture(records = {}, failWrites = false) {
   const saved = { qtsAutoApplyRuns: records };
   const calls = [];
+  const setAside = [];
   const errors = [];
   let response = { success: true };
   const session = {};
   const context = vm.createContext({ self: {}, EXTENSION_STATUS_KEY: 'qtsExtensionStatus', console: { error: (...args) => errors.push(args) }, crypto: require('node:crypto').webcrypto,
     chrome: { storage: { local: { get: async key => ({ [key]: saved[key] }), set: async values => { if (failWrites) throw Error('Storage is unavailable.'); Object.assign(saved, structuredClone(values)); } }, session: { get: async key => ({ [key]: session[key] }), set: async values => Object.assign(session, values) }, onChanged: { addListener() {} } }, tabs: { get: async () => { throw Error('No such tab'); } } },
-    notifyApply: async () => {},
+    notifyApply: async () => {}, noteCancelledJob: async jobId => { setAside.push(jobId); },
     giveBackChatTab: async () => {}, workerApiRequest: async (method, url, body) => { calls.push({ method, url, body }); return response; },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'auto-apply-runner.js'), 'utf8'), context);
-  return { api: context.self.__qtsAutoApply, saved, calls, errors, reply: value => { response = value; } };
+  return { api: context.self.__qtsAutoApply, saved, calls, errors, setAside, reply: value => { response = value; } };
 }
 
 test('Auto Apply recovery storage failures are reported and not shaped as a successful release', async () => {
@@ -69,6 +70,44 @@ test('a missing application tab is released automatically, keeping the checkpoin
   assert.equal(f.saved.qtsAutoApplyRuns.a.step, 2);
   assert.deepEqual(f.saved.qtsAutoApplyRuns.a.used, { Question: { value: 'Saved answer' } });
   assert.ok(f.calls.every(c => c.url.endsWith('/release')));
+});
+
+const API_RUN = { attemptId: 'a', jobId: 'j', apiFlow: true, tabId: 999, step: 2, used: { Question: { value: 'An AI answer' } } };
+
+test('Auto Apply with APIs: a job whose tab went while QTS restarted goes back unchanged and nothing of it stays here', async () => {
+  const f = fixture({ a: structuredClone(API_RUN) });
+  await f.api.resumeRuns();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].body.mode, 'drop');
+  assert.equal(f.calls[0].body.appliedAnswers.length, 0);
+  assert.deepEqual(f.saved.qtsAutoApplyRuns, {});
+  assert.deepEqual(f.setAside, ['j'], 'this run goes on without it');
+});
+
+test('Auto Apply with APIs: stopped before Chrome restarted, the job goes back unchanged', async () => {
+  const f = fixture({ a: structuredClone(API_RUN) });
+  assert.equal(await f.api.recoverStoppedRuns(), true);
+  assert.equal(f.calls[0].body.mode, 'drop');
+  assert.deepEqual(f.saved.qtsAutoApplyRuns, {});
+});
+
+test('Auto Apply with APIs: a give-back that failed is retried the same way, then nothing stays', async () => {
+  const f = fixture();
+  f.reply({ success: false, _httpStatus: 503 });
+  assert.equal(await f.api.releaseRun({ attemptId: 'a', jobId: 'j', apiFlow: true, releaseMode: 'drop' }, 'The tab was closed.', []), false);
+  assert.equal(f.saved.qtsAutoApplyRuns.a.pendingRelease, true);
+  f.reply({ success: true });
+  assert.equal(await f.api.retryPendingReleases(), true);
+  assert.deepEqual(f.calls.map(c => c.body.mode), ['drop', 'drop']);
+  assert.deepEqual(f.saved.qtsAutoApplyRuns, {});
+});
+
+test('Auto Apply with APIs: a real failure still says why on the job', async () => {
+  const f = fixture({ a: structuredClone(API_RUN) });
+  assert.equal(await f.api.releaseRun({ attemptId: 'a', jobId: 'j', apiFlow: true, releaseMode: 'later' }, 'No way to the application form was found.', []), true);
+  assert.equal(f.calls[0].body.mode, 'later');
+  assert.equal(f.calls[0].body.reason, 'No way to the application form was found.');
+  assert.deepEqual(f.saved.qtsAutoApplyRuns, {});
 });
 
 test('after a Chrome restart a submitted application is never replayed and cannot block the queue', async () => {

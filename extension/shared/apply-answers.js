@@ -1845,7 +1845,7 @@
       job_title: job.title || '',
       company: job.company || '',
       job_location: job.location || 'not stated',
-      job_description: String(job.description || '').slice(0, minimal ? 6000 : 12000),
+      job_description: String(job.description || '').slice(0, minimal ? 6000 : apiFlow ? undefined : 12000),
       today: formatDate(new Date(today || Date.now())),
       candidate_profile: JSON.stringify(candidateFacts(candidate, job, fields, exchangeRates, today, { minimal, apiFlow })),
       resume: resume || '(none)',

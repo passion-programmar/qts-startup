@@ -176,6 +176,13 @@ async function runAutoApplication(application, recipe, resume = null) {
 }
 
 async function resumeForClaimedJob(application) {
+  // Auto Apply with APIs keeps nothing between runs: whatever an earlier run left of this job goes.
+  if (application.autoApplyApi === true) {
+    await changeStoredRuns((all) => {
+      for (const [id, record] of Object.entries(all)) if (record.jobId === application.job.id && !record.submitted && !record.pendingRelease) delete all[id];
+    });
+    return null;
+  }
   const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
   const entry = Object.entries(stored).find(([, record]) =>
     record.jobId === application.job.id && !record.submitted && !record.pendingRelease
@@ -236,6 +243,8 @@ async function resumeAutoApplyRuns(selection, limit = 2) {
     if (!application) {
       if (!tab) {
         if (!(await releaseInterruptedAutoRun(record, 'Its tab was closed while QTS restarted.'))) throw new Error('QTS is retrying cleanup of a closed application tab.');
+        // Auto Apply with APIs: this run goes on without the job; it is back on the list, unchanged.
+        if (record.apiFlow) await noteCancelledJob(record.jobId);
         continue;
       }
       if (![404, 409].includes(reply?._httpStatus)) throw new Error('QTS could not resume the application yet. It will retry automatically.');
@@ -254,27 +263,29 @@ async function resumeAutoApplyRuns(selection, limit = 2) {
 // This queue only gives unfinished jobs back; it never submits or confirms an application.
 async function releaseInterruptedAutoRun(record, reason = record.releaseReason, answers = record.releaseAnswers || []) {
   if (record.submitted) return true;
+  // Auto Apply with APIs: a job closed, cancelled or cut off goes back exactly as it was (nothing recorded).
+  const releaseMode = record.releaseMode || (record.apiFlow ? 'drop' : 'later');
   const pending = {
     ...record,
     attemptId: record.attemptId,
     jobId: record.jobId,
     pendingRelease: true,
     paused: false,
+    releaseMode,
     releaseReason: reason || 'Interrupted Auto Apply application.',
     releaseAnswers: answers,
   };
   await changeStoredRuns((all) => { all[record.attemptId] = { ...(all[record.attemptId] || {}), ...pending }; });
   const reply = await workerApiRequest('POST', '/api/extension/apply/release', {
-    attemptId: pending.attemptId, mode: 'later', reason: pending.releaseReason, appliedAnswers: answers,
+    attemptId: pending.attemptId, mode: releaseMode, reason: pending.releaseReason, appliedAnswers: answers,
   }).catch(() => null);
   // A lost response may mean release already succeeded. 409 cannot release or resubmit a live
   // confirmation; the server retains its existing ownership and post-Submit protections.
   if (reply?.success === true || reply?._httpStatus === 409 || reply?._httpStatus === 404) {
     await changeStoredRuns((all) => {
       const saved = all[record.attemptId];
-      if (saved && !saved.submitted) {
-        all[record.attemptId] = { ...saved, pendingRelease: false, paused: true, tabId: null };
-      }
+      if (saved?.apiFlow && !saved.submitted) delete all[record.attemptId];
+      else if (saved && !saved.submitted) all[record.attemptId] = { ...saved, pendingRelease: false, paused: true, tabId: null };
     });
     return true;
   }

@@ -208,8 +208,23 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
   const seeksGuestWay = !handleAccountSteps || guestFirst;
   const tick = guestFirst ? 300 : 1000;
   const clicked = [];
+  // Auto Apply with APIs: the pages passed through, for the failure report and to stop a loop.
+  const trail = [];
+  const visited = new Set();
+  let bounces = 0;
+  let lookedAgain = false;
   for (let step = 0; step < APPLY_START_STEPS; step += 1) {
     if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
+    if (guestFirst) {
+      const here = String((await getTab(tab.id))?.url || '').split('#')[0];
+      if (self.__qtsApplyRecipes.hostedBoardApply(here)) throw self.__qtsAutoApplyApi.hostedApplyStop(here);
+      if (here && trail.at(-1) !== here) {
+        if (visited.has(here)) bounces += 1;
+        visited.add(here);
+        trail.push(here);
+      }
+      if (bounces >= 2) throw new ApplyStop(await self.__qtsAutoApplyApi.describeNoRoute(tab.id, clicked, trail, 'QTS kept being sent back to the same pages'), { skip: false });
+    }
     await inForm(tab.id, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
     // Pages often build their content after loading; give the form a few seconds to appear. A page
     // still empty (Workday draws everything with JavaScript) gets up to 20 s; one whose Apply button
@@ -221,6 +236,12 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       if (['email_first_application', 'authentication_required', 'registration_required',
         'verification_required', 'captcha_required'].includes(page?.type)) break;
       if (page?.type === 'application_navigation' && waited >= 2000) break;
+      if (guestFirst && page?.type === 'unsupported_page' && waited >= 1500) {
+        const found = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true, apiFlow: true }), [clicked]).catch(() => null);
+        if (found?.ok) break;
+        // Finished drawing, and no way on: no reason to wait out the full time.
+        if (waited >= 3000 && await inForm(tab.id, () => globalThis.__qtsApplyForm.pageSettledWithText()).catch(() => false)) break;
+      }
       if (waited >= 6000 && page && page.type !== 'unsupported_page') break;
       await sleep(tick);
     }
@@ -232,7 +253,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     // clicks it below); only a page offering nothing but signing in waits for the Manager.
     let accountEscape = false;
     if (seeksGuestWay && ['email_first_application', 'authentication_required', 'registration_required'].includes(page?.type)) {
-      const probe = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true }), [clicked]).catch(() => null);
+      const probe = await inForm(tab.id, (skip, apiFlow) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true, apiFlow }), [clicked, guestFirst]).catch(() => null);
       accountEscape = probe?.ok === true;
     }
     if (!accountEscape && ['email_first_application', 'authentication_required', 'registration_required'].includes(page?.type)) {
@@ -292,13 +313,22 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     }
     const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
     if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
-    let start = await inForm(tab.id, (skip, assistant) => globalThis.__qtsApplyForm.clickStart(skip, { assistant }), [clicked, seeksGuestWay]).catch(() => null);
+    let start = await inForm(tab.id, (skip, assistant, apiFlow) => globalThis.__qtsApplyForm.clickStart(skip, { assistant, apiFlow }), [clicked, seeksGuestWay, guestFirst]).catch(() => null);
     // Nothing leads on without an account: only now the site's own Sign in or Register.
     if (guestFirst && !start?.ok && !start?.email) {
-      start = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: false }), [clicked]).catch(() => null);
+      start = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: false, apiFlow: true }), [clicked]).catch(() => null);
     }
     if (start?.email) throw new ApplyStop('This job takes applications by email; apply by hand.');
-    if (!start?.ok) break;
+    if (!start?.ok) {
+      // A control the page draws a moment later gets one more look, once.
+      if (guestFirst && !lookedAgain) {
+        lookedAgain = true;
+        await inForm(tab.id, () => globalThis.__qtsApplyForm.settled({ quietMs: 1500, maxMs: 4000 })).catch(() => false);
+        step -= 1;
+        continue;
+      }
+      break;
+    }
     if (start.frameUrl) {
       await chrome.tabs.update(tab.id, { url: start.frameUrl });
       await sleep(500);
@@ -309,7 +339,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     const urlBefore = (await getTab(tab.id))?.url;
     let movedOn = false;
     // The button may open a new tab, load another page, or show the form on this one.
-    for (let waited = 0; waited < APPLY_START_WAIT_MS; waited += tick) {
+    for (let waited = 0; waited < (guestFirst ? 8000 : APPLY_START_WAIT_MS); waited += tick) {
       await sleep(tick);
       if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
       const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && entry.openerTabId === tab.id);
@@ -331,6 +361,10 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
         break;
       }
       if ((await getTab(tab.id))?.url !== urlBefore) movedOn = true;
+      if (guestFirst && movedOn) {
+        await waitForTabComplete(tab.id, 45 * 1000);
+        break;
+      }
     }
     // A link the page caught instead of following (Jobgether's sign-up box when not signed in):
     // its address is opened directly, as a person would by opening the link.
@@ -350,7 +384,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
   const gate = await inForm(tab.id, () => globalThis.__qtsApplyForm.pageGate()).catch(() => null);
   if (gate?.kind === 'bot_check') throw new ApplyStop(`The site asked for a human check ("${String(gate.text).slice(0, 60)}"); QTS does not get around it. Open the job and apply by hand.`, { pageType: 'captcha_required' });
   if (gate?.kind === 'login') throw new ApplyStop(`The site asks to sign in or create an account before applying ("${String(gate.text).slice(0, 60)}"); enter credentials yourself and continue.`, { pageType: 'authentication_required' });
-  throw await pageStop(tab.id, 'No application form or Apply button was found on the job page; apply by hand.');
+  throw await pageStop(tab.id, guestFirst ? await self.__qtsAutoApplyApi.describeNoRoute(tab.id, clicked, trail) : 'No application form or Apply button was found on the job page; apply by hand.');
 }
 
 /**
@@ -1116,10 +1150,12 @@ async function fetchApplyDocuments(attemptId) {
     };
   } catch (error) {
     const reason = typeof error?.message === 'string' && error.message ? error.message : 'The saved PDFs could not be read.';
-    throw new ApplyStop(
+    const stop = new ApplyStop(
       `Apply needs the existing Generation PDFs and will not regenerate them. ${reason} Open QTS > Tools > Apply PDFs folder to check local PDF access. Confirm both exact saved files are still in their Generation folder.`,
       { skip: false },
     );
+    stop.pdfAccess = /Choose the QTS_Resume folder|folder is unavailable|folder permission is unavailable/.test(reason);
+    throw stop;
   }
 }
 
@@ -2063,7 +2099,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return retryAssistedAutofill(msg.attemptId, sender.tab?.id);
     }
     // Fill again: this page only, once, also while autofill is paused; the Manager's edits stay.
-    if (msg.action === 'fill_again') {
+    // (Auto Apply with APIs: it goes on below, to the application waiting for the Manager.)
+    if (msg.action === 'fill_again' && activeReviews.get(msg.attemptId)?.panel?.apiFlow !== true) {
       const review = activeReviews.get(msg.attemptId);
       if (sender.id !== chrome.runtime.id || !review?.assist || !tabsOf(review).has(sender.tab?.id) || review.assistant?.stopped) {
         return { ok: false, error: 'This page no longer owns an active Apply application.' };
@@ -2540,6 +2577,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   const heartbeat = setInterval(() => keepAlive().catch(() => {}), auto ? AUTO_APPLY_HEARTBEAT_MS : APPLY_HEARTBEAT_MS);
   // resume (Auto Apply after its worker restarted): the answers so far, and the step it was on.
   const answersUsed = { ...(resume?.used || {}) };
+  // Auto Apply with APIs records answers only with a real Submit: anything else starts fresh next time.
+  const keptAnswers = () => (application.apiFlow ? [] : appliedAnswers(answersUsed));
   const checkBaselines = new Map(resume?.checkBaselines || []);
   let savedChanges = resume?.savedChanges || [];
   application.answerCache = new Map(resume?.cache || []);
@@ -2551,6 +2590,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     application.clearedSites = new Set();
     application.cleanedBoxes = new Set(resume?.cleanedBoxes || []);
     application.seedCleanOnce = Boolean(resume?.tabId != null);
+    application.destinationConfirmed = Boolean(resume?.tabId != null);
     application.stuckBoxes = new Map(resume?.stuckBoxes || []);
   }
   const dryRun = !auto && (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
@@ -2569,7 +2609,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     refused: [...(application.aiRefused || [])], aiCalls: application.aiCalls || 0, provisional: [...provisional.values()],
     ...(checklist ? { checklist: checklist.save(), stepShapes: [...stepShapes] } : {}),
     ...(application.apiFlow ? {
-      verifiedSites: [...application.verifiedSites], cleanedBoxes: [...application.cleanedBoxes],
+      apiFlow: true, verifiedSites: [...application.verifiedSites], cleanedBoxes: [...application.cleanedBoxes],
       stuckBoxes: [...application.stuckBoxes], candidateId: application.candidate?.candidateId ?? null,
     } : {}),
   });
@@ -2664,7 +2704,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     ...(auto ? { auto: true, onClosed: () => {
       tabClosed = true;
       aiAbortController?.abort();
-      signalStop('The application tab was closed. QTS will retry it automatically.');
+      signalStop(application.apiFlow ? 'The application tab was closed. The job went back to the list, unchanged.' : 'The application tab was closed. QTS will retry it automatically.');
     } } : {}),
   };
   review.onTab = (opened) => {
@@ -2723,8 +2763,14 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     ...(auto && path === 'result' && body.submitted === true ? { removeJob: true } : {}),
   });
   const release = (mode, reason) => auto
-    ? self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id }, reason.slice(0, 480), appliedAnswers(answersUsed))
+    ? self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id, ...(application.apiFlow ? { apiFlow: true, releaseMode: mode } : {}) }, reason.slice(0, 480), keptAnswers())
     : report('release', { mode, reason: reason.slice(0, 480), appliedAnswers: appliedAnswers(answersUsed) });
+  // A job this run is finished with is not offered again until Apply restarts. Auto Apply with APIs: not
+  // when Apply has stopped or another candidate was chosen, so that the next run can still offer it.
+  const setAside = async () => {
+    if (application.apiFlow && (stopRequested || !(await isApplyOn()))) return;
+    await noteCancelledJob(application.job.id);
+  };
   let tab = null;
   let submitted = false;
   const manualAccountStep = async (stepNumber, message, notice) => {
@@ -2784,6 +2830,19 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     }
     throw new ApplyStop('This site still shows another account. Sign out of it, then start this application again.', { skip: false });
   };
+  /**
+   * Auto Apply with APIs: a form reached on another site must be this job's, before anything is
+   * emptied or filled. Returns the Manager's decision when it is not to go on.
+   */
+  const confirmDestination = async (stepNumber) => {
+    const page = await inForm(tab.id, () => globalThis.__qtsApplyForm.pageIdentity()).catch(() => null);
+    if (!self.__qtsApplyRecipes.sameJobPage({ savedUrl: application.job.url, page, company: application.job.company, title: application.job.title })) {
+      const decision = await manualAccountStep(stepNumber, `This page does not mention ${application.job.title} at ${application.job.company}. Choose Continue only if it is the right job; otherwise choose Skip.`, 'Check this is the right job.');
+      if (!['continue', 'continue_manual'].includes(decision.action)) return decision.action;
+    }
+    application.destinationConfirmed = true;
+    return null;
+  };
   try {
     // Resumed after a restart: the form is already open in its tab, at its step.
     const resumedTab = resume?.tabId != null ? await chrome.tabs.get(resume.tabId).catch(() => null) : null;
@@ -2837,9 +2896,13 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         if (decision) return await finishBeforeSubmit(decision);
         continue;
       }
+      if (application.apiFlow && !application.destinationConfirmed) {
+        const decision = await confirmDestination(step);
+        if (decision) return await finishBeforeSubmit(decision);
+      }
       application.formTabId = tab.id;
       currentStep = step;
-      await report('review', { review: false, appliedAnswers: appliedAnswers(answersUsed) });
+      await report('review', { review: false, appliedAnswers: keptAnswers() });
       review.panel = reviewState('working', { step, workingText: fillAgain ? 'Filling again…' : `Filling step ${step}…` });
       await showReviewPanel(tab.id, review.panel).catch(() => {});
       await onProgress({ step, phase: 'filling', ...(auto ? { memory: memory() } : {}) });
@@ -2890,7 +2953,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         checkBaselines.set(step, [...baseline, ...(now || []).filter((entry) => !known.has(entry.id))]);
       }
       for (const [label, answer] of Object.entries(filled.used)) {
-        if (!answer.file) application.answerCache.set(label, answer);
+        if (!answer.file && !application.apiFlow) application.answerCache.set(label, answer);
       }
       for (const entry of filled.unresolved || []) unresolved.set(entry.label, { ...entry, step });
       for (const label of Object.keys(filled.used)) unresolved.delete(label);
@@ -2960,7 +3023,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         return;
       }
 
-      await report('review', { review: true, appliedAnswers: appliedAnswers(answersUsed) });
+      await report('review', { review: true, appliedAnswers: keptAnswers() });
       const problemFieldIds = problems.map((entry) => entry.fieldId).filter(Boolean);
       // Auto Apply: the step's checklist checked on the page itself before the Manager sees it.
       await recheckPage(tab.id, step);
@@ -3012,7 +3075,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         }
         // Auto Apply: "Check again" reads the page again (nothing filled) after the Manager's changes.
         if (auto && decision.action === 'recheck') {
-          if (decision.manualCheck) {
+          if (decision.manualCheck && !application.apiFlow) {
             try {
               const current = decision.answers || await inForm(tab.id, () => globalThis.__qtsApplyForm.currentAnswers());
               const items = self.__qtsApplyAnswers.changedCorrections(checkBaselines.get(step), current);
@@ -3104,7 +3167,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       if (decision.action === 'fill_again' || decision.action === 'ask_again') {
         checkBaselines.delete(step);
         // Fill again reuses the answers (no ChatGPT for known questions); Ask again forgets ChatGPT's failures.
-        if (decision.action === 'ask_again') {
+        // Auto Apply with APIs keeps no answers: either one is a new AI request.
+        if (decision.action === 'ask_again' || application.apiFlow) {
           application.answerCache.clear();
           application.aiRefused?.clear();
         }
@@ -3113,7 +3177,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       }
       if (decision.action === 'submitted') {
         const current = decision.answers || await inForm(tab.id, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []);
-        const marked = await report('submitted', { appliedAnswers: submittedAnswers(answersUsed, current), learned: learnedAnswers(answersUsed, current) });
+        const marked = await report('submitted', { appliedAnswers: submittedAnswers(answersUsed, current), learned: application.apiFlow ? [] : learnedAnswers(answersUsed, current) });
         if (!marked.success) throw new ApplyStop(marked.message || 'QTS did not record the Submit.', { skip: false, keepTab: false });
         submitted = true;
         await onProgress({ step, phase: 'submitted', memory: memory() });
@@ -3139,11 +3203,20 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     // closing below then shows the Manager's tab it was opened from).
     if (auto) await giveBackChatTab(application.attemptId).catch(() => {});
     // Auto Apply preserves the last completed form step when stopped, closed, or when its claim is lost.
-    const resumePending = auto && (stopRequested || tabClosed || lostClaim);
+    // Auto Apply with APIs keeps nothing: the job goes back exactly as it was, with nothing recorded.
+    const interrupted = auto && (stopRequested || tabClosed || lostClaim);
+    const resumePending = interrupted && !application.apiFlow;
     if (resumePending) await captureInterruptedAnswers();
     await onProgress({ step: currentStep, phase: 'ended', reason: stop.message, resumePending, memory: memory() });
-    await release(stop.dryRun ? 'test' : auto ? 'later' : stop.skip ? 'skip' : 'error', stop.message).catch(() => {});
-    if (auto && !resumePending) await noteCancelledJob(application.job.id).catch(() => {});
+    await release(interrupted && application.apiFlow ? 'drop' : stop.dryRun ? 'test' : auto ? 'later' : stop.skip ? 'skip' : 'error', stop.message).catch(() => {});
+    // Auto Apply with APIs: without the PDF folder every job would fail the same way, so the run ends here.
+    const noPdfFolder = application.apiFlow === true && stop.pdfAccess === true;
+    if (auto && !resumePending && !noPdfFolder) await setAside().catch(() => {});
+    if (noPdfFolder) {
+      stop.keepTab = false;
+      await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null }).catch(() => {});
+      await notifyApply('Auto Apply stopped: QTS cannot read the QTS_Resume folder in this Chrome. Choose it under Apply PDFs folder, then start again.').catch(() => {});
+    }
     // Test mode gives the job back, so the same job would be claimed again at once: one test per click.
     if (stop.dryRun) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
     if (stop.keepTab) {
@@ -3170,11 +3243,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
 
   // Skip, Later, a closed tab, a lost claim, or Apply turned off during review: the job is given back.
   async function finishBeforeSubmit(action) {
-    const mode = action === 'skip' && !auto ? 'skip' : 'later';
-    const resumePending = auto && (stopRequested || tabClosed || ['closed', 'cancel', 'lost'].includes(action));
+    // Auto Apply with APIs: whatever ended it here, the job goes back exactly as it was, with nothing recorded.
+    const mode = application.apiFlow ? 'drop' : action === 'skip' && !auto ? 'skip' : 'later';
+    const resumePending = auto && !application.apiFlow && (stopRequested || tabClosed || ['closed', 'cancel', 'lost'].includes(action));
     if (resumePending) await captureInterruptedAnswers();
     await onProgress({ step: currentStep, phase: 'ended', reason: action, resumePending, memory: memory() });
-    if (auto && !resumePending) await noteCancelledJob(application.job.id).catch(() => {});
+    if (auto && !resumePending) await setAside().catch(() => {});
     const reason = action === 'skip' ? 'Skipped by the Manager.'
       : action === 'closed' ? 'The review tab was closed; the job went back to the list.'
         : 'The Manager will apply later.';
@@ -4241,7 +4315,7 @@ async function processApplyQueue() {
         continue;
       }
       if (!(await isApplyOn())) {
-        if (autoApply) await self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id }, 'Auto Apply stopped while claiming this job.');
+        if (autoApply) await self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id, ...(application.autoApplyApi === true ? { apiFlow: true } : {}) }, 'Auto Apply stopped while claiming this job.');
         else await workerApiRequest('POST', '/api/extension/apply/release', { attemptId: application.attemptId, mode: 'later', reason: 'Apply stopped while claiming this job.' });
         break;
       }

@@ -185,6 +185,15 @@ test('a box with a required pattern says so', () => {
   assert.doesNotMatch(prompt({ fields: [field('z', 'Postcode', { pattern: '[0-9]{5}' })] }), /"pattern"/);
 });
 
+test('the whole job description goes to the AI; the older prompts keep their limits', () => {
+  const description = 'x'.repeat(30000);
+  const template = 'J: {{job_description}}\nQ: {{questions}}';
+  const length = (extra) => (answers.buildAnswerPrompt({ template, job: { description }, candidate: CANDIDATE, fields: [field('a', 'Email')], savedAnswers: [], today: new Date('2026-11-08'), ...extra }).match(/x+/) || [''])[0].length;
+  assert.equal(length({ apiFlow: true }), 30000);
+  assert.equal(length({}), 12000);
+  assert.equal(length({ minimal: true }), 6000);
+});
+
 test('the follow-up keeps the reply shape only', () => {
   const text = answers.buildFixPrompt([{ id: 'a', label: 'Email', reason: 'not taken' }], [field('a', 'Email')], { apiFlow: true });
   assert.match(text, /Reply with JSON only/);

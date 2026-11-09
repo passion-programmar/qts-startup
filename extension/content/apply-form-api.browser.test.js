@@ -97,6 +97,98 @@ test('a tracking code already on the form is marked to stay; an empty one is a q
   assert.equal(fields.find((field) => field.label === 'Promo code').trackingValue, undefined);
 });
 
+test('a "Preferred" question is emptied; a real referral code stays', { skip }, async () => {
+  const html = `<form>${BOXES}<div><label for="p">Preferred location</label><input id="p" value="Berlin"></div><div><label for="r">Referral code</label><input id="r" value="KEEP"></div></form>`;
+  const after = await onPage(html, `
+    await api.emptyOldAnswers({ uploads: true });
+    return { preferred: document.getElementById('p').value, referral: document.getElementById('r').value };
+  `);
+  assert.deepEqual(after, { preferred: '', referral: 'KEEP' });
+  const fields = await onPage(html, 'return api.scanForAssist();');
+  assert.equal(fields.find((field) => field.label === 'Preferred location').trackingValue, undefined);
+  assert.equal(fields.find((field) => field.label === 'Referral code').trackingValue, true);
+});
+
+test('Normal Apply\'s cleaning treats "Preferred" boxes as before', { skip }, async () => {
+  const value = await onPage(`<form>${BOXES}<div><label for="p">Preferred location</label><input id="p" value="Berlin"></div></form>`, `
+    await api.emptyOldAnswers({});
+    return document.getElementById('p').value;
+  `);
+  assert.equal(value, 'Berlin');
+});
+
+test('a dropdown at its own start is not reported; one showing another choice is', { skip }, async () => {
+  const html = `<form>${BOXES}<div><label for="cur">Salary currency</label><select id="cur"><option>USD</option><option>EUR</option></select></div></form>`;
+  assert.deepEqual(await onPage(html, 'return (await api.emptyOldAnswers({ uploads: true })).stuck;'), []);
+  const changed = await onPage(html, `
+    document.getElementById('cur').value = 'EUR';
+    return (await api.emptyOldAnswers({ uploads: true })).stuck;
+  `);
+  assert.deepEqual(changed.map((box) => box.label), ['Salary currency']);
+});
+
+test('a start control drawn without a real button is found only when asked for', { skip }, async () => {
+  const html = '<h1>A job</h1><div class="btn" onclick="window.started = true">Apply for this Position</div>';
+  assert.equal((await onPage(html, 'return api.clickStart([], { assistant: true, probe: true });')).ok, false);
+  const found = await onPage(html, 'return api.clickStart([], { assistant: true, probe: true, apiFlow: true });');
+  assert.deepEqual([found.ok, found.text], [true, 'Apply for this Position']);
+  assert.equal(await onPage(html, 'api.clickStart([], { assistant: true, apiFlow: true }); return window.started === true;'), true);
+});
+
+test('a drawn control is clicked at its innermost element, so the handler is reached either way', { skip }, async () => {
+  const html = '<h1>A job</h1><div id="outer" onclick="window.started = event.target.id" style="cursor:pointer"><span id="inner">Apply now</span></div>';
+  assert.equal(await onPage(html, 'api.clickStart([], { assistant: true, apiFlow: true }); return window.started;'), 'inner');
+});
+
+test('a drawn Continue or Apply as guest counts too', { skip }, async () => {
+  for (const words of ['Continue', 'Apply as guest']) {
+    const found = await onPage(`<h1>A job</h1><div onclick="1">${words}</div>`, 'return api.clickStart([], { assistant: true, probe: true, apiFlow: true });');
+    assert.deepEqual([found.ok, found.text], [true, words]);
+  }
+});
+
+test('a long answer is read back from the page in full', { skip }, async () => {
+  const length = await onPage(`<form>${BOXES}<div><label for="t">Why us?</label><textarea id="t">${'word '.repeat(200)}</textarea></div></form>`, `
+    return api.auditForm().fields.find((field) => field.label === 'Why us?').value.length;
+  `);
+  assert.ok(length > 900, String(length));
+});
+
+test('the API flow reads a question\'s whole help text; every other flow keeps its limit', { skip }, async () => {
+  const help = 'Tell us in detail. '.repeat(30);
+  const html = `<form>${BOXES}<div><label for="t">Why us?</label><span id="h">${help}</span><textarea id="t" aria-describedby="h"></textarea></div></form>`;
+  const [whole, limited] = await onPage(html, "return [api.scanForAssist({ fullNotes: true }), api.scanForAssist()].map((fields) => fields.find((field) => field.label === 'Why us?').note.length);");
+  assert.ok(whole > 500, String(whole));
+  assert.ok(limited <= 200, String(limited));
+});
+
+test('more start words count only for the API flow', { skip }, async () => {
+  const html = '<h1>A job</h1><a href="#x">Get started</a>';
+  assert.equal((await onPage(html, 'return api.clickStart([], { assistant: true, probe: true });')).ok, false);
+  assert.equal((await onPage(html, 'return api.clickStart([], { assistant: true, probe: true, apiFlow: true });')).ok, true);
+});
+
+test('a failure report names the application controls on the page', { skip }, async () => {
+  const controls = await onPage('<h1>A job</h1><a href="#a">Apply on LinkedIn</a><button>Share</button><div onclick="1">Start your journey</div>', 'return api.applyControlsSeen();');
+  assert.deepEqual(controls, ['Apply on LinkedIn', 'Start your journey']);
+});
+
+test('the wait for a page says whether it went quiet', { skip }, async () => {
+  assert.equal(await onPage('<p>x</p>', 'return api.settled({ quietMs: 100, maxMs: 1500 });'), true);
+  assert.equal(await onPage('<p id="x">x</p>', `setInterval(() => { document.getElementById('x').textContent += '.'; }, 30); return api.settled({ quietMs: 200, maxMs: 600 });`), false);
+});
+
+test('other drawn text is not taken for a start control', { skip }, async () => {
+  for (const html of [
+    '<div onclick="1">Apply for this Position with LinkedIn</div>',
+    '<div style="cursor:pointer">Read more about the role</div>',
+    '<div>Apply now</div>',
+    `<div onclick="1">${'Apply for this role and tell us about yourself. '.repeat(4)}</div>`,
+  ]) {
+    assert.equal((await onPage(`<h1>A job</h1>${html}`, 'return api.clickStart([], { assistant: true, probe: true, apiFlow: true });')).ok, false, html.slice(0, 50));
+  }
+});
+
 test('uploads holding someone else\'s file are named', { skip }, async () => {
   const html = `<form>${BOXES}<div><label for="cv">Resume</label><input id="cv" type="file"><span>other_person.pdf</span></div></form>`;
   assert.deepEqual((await onPage(html, 'return api.foreignUploads(["Ana.pdf"]);')).map((entry) => entry.name), ['other_person.pdf']);

@@ -100,6 +100,11 @@ async function checkSiteAccount(tabId, application, options) {
   const { site } = prepared;
   const candidateId = application.candidate?.candidateId;
   const who = candidateNameOf(application);
+  // Mail, LinkedIn and the like: who is signed in matters only when the application form is there.
+  if (prepared.standing === 'shared' && ['other', 'unknown'].includes(seen.standing)) {
+    const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+    if (!['application_form', 'partial_application_form'].includes(page?.type)) return { ok: true, site };
+  }
   if (seen.standing === 'none' || seen.standing === 'same' || (seen.standing === 'unknown' && application.verifiedSites.has(site))) {
     if (prepared.standing !== 'shared') await changeSiteLedger((ledger) => sessions.rememberSite(ledger, url, candidateId, Date.now()));
     return { ok: true, site };
@@ -124,6 +129,31 @@ async function checkSiteAccount(tabId, application, options) {
     message: `This site is signed in to an account QTS cannot identify. Choose Continue only if it is ${who}'s${application.candidate?.email ? ` (${application.candidate.email})` : ''}; otherwise sign out first.`,
     notice: 'Check which account is signed in here.',
   };
+}
+
+/** The job board's own application reached: the job is given back with the reason. */
+function hostedApplyStop(url) {
+  let host = '';
+  try { host = new URL(url).hostname; } catch { host = 'the job board'; }
+  return new ApplyStop(`This job is only open through the job board's own application (${host}). QTS does not use those: apply on the company's site if it has one.`, { skip: false, keepTab: false, pageType: 'job_board_hosted' });
+}
+
+/** Why the way to the form ran out, with what was tried and what the page offered. */
+async function describeNoRoute(tabId, clicked, trail, lead = 'No way to the application form was found') {
+  const seen = await inForm(tabId, () => globalThis.__qtsApplyForm.applyControlsSeen()).catch(() => []);
+  const url = (await getTab(tabId))?.url || trail.at(-1) || '';
+  let host = '';
+  try { host = new URL(url).hostname; } catch { host = ''; }
+  const boardOnly = (seen || []).some((text) => /easy apply/i.test(text)) || /(^|\.)(indeed|ziprecruiter|glassdoor|monster|simplyhired)\.[a-z.]+$/i.test(host);
+  const parts = [
+    `${boardOnly ? 'This job board only offers its own application here, which QTS does not use' : lead}.`,
+    `Ended at ${url.slice(0, 150)}.`,
+    clicked.length ? `Clicked: ${clicked.map((text) => `"${text}"`).join(', ')}.` : 'Nothing to click was recognised.',
+    seen?.length ? `Controls on the page: ${seen.map((text) => `"${text}"`).join(', ')}.` : 'The page shows no application controls.',
+    ...(trail.length > 1 ? [`Pages visited: ${trail.length}.`] : []),
+  ];
+  diag('navigation', { clicked, pages: trail.length, seen });
+  return parts.join(' ').slice(0, 470);
 }
 
 /** Normal Apply by a Manager with the switch: the site is remembered as this candidate's. */
@@ -356,7 +386,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   for (let round = 0; round <= APPLY_FILL_ROUNDS; round += 1) {
     await throwIfStopped();
     // 2. Read every question the page shows now.
-    const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist()) || [];
+    const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist({ fullNotes: true })) || [];
     const fresh = [];
     for (const field of fields) {
       if (field.hidden || field.disabled || field.unrelated || field.account || field.managerChanged || field.trackingValue || reviewed.has(field.id) || seen.has(field.id)) continue;
@@ -402,6 +432,9 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       leave(field);
     }
 
+    // The documents are read before the AI is asked: a file that cannot be read must not cost a request.
+    if (plan.uploads.length || plan.autofillUpload) await needDocuments();
+
     // 3. One request for every question QTS may not answer by itself. Nothing has been filled yet.
     const answers = {};
     const asked = new Map();
@@ -425,7 +458,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       const { field } = entry;
       asked.set(field.id, entry);
       const named = HAS_WORDS.test(field.label || '');
-      const earlier = named && (used[field.label] || application.answerCache.get(field.label));
+      const earlier = named && used[field.label];
       if (earlier && 'value' in earlier) {
         const kept = verify(entry, earlier);
         if (kept) answers[field.id] = kept;
@@ -504,6 +537,8 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     }
     for (const { field, answer } of plan.uploads) {
       await throwIfStopped();
+      // Fill again: a document already attached stays (a site may keep a second copy).
+      if (options.again && await inForm(tabId, (id) => globalThis.__qtsApplyForm.uploadHolds(id), [field.id]).catch(() => false)) continue;
       const ready = await needDocuments();
       const file = { ...ready[answer.file], mimeType: 'application/pdf' };
       const name = answer.file === 'coverLetter' ? 'cover letter' : 'résumé';
@@ -647,6 +682,8 @@ self.__qtsAutoApplyApi = {
   candidateHolds,
   noteSiteUsed,
   hasNewQuestions,
+  hostedApplyStop,
+  describeNoRoute,
   fillPage: fillApiFormPage,
   releaseSites: (attemptId) => siteHolds.release(attemptId),
 };

@@ -79,7 +79,7 @@ const FORM_STEPS = `<!doctype html><html lang="en"><head><meta charset="utf-8"><
   </div>
   <div id="step2" style="display:none">
     <h2>About you</h2>
-    <div><label for="mot">What motivates you in your work? *</label><textarea id="mot" required></textarea></div>
+    <div><label for="mot">What motivates you in your work? *</label><span id="mot-help">${'Tell us in detail. '.repeat(30)}</span><textarea id="mot" aria-describedby="mot-help" required></textarea></div>
     <div><label for="note">What is your favourite colour? *</label><input id="note" required></div>
     <button type="button" id="back2">Back</button>
     <button type="submit" id="submit">Submit application</button>
@@ -92,7 +92,7 @@ const FORM_STEPS = `<!doctype html><html lang="en"><head><meta charset="utf-8"><
 </script>${FORM_END}
 </body></html>`;
 
-const SMALL_FORM = (body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Site - Apply</title></head><body>${body}
+const SMALL_FORM = (body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Globex - Apply</title></head><body>${body}
 <form id="app">
   <div><label for="fn">First name *</label><input id="fn" required></div>
   <div><label for="ln">Last name *</label><input id="ln" required></div>
@@ -111,6 +111,20 @@ const JOB_GUEST = `<!doctype html><html><body><h1>A job</h1>
   <a href="/account-login">Sign in</a> <a href="/account-login?register=1">Create account</a>
   <button id="guest" onclick="location.href='/small'">Apply as guest</button>
 </body></html>`;
+const JOB_SHARED = `<!doctype html><html><body><header><a href="/logout">Sign out</a></header><h1>A job</h1><button id="go" onclick="location.href='${BASE}/small'">Apply on company site</button></body></html>`;
+const ATS = `http://jobs.ats-example.com:${PORT}`;
+const JOB_LATE = `<!doctype html><html><body><h1>A job</h1><p>${'About this role. '.repeat(30)}</p><div id="slot"></div><script>setTimeout(() => { document.getElementById('slot').innerHTML = '<a href="/small">Apply now</a>'; }, 6000);</script></body></html>`;
+const JOB_NEW_TAB = '<!doctype html><html><body><h1>A job</h1><a target="_blank" href="/small">Apply now</a></body></html>';
+const JOB_MODAL = `<!doctype html><html><body><h1>A job</h1><button id="open" onclick="document.getElementById('modal').hidden = false; this.remove();">Get started</button><div id="modal" hidden role="dialog"><form id="app"><div><label for="fn">First name *</label><input id="fn" required></div><div><label for="ln">Last name *</label><input id="ln" required></div><div><label for="em">Email *</label><input id="em" type="email" required></div><button type="submit">Submit application</button></form></div></body></html>`;
+const JOB_REDIRECT = `<!doctype html><html><body><h1>A job</h1><a href="/go?to=${encodeURIComponent(`${ATS}/small`)}">Apply for this job</a></body></html>`;
+const JOB_WRONG = `<!doctype html><html><body><h1>A job</h1><a href="${ATS}/other-vacancy">Apply for this job</a></body></html>`;
+const OTHER_VACANCY = '<!doctype html><html lang="en"><head><title>Accountant at Initech</title></head><body><form id="app"><div><label for="fn">First name *</label><input id="fn" required></div><div><label for="ln">Last name *</label><input id="ln" required></div><div><label for="em">Email *</label><input id="em" type="email" required></div><button type="submit">Submit application</button></form></body></html>';
+const JOB_HOSTED = `<!doctype html><html><body><h1>A job</h1><p>${'About this role. '.repeat(30)}</p><a id="hosted" href="http://smartapply.indeed.com:${PORT}/hosted">Apply now</a></body></html>`;
+const JOB_EXTERNAL = `<!doctype html><html><body><h1>A job</h1><a id="hosted" href="/hosted-inner">Apply now</a> <a href="${ATS}/small">Apply on company site</a></body></html>`;
+const JOB_NONE = `<!doctype html><html><body><h1>A job</h1><p>${'About this role. '.repeat(30)}</p></body></html>`;
+const LOOP_A = '<!doctype html><html><body><h1>A</h1><a href="/loop-b">Apply now</a></body></html>';
+const LOOP_B = '<!doctype html><html><body><h1>B</h1><a href="/loop-a">Continue to apply</a></body></html>';
+const JOB_DIV = `<!doctype html><html><body><h1>A job</h1><div class="btn" onclick="location.href='/small'">Apply for this Position</div></body></html>`;
 const JOB_BLOCKED = `<!doctype html><html><body><h1>A job</h1><p>Sign in to apply.</p><a href="/account-login">Sign in</a></body></html>`;
 const ACCOUNT_LOGIN = `<!doctype html><html><body>
   <form onsubmit="event.preventDefault(); fetch('/account-login-submitted?email=' + encodeURIComponent(email.value) + '&password=' + encodeURIComponent(password.value)).then(() => { location.href = '/small'; });">
@@ -159,7 +173,7 @@ function aiReply(prompt) {
     if (/email/i.test(question.question)) return value(mock.wrongEmail ? 'someone.else@example.com' : person.email);
     if (/phone/i.test(question.question)) return value(person.phone);
     if (/hear about/i.test(question.question)) return value('LinkedIn');
-    if (/motivates/i.test(question.question)) return value('Building reliable services.');
+    if (/motivates/i.test(question.question)) return value(mock.longAnswer ? 'Reliable services. '.repeat(50) : 'Building reliable services.');
     if (/own a car/i.test(question.question)) return value('Yes');
     if (/car model/i.test(question.question)) return value('Dacia Logan');
     if (/colour/i.test(question.question)) return value('Blue');
@@ -173,12 +187,13 @@ function aiReply(prompt) {
 const mock = {};
 function resetMock(options = {}) {
   Object.assign(mock, {
-    log: [], answers: 0, prompts: [], asked: [], released: [], reviews: [], submitted: [], results: [], accountLogins: [], cookies: [],
+    log: [], answers: 0, prompts: [], asked: [], released: [], reviews: [], submitted: [], results: [], accountLogins: [], cookies: [], claimBodies: [],
     pageSubmitted: 0, claims: 0, byAttempt: {}, queue: options.queue || [],
     autoApplyParallelLimit: options.autoApplyParallelLimit ?? 1,
     answerDelay: options.answerDelay || 0,
     aiMode: options.aiMode || 'rules',
     wrongEmail: options.wrongEmail === true,
+    longAnswer: options.longAnswer === true,
   });
 }
 resetMock();
@@ -201,6 +216,21 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/facts') return html(FORM_FACTS);
     if (url.pathname === '/job-guest') return html(JOB_GUEST);
     if (url.pathname === '/job-blocked') return html(JOB_BLOCKED);
+    if (url.pathname === '/job-shared') return html(JOB_SHARED);
+    if (url.pathname === '/job-div') return html(JOB_DIV);
+    if (url.pathname === '/job-late') return html(JOB_LATE);
+    if (url.pathname === '/job-new-tab') return html(JOB_NEW_TAB);
+    if (url.pathname === '/job-modal') return html(JOB_MODAL);
+    if (url.pathname === '/job-redirect') return html(JOB_REDIRECT);
+    if (url.pathname === '/job-wrong') return html(JOB_WRONG);
+    if (url.pathname === '/other-vacancy') return html(OTHER_VACANCY);
+    if (url.pathname === '/job-hosted') return html(JOB_HOSTED);
+    if (url.pathname === '/job-external') return html(JOB_EXTERNAL);
+    if (url.pathname === '/job-none') return html(JOB_NONE);
+    if (url.pathname === '/loop-a') return html(LOOP_A);
+    if (url.pathname === '/loop-b') return html(LOOP_B);
+    if (url.pathname === '/hosted') { mock.hostedOpened = (mock.hostedOpened || 0) + 1; return html('<!doctype html><title>Indeed Apply</title><h1>Hosted</h1>'); }
+    if (url.pathname === '/go') { res.writeHead(302, { Location: url.searchParams.get('to') }); res.end(); return undefined; }
     if (url.pathname === '/account-login') return html(ACCOUNT_LOGIN);
     if (url.pathname === '/account-login-submitted') {
       mock.accountLogins.push({ email: url.searchParams.get('email'), password: url.searchParams.get('password') });
@@ -227,6 +257,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { canUseApply: true, autoApplyParallelLimit: mock.autoApplyParallelLimit } });
     if (url.pathname === '/api/extension/apply/claim') {
       mock.claims += 1;
+      mock.claimBodies.push(data);
       const selection = data.selection;
       const index = selection
         ? mock.queue.findIndex((entry) => entry.candidate.id === selection.candidateId && selection.jobIds.includes(entry.job.id))
@@ -290,7 +321,8 @@ async function launch() {
   const puppeteer = require('puppeteer-core');
   const browser = await puppeteer.launch({
     executablePath: CHROME, headless: !HEADFUL, pipe: true, protocolTimeout: 600000, defaultViewport: HEADFUL ? null : { width: 1280, height: 900 },
-    enableExtensions: [path.join(root, 'extension')], args: ['--no-first-run', '--window-size=1300,950'],
+    // indeed.com stands in for a site nobody is signed out of; it is mapped here, so nothing reaches it.
+    enableExtensions: [path.join(root, 'extension')], args: ['--no-first-run', '--window-size=1300,950', '--host-resolver-rules=MAP www.indeed.com 127.0.0.1, MAP smartapply.indeed.com 127.0.0.1, MAP jobs.ats-example.com 127.0.0.1'],
   });
   const target = await browser.waitForTarget((entry) => entry.type() === 'service_worker' && entry.url().includes('service-worker.js'), { timeout: 30000 });
   const extensionId = new URL(target.url()).host;
@@ -616,6 +648,33 @@ test('an account QTS cannot name waits for the Manager, and no AI request goes o
   } finally { await browser.close(); }
 });
 
+test('a signed-in job page on a site like Indeed does not stop QTS on its way to the form', { skip, timeout: 120000 }, async () => {
+  const job = application(17, 'job-shared');
+  job.job.url = `http://www.indeed.com:${PORT}/job-shared?job=17`;
+  resetMock({ queue: [job] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/small');
+    assert.equal(await valueOf(form, 'fn'), 'Ana');
+  } finally { await browser.close(); }
+});
+
+test('an application form that is itself on such a site still waits for the Manager', { skip, timeout: 120000 }, async () => {
+  const job = application(18, 'unknown-account');
+  job.job.url = `http://www.indeed.com:${PORT}/unknown-account?job=18`;
+  resetMock({ queue: [job] });
+  const { browser, action } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    const form = await until(async () => (await browser.pages()).find((page) => page.url().includes('/unknown-account')), 30000, 'the page');
+    await until_panel(form, /account QTS cannot identify/);
+    assert.equal(mock.answers, 0);
+    assert.equal(await valueOf(form, 'fn'), '');
+  } finally { await browser.close(); }
+});
+
 test('another account showing at the end holds the site\'s Submit', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(13, 'late-account')] });
   const { browser, action, storage } = await launch();
@@ -631,7 +690,7 @@ test('another account showing at the end holds the site\'s Submit', { skip, time
   } finally { await browser.close(); }
 });
 
-test('a job taken up again in a new tab is filled again, from the answers it already has', { skip, timeout: 150000 }, async () => {
+test('a cancelled job starts fresh: nothing is kept, and the AI is asked again', { skip, timeout: 150000 }, async () => {
   const job = application(15, 'small');
   resetMock({ queue: [job] });
   const { browser, action, storage } = await launch();
@@ -643,6 +702,10 @@ test('a job taken up again in a new tab is filled again, from the answers it alr
     await until(() => mock.released.length === 1, 20000, 'the application to be given back');
     await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus !== 'apply', 20000, 'the run to stop');
     await until(async () => !(await formPage(browser, '/small')), 20000, 'the old tab to close');
+    assert.equal(mock.released[0].mode, 'drop', 'nothing is recorded on the job');
+    assert.deepEqual(mock.released[0].appliedAnswers, [], 'no answers go back with the job');
+    assert.ok(mock.reviews.every((entry) => (entry.appliedAnswers || []).length === 0), 'no answers are recorded while it runs');
+    await until(async () => Object.keys((await storage(['qtsAutoApplyRuns'])).qtsAutoApplyRuns || {}).length === 0, 10000, 'nothing to be kept in this Chrome');
 
     mock.queue.push(job);
     assert.equal((await action('auto_apply')).ok, true);
@@ -650,7 +713,41 @@ test('a job taken up again in a new tab is filled again, from the answers it alr
     await waitForStep(storage, 1);
     await until(async () => await valueOf(form, 'em') === 'ana.test@example.com', 30000, 'the page to be filled');
     assert.equal(await valueOf(form, 'fn'), 'Ana');
-    assert.equal(mock.answers, 1, 'the answers already given are used again');
+    assert.equal(mock.answers, 2, 'a new AI request');
+    assert.ok(mock.claimBodies.every((body) => !(body.skipJobIds || []).includes(job.job.id)), 'a stopped run leaves the job free for the next one');
+  } finally { await browser.close(); }
+});
+
+test('a closed tab leaves the job as it was, and QTS goes on to the next job', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(48, 'small'), application(49, 'facts')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    await (await formPage(browser, '/small')).close();
+    await until(() => mock.released.length === 1, 20000, 'the job to be given back');
+    assert.equal(mock.released[0].attemptId, attempt(48));
+    assert.equal(mock.released[0].mode, 'drop', 'nothing is recorded on the job');
+    assert.deepEqual(mock.released[0].appliedAnswers, []);
+    await until(() => formPage(browser, '/facts'), 30000, 'the next job');
+    assert.ok(mock.claimBodies.at(-1).skipJobIds.includes(jobId(48)), 'the closed job is not opened again in this run');
+    assert.equal(await formPage(browser, '/small'), undefined);
+  } finally { await browser.close(); }
+});
+
+test('Skip and Later leave the job as it was, and QTS goes on to the next job', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(50, 'small'), application(51, 'small')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    await pressPanel(await formPage(browser, '/small'), 'Skip');
+    await until(() => mock.byAttempt[attempt(51)], 30000, 'the next job');
+    await waitForStep(storage, 1);
+    await pressPanel(await formPage(browser, '/small'), 'Later');
+    await until(() => mock.released.length === 2, 20000, 'the second job to be given back');
+    assert.deepEqual(mock.released.map((entry) => [entry.attemptId, entry.mode]), [[attempt(50), 'drop'], [attempt(51), 'drop']]);
+    assert.deepEqual(mock.released.flatMap((entry) => entry.appliedAnswers), []);
   } finally { await browser.close(); }
 });
 
@@ -679,6 +776,204 @@ test('saved answers play no part; what the prompt covers is filled, and what it 
   } finally { await browser.close(); }
 });
 
+test('an Apply drawn without a real button is found and clicked, quickly', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(21, 'job-div')] });
+  const { browser, action, storage } = await launch();
+  try {
+    const started = Date.now();
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(() => formPage(browser, '/small'), 15000, 'the form, without the 20 second wait');
+    assert.ok(Date.now() - started < 15000);
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(await formPage(browser, '/small'), 'fn'), 'Ana');
+  } finally { await browser.close(); }
+});
+
+test('without the PDF folder no AI request goes out and the run stops at the first job', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(19, 'form'), application(20, 'form')], autoApplyParallelLimit: 1 });
+  const { browser, action, storage, worker } = await launch();
+  try {
+    await worker.evaluate(() => { Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: { getSetting: async () => ({ value: null }) } }); });
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus !== 'apply', 60000, 'the run to stop');
+    await until(() => mock.released.length === 1, 20000, 'the job to be given back');
+    assert.equal(mock.answers, 0, 'no AI request');
+    assert.equal(mock.claims, 1, 'the next job is not taken');
+    assert.match(mock.released[0].reason, /QTS_Resume/);
+    await until(async () => !(await formPage(browser, '/form')), 10000, 'its tab to close');
+  } finally { await browser.close(); }
+});
+
+test('a job whose form has no uploads does not need the PDF folder', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(22, 'small')] });
+  const { browser, action, storage, worker } = await launch();
+  try {
+    await worker.evaluate(() => { Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: { getSetting: async () => ({ value: null }) } }); });
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(await formPage(browser, '/small'), 'fn'), 'Ana');
+  } finally { await browser.close(); }
+});
+
+const reachesForm = (name, form, prefix = '/small', extra = () => {}) => test(name, { skip, timeout: 120000 }, async () => {
+  const job = application(30 + form.length, form);
+  extra(job);
+  resetMock({ queue: [job] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(await formPage(browser, prefix) || (await browser.pages()).find((page) => page.url().includes(prefix)), 'fn'), 'Ana');
+    assert.deepEqual(mock.released, []);
+    assert.equal(mock.pageSubmitted, 0);
+  } finally { await browser.close(); }
+});
+reachesForm('a button the page draws a few seconds later is found', 'job-late');
+reachesForm('an Apply that opens a new tab is followed', 'job-new-tab');
+reachesForm('a form in a pop-up is reached, on "Get started"', 'job-modal', '/job-modal');
+reachesForm('a redirect to the company\'s application system is followed', 'job-redirect', `${ATS}/small`);
+
+const firstPage = async (browser, part) => (await browser.pages()).find((page) => page.url().includes(part));
+test('an Apply on a job board that leads to the employer is used, not the board\'s own', { skip, timeout: 120000 }, async () => {
+  const job = application(40, 'job-external');
+  job.job.url = `http://www.indeed.com:${PORT}/job-external?job=40`;
+  resetMock({ queue: [job] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(await firstPage(browser, 'jobs.ats-example.com'), 'fn'), 'Ana');
+  } finally { await browser.close(); }
+});
+
+test('a job board\'s own Apply is never clicked, and the job goes back with the reason', { skip, timeout: 120000 }, async () => {
+  const job = application(41, 'job-hosted');
+  job.job.url = `http://www.indeed.com:${PORT}/job-hosted?job=41`;
+  resetMock({ queue: [job] });
+  const { browser, action } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(() => mock.released.length === 1, 45000, 'the job to be given back');
+    assert.match(mock.released[0].reason, /job board only offers its own application/);
+    assert.match(mock.released[0].reason, /Ended at http:\/\/www\.indeed\.com/);
+    assert.match(mock.released[0].reason, /"Apply now"/);
+    assert.equal(mock.hostedOpened || 0, 0);
+    assert.equal(mock.answers, 0);
+  } finally { await browser.close(); }
+});
+
+test('a saved link that is itself a job board application is refused at once', { skip, timeout: 120000 }, async () => {
+  const job = application(42, 'hosted');
+  job.job.url = `http://smartapply.indeed.com:${PORT}/hosted?job=42`;
+  resetMock({ queue: [job] });
+  const { browser, action } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(() => mock.released.length === 1, 30000, 'the job to be given back');
+    assert.match(mock.released[0].reason, /job board's own application \(smartapply\.indeed\.com\)/);
+    assert.equal(mock.answers, 0);
+  } finally { await browser.close(); }
+});
+
+test('a form that names another vacancy waits for the Manager before anything is touched', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(43, 'job-wrong')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    const form = await until(() => firstPage(browser, '/other-vacancy'), 30000, 'the other vacancy');
+    await until_panel(form, /does not mention Backend Engineer at Globex/);
+    assert.equal(mock.answers, 0);
+    await pressPanel(form, 'Continue →');
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(form, 'fn'), 'Ana');
+  } finally { await browser.close(); }
+});
+
+test('with no way to the form, QTS stops quickly and says what it saw', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(44, 'job-none')] });
+  const { action } = await launch().then((ctx) => { test.after(() => ctx.browser.close().catch(() => {})); return ctx; });
+  const started = Date.now();
+  assert.equal((await action('auto_apply')).ok, true);
+  await until(() => mock.released.length === 1, 30000, 'the job to be given back');
+  assert.ok(Date.now() - started < 20000, `took ${Date.now() - started} ms`);
+  assert.match(mock.released[0].reason, /No way to the application form was found/);
+  assert.equal(mock.released[0].mode, 'later', 'a real failure keeps its reason on the job');
+  assert.match(mock.released[0].reason, /Ended at /);
+  assert.match(mock.released[0].reason, /Nothing to click was recognised/);
+});
+
+test('two pages sending QTS back and forth do not loop', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(45, 'loop-a')] });
+  const { browser, action } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(() => mock.released.length === 1, 45000, 'the job to be given back');
+    assert.match(mock.released[0].reason, /Clicked: "Apply now", "Continue to apply"/);
+    assert.equal(mock.answers, 0);
+  } finally { await browser.close(); }
+});
+
+test('a long answer goes into the form whole, and Fill again asks the AI again', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(46, 'steps')], longAnswer: true });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/steps');
+    await form.click('#next1');
+    await waitForStep(storage, 2);
+    assert.equal(await valueOf(form, 'mot'), 'Reliable services. '.repeat(50).trim());
+    assert.equal(mock.answers, 2);
+    assert.ok(mock.prompts[1].includes('Tell us in detail. '.repeat(20).trim()), 'the whole help text goes to the AI');
+    await pressPanel(form, 'Fill again');
+    await until(() => mock.answers === 3, 30000, 'a new AI request');
+    await waitForStep(storage, 2);
+    assert.equal(await valueOf(form, 'mot'), 'Reliable services. '.repeat(50).trim());
+  } finally { await browser.close(); }
+});
+
+test('Fill again asks the AI again, keeps the documents attached, and leaves the Manager\'s own answers', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(52, 'form')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    assert.equal(mock.answers, 1);
+    const attachments = () => form.evaluate(() => window.events.filter((event) => event.id === 'cv' && event.type === 'change' && event.value).length);
+    const attached = await attachments();
+    assert.ok(attached >= 1, 'the document went in');
+    await form.focus('#ph');
+    await form.keyboard.down('Control');
+    await form.keyboard.press('KeyA');
+    await form.keyboard.up('Control');
+    await form.keyboard.type('+40 700 000 111');
+    await pressPanel(form, 'Fill again');
+    await until(() => mock.answers === 2, 30000, 'a new AI request');
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(form, 'mot'), 'Building reliable services.');
+    assert.equal(await valueOf(form, 'ph'), '+40 700 000 111', 'the Manager\'s edit stays');
+    assert.ok(!mock.asked[1].some((question) => /phone/i.test(question)), 'and is not asked about');
+    assert.equal(await attachments(), attached, 'the document is not attached twice');
+    assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
+  } finally { await browser.close(); }
+});
+
+test('Check saves nothing to the saved answers', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(47, 'small')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/small');
+    await form.focus('#ln');
+    await form.keyboard.type('x');
+    await pressPanel(form, 'Check');
+    await sleep(1500);
+    assert.equal(mock.log.filter((entry) => entry.path.endsWith('/check-answers')).length, 0);
+  } finally { await browser.close(); }
+});
+
 test('choosing another candidate stops what was under way for the first', { skip, timeout: 120000 }, async () => {
   const job = application(14, 'small');
   resetMock({ queue: [job], answerDelay: 15000 });
@@ -692,6 +987,7 @@ test('choosing another candidate stops what was under way for the first', { skip
     await until(() => mock.released.length === 1, 20000, 'the application to be given back');
     assert.equal(mock.released[0].attemptId, attempt(14));
     assert.match(mock.released[0].reason, /Another candidate was chosen/);
+    assert.equal(mock.released[0].mode, 'drop', 'nothing is recorded on the job');
     await sleep(500);
     const left = await form.evaluate(() => document.getElementById('fn')?.value).catch(() => '');
     assert.ok(!left, 'nothing was filled for the old candidate');

@@ -22,6 +22,12 @@
   const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|enter (your )?(details|information) manually|continue (manually|without .{1,30})|(continue|apply|proceed|check ?out) as (a )?guest|guest (application|apply|checkout)|skip( for now| this step| sign[ -]?in| login)?|i don['’]?t have an account)$/i;
   const ACCOUNT_ACTION_TEXT = /^(sign ?in|log ?in|register|sign ?up|create (an |your )?account|candidate login|candidate portal|apply with an account)$/i;
   const NOT_START = /linkedin|indeed|seek|xing|glassdoor|easy apply|with (google|facebook|apple|github|resume|cv)|later|save|share|refer|alert|similar|sign ?in|log ?in|register|autofill/i;
+  // Auto Apply with APIs: more ways of saying "start the application".
+  const API_START_TEXT = /^(get started|start now|start here|apply to this job|i want to apply|continue to apply|continue application|proceed to apply|apply on (the )?(company|employer)['’]?s? (site|website|page)|view and apply|go to application)$/i;
+  // Job boards whose own "Apply" is their hosted application: only a way out to the employer counts there.
+  const HOSTED_BOARD = /(^|\.)(indeed|ziprecruiter|glassdoor|monster|simplyhired)\.[a-z.]+$/i;
+  const EMPLOYER_WORDS = /company|employer|external|website|career/i;
+  const startWords = (text, apiFlow) => (START_TEXT.test(text) || (apiFlow && API_START_TEXT.test(text))) && !NOT_START.test(text);
   // Job-site systems whose form a company page embeds in a frame; opening the frame shows the form.
   const FORM_FRAME = /greenhouse\.io\/(embed\/)?job_app|boards(\.eu)?\.greenhouse\.io|jobs(\.eu)?\.lever\.co|jobs\.ashbyhq\.com|apply\.workable\.com|smartrecruiters\.com|recruitee\.com|teamtailor\.com|personio\.(de|com)|bamboohr\.com|jobvite\.com|breezy\.hr|comeet\.(co|com)|pinpointhq\.com|join\.com|homerun\.co|applytojob\.com/i;
   const DROP_TEXT = /\b(drag|drop)\b[^.]{0,40}\b(files?|here|cv|resume|résumé|document)\b|\bclick to upload\b|\bbrowse (files|computer)\b|\bchoose (a )?file\b/i;
@@ -973,12 +979,16 @@
 
   /** The help text a field points to (aria-describedby), without the site's error messages. */
   function helpText(control) {
+    return fullHelpText(control).slice(0, 200);
+  }
+
+  function fullHelpText(control) {
     const root = control.getRootNode();
     const text = String(control.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean)
       .map((id) => textOf(root.getElementById?.(id) || document.getElementById(id)))
       .filter((entry) => entry && !NOT_HELP.test(entry))
       .join(' ');
-    return (text || inlineHelp(control)).slice(0, 200);
+    return text || inlineHelp(control);
   }
 
   /**
@@ -2155,7 +2165,7 @@
         required: Boolean(field.required),
         labelUnresolved: Boolean(field.labelUnresolved),
         answered: field.kind === 'file' ? uploadAccepted(field.id) : !isUnanswered(field),
-        value: String(Array.isArray(value) ? value.join(', ') : value ?? '').slice(0, 200),
+        value: String(Array.isArray(value) ? value.join(', ') : value ?? ''),
         issue: fieldIssue(field.id),
       };
     });
@@ -2488,6 +2498,41 @@
       && isShown(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
   }
 
+  /**
+   * Auto Apply with APIs: a start control a page draws without a real button (a <div> with a click
+   * handler or a pointer cursor) whose own words are a start word. The innermost such element, so a
+   * click reaches whichever element holds the handler.
+   */
+  function plainStartControl(element) {
+    if (!['DIV', 'SPAN', 'LI', 'TD', 'P'].includes(element.tagName)) return false;
+    const quick = cleanText(element.textContent || '');
+    if (!quick || quick.length > 80) return false;
+    const text = startText(element);
+    if (!(startWords(text, true) || NEXT_TEXT.test(text) || MANUAL_TEXT.test(text)) || !isShown(element) || element.getAttribute('aria-disabled') === 'true') return false;
+    if (element.closest('a, button, [role="button"]')) return false;
+    if (!element.hasAttribute('onclick') && getComputedStyle(element).cursor !== 'pointer') return false;
+    return ![...element.children].some(plainStartControl);
+  }
+
+  /** On a job board: whether this control leads out to the employer, not into the board's own application. */
+  function leadsToEmployer(element) {
+    if (EMPLOYER_WORDS.test(`${startText(element)} ${element.getAttribute('aria-label') || ''}`)) return true;
+    if (element.tagName !== 'A' || !element.href) return false;
+    try {
+      return !HOSTED_BOARD.test(new URL(element.href).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  /** A visible frame from another site that looks like an application form (a size no widget has). */
+  function likelyFormFrame(frame) {
+    const box = frame.getBoundingClientRect();
+    return box.width >= 300 && box.height >= 200 && !frameDocument(frame)?.documentElement
+      && /appl(y|ication)|candidate|career|recruit|\bjobs?\b/i.test(frame.src)
+      && !NOT_FORM_FRAME.test(frame.src) && !/indeed|linkedin|glassdoor|ziprecruiter/i.test(frame.src);
+  }
+
   function startText(element) {
     return buttonText(element)
       .replace(/[→›»↗➔>]+/g, ' ')
@@ -2628,14 +2673,14 @@
    * takes a start / continue / guest signal even beside a sign-in or register form, never one inside
    * it, and never Sign in / Register / Create account itself; with several Continue buttons, the main one.
    */
-  function clickStart(alreadyClicked = [], { assistant = false, probe = false } = {}) {
+  function clickStart(alreadyClicked = [], { assistant = false, probe = false, apiFlow = false } = {}) {
     const tried = new Set(alreadyClicked);
-    const candidates = allElements().filter((element) => clickable(element) && !tried.has(startText(element))
+    const candidates = allElements().filter((element) => (clickable(element) || (apiFlow && plainStartControl(element))) && !tried.has(startText(element))
       && !(assistant && insideAccountForm(element)));
     const manual = candidates.find((element) => MANUAL_TEXT.test(startText(element)) && !/linkedin|indeed/i.test(startText(element)));
     const area = (element) => element.getBoundingClientRect().width * element.getBoundingClientRect().height;
     const starts = candidates
-      .filter((element) => START_TEXT.test(startText(element)) && !NOT_START.test(startText(element)))
+      .filter((element) => startWords(startText(element), apiFlow) && (!apiFlow || !HOSTED_BOARD.test(location.hostname) || leadsToEmployer(element)))
       .sort((a, b) => {
         const area = (element) => element.getBoundingClientRect().width * element.getBoundingClientRect().height;
         return area(b) - area(a);
@@ -2669,7 +2714,7 @@
       }
     }
     const frame = allElements().find((element) => element.tagName === 'IFRAME' && isShown(element)
-      && /^https?:/i.test(element.src || '') && FORM_FRAME.test(element.src));
+      && /^https?:/i.test(element.src || '') && (FORM_FRAME.test(element.src) || (apiFlow && likelyFormFrame(element))));
     if (frame) return { ok: true, action: 'application', frameUrl: frame.src };
     // Normal Apply never clicks Sign in / Register / Create account: those are the Manager's.
     const account = assistant ? null : candidates.find((element) => ACCOUNT_ACTION_TEXT.test(startText(element)));
@@ -2756,6 +2801,8 @@
   const MANAGER_ATTRIBUTE = 'data-qts-manager-changed';
   // Boxes that say where the application came from, not who applies: the site's value stays.
   const TRACKING_BOX = /referr|\bsource\b|\butm\b|\btoken\b|\b(promo|invite|invitation|tracking|campaign|job|requisition|reference)[ -]?(code|id|number)\b/i;
+  // Auto Apply with APIs: "referr" must start a word, so "Preferred location" is a question like any other.
+  const STRICT_TRACKING_BOX = new RegExp(TRACKING_BOX.source.replace('referr', '\\breferr'), 'i');
 
   function managerChanged(element, field) {
     const marked = (node) => Boolean(node.hasAttribute?.(MANAGER_ATTRIBUTE) || node.querySelector?.(`[${MANAGER_ATTRIBUTE}]`));
@@ -2868,7 +2915,7 @@
         continue;
       }
       if (!element || ['file', 'range'].includes(field.kind) || isUnanswered(field) || managerChanged(element, field)
-        || TRACKING_BOX.test(field.label) || job.includes(cleanText(element.value || '').toLowerCase())) continue;
+        || (uploads ? STRICT_TRACKING_BOX : TRACKING_BOX).test(field.label) || job.includes(cleanText(element.value || '').toLowerCase())) continue;
       await emptyBox(element, field).catch(() => {});
       touched.push(field);
       await sleep(60);
@@ -2877,7 +2924,7 @@
     for (const field of touched) {
       if (!findField(field.id) || isUnanswered(field)) emptied.push(field.label);
       // A custom list with nothing to clear it with is not reported: its fill replaces the choice.
-      else if (!['menu', 'combobox'].includes(field.kind)) stuck.push({ id: field.id, label: field.label, kind: field.kind });
+      else if (!['menu', 'combobox'].includes(field.kind) && !(uploads && showsOwnStart(findField(field.id)))) stuck.push({ id: field.id, label: field.label, kind: field.kind });
     }
     for (const field of attached) {
       if (uploadHolds(field.id)) stuck.push({ id: field.id, label: field.label, upload: true });
@@ -2896,6 +2943,15 @@
       }
     }
     return { keys, boxKeys, newPage, emptied, stuck };
+  }
+
+  /** A dropdown with no empty choice that still shows where the page starts it: nothing old is in it. */
+  function showsOwnStart(element) {
+    if (element?.tagName !== 'SELECT' || element.multiple) return false;
+    const options = [...element.options];
+    if (options.some((option) => !option.value || PLACEHOLDER.test(optionText(option)))) return false;
+    const start = options.find((option) => option.defaultSelected) || options[0];
+    return Boolean(start) && element.selectedOptions[0] === start;
   }
 
   // A control that takes an attached file away, in the languages forms use.
@@ -3037,23 +3093,48 @@
     return new Promise((resolve) => {
       let quiet = null;
       let cap = null;
+      const reachedQuiet = () => done(true);
       const observer = new MutationObserver(() => {
         clearTimeout(quiet);
-        quiet = setTimeout(done, quietMs);
+        quiet = setTimeout(reachedQuiet, quietMs);
       });
-      function done() {
+      function done(wasQuiet) {
         observer.disconnect();
         clearTimeout(quiet);
         clearTimeout(cap);
-        resolve(true);
+        resolve(wasQuiet);
       }
       observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
-      quiet = setTimeout(done, quietMs);
-      cap = setTimeout(done, maxMs);
+      quiet = setTimeout(reachedQuiet, quietMs);
+      cap = setTimeout(() => done(false), maxMs);
     });
   }
 
-  function scanForAssist() {
+  /** Whether the page has finished drawing: loaded, showing text, unchanged for quietMs. Read only. */
+  async function pageSettledWithText(quietMs = 1200) {
+    if (document.readyState !== 'complete' || cleanText(document.body?.innerText || '').length < 200) return false;
+    return settled({ quietMs, maxMs: quietMs + 400 });
+  }
+
+  /** What the page says it is, to tell whether it is the intended job. Read only. */
+  function pageIdentity() {
+    return { url: location.href, title: document.title || '', text: cleanText(document.body?.innerText || '').slice(0, 20000) };
+  }
+
+  /** The page's application-like controls in words, for a failure report. Read only. */
+  function applyControlsSeen() {
+    const seen = new Set();
+    for (const element of allElements()) {
+      if (seen.size >= 8) break;
+      if (!isShown(element) || !(clickable(element) || element.hasAttribute('onclick'))) continue;
+      const text = startText(element);
+      if (text && text.length <= 60 && /appl|start|continue|next|interest|candidat/i.test(text)) seen.add(text);
+    }
+    return [...seen];
+  }
+
+  // fullNotes: Auto Apply with APIs reads a question's whole help text; every other flow keeps its limit.
+  function scanForAssist({ fullNotes = false } = {}) {
     const fields = scanForm();
     const elements = new Map(allElements().filter((element) => element.hasAttribute(FIELD_ATTRIBUTE))
       .map((element) => [element.getAttribute(FIELD_ATTRIBUTE), element]));
@@ -3078,7 +3159,8 @@
         ...(field.kind === 'date' ? { minDate: element.min || null, maxDate: element.max || null, dateStep: element.step === 'any' ? null : Number(element.step || 1) } : {}),
       };
       // A referral or tracking code the site put there says where the application came from: it stays.
-      if (TRACKING_BOX.test(field.label) && !isUnanswered(field)) field = { ...field, trackingValue: true };
+      if (STRICT_TRACKING_BOX.test(field.label) && !isUnanswered(field)) field = { ...field, trackingValue: true };
+      if (fullNotes && field.note) field = { ...field, note: fullHelpText(element) || field.note };
       if (managerChanged(element, field)) field = { ...field, managerChanged: true };
       if (unrelatedBox(element)) return { ...field, unrelated: true };
       return accountBox(element) ? { ...field, account: true } : field;
@@ -3093,6 +3175,9 @@
     foreignUploads,
     siteAccount,
     settled,
+    pageSettledWithText,
+    pageIdentity,
+    applyControlsSeen,
     embeddedApplicationUrl,
     readComboboxOptions,
     discoverComboboxChoices,

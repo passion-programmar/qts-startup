@@ -1,21 +1,26 @@
 # Auto Apply with APIs: build report
 
-Date: 2026-11-08. Extension version 1.51.0.
+Date: 2026-11-09. Extension version 1.52.0.
 
 Update: this flow no longer uses saved answers at any level. Facts such as sponsorship, relocation,
 notice and salary come from what Super Admin writes in the prompt. Normal Apply still uses saved
 answers. QTS cannot check facts that are only in the prompt, so the Manager should check them at review.
 
+Update for 1.52.0: every run makes a new AI request and no answers are kept. A job that is closed,
+cancelled, skipped or put off goes back to the list exactly as it was. Nothing is cut short. Fill again
+now works. QTS finds its way to the form on more kinds of page, and says what it saw when it cannot.
+
 ## 1. Where things stand
 
 ```
-Built and tested on this PC   yes
+Built and tested on this PC   yes, except the last small edit (see section 6)
 Tested with real AI           no   (your rule: real AI only on Production)
 Pushed to Production          yes, together with this report
 Used by any Manager yet       no   (the switch is off for everyone until Super Admin turns it on)
 ```
 
-Managers without the switch keep today's ChatGPT Auto Apply.
+Managers without the switch keep today's ChatGPT Auto Apply. One thing changed for them in 1.52.0: a
+long answer is read back from the form whole, no longer cut at 200 characters.
 
 ## 2. Candidates' personal data
 
@@ -86,6 +91,13 @@ The Manager clicks Submit. QTS never does.
 | Candidate changes during a run | Work for the old candidate stops, the AI request is cancelled, and the job goes back to the list. |
 | Guest way first | Apply and guest buttons win even beside Sign in or Register. |
 | Keep the Manager's edits | Boxes the Manager changed, and steps already filled, are never emptied or filled again. Only their own Fill again or Ask AI again goes back over a step, and even that keeps what they changed. |
+| Every run asks the AI | No answers are reused or kept. Fill again and Ask AI again each make a new AI request. Documents already attached stay attached. |
+| Closed or cancelled means fresh | Closed tab, Cancel, Skip, Later or Stop: the job goes back exactly as it was. Nothing is recorded on the job and no record stays in Chrome. |
+| Nothing cut off | Answers, the job description and each question's help text go through whole. |
+| Reach the form by itself | Real and drawn Apply buttons, more start words, pop-ups, new tabs, redirects and embedded forms. A job board's own application is never used. |
+| Right job | A form on another site that names neither the company nor most of the job title waits for the Manager before anything is touched. |
+| Say why it stopped | The reason names the last page, what was clicked and what the page offered. Pages sending QTS back and forth do not loop. |
+| PDFs first | Without the QTS_Resume folder no AI request goes out and the run stops at the first job. |
 
 ## 5. Choices I made where you had not decided
 
@@ -102,22 +114,31 @@ Tell me to change any of these.
 | Sites nobody is signed out of | Google, Gmail, YouTube, LinkedIn, Indeed, Glassdoor, Facebook, Microsoft, Outlook, Apple, GitHub, OpenAI, ChatGPT, Yahoo, vercel.app. If one of these shows another account, the Manager deals with it. |
 | Two candidates on one site in one Chrome | The later one waits until the first application ends. |
 | Custom URL jobs of normal Managers | Unchanged. |
+| Tab closed, Skip or Later | QTS goes on to the next job. This one is not opened again until Auto Apply is started again. |
+| A job that really fails (no way to the form, for example) | Its reason stays on the job, so it can be fixed. |
+| A real Submit | The bid stores what was submitted, as history. It is never reused. |
+| Fill again for Managers without the switch | Left as it is: that button has done nothing on their Auto Apply panel since 1.36.0. |
 
 ## 6. What was tested
 
 Everything below ran on this PC with a fake QTS server and fixed AI answers. No Gemini or Groq key was
-called.
+called. These are the results of the last full run for 1.52.0.
 
 ```
-Server tests                       436 passed, 4 skipped
-Extension tests                    663 of 664 passed
-New tests in real Chrome           14 of 14 passed
-Older Apply tests in real Chrome   20 passed, 3 optional ChatGPT tests skipped
-Type check and production build    passed
+Recovery tests                     9 of 9 passed
+Extension tests                    680 of 683 passed
+Tests in real Chrome               53 passed, 1 failed, 3 optional ChatGPT tests skipped
+Server tests, type check, build    not run again (this release changes only a comment on the server)
 ```
 
-The one extension failure is a launcher test that already failed now and then before this work. Run
-alone twice, it failed once and passed once.
+The 3 extension failures are Settings tests looking for form names that commit 43206a1 renamed.
+
+The Chrome failure is an older test ("modes, permission") that fails now and then. Run on the commit
+before this release, without any of these changes, it failed 2 times in 6.
+
+One small edit came after that run and was pushed untested, on request ("no run, push"): the whole help
+text of a question goes to the AI only for Managers with the switch, so Managers on ChatGPT keep their
+200-character limit. Its two test changes have not run either.
 
 The new Chrome tests show that:
 
@@ -132,7 +153,14 @@ The new Chrome tests show that:
 - A page signed in as someone else is signed out before filling.
 - An account QTS cannot name waits for the Manager, with no AI request before.
 - Another account appearing at the end holds the site's Submit.
-- A job reopened in a new tab fills again without a new AI request.
+- A cancelled, closed, skipped or put-off job goes back with nothing recorded, and the next run asks the AI again.
+- A long answer goes into the form whole.
+- Fill again makes a new AI request, keeps the documents attached and leaves the Manager's own answers.
+- A start control drawn without a real button is found and clicked.
+- A job board's own Apply is never clicked. An Apply that leads to the employer is used.
+- With no way to the form, QTS stops quickly and says what it saw.
+- A form that names another vacancy waits for the Manager.
+- Without the PDF folder no AI request goes out and the run stops at the first job.
 - Choosing another candidate stops the work and gives the job back.
 - Saved answers play no part: what the prompt covers is filled, and what it does not goes to the Manager.
 
@@ -158,7 +186,7 @@ Not tested:
 ## 8. What to do next
 
 ```
-You:  install extension 1.51.0
+You:  install extension 1.52.0
       -> check the prompt "Gemini · Application-answer generation" in Settings
       -> Super Admin turns on "Auto Apply with APIs" for ONE Manager
       -> run one real job on Production -> send me what happened

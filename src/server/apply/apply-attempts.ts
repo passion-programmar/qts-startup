@@ -500,7 +500,8 @@ async function recordApplyRun(jobId: string, outcome: string, reason: string | n
  * - "later": the Manager will come back to it; it returns to the list without counting as a return.
  * - "test": test mode stopped before Submit on purpose; like "later".
  * - "drop": the assistant's page ended without a bid (Cancel, a closed page, Apply turned off, an
- *   error): nothing is recorded; the job is exactly as it was before it was opened.
+ *   error), or Auto Apply with APIs was cancelled, closed, skipped or put off: nothing is recorded;
+ *   the job is exactly as it was before it was opened.
  * - "remove": the panel's Remove: the job row is deleted (its attempts with it); never while
  *   Generation still writes it.
  */
