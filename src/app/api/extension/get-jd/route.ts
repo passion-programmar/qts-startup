@@ -17,7 +17,7 @@ import { db } from "@/lib/db";
 import { AiJobError, aiRequestBudgetMs } from "@/server/gemini/ai-job";
 import { runAiRequest } from "@/server/gemini/ai-request";
 import { geminiJobEvaluationGenerationConfig, groqJobEvaluationJsonHint } from "@/server/gemini/job-evaluation-config";
-import { candidatesWithJdNotes } from "@/server/gemini/candidates-with-jd-notes";
+import { type CareerTimelineEntry, candidatesWithCareerTimeline } from "@/server/gemini/candidates-with-career-timeline";
 import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
 import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-indexes";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
@@ -43,6 +43,7 @@ const maxPageTitleLength = 500;
 const maxPageTextLength = 100_000;
 const maxManagerAccounts = 100;
 const maxGeminiResponseBytes = 1_000_000;
+const invalidPageReason = "The page does not show one clear, active job posting.";
 
 const generationConfig = geminiJobEvaluationGenerationConfig;
 
@@ -50,7 +51,8 @@ type CandidateProfileForEvaluation = {
   id: string;
   name: string;
   category: string | null;
-  jdMatching: string | null;
+  // The profile's job titles and months, newest first. Companies and descriptions stay out.
+  employmentTimeline: CareerTimelineEntry[];
   // The company of the candidate's most recent experience; a job there is never saved for them.
   currentEmployer: string | null;
 };
@@ -158,7 +160,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       );
     }
     const candidateProfiles = profileResult.profiles;
-    const candidatesForEvaluation = candidatesWithJdNotes(candidateProfiles);
+    const candidatesForEvaluation = candidatesWithCareerTimeline(candidateProfiles);
 
     const [prompt] = await db
       .select({ promptTemplate: prompts.promptTemplate })
@@ -182,7 +184,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
     const candidateContext = candidatesForEvaluation.map((candidate, index) => ({
       candidateIndex: index,
       candidateName: candidate.name,
-      jdMatching: candidate.jdMatching,
+      employmentTimeline: candidate.employmentTimeline,
     }));
     const promptText = buildGetJdEvaluationPrompt({
       savedPrompt: prompt.promptTemplate,
@@ -348,7 +350,16 @@ async function loadManagerCandidateProfiles(
       firstName: profiles.firstName,
       lastName: profiles.lastName,
       category: profiles.managerCategory,
-      jdMatching: profiles.jdMatching,
+      employmentTimeline: sql<CareerTimelineEntry[]>`coalesce((
+        select json_agg(json_build_object(
+            'jobTitle', btrim(e.job_title),
+            'start', to_char(e.start_date, 'YYYY-MM'),
+            'end', to_char(e.end_date, 'YYYY-MM'),
+            'isCurrent', e.is_current
+          ) order by e.is_current desc, e.end_date desc nulls first, e.start_date desc nulls last, e.sort_order asc)
+          from experiences e
+         where e.profile_user_id = ${profiles.userId} and btrim(e.job_title) <> ''
+      ), '[]'::json)`,
       // The current job first, else the one that ended last.
       currentEmployer: sql<string | null>`(
         select e.company_name from experiences e
@@ -377,7 +388,7 @@ async function loadManagerCandidateProfiles(
       name: ([row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate")
         .slice(0, 300),
       category: row.category || null,
-      jdMatching: row.jdMatching,
+      employmentTimeline: row.employmentTimeline,
       currentEmployer: row.currentEmployer,
     })),
   };
@@ -409,7 +420,6 @@ function validateClassification(
     "employmentType",
     "workplaceType",
     "salary",
-    "jobUrl",
   ] as const;
   for (const field of stringFields) {
     if (typeof job[field] !== "string") {
@@ -426,7 +436,8 @@ function validateClassification(
       "Gemini response contained an invalid job field.",
     );
   }
-  const reason = reasonValue.trim();
+  // The saved prompt only asks for a reason when the page is a job, so an invalid page may have none.
+  const reason = reasonValue.trim() || (value.isJobPage ? "" : invalidPageReason);
   if (!reason || reason.length > 1200) {
     throw getJdError(
       "gemini_invalid_job_field",

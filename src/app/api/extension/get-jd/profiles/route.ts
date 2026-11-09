@@ -17,7 +17,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   try {
     const [managerRow] = await db.select({ useGeminiMatching: users.useGeminiMatching }).from(users).where(eq(users.id, manager.id)).limit(1);
-    const requireMatchingNote = managerRow?.useGeminiMatching === true;
+    const geminiMatching = managerRow?.useGeminiMatching === true;
     const rows = await db
       .select({
         id: profiles.userId,
@@ -36,7 +36,6 @@ export async function GET(request: Request): Promise<NextResponse> {
         eq(users.parentUserId, manager.id),
         eq(users.role, "account"),
         isNull(users.blockedAt),
-        requireMatchingNote ? sql`length(regexp_replace(coalesce(${profiles.jdMatching}, ''), ${"\\s"}, '', 'g')) > 0` : sql`true`,
         sql`exists (select 1 from experiences e where e.profile_user_id = ${profiles.userId} group by e.profile_user_id having count(*) >= 3)`,
       ))
       .orderBy(asc(profiles.firstName), asc(profiles.lastName))
@@ -55,7 +54,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         id: profile.id,
         name: [profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Candidate",
         category: profile.category || null,
-        ...(!requireMatchingNote ? { categoryId: profile.categoryId, categoryName: profile.categoryName, label: profile.label, labelColor: profile.labelColor } : {}),
+        ...(!geminiMatching ? { categoryId: profile.categoryId, categoryName: profile.categoryName, label: profile.label, labelColor: profile.labelColor } : {}),
       })),
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

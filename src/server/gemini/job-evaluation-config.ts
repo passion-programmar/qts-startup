@@ -13,7 +13,6 @@ export const geminiJobEvaluationResponseSchema = {
         employmentType: { type: "STRING" },
         workplaceType: { type: "STRING" },
         salary: { type: "STRING" },
-        jobUrl: { type: "STRING" },
         reason: { type: "STRING" },
       },
       required: [
@@ -24,7 +23,6 @@ export const geminiJobEvaluationResponseSchema = {
         "employmentType",
         "workplaceType",
         "salary",
-        "jobUrl",
         "reason",
       ],
     },

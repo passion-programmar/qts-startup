@@ -174,8 +174,8 @@ with Super-Admin permission can maintain their own blocked URL fragments and
 detection keywords; a block fragment matches the current URL. General Get JD
 extracts locally, checks Jobs/Bids and candidate account states through the
 server, then lets the Manager select and save accounts. Gemini matching is
-assigned per Manager; it sends visible job text and candidate matching notes
-to the server and automatically saves matches. The extension enables this
+assigned per Manager; the server sends visible job text and each candidate's
+profile job titles and dates to the AI and automatically saves matches. The extension enables this
 capability, but the server uses Gemini only when Super Admin has assigned it to
 that Manager; otherwise it stays in General mode. Super Admin can choose Local
 Count or Gemini Count; Gemini Usage records per-request counts next to Google

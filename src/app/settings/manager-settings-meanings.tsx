@@ -37,7 +37,7 @@ export const MANAGER_SETTINGS = {
     off: "General",
     icon: ScanSearch,
     summary: "How Get JD matches jobs to candidates.",
-    onMeaning: "Only candidates with a JD matching note are used, and a job needs its match result before Generation.",
+    onMeaning: "AI matches each job to candidates by the job titles in their profile. Generation and Auto Apply still need a JD matching note.",
     offMeaning: "No note or match result is needed.",
   },
   chatGptUrl: {

@@ -12,7 +12,7 @@ test("passes the saved evaluation prompt and input data without API-side evaluat
     candidates: [{
       candidateIndex: 0,
       candidateName: "Candidate A",
-      jdMatching: "Platform or infrastructure roles.",
+      employmentTimeline: [{ jobTitle: "Platform Engineer", start: "2021-03", end: null, isCurrent: true }],
     }],
   });
 
@@ -22,7 +22,7 @@ test("passes the saved evaluation prompt and input data without API-side evaluat
   ));
   assert.ok(prompt.includes('"visiblePageText":"Remote role with platform responsibilities."'));
   assert.ok(prompt.includes('"candidateIndex":0'));
-  assert.ok(prompt.includes('"jdMatching":"Platform or infrastructure roles."'));
+  assert.ok(prompt.includes('"employmentTimeline":[{"jobTitle":"Platform Engineer","start":"2021-03","end":null,"isCurrent":true}]'));
   assert.ok(!prompt.includes("Set isRemote"));
   assert.ok(!prompt.includes("specific job posting"));
   assert.ok(!prompt.includes("reasonable fit"));

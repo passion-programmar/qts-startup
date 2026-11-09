@@ -99,7 +99,11 @@ export function buildModelTestPrompt(testText: string): string {
     pageUrl: "https://example.test/jobs/model-test",
     pageTitle: "Model test job post",
     pageText: testText,
-    candidates: [{ candidateIndex: 0, candidateName: "Test Candidate", jdMatching: "Backend engineering with Python" }],
+    candidates: [{
+      candidateIndex: 0,
+      candidateName: "Test Candidate",
+      employmentTimeline: [{ jobTitle: "Backend Engineer", start: "2021-03", end: null, isCurrent: true }],
+    }],
   });
 }
 

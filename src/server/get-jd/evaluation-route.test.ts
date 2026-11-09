@@ -5,20 +5,20 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 
 const original = "Build Python services using FastAPI.\nPreserve PostgreSQL, requirements, benefits and Unicode: São Paulo.";
-const fixture: { calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, failure: null };
+const fixture: { calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
 (globalThis as Record<string, unknown>).__qtsEvaluationFixture = fixture;
 let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/extension-auth": `export const getExtensionManager=async()=>({id:'local-manager'});`,
-    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,jdMatching:'Python backend engineering',currentEmployer:'Different Employer'}];const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
+    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',start:'2021-03',end:null,isCurrent:true}],currentEmployer:'Different Employer'}];const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
     "@/server/get-jd/precheck-ticket": `export const getPrecheckTickets=()=>({verify:async(token)=>token==='valid'?{jobUrl:'https://example.test/jobs/1',jobTitle:'Engineer',company:'Example'}:null});`,
     "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>evaluate();`,
     "@/server/database/database-usage": `export const scheduleDailyCleanup=()=>{};`,
     "@/server/jobs/get-jd-mode": `export const getGetJdMatchingMode=async()=> 'gemini';`,
     "@/server/gemini/ai-job": `export class AiJobError extends Error{constructor(code,message,retryAt=null){super(message);this.code=code;this.retryAt=retryAt}};export const aiRequestBudgetMs=55000;globalThis.__AiJobError=AiJobError;`,
-    "@/server/gemini/ai-request": `export const runAiRequest=async({contents,parse})=>{const f=globalThis.__qtsEvaluationFixture;f.calls++;f.prompts.push(contents[0].parts[0].text);if(f.failure)throw f.failure();return parse(JSON.stringify({isJobPage:true,isRemote:f.remote,matchingProfileIndexes:[0],job:{title:'Engineer',company:'Example',description:'GEMINI REWRITE MUST NOT BE SAVED',location:'Remote',employmentType:'Full-time',workplaceType:'Remote',salary:'',jobUrl:'https://example.test/jobs/1',reason:'Remote eligible.'}}));};`,
+    "@/server/gemini/ai-request": `export const runAiRequest=async({contents,parse})=>{const f=globalThis.__qtsEvaluationFixture;f.calls++;f.prompts.push(contents[0].parts[0].text);if(f.failure)throw f.failure();const job={title:'Engineer',company:'Example',description:'GEMINI REWRITE MUST NOT BE SAVED',location:'Remote',employmentType:'Full-time',workplaceType:'Remote',salary:'',reason:'Remote eligible.'};return parse(JSON.stringify({isJobPage:f.jobPage,isRemote:f.remote,matchingProfileIndexes:f.jobPage?[0]:[],job:{...job,...f.job}}));};`,
     "@/server/jobs/get-jd-jobs": `export {getJdAccountState,summarizeAccountStates} from '@/server/jobs/get-jd-account-states';export const insertGetJdJob=async(job)=>{globalThis.__qtsEvaluationFixture.saves.push(job);return {status:'saved',jobId:'local-job'}};`,
   };
   const bundled = await build({ absWorkingDir: process.cwd(), tsconfig: resolve("tsconfig.json"),
@@ -37,15 +37,39 @@ const aiError = (code: string, message: string, retryAt?: number) =>
 const request = (extra = {}) => new Request("http://localhost/api/extension/get-jd", { method: "POST", body: JSON.stringify({
   pageUrl: "https://example.test/jobs/1", pageTitle: "Engineer", precheckToken: "valid", originalDescription: original, ...extra,
 }) });
-test("Gemini matching preserves its prompt/notes and saves the complete original JD without a final lookup", async () => {
+test("Gemini matching keeps the saved prompt, sends the career timeline, and saves the complete original JD without a final lookup", async () => {
   fixture.saves = []; fixture.calls = 0;
   const response = await POST(request()); const body = await response.json();
   assert.equal(response.status, 200); assert.equal(body.autoSavedProfileIds.length, 1);
   assert.equal(fixture.calls, 1); assert.equal(fixture.saves[0].description, original);
   assert.equal(body.classification.job.description, original);
   assert.match(fixture.prompts.at(-1) || "", /KEEP MANAGER MATCHING INSTRUCTIONS/);
-  assert.match(fixture.prompts.at(-1) || "", /Python backend engineering/);
+  assert.match(fixture.prompts.at(-1) || "", /"employmentTimeline":\[\{"jobTitle":"Python Backend Engineer","start":"2021-03","end":null,"isCurrent":true\}\]/);
+  assert.doesNotMatch(fixture.prompts.at(-1) || "", /"jdMatching"/);
   assert.match(fixture.prompts.at(-1) || "", /São Paulo/);
+});
+test("an answer without jobUrl is accepted and the result keeps the real page URL", async () => {
+  fixture.saves = [];
+  const response = await POST(request()); const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.classification.job.jobUrl, "https://example.test/jobs/1");
+  assert.equal((fixture.saves[0] as unknown as { jobUrl: string }).jobUrl, "https://example.test/jobs/1");
+});
+test("an invalid page with an empty reason is reported as not a job, and nothing is saved", async () => {
+  fixture.jobPage = false; fixture.remote = false; fixture.job = { reason: "" }; fixture.saves = [];
+  const response = await POST(request()); const body = await response.json();
+  fixture.jobPage = true; fixture.remote = true; fixture.job = {};
+  assert.equal(response.status, 200);
+  assert.match(body.message, /^Not a valid job page: The page does not show one clear, active job posting\.$/);
+  assert.equal(fixture.saves.length, 0);
+});
+test("a real job with an empty reason is still an unusable answer", async () => {
+  fixture.job = { reason: "  " }; fixture.saves = [];
+  const response = await POST(request()); const body = await response.json();
+  fixture.job = {};
+  assert.equal(response.status, 502);
+  assert.equal(body.diagnosticCode, "gemini_invalid_job_field");
+  assert.equal(fixture.saves.length, 0);
 });
 test("missing/invalid precheck or missing/oversized original JD never reaches Gemini", async () => {
   for (const extra of [{ precheckToken: "" }, { precheckToken: "invalid" }, { originalDescription: "" }, { originalDescription: "x".repeat(100001) }]) {
