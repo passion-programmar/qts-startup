@@ -217,12 +217,15 @@ export function ManagerApplyForm({
   managerId,
   canUseApply,
   aiMode,
+  autoApplyApi,
   autoSubmit,
   reviewMode,
 }: {
   managerId: string;
   canUseApply: boolean;
   aiMode: string;
+  // Off by default: Auto Apply answers with ChatGPT.
+  autoApplyApi: boolean;
   // Off by default: Apply stops before Submit for the Manager's review.
   autoSubmit: boolean;
   // "every_step" by default; "before_submit" reviews everything once at the end.
@@ -259,13 +262,32 @@ export function ManagerApplyForm({
           <span className="text-xs font-medium text-slate-700">
             Assisted Apply answers: {usesGemini ? "Gemini" : "ChatGPT"}
           </span>
-          <span className="text-xs text-slate-500">Auto Apply always uses ChatGPT.</span>
+          {!autoApplyApi && <span className="text-xs text-slate-500">Auto Apply uses ChatGPT.</span>}
           <button
             className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
             disabled={isPending}
             type="submit"
           >
             Use {usesGemini ? "ChatGPT" : "Gemini"}
+          </button>
+        </form>
+      )}
+      {canUseApply && (
+        <form action={formAction} className="flex flex-wrap items-center gap-2">
+          <input name="managerId" type="hidden" value={managerId} />
+          <input name="autoApplyApi" type="hidden" value={String(!autoApplyApi)} />
+          <span className="text-xs font-medium text-slate-700">
+            Auto Apply with APIs: {autoApplyApi ? "on (Gemini, Groq)" : "off"}
+          </span>
+          <button
+            className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={isPending}
+            title={autoApplyApi
+              ? "This Manager's Auto Apply goes back to ChatGPT"
+              : "This Manager's Auto Apply cleans each form, asks Gemini or Groq once for its questions, then fills it. The Manager still clicks Submit."}
+            type="submit"
+          >
+            {autoApplyApi ? "Turn off" : "Turn on"}
           </button>
         </form>
       )}

@@ -41,6 +41,13 @@ cadence; Auto Apply leaves the site's Submit action and success confirmation to
 the Manager. Check saves corrections using candidate, application, or Manager
 scope; global reusable answers remain Super Admin managed.
 
+Super Admin can also turn on **Auto Apply with APIs** per Manager, off by
+default. That Manager's Auto Apply checks who is signed in to the job site,
+empties the form, asks the server's Gemini and Groq keys once per page, then
+uploads and fills. The Manager still moves the form on and clicks Submit.
+Managers without the switch keep ChatGPT. See
+[docs/AUTO_APPLY_WITH_APIS_REPORT.md](docs/AUTO_APPLY_WITH_APIS_REPORT.md).
+
 Super Admin can set a ChatGPT Project URL per Manager. Generation and ChatGPT-backed Apply start a fresh chat from that URL for each job and replace their pinned ChatGPT tab after ten jobs. The default is `https://chatgpt.com/`.
 
 ## Local development

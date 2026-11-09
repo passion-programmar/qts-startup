@@ -894,6 +894,8 @@
         // value through a popup, so it is still a question; a locked prefilled box is left alone.
         disabled: control.disabled || (control.readOnly && !readOnlyPicker(control)),
         ...(control.readOnly && readOnlyPicker(control) ? { readOnlyPicker: true } : {}),
+        // The browser's own month, week and time boxes take one exact format.
+        ...(['month', 'week', 'time', 'datetime-local'].includes(type) ? { nativeType: type } : {}),
         ...(labelUnresolved ? { labelUnresolved: true } : {}),
         // Named only by its placeholder ("Your city"): usable, but the question text is less sure.
         ...(named && type !== 'file' && cleanText(control.placeholder) === named ? { labelConfidence: 'low' } : {}),
@@ -2836,10 +2838,11 @@
    * have not been met in this application (known: earlier results' keys), so going Back, boxes a fill
    * revealed, and redraws empty nothing. Kept: what the Manager changed, tracking boxes, the job's own
    * title or company, uploads and sliders. seedOnly only records the boxes (a restarted extension's
-   * open pages, a form the site filled from the résumé).
+   * open pages, a form the site filled from the résumé). uploads (Auto Apply with APIs): files already
+   * attached are removed as well.
    * { keys, newPage, emptied: [label], stuck: [{ id, label }] }
    */
-  async function emptyOldAnswers({ known = [], seedOnly = false, keepValues = [] } = {}) {
+  async function emptyOldAnswers({ known = [], seedOnly = false, keepValues = [], uploads = false, keepFiles = [] } = {}) {
     const seen = new Set(known);
     const page = `${location.origin}${location.pathname}${location.hash}`;
     const count = new Map();
@@ -2852,11 +2855,18 @@
     const newPage = boxes.length > 0 && boxes.filter((box) => seen.has(box.key)).length / boxes.length < 0.5;
     const emptied = [];
     const stuck = [];
-    if (!newPage || seedOnly) return { keys, newPage, emptied, stuck };
+    const boxKeys = boxes.map((box) => [box.field.id, box.key]);
+    if (!newPage || seedOnly) return { keys, boxKeys, newPage, emptied, stuck };
     const job = keepValues.map((value) => cleanText(value).toLowerCase()).filter(Boolean);
     const touched = [];
+    const attached = [];
     for (const { field, key } of boxes) {
       const element = seen.has(key) ? null : findField(field.id);
+      if (uploads && element && field.kind === 'file' && !managerChanged(element, field) && uploadHolds(field.id)) {
+        await removeUpload(element, field.id).catch(() => {});
+        attached.push(field);
+        continue;
+      }
       if (!element || ['file', 'range'].includes(field.kind) || isUnanswered(field) || managerChanged(element, field)
         || TRACKING_BOX.test(field.label) || job.includes(cleanText(element.value || '').toLowerCase())) continue;
       await emptyBox(element, field).catch(() => {});
@@ -2867,9 +2877,180 @@
     for (const field of touched) {
       if (!findField(field.id) || isUnanswered(field)) emptied.push(field.label);
       // A custom list with nothing to clear it with is not reported: its fill replaces the choice.
-      else if (!['menu', 'combobox'].includes(field.kind)) stuck.push({ id: field.id, label: field.label });
+      else if (!['menu', 'combobox'].includes(field.kind)) stuck.push({ id: field.id, label: field.label, kind: field.kind });
     }
-    return { keys, newPage, emptied, stuck };
+    for (const field of attached) {
+      if (uploadHolds(field.id)) stuck.push({ id: field.id, label: field.label, upload: true });
+      else emptied.push(field.label);
+    }
+    if (uploads) {
+      const squashName = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+      const ownFiles = keepFiles.map(squashName).filter(Boolean);
+      for (const row of attachmentRows().filter((entry) => !ownFiles.some((own) => squashName(entry.name).includes(own)))) {
+        const name = row.name;
+        press(row.control);
+        await sleep(300);
+        pressRemovalConfirmation();
+        if (row.node.isConnected && isShown(row.node)) stuck.push({ id: null, label: name, upload: true });
+        else emptied.push(name);
+      }
+    }
+    return { keys, boxKeys, newPage, emptied, stuck };
+  }
+
+  // A control that takes an attached file away, in the languages forms use.
+  const REMOVE_FILE = /\b(remove|delete|clear|discard|usu[nń]|entfernen|l[oö]schen|supprimer|eliminar|rimuovi|excluir|remover)\b|^[×✕✖xX]$/i;
+  const CONFIRM_REMOVAL = /^(yes|ok|okay|confirm|remove|delete|tak|ja|oui|s[ií]|usu[nń]|entfernen|l[oö]schen|supprimer|eliminar)\b/i;
+
+  const removeWords = (node) => cleanText(`${textOf(node)} ${node.getAttribute?.('aria-label') || ''} ${node.getAttribute?.('title') || ''}`);
+
+  /** The controls in a box that remove an attachment (never the file input itself). */
+  function removeControls(box, input = null) {
+    return [...new Set([box, ...deepQuery(box, 'button, a, [role="button"], [aria-label], [title]')])]
+      .filter((node) => node?.matches?.('button, a, [role="button"], [aria-label], [title]') && node !== input && !(input && node.contains(input)) && isShown(node)
+        && !node.matches('input') && textOf(node).length < 40 && REMOVE_FILE.test(removeWords(node)));
+  }
+
+  /** "Are you sure?" after removing a file: the dialog's own Yes, when one appeared. */
+  function pressRemovalConfirmation() {
+    const dialog = allElements().find((node) => node.matches?.('[role="dialog"], [role="alertdialog"]') && isShown(node));
+    if (!dialog) return false;
+    const yes = deepQuery(dialog, 'button, [role="button"]').find((node) => isShown(node) && CONFIRM_REMOVAL.test(cleanText(textOf(node))));
+    if (!yes) return false;
+    press(yes);
+    return true;
+  }
+
+  /** Takes an attached file off an upload: the browser's own selection, then the site's Remove. */
+  async function removeUpload(element, id) {
+    const input = element.matches('input[type="file"]') ? element : deepQuery(element, 'input[type="file"]')[0] || null;
+    if (input?.files?.length) {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(150);
+    }
+    for (const control of removeControls(uploadScope(element), input)) {
+      if (!uploadHolds(id)) return;
+      if (!control.isConnected) continue;
+      press(control);
+      await sleep(300);
+      pressRemovalConfirmation();
+      await sleep(150);
+    }
+  }
+
+  /**
+   * Files shown as attached with their own Remove control but no upload box left to read (a site that
+   * swaps the box for a file row). Only a row of its own: a name beside a Remove, no other question in it.
+   */
+  function attachmentRows() {
+    const rows = [];
+    const known = new Set();
+    for (const node of allElements()) {
+      if (node.children.length || !isShown(node)) continue;
+      const text = textOf(node);
+      if (!text || text.length > 120 || !SHOWN_FILE_NAME.test(text) || known.has(text)) continue;
+      if (!node.closest('form, [role="form"], fieldset, main') || node.closest('a[href]')) continue;
+      for (let box = node.parentElement, depth = 0; box && depth < 4; box = box.parentElement, depth += 1) {
+        if (deepQuery(box, 'input:not([type="hidden"]):not([type="file"]), select, textarea').some(isShown)) break;
+        const control = removeControls(box)[0];
+        if (!control) continue;
+        known.add(text);
+        rows.push({ node, control, name: text });
+        break;
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * Every question as it stands now, with what the Manager changed marked: for the last check against
+   * the candidate's profile. Read only.
+   */
+  function answersForCheck() {
+    const values = new Map(currentAnswers().map((entry) => [entry.id, entry.value]));
+    return scanForAssist()
+      .filter((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account && field.kind !== 'file')
+      .map((field) => {
+        const value = ['combobox', 'menu'].includes(field.kind) ? shownValue(field.id).replace(/[×✕]/g, '').trim() || values.get(field.id) : values.get(field.id);
+        return { ...field, value: Array.isArray(value) ? value.join(', ') : value ?? '', answered: !isUnanswered(field) };
+      });
+  }
+
+  /** Uploads holding a file that is not one of these names: { id, label, name }. Read only. */
+  function foreignUploads(allowed = []) {
+    const squash = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    const own = allowed.map(squash).filter(Boolean);
+    const wholeName = new RegExp(`^(?:${SHOWN_FILE_NAME.source})$`, 'iu');
+    const found = [];
+    for (const field of scanForm().filter((entry) => entry.kind === 'file' && !entry.disabled)) {
+      const element = findField(field.id);
+      if (!element) continue;
+      const shown = element.files?.length ? [...element.files].map((file) => file.name)
+        : deepQuery(uploadScope(element), '*').filter((node) => !node.children.length && isShown(node)).map(textOf).filter((text) => wholeName.test(text));
+      for (const name of new Set(shown)) {
+        if (!own.some((entry) => squash(name).includes(entry) || entry.includes(squash(name)))) found.push({ id: field.id, label: field.label, name: cleanText(name) });
+      }
+    }
+    return found;
+  }
+
+  const SIGN_OUT_WORDS = /^(?:sign ?out|log ?out|logout|signout|abmelden|ausloggen|se d[ée]connecter|d[ée]connexion|cerrar sesi[oó]n|salir|wyloguj(?: si[eę])?|sair|esci|disconnetti|uitloggen|afmelden)$/i;
+  const SIGN_OUT_ADDRESS = /(?:^|[/?#&=_-])(?:sign|log)[-_]?(?:out|off)(?:$|[/?#&=_.-])/i;
+  const ACCOUNT_WORDS = /^(?:my (?:account|profile|applications?|dashboard)|account(?: settings)?|candidate (?:home|profile|dashboard))$/i;
+  const SIGN_IN_WORDS = /^(?:sign ?in|log ?in|login|register|sign ?up|create (?:an )?account)\b/i;
+  const SIGNED_IN_AS = /\b(?:signed|logged) in as\b.{0,120}/i;
+  const ACCOUNT_AREA = 'header, nav, [role="banner"], [role="navigation"], [class*="account" i], [id*="account" i], [class*="profile" i], [class*="usermenu" i], [class*="user-menu" i], [data-automation-id*="account" i], [data-automation-id*="utility" i]';
+  const SHOWN_EMAIL = /[\w.+'-]+@[\w-]+(?:\.[\w-]+)+/g;
+
+  /**
+   * What this page shows about an account signed in to the site: { signedIn, emails, text, formEmail }.
+   * A Sign out control (also one hidden in a closed menu), "Signed in as", or an account menu with no
+   * Sign in beside it. Read only.
+   */
+  function siteAccount() {
+    const controls = allElements().filter((element) => ['A', 'BUTTON'].includes(element.tagName) || /^(button|menuitem|link)$/i.test(element.getAttribute('role') || ''));
+    const words = (element) => cleanText(element.textContent || element.getAttribute('aria-label') || element.getAttribute('title') || '');
+    const signOut = controls.find((element) => SIGN_OUT_WORDS.test(words(element)) || (element.tagName === 'A' && SIGN_OUT_ADDRESS.test(element.getAttribute('href') || '')));
+    const shownControls = controls.filter(isShown);
+    const signInOffered = shownControls.some((element) => SIGN_IN_WORDS.test(words(element)));
+    const accountMenu = shownControls.some((element) => ACCOUNT_WORDS.test(words(element)));
+    const said = cleanText(document.body?.innerText || '').slice(0, 20000).match(SIGNED_IN_AS)?.[0] || '';
+    if (!signOut && !said && (!accountMenu || signInOffered)) return { signedIn: false, emails: [], text: '', formEmail: '' };
+    const parts = [said];
+    for (const area of allElements().filter((element) => element.matches?.(ACCOUNT_AREA)).slice(0, 80)) {
+      const text = cleanText(area.textContent || '');
+      if (text && text.length <= 400) parts.push(text);
+    }
+    for (let box = signOut?.parentElement, depth = 0; box && depth < 4; box = box.parentElement, depth += 1) {
+      const text = cleanText(box.textContent || '');
+      if (text.length <= 400) parts.push(text);
+    }
+    const text = parts.filter(Boolean).join(' ').slice(0, 4000);
+    const emailBox = scanForm().find((field) => !field.hidden && (field.kind === 'email' || /e-?mail/i.test(field.label)) && findField(field.id)?.value);
+    return { signedIn: true, emails: [...new Set(text.match(SHOWN_EMAIL) || [])], text, formEmail: emailBox ? String(findField(emailBox.id).value).trim() : '' };
+  }
+
+  /** Waits until the page has stopped changing for quietMs (at most maxMs): no fixed pause. */
+  function settled({ quietMs = 300, maxMs = 2000 } = {}) {
+    return new Promise((resolve) => {
+      let quiet = null;
+      let cap = null;
+      const observer = new MutationObserver(() => {
+        clearTimeout(quiet);
+        quiet = setTimeout(done, quietMs);
+      });
+      function done() {
+        observer.disconnect();
+        clearTimeout(quiet);
+        clearTimeout(cap);
+        resolve(true);
+      }
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      quiet = setTimeout(done, quietMs);
+      cap = setTimeout(done, maxMs);
+    });
   }
 
   function scanForAssist() {
@@ -2896,6 +3077,8 @@
         ...(field.kind === 'range' ? { min: field.min ?? 0, max: field.max ?? 100 } : {}),
         ...(field.kind === 'date' ? { minDate: element.min || null, maxDate: element.max || null, dateStep: element.step === 'any' ? null : Number(element.step || 1) } : {}),
       };
+      // A referral or tracking code the site put there says where the application came from: it stays.
+      if (TRACKING_BOX.test(field.label) && !isUnanswered(field)) field = { ...field, trackingValue: true };
       if (managerChanged(element, field)) field = { ...field, managerChanged: true };
       if (unrelatedBox(element)) return { ...field, unrelated: true };
       return accountBox(element) ? { ...field, account: true } : field;
@@ -2906,6 +3089,10 @@
     scanForm,
     scanForAssist,
     emptyOldAnswers,
+    answersForCheck,
+    foreignUploads,
+    siteAccount,
+    settled,
     embeddedApplicationUrl,
     readComboboxOptions,
     discoverComboboxChoices,

@@ -23,6 +23,8 @@
   const OPT_IN = /\b(marketing|newsletters?|(future|other|new) (jobs?|roles?|opportunit\w*|vacanc\w*|positions?|openings?)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?|contact me about)\b/i;
   // Questions that use "accept"/"agree"/"confirm" but ask about the candidate, not about terms.
   const NOT_AN_AGREEMENT = /\b(willing|salary|compensation|relocat\w*|travel|overtime|lower|shift|weekends?|night)\b/i;
+  // Auto Apply with APIs: declarations with legal weight. QTS and the AI never answer these; the Manager does.
+  const SENSITIVE_DECLARATION = /\b(criminal|convict(?:ed|ions?)?|felon(?:y|ies)?|misdemeanou?rs?|arrest(?:ed|s)?|offen[cs]es?|perjury|sworn|affidavit|drug (?:test|screen)\w*|security clearance|bankrupt\w*|debarred|disciplinary)\b/i;
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
 
@@ -1724,13 +1726,15 @@
     'For "options", copy exactly one option character for character; for type "checkbox-group" or "multiple": true, every option that fits, separated by " | ".',
     ...REPLY_FORMAT.slice(4),
   ].join('\n');
-  const answerReplyFormat = (autoApply) => autoApply ? AUTO_APPLY_REPLY_FORMAT : REPLY_FORMAT.join('\n');
+  // Auto Apply with APIs: only the shape of the reply. What to answer is Super Admin's prompt.
+  const API_REPLY_FORMAT = REPLY_FORMAT.slice(0, 8).join('\n');
+  const answerReplyFormat = (autoApply, apiFlow = false) => apiFlow ? API_REPLY_FORMAT : autoApply ? AUTO_APPLY_REPLY_FORMAT : REPLY_FORMAT.join('\n');
 
   // Facts the AI never needs for open questions (the profile answers contact and diversity questions
   // itself): left out of Auto Apply's prompts.
   const NOT_FOR_AI = ['email', 'phone', 'address', 'linkedin', 'github', 'portfolio', 'diversityAnswers'];
 
-  function candidateFacts(candidate, job, fields, exchangeRates, today, { minimal = false } = {}) {
+  function candidateFacts(candidate, job, fields, exchangeRates, today, { minimal = false, apiFlow = false } = {}) {
     const facts = {
       name: [candidate.firstName, candidate.lastName].filter(Boolean).join(' '),
       email: candidate.email,
@@ -1769,8 +1773,11 @@
       facts.salaryEquivalents = salaryEquivalents(candidate, asked, exchangeRates);
     }
     if (minimal) for (const key of NOT_FOR_AI) delete facts[key];
+    // Auto Apply with APIs: the AI gets the profile, but never race, gender, disability or the like;
+    // QTS fills those from the profile itself.
+    if (apiFlow) delete facts.diversityAnswers;
     // Auto Apply (minimal): the AI is never told the usual default as if it were the candidate's notice.
-    if (minimal && !hasNotice(candidate)) {
+    if ((minimal || apiFlow) && !hasNotice(candidate)) {
       delete facts.noticePeriod;
       delete facts.earliestStartDate;
     }
@@ -1780,7 +1787,10 @@
   // Fields answered by picking from a list.
   const CHOICE_KINDS = new Set(['select', 'menu', 'combobox']);
 
-  function questionList(fields) {
+  // The browser's own month, week and time boxes take exactly one format.
+  const NATIVE_FORMATS = { month: 'YYYY-MM', week: 'YYYY-Www', time: 'HH:MM', 'datetime-local': 'YYYY-MM-DDTHH:MM' };
+
+  function questionList(fields, { apiFlow = false } = {}) {
     return fields.map((field) => ({
       id: field.id,
       question: field.label,
@@ -1799,6 +1809,8 @@
       ...(Number.isFinite(field.max) ? { max: field.max } : {}),
       ...(field.unit ? { unit: field.unit } : {}),
       ...(field.kind === 'date' ? { format: 'YYYY-MM-DD' } : field.placeholder && /^[dmy]{1,4}[./\- ][dmy]{1,4}[./\- ][dmy]{1,4}$/i.test(field.placeholder) ? { format: field.placeholder } : {}),
+      ...(apiFlow && NATIVE_FORMATS[field.nativeType] ? { format: NATIVE_FORMATS[field.nativeType] } : {}),
+      ...(apiFlow && field.pattern ? { pattern: field.pattern } : {}),
       ...(field.hint ? { hint: field.hint } : {}),
     }));
   }
@@ -1807,10 +1819,10 @@
    * The AI request for a page's open questions: Super Admin's prompt (or the default) with its
    * placeholders filled, then the fixed reply format. One message, answered as strict JSON.
    */
-  function buildAnswerPrompt({ template, job, candidate: profile, resumeText, coverLetterText, documentsJson, fields, exchangeRates, today, savedAnswers, minimal = false, autoApply = minimal }) {
+  function buildAnswerPrompt({ template, job, candidate: profile, resumeText, coverLetterText, documentsJson, fields, exchangeRates, today, savedAnswers, minimal = false, autoApply = minimal, apiFlow = false }) {
     // The AI sees the salary, notice, and sponsorship Apply uses: Super Admin's reusable ones first.
     const candidate = withReusableFacts(profile, savedAnswers, exchangeRates);
-    const questions = JSON.stringify(questionList(fields));
+    const questions = JSON.stringify(questionList(fields, { apiFlow }));
     const saved = (savedAnswers || [])
       .map((row) => `${row.questionText}: ${row.answer}${row.note ? ` (note: ${row.note})` : ''}`)
       .join('\n') || '(none)';
@@ -1827,7 +1839,7 @@
       job_location: job.location || 'not stated',
       job_description: String(job.description || '').slice(0, minimal ? 6000 : 12000),
       today: formatDate(new Date(today || Date.now())),
-      candidate_profile: JSON.stringify(candidateFacts(candidate, job, fields, exchangeRates, today, { minimal })),
+      candidate_profile: JSON.stringify(candidateFacts(candidate, job, fields, exchangeRates, today, { minimal, apiFlow })),
       resume: resume || '(none)',
       cover_letter: coverLetter || '(none)',
       resume_and_cover_letter: documents,
@@ -1840,7 +1852,7 @@
     let prompt = source.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (whole, name) => (name in values ? values[name] : whole));
     // A prompt that leaves the questions out still gets them, or there would be nothing to answer.
     if (!/\{\{\s*(questions|application_question)\s*\}\}/.test(source)) prompt += `\n\nQuestions:\n${questions}`;
-    return `${prompt}\n\n${answerReplyFormat(autoApply)}`;
+    return `${prompt}\n\n${answerReplyFormat(autoApply, apiFlow)}`;
   }
 
   /** { ok: true, value } with the cleaned answer, or { ok: false, reason }. */
@@ -1949,13 +1961,13 @@
    * The one follow-up for answers that could not be used: before filling (not an option, too long)
    * or after (the site rejected them). Each question comes again with its options and the reason.
    */
-  function buildFixPrompt(invalid, fields = [], { autoApply = false } = {}) {
-    const byId = new Map(questionList(fields).map((question) => [question.id, question]));
+  function buildFixPrompt(invalid, fields = [], { autoApply = false, apiFlow = false } = {}) {
+    const byId = new Map(questionList(fields, { apiFlow }).map((question) => [question.id, question]));
     const again = invalid.map((entry) => ({ ...(byId.get(entry.id) || { id: entry.id, question: entry.label }), problem: entry.reason }));
     return [
       'Some answers could not be used. Answer only these again, following the same rules and fixing each problem:',
       JSON.stringify(again),
-      answerReplyFormat(autoApply),
+      answerReplyFormat(autoApply, apiFlow),
     ].join('\n');
   }
 
@@ -2076,7 +2088,121 @@
     return Boolean(meaning.matchSaved(field.label, (savedAnswerRows || []).filter((row) => ['application', 'candidate', 'manager'].includes(row.scope)), { kind: field.kind, options: field.options || [] }));
   }
 
-  const api = { changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
+  /**
+   * Auto Apply with APIs: what each question on a page needs, decided before anything is filled.
+   *   uploads, autofillUpload  documents (the site's "fill from résumé" upload is kept apart)
+   *   code     QTS fills these once the AI has answered: required agreements, the cover letter's
+   *            text, and diversity answers from the profile, which the AI is never sent
+   *   ai       asked of the AI; check is what the profile states (its answer must say the same),
+   *            lacking names a fact the profile does not have
+   *   manager  declarations QTS and the AI never answer, and required boxes nothing can answer
+   */
+  function planApiFields(fields, profile, savedAnswers, context = {}) {
+    const shown = (fields || []).filter((field) => !field.hidden && !field.disabled);
+    const resolved = resolveFields(shown, profile, savedAnswers, { ...context, autoApply: true, normalApply: false });
+    const open = new Map(resolved.open.map((entry) => [entry.id, entry]));
+    const lacking = new Map(resolved.missing.map((entry) => [entry.id, entry.fact]));
+    const byHand = new Map(resolved.byHand.map((entry) => [entry.id, entry.message]));
+    const plan = { uploads: [], autofillUpload: null, code: [], ai: [], manager: [] };
+    const askManager = (field, message) => plan.manager.push({ field, message });
+    for (const field of shown) {
+      const label = labelOf(field);
+      const answer = resolved.answers[field.id];
+      const asked = open.get(field.id);
+      if (field.kind === 'file') {
+        if (isAutofillUpload(field)) plan.autofillUpload ||= field;
+        else if (answer?.file) plan.uploads.push({ field, answer });
+        else if (byHand.has(field.id)) askManager(field, byHand.get(field.id));
+        continue;
+      }
+      if (SENSITIVE_DECLARATION.test(label)) {
+        if (field.required) askManager(field, `Answer "${field.label}" yourself: QTS and the AI leave declarations like this to you.`);
+        continue;
+      }
+      if (EEO.test(label)) {
+        if (answer?.value !== undefined) plan.code.push({ field, answer });
+        else if (field.required) askManager(field, `Fill "${field.label}" yourself: the candidate's profile has no answer for it.`);
+        continue;
+      }
+      if (answer?.source === 'consent' || answer?.source === 'documents') {
+        plan.code.push({ field, answer });
+        continue;
+      }
+      if (!answer && !asked) {
+        if (byHand.has(field.id)) askManager(field, byHand.get(field.id));
+        continue;
+      }
+      // The prompt decides how to answer: no hint written here, except what the profile itself says.
+      let sent = asked || field;
+      if (asked && (lacking.has(field.id) || /^Use the supplied candidate facts/.test(asked.hint || ''))) {
+        const { hint: _hint, ...rest } = asked;
+        sent = rest;
+      }
+      const exact = (savedAnswers || []).some((row) => row.questionKey === normalizeQuestionKey(field.label));
+      const known = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exact && answer.fact === 'answer'));
+      plan.ai.push({ field: sent, ...(known ? { check: answer } : {}), ...(lacking.has(field.id) ? { lacking: lacking.get(field.id) } : {}) });
+    }
+    return plan;
+  }
+
+  const answerWords = (value) => (Array.isArray(value) ? value.join(' ') : String(value ?? ''));
+
+  /** Whether a value says what the profile says. loose: a site may show more words around it. */
+  function sameAsProfile(check, value, { loose = false } = {}) {
+    if (typeof check.value === 'boolean') return (typeof value === 'boolean' ? value : checkboxAnswerValue(value) ?? yesOrNo(value)) === check.value;
+    const [meant, said] = [plain(answerWords(check.value)), plain(answerWords(value))];
+    if (meant === said || meant.replace(/\s+/g, '') === said.replace(/\s+/g, '')) return true;
+    const [yesMeant, yesSaid] = [yesOrNo(meant), yesOrNo(said)];
+    if (yesMeant !== null && yesSaid !== null) return yesMeant === yesSaid;
+    const intended = String(check.intended ?? answerWords(check.value));
+    if (check.fact === 'location') {
+      const city = plain(intended.split(',')[0]);
+      const country = countryCode(intended.split(',').pop());
+      const sameCountry = !country || countryCode(answerWords(value).split(',').pop()) === country || keepsMeaning({ fact: 'location', intended }, value);
+      return sameCountry && (!city || said.includes(city));
+    }
+    if (['phone', 'country', 'nationality', 'birthday'].includes(check.fact)) return keepsMeaning({ fact: check.fact, intended }, value);
+    return loose && Boolean(meant && said) && (meant.includes(said) || said.includes(meant));
+  }
+
+  /**
+   * One AI answer checked before it is filled. A fact the profile states stays that fact: anything
+   * else is replaced by the profile's value, and the Manager is told. A fact the profile lacks must
+   * show in the candidate's documents or saved answers. { answer, corrected? } or { refused: reason }.
+   */
+  function verifyApiAnswer(entry, answer, { evidence = '' } = {}) {
+    const { field, check, lacking } = entry;
+    if (check) {
+      if (sameAsProfile(check, answer.value)) return { answer };
+      return { answer: { ...check }, corrected: { said: answerWords(answer.value), used: answerWords(check.value) } };
+    }
+    if (field.fact && field.intended) {
+      if (keepsMeaning(field, answer.value)) return { answer };
+      return { refused: `the ${field.fact === 'answer' ? 'saved answer' : 'profile'} says "${field.intended}", and the AI's answer does not say the same` };
+    }
+    if (lacking) {
+      const said = plain(answerWords(answer.value));
+      const digits = said.replace(/\D/g, '');
+      const shown = digits.length >= 5 ? String(evidence).replace(/\D/g, '').includes(digits) : Boolean(said) && plain(evidence).includes(said);
+      if (!shown || yesOrNo(said) !== null) return { refused: `the profile has no ${lacking}, and the résumé and saved answers do not show the AI's answer` };
+    }
+    return { answer };
+  }
+
+  /** Answers on the page that differ from the candidate's profile: { id, label, shown, profile }. */
+  function personalMismatches(fields, profile, savedAnswers, context = {}) {
+    const checked = (fields || []).filter((field) => field.answered && !field.managerChanged && !EEO.test(labelOf(field)));
+    const { answers } = resolveFields(checked, profile, savedAnswers, { ...context, autoApply: true, normalApply: false });
+    const wrong = [];
+    for (const field of checked) {
+      const answer = answers[field.id];
+      if (!answer?.fact || answer.fact === 'answer' || answer.source !== 'profile' || answer.value === undefined) continue;
+      if (!sameAsProfile(answer, field.value, { loose: true })) wrong.push({ id: field.id, label: field.label, shown: String(field.value), profile: answerWords(answer.value) });
+    }
+    return wrong;
+  }
+
+  const api = { planApiFields, verifyApiAnswer, personalMismatches, changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

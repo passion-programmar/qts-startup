@@ -104,6 +104,9 @@ export const users = pgTable(
     // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
     canUseApply: boolean("can_use_apply").default(false).notNull(),
     applyAiMode: text("apply_ai_mode").default("chatgpt").notNull(),
+    // Super Admin's per-Manager switch: Auto Apply answers through Gemini/Groq instead of ChatGPT.
+    // Separate from Get JD matching and the assisted Apply AI choice; off means nothing changes.
+    autoApplyApi: boolean("auto_apply_api").default(false).notNull(),
     autoApplyParallelLimit: integer("auto_apply_parallel_limit").default(2).notNull(),
     chatGptUrl: text("chatgpt_url").default("https://chatgpt.com/").notNull(),
     // Apply clicks Submit itself when on (Super Admin, per Manager); a bid still waits for the Manager's Yes.

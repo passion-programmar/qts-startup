@@ -42,7 +42,9 @@ importScripts(
   '../vendor/pdf-lib/pdf-lib.min.js',
   '../shared/chrome-pdf.js',
   '../shared/resume-print-requests.js',
+  '../shared/site-sessions.js',
   'apply-runner.js',
+  'auto-apply-api.js',
   'auto-apply-runner.js',
   'auto-apply-checklist.js'
 );

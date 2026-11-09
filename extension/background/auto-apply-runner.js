@@ -26,6 +26,8 @@ const AUTO_APPLY_CHAT_FOCUS_KEY = 'qtsAutoApplyChatFocus';
 // At most this many AI requests per application; a busy server is tried again after these waits.
 const AUTO_APPLY_AI_BUDGET = 10;
 const AUTO_APPLY_AI_RETRY_WAITS = [3000, 10000];
+// With the APIs a busy moment passes within a minute (the per-minute limits of the keys).
+const AUTO_APPLY_API_RETRY_WAITS = [5000, 20000, 40000];
 const autoRuns = new Map();
 let lastAutoRun = null;
 let runWrites = Promise.resolve();
@@ -81,6 +83,15 @@ async function prepareAutoApplication(application) {
   application.aiBudget = bounded(limits.budget, 1, 20, AUTO_APPLY_AI_BUDGET);
   application.aiTimeoutMs = bounded(limits.timeoutMs, 5000, 120000, null);
   application.aiRetryWaits = AUTO_APPLY_AI_RETRY_WAITS;
+  // Super Admin's "Auto Apply with APIs" for this Manager: Gemini and Groq through the QTS server,
+  // in its own flow (auto-apply-api.js). No turn-taking: the keys serve several applications at once.
+  if (application.autoApplyApi === true) {
+    application.apiFlow = true;
+    application.aiMode = 'gemini';
+    application.minimalPrompt = false;
+    application.aiRetryWaits = AUTO_APPLY_API_RETRY_WAITS;
+    delete application.chatFocus;
+  }
   application.factSources = self.__qtsApplyAnswers.factSources({
     candidate: application.candidate,
     resumeText: application.job.resumeText,
@@ -165,7 +176,9 @@ async function runAutoApplication(application, recipe, resume = null) {
 async function resumeForClaimedJob(application) {
   const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
   const entry = Object.entries(stored).find(([, record]) =>
-    record.jobId === application.job.id && !record.submitted && !record.pendingRelease);
+    record.jobId === application.job.id && !record.submitted && !record.pendingRelease
+    // Saved work is only ever taken up for the candidate it was done for.
+    && (!record.candidateId || record.candidateId === application.candidate?.candidateId));
   if (!entry) return null;
   const [previousId, record] = entry;
   const attemptId = application.attemptId;

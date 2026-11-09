@@ -45,6 +45,8 @@ function createChecklist(saved = []) {
    * question (with fieldId, value, source); provisional: the application's provisional answers.
    */
   function addStep(step, filled, used, provisional) {
+    // Page-wide messages kept from the last pass are that pass's: this one says its own.
+    for (const [key, entry] of entries) if (entry.step === step && entry.keep === true) entries.delete(key);
     const byId = new Map(Object.values(used || {}).filter((answer) => answer.fieldId && answer.step === step).map((answer) => [answer.fieldId, answer]));
     const flagged = new Map((filled.problems || []).filter((entry) => entry.fieldId).map((entry) => [entry.fieldId, entry]));
     const pending = new Map([...provisional.values()].filter((entry) => entry.step === step).map((entry) => [entry.id, entry]));
@@ -55,7 +57,7 @@ function createChecklist(saved = []) {
       if (pending.has(field.fieldId) && !pending.get(field.fieldId).accepted) {
         put(step, field.question, { ...base, category: 'provisional', issue: pending.get(field.fieldId).reason });
       } else if (field.status === 'verified') {
-        put(step, field.question, { ...base, category: 'verified', issue: '' });
+        put(step, field.question, { ...base, category: 'verified', issue: answer?.checkedNote || '' });
       } else if (problem) {
         const message = String(problem.message || '');
         put(step, field.question, { ...base, category: /did not take|did not accept|rejected|refused|not one of|could not be|was cleared|invalid/i.test(message) ? 'failed' : 'needs_input', issue: message });
@@ -67,7 +69,7 @@ function createChecklist(saved = []) {
     }
     // What the page shows as a whole (no single question): an unreadable part, an error, a closed form.
     for (const entry of (filled.problems || []).filter((item) => !item.fieldId)) {
-      put(step, entry.message, { fieldId: null, kind: 'page', required: true, category: /cannot read|couldn't read/i.test(entry.message) ? 'unknown' : 'failed', issue: entry.message });
+      put(step, entry.message, { fieldId: null, kind: 'page', required: true, category: /cannot read|couldn't read/i.test(entry.message) ? 'unknown' : 'failed', issue: entry.message, ...(entry.keep ? { keep: true, title: 'Needs you', issue: '' } : {}) });
     }
   }
 
@@ -154,8 +156,20 @@ function createChecklist(saved = []) {
         || [...new Set(look.frames || [])].some((host) => entry.label === `Part of the page from ${host}`)
         || (look.gate && entry.category === 'blocked' && !/CAPTCHA/.test(entry.label))
         || (look.blockers?.includes('captcha') && /CAPTCHA/.test(entry.label))
+        || entry.hold === true || entry.keep === true
         || /no longer shown on this page/.test(entry.issue);
       if (!still) entries.delete(key);
+    }
+  }
+
+  /**
+   * Auto Apply with APIs: what stops Submit about this candidate on this step, as it is now (another
+   * account signed in, a personal answer or document that is not theirs). Replaces the last check's.
+   */
+  function setHolds(step, messages) {
+    for (const [key, entry] of entries) if (entry.step === step && entry.hold === true) entries.delete(key);
+    for (const message of messages || []) {
+      put(step, message, { fieldId: null, kind: 'page', required: true, category: 'blocked', hold: true, title: 'Candidate check', issue: '' });
     }
   }
 
@@ -165,7 +179,7 @@ function createChecklist(saved = []) {
     const order = ['blocked', 'failed', 'needs_input', 'provisional', 'unknown', 'optional_empty', 'verified'];
     const items = all
       .map((entry) => ({
-        step: entry.step, label: entry.label, category: entry.category, title: CHECKLIST_LABELS[entry.category], issue: entry.issue || '', required: Boolean(entry.required), kind: entry.kind || null,
+        step: entry.step, label: entry.label, category: entry.category, title: entry.title || CHECKLIST_LABELS[entry.category], issue: entry.issue || '', required: Boolean(entry.required), kind: entry.kind || null,
         fieldId: entry.step === currentStep ? entry.fieldId || null : null,
         // An earlier step is not on this page: its state is as it was when QTS left it.
         where: entry.step === currentStep ? `step ${entry.step}` : `step ${entry.step} (earlier: use the site's Back to see it)`,
@@ -177,7 +191,7 @@ function createChecklist(saved = []) {
     return { items, totals, needsYou: needsYou.length, blocking: blocking.length };
   }
 
-  return { addStep, accept, recheck, summary, save: () => [...entries.values()] };
+  return { addStep, accept, recheck, setHolds, summary, save: () => [...entries.values()] };
 }
 
 self.__qtsAutoApplyChecklist = { create: createChecklist, LABELS: CHECKLIST_LABELS };

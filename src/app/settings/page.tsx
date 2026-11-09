@@ -144,6 +144,7 @@ export default async function SettingsPage() {
         useGeminiMatching: users.useGeminiMatching,
         canUseApply: users.canUseApply,
         applyAiMode: users.applyAiMode,
+        autoApplyApi: users.autoApplyApi,
         chatGptUrl: users.chatGptUrl,
         autoSubmit: users.autoSubmit,
         applyReviewMode: users.applyReviewMode,
@@ -480,6 +481,7 @@ export default async function SettingsPage() {
                   />,
                   <ManagerApplyForm
                     aiMode={manager.applyAiMode}
+                    autoApplyApi={manager.autoApplyApi}
                     autoSubmit={manager.autoSubmit}
                     reviewMode={manager.applyReviewMode}
                     canUseApply={manager.canUseApply}

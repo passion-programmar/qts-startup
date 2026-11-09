@@ -48,6 +48,9 @@ export type ClaimedApplication = {
   attemptId: string;
   aiMode: "chatgpt" | "gemini";
   autoApplyCustomUrlGemini: boolean;
+  // Super Admin's "Auto Apply with APIs" switch for this Manager: Auto Apply answers through the
+  // Gemini/Groq keys on the server (fills only after the answers arrive; the Manager submits).
+  autoApplyApi: boolean;
   // Apply clicks Submit itself (Super Admin's per-Manager option); the bid still waits for Yes.
   autoSubmit: boolean;
   // When Apply stops for review (Super Admin, per Manager): every step, or once before Submit.
@@ -274,6 +277,7 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
       sexualOrientation: profiles.sexualOrientation,
       pronouns: profiles.pronouns,
       aiMode: users.applyAiMode,
+      autoApplyApi: users.autoApplyApi,
       autoSubmit: users.autoSubmit,
       reviewMode: users.applyReviewMode,
       siteAccountPassword: users.siteAccountPassword,
@@ -289,7 +293,7 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
   const {
     managerId, jobId, url, title, company, location, employmentType, workplaceType, salary, description,
     resumeLocalPath, resumeSavedOn, promptName, pdfTemplate, savedResumeText, savedCoverLetterText,
-    deliveredResume, deliveredCoverLetter, aiMode, autoSubmit, reviewMode, siteAccountPassword, ...candidate
+    deliveredResume, deliveredCoverLetter, aiMode, autoApplyApi, autoSubmit, reviewMode, siteAccountPassword, ...candidate
   } = row;
   const savedAnswers = await loadApplicationAnswers(managerId, candidate.candidateId, jobId);
   const effectiveAiMode = autoApplyCustomUrlGemini ? "gemini" : aiMode === "gemini" ? "gemini" : "chatgpt";
@@ -297,6 +301,7 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
     attemptId,
     aiMode: effectiveAiMode,
     autoApplyCustomUrlGemini,
+    autoApplyApi,
     autoSubmit,
     reviewMode: reviewModeOf(reviewMode),
     job: {
@@ -321,7 +326,8 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
     // A reusable salary answer may need converting to another currency.
     exchangeRates: await loadExchangeRates(),
     rememberedChoices: await rememberedChoices(),
-    answerPrompt: await defaultAnswerPrompt(effectiveAiMode),
+    // With the switch on, Auto Apply answers with Super Admin's Gemini prompt, whichever AI the keys reach.
+    answerPrompt: await defaultAnswerPrompt(autoApplyApi ? "gemini" : effectiveAiMode),
     siteAccountPassword: decryptSiteAccountPassword(siteAccountPassword),
   };
 }

@@ -168,6 +168,7 @@
     document.removeEventListener('submit', onDocumentSubmit, true);
     document.removeEventListener('input', onEdit, true);
     document.removeEventListener('change', onEdit, true);
+    for (const type of ['input', 'change', 'click']) document.removeEventListener(type, markManagerChange, true);
     try { global.__qtsApplyForm?.markProblemFields?.([]); } catch { /* Old context already disposed. */ }
     clearDock();
     host.remove();
@@ -637,6 +638,17 @@
   };
   document.addEventListener('input', onEdit, true);
   document.addEventListener('change', onEdit, true);
+  // Auto Apply with APIs: what the Manager types or picks while reviewing is marked on the box itself,
+  // so QTS never empties or replaces it, on this step or after the Manager moves on.
+  const markManagerChange = (event) => {
+    if (!event.isTrusted || !state?.apiFlow || state.mode !== 'review' || host.contains(event.target)) return;
+    const path = event.composedPath().filter((node) => node?.setAttribute);
+    const box = event.type === 'click'
+      ? path.find((node) => node.matches('[role="radio"], [role="checkbox"], [role="combobox"], [aria-pressed], [data-qts-apply-field]'))
+      : path[0];
+    box?.setAttribute('data-qts-manager-changed', '1');
+  };
+  for (const type of ['input', 'change', 'click']) document.addEventListener(type, markManagerChange, true);
 
   // The worker sleeps when idle; the panel keeps it awake while the Manager reviews.
   heartbeatTimer = setInterval(() => { if (state) send('ping'); }, 20000);

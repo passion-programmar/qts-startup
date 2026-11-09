@@ -112,6 +112,21 @@ matching to that Manager. The in-page preview is local extraction; General mode
 uses server duplicate/account/save APIs, while assigned Gemini mode uses the
 server evaluation route and automatically saves matches.
 
+Auto Apply with APIs is a per-Manager Super Admin switch (`users.auto_apply_api`,
+off by default), separate from Get JD matching and the Assisted Apply AI choice.
+With it on, the extension runs `extension/background/auto-apply-api.js` instead of
+the ChatGPT fill: it clears a job site last used for another candidate and
+checks who is signed in (`extension/shared/site-sessions.js`), empties the form,
+reads every question, sends one request per page to
+`POST /api/extension/apply/answers`, uploads the documents, fills everything,
+and asks again only about questions that appeared. The route serves only Managers
+with the switch, the Gemini Apply mode, or a Custom URL job. QTS clicks through to
+the form by itself, preferring a way in without an account; after filling a step
+it stops, and the Manager clicks Next and Submit. Each step is checked against the
+candidate before Submit, and what fails holds the site's Submit. Super Admin's
+"Gemini · Application-answer generation" prompt decides what the AI is told; the
+code adds only the reply format.
+
 Application-session, scanner, and Gmail code remains unfinished product work.
 Assisted Apply and Auto Apply use the supported Manager-authenticated claim,
 review, correction, and result routes. Auto Apply remains gated by the

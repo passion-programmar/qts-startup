@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "auto_apply_api" boolean DEFAULT false NOT NULL;

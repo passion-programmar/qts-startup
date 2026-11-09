@@ -288,6 +288,7 @@ export async function updateManagerApplyAction(
   const aiModeValue = formData.get("aiMode");
   const autoSubmitValue = formData.get("autoSubmit");
   const reviewModeValue = formData.get("reviewMode");
+  const autoApplyApiValue = formData.get("autoApplyApi");
   const change = enabledValue === "true" || enabledValue === "false"
     ? { canUseApply: enabledValue === "true" }
     : aiModeValue === "chatgpt" || aiModeValue === "gemini"
@@ -296,7 +297,9 @@ export async function updateManagerApplyAction(
         ? { autoSubmit: autoSubmitValue === "true" }
         : reviewModeValue === "every_step" || reviewModeValue === "before_submit"
           ? { applyReviewMode: reviewModeValue }
-          : null;
+          : autoApplyApiValue === "true" || autoApplyApiValue === "false"
+            ? { autoApplyApi: autoApplyApiValue === "true" }
+            : null;
   if (!isUuid(managerId) || !change) {
     return { ...emptyState, error: "Select a valid Manager and Apply setting." };
   }
@@ -326,6 +329,10 @@ export async function updateManagerApplyAction(
       ? change.canUseApply
         ? "Apply was turned on. This Manager's Apply button now applies to Generation-completed jobs."
         : "Apply was turned off for this Manager."
+      : "autoApplyApi" in change
+        ? change.autoApplyApi
+          ? "Auto Apply with APIs is on: this Manager's Auto Apply now answers through Gemini and Groq, and the Manager still clicks Submit."
+          : "Auto Apply with APIs is off: this Manager's Auto Apply uses ChatGPT again."
       : "applyReviewMode" in change
         ? change.applyReviewMode === "before_submit"
           ? "Apply now fills every step by itself and stops once before Submit for this Manager's review (problems still stop on their step)."
