@@ -1,18 +1,15 @@
 import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { ChevronDown, Info } from "lucide-react";
 import { redirect } from "next/navigation";
 import {
   GlobalPromptForm,
-  ManagerApplyForm,
-  ManagerGeminiMatchingForm,
   PromptVersionPicker,
   type PromptVersion,
-  ManagerTextHighlightAccessForm,
-  ManagerPageExclusionAccessForm,
-  ManagerJobDetectionUrlAccessForm,
-  ManagerChatGptUrlForm,
   OwnChatGptUrlForm,
   OwnAutoApplyParallelLimitForm,
 } from "@/app/settings/prompt-forms";
+import { ManagerChatGptUrlCell, ManagerSettingSwitch } from "@/app/settings/manager-settings";
+import { MANAGER_SETTINGS, ManagerIdentity, ManagerSettingMeanings } from "@/app/settings/manager-settings-meanings";
 import { groupVersions } from "@/app/prompts/prompt-groups";
 import { managerApplyAnswers, prompts, users } from "@/db/schema";
 import { PublishManagerAnswers } from "./publish-manager-answers";
@@ -62,6 +59,11 @@ const promptGroups = [
     heading: "Gemini · Application-answer generation",
   },
 ] as const;
+
+// The first cell of each Manager row.
+function managerCell(manager: { displayName: string | null; loginName: string | null }) {
+  return <ManagerIdentity displayName={manager.displayName} key="manager" loginName={manager.loginName} />;
+}
 
 export default async function SettingsPage() {
   const currentUser = await requireUser();
@@ -434,84 +436,115 @@ export default async function SettingsPage() {
           )}
         </SettingsCard>
 
-        <SettingsCard summary={`${managerRows.length} active Managers`} title="Managers">
+        <SettingsCard
+          summary={`${managerRows.length} active Managers · ${managerRows.filter((manager) => manager.canUseApply).length} with Apply on · ${managerRows.filter((manager) => manager.canUseApply && manager.autoApplyApi).length} with APIs on`}
+          title="Managers"
+        >
+          <details className="group/meanings mb-4 rounded-2xl border border-indigo-100 bg-linear-to-br from-indigo-50/70 via-white to-violet-50/50" open>
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3.5 [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center gap-2 text-xs font-semibold text-indigo-900">
+                <Info aria-hidden="true" className="size-4 text-indigo-500" />
+                What each column means
+              </span>
+              <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-indigo-400 transition group-open/meanings:rotate-180" />
+            </summary>
+            <div className="border-t border-indigo-100/70 px-5 py-5">
+              <ManagerSettingMeanings settings={["apply", "autoApplyApi", "geminiMatching", "chatGptUrl", "textHighlights", "pageExclusions", "jobDetectionUrls"]} />
+            </div>
+          </details>
           <PaginatedTable
             columns={[
-              { label: "Manager", className: "w-[12%]" },
-              { label: "Own prompts (read-only)", className: "w-[24%]" },
-              { label: "Get JD matching", className: "w-[13%]" },
-              { label: "Apply", className: "w-[13%]" },
-              { label: "ChatGPT URL", className: "w-[20%]" },
-              { label: "Text highlight access", className: "w-[13%]" },
-              { label: "Excluded rules · job match", className: "w-[12%]" },
-              { label: "Job-detection rules · block", className: "w-[13%]" },
+              { label: "Manager", className: "w-[14%]" },
+              { label: MANAGER_SETTINGS.apply.column, className: "w-[8%]" },
+              { label: MANAGER_SETTINGS.autoApplyApi.column, className: "w-[10%]" },
+              { label: MANAGER_SETTINGS.geminiMatching.column, className: "w-[10%]" },
+              { label: MANAGER_SETTINGS.chatGptUrl.column, className: "w-[25%]" },
+              { label: MANAGER_SETTINGS.textHighlights.column, className: "w-[11%]" },
+              { label: MANAGER_SETTINGS.pageExclusions.column, className: "w-[11%]" },
+              { label: MANAGER_SETTINGS.jobDetectionUrls.column, className: "w-[11%]" },
             ]}
             emptyMessage="No active Managers"
             rows={managerRows.map((manager) => {
-              const ownPrompts = groupVersions(
-                managerPromptRows.filter((row) => row.ownerManagerId === manager.id),
-              );
+              const managerName = manager.displayName ?? manager.loginName ?? "Manager";
+              const applyOff = manager.canUseApply ? undefined : "Turn Apply on first";
               return {
                 id: manager.id,
+                search: { name: manager.displayName ?? "", login: manager.loginName ?? "" },
                 cells: [
-                  <div key="manager">
-                    <div className="font-semibold">
-                      {manager.displayName ?? "Manager"}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      @{manager.loginName ?? "unknown"}
-                    </div>
-                  </div>,
-                  <div className="min-w-0 space-y-2" key="own-prompts">
-                    {ownPrompts.length === 0 ? (
-                      <span className="text-xs text-slate-500">None · uses the default prompt</span>
-                    ) : ownPrompts.map((prompt) => (
-                      <div className="space-y-1" key={prompt.promptGroupId}>
-                        <p className="text-xs font-medium text-slate-700">
-                          {prompt.name} · v{prompt.version}
-                        </p>
-                        <PromptVersionPicker readOnly versions={prompt.versions} />
-                      </div>
-                    ))}
-                  </div>,
-                  <ManagerGeminiMatchingForm
-                    key="gemini-matching"
-                    managerId={manager.id}
-                    useGemini={manager.useGeminiMatching}
-                  />,
-                  <ManagerApplyForm
-                    aiMode={manager.applyAiMode}
-                    autoApplyApi={manager.autoApplyApi}
-                    autoSubmit={manager.autoSubmit}
-                    reviewMode={manager.applyReviewMode}
-                    canUseApply={manager.canUseApply}
-                    key="apply"
-                    managerId={manager.id}
-                  />,
-                  <ManagerChatGptUrlForm
-                    chatGptUrl={manager.chatGptUrl}
-                    key="chatgpt-url"
-                    managerId={manager.id}
-                  />,
-                  <ManagerTextHighlightAccessForm
-                    canManage={manager.canManageTextHighlights}
-                    key="text-highlight-access"
-                    managerId={manager.id}
-                  />,
-                  <ManagerPageExclusionAccessForm
-                    canManage={manager.canManagePageExclusions}
-                    key="page-exclusion-access"
-                    managerId={manager.id}
-                  />,
-                  <ManagerJobDetectionUrlAccessForm
-                    canManage={manager.canManageJobDetectionUrlRules}
-                    key="job-detection-url-access"
-                    managerId={manager.id}
-                  />,
+                  managerCell(manager),
+                  <ManagerSettingSwitch key="apply" managerId={manager.id} managerName={managerName} on={manager.canUseApply} setting="apply" />,
+                  <ManagerSettingSwitch disabledReason={applyOff} key="auto-apply-api" managerId={manager.id} managerName={managerName} on={manager.autoApplyApi} setting="autoApplyApi" />,
+                  <ManagerSettingSwitch key="gemini-matching" managerId={manager.id} managerName={managerName} on={manager.useGeminiMatching} setting="geminiMatching" />,
+                  <ManagerChatGptUrlCell chatGptUrl={manager.chatGptUrl} key="chatgpt-url" managerId={manager.id} managerName={managerName} />,
+                  <ManagerSettingSwitch key="text-highlights" managerId={manager.id} managerName={managerName} on={manager.canManageTextHighlights} setting="textHighlights" />,
+                  <ManagerSettingSwitch key="page-exclusions" managerId={manager.id} managerName={managerName} on={manager.canManagePageExclusions} setting="pageExclusions" />,
+                  <ManagerSettingSwitch key="job-detection-urls" managerId={manager.id} managerName={managerName} on={manager.canManageJobDetectionUrlRules} setting="jobDetectionUrls" />,
                 ],
               };
             })}
+            searchFields={[{ key: "name", label: "Name" }, { key: "login", label: "Login" }]}
           />
+          <div className="mt-4 space-y-3">
+            <SettingsCard item summary="Used only by the developer test run, apart from one prompt choice" title="Older Apply settings">
+              <div className="mb-4 rounded-xl bg-slate-50 p-4">
+                <ManagerSettingMeanings settings={["aiMode", "reviewMode", "autoSubmit"]} />
+              </div>
+              <PaginatedTable
+                columns={[
+                  { label: "Manager", className: "w-[34%]" },
+                  { label: MANAGER_SETTINGS.aiMode.column, className: "w-[22%]" },
+                  { label: MANAGER_SETTINGS.reviewMode.column, className: "w-[22%]" },
+                  { label: MANAGER_SETTINGS.autoSubmit.column, className: "w-[22%]" },
+                ]}
+                emptyMessage="No active Managers"
+                rows={managerRows.map((manager) => {
+                  const managerName = manager.displayName ?? manager.loginName ?? "Manager";
+                  const applyOff = manager.canUseApply ? undefined : "Turn Apply on first";
+                  return {
+                    id: manager.id,
+                    cells: [
+                      managerCell(manager),
+                      <ManagerSettingSwitch disabledReason={applyOff} key="ai-mode" managerId={manager.id} managerName={managerName} on={manager.applyAiMode === "gemini"} setting="aiMode" />,
+                      <ManagerSettingSwitch disabledReason={applyOff} key="review-mode" managerId={manager.id} managerName={managerName} on={manager.applyReviewMode === "before_submit"} setting="reviewMode" />,
+                      <ManagerSettingSwitch disabledReason={applyOff} key="auto-submit" managerId={manager.id} managerName={managerName} on={manager.autoSubmit} setting="autoSubmit" />,
+                    ],
+                  };
+                })}
+              />
+            </SettingsCard>
+            <SettingsCard item summary="The prompts each Manager wrote; Super Admin can only read them" title="Managers' own prompts">
+              <PaginatedTable
+                columns={[
+                  { label: "Manager", className: "w-[24%]" },
+                  { label: "Own prompts", className: "w-[76%]" },
+                ]}
+                emptyMessage="No active Managers"
+                rows={managerRows.map((manager) => {
+                  const ownPrompts = groupVersions(
+                    managerPromptRows.filter((row) => row.ownerManagerId === manager.id),
+                  );
+                  return {
+                    id: manager.id,
+                    cells: [
+                      managerCell(manager),
+                      <div className="min-w-0 space-y-2" key="own-prompts">
+                        {ownPrompts.length === 0 ? (
+                          <span className="text-xs text-slate-500">None · uses the default prompt</span>
+                        ) : ownPrompts.map((prompt) => (
+                          <div className="space-y-1" key={prompt.promptGroupId}>
+                            <p className="text-xs font-medium text-slate-700">
+                              {prompt.name} · v{prompt.version}
+                            </p>
+                            <PromptVersionPicker readOnly versions={prompt.versions} />
+                          </div>
+                        ))}
+                      </div>,
+                    ],
+                  };
+                })}
+              />
+            </SettingsCard>
+          </div>
         </SettingsCard>
       </div>
     </main>
