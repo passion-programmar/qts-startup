@@ -4,7 +4,6 @@ import { generationFree } from "@/server/generation/generation-hold";
 import { hasEffectiveJobDescription } from "@/server/jobs/job-description";
 import { jobHasBid } from "@/server/jobs/job-bids";
 
-export const hasMatchingNote = () => sql`length(regexp_replace(coalesce(${profiles.jdMatching}, ''), ${"\\s"}, '', 'g')) > 0`;
 export const hasEligibleExperienceCount = () => sql`exists (
   select 1 from experiences e
   where e.profile_user_id = ${profiles.userId}
@@ -12,16 +11,14 @@ export const hasEligibleExperienceCount = () => sql`exists (
   having count(*) >= 3
 )`;
 
-// The job-level half of Generation readiness; the account-level half is the matching note and experience.
+// The job-level half of Generation readiness; the account-level half is an active account with experience.
 export function readyGenerationJob(now = new Date()): SQL {
   return and(ne(jobs.generationStatus, "completed"), generationFree(now),
     isNull(jobs.resumeLocalPath), hasEffectiveJobDescription()) as SQL;
 }
 
-export function readyGeneration(now = new Date(), requireMatchingNote = true) {
-  return and(readyGenerationJob(now),
-    requireMatchingNote ? hasMatchingNote() : sql`true`,
-    hasEligibleExperienceCount());
+export function readyGeneration(now = new Date()) {
+  return and(readyGenerationJob(now), hasEligibleExperienceCount());
 }
 
 // Manual Apply: the job conditions of claim_apply_attempt (drizzle/0083) when not Auto Apply.

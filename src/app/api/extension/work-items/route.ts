@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { categories, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { hasEligibleExperienceCount, hasMatchingNote, readyApply, readyAutoApply, readyGeneration, readyGenerationJob } from "@/server/work/work-eligibility";
+import { hasEligibleExperienceCount, readyApply, readyAutoApply, readyGeneration, readyGenerationJob } from "@/server/work/work-eligibility";
 import { matchesManagerCustomUrl } from "@/server/work/custom-urls";
 import { isWorkId } from "@/server/work/work-selection";
 
@@ -20,11 +20,9 @@ export async function GET(request: Request): Promise<NextResponse> {
     return reply({ success: false, message: "A valid work mode and account are required." }, 400);
   }
   try {
-    const [managerRow] = await db.select({ useGeminiMatching: users.useGeminiMatching }).from(users).where(eq(users.id, manager.id)).limit(1);
-    const requireMatchingNote = managerRow?.useGeminiMatching === true;
     const managed = and(eq(users.parentUserId, manager.id), eq(users.role, "account"), isNull(users.blockedAt));
-    // Generation and Auto Apply also need the account's experience (and matching note); Apply does not.
-    const qualified = and(hasEligibleExperienceCount(), requireMatchingNote ? hasMatchingNote() : sql`true`);
+    // Only active accounts are listed. Generation and Auto Apply also need the account's experience; Apply does not.
+    const qualified = hasEligibleExperienceCount();
     const ownership = mode === "apply" ? managed : and(managed, qualified);
     if (mode === "all") {
       const accounts = await db.select({
@@ -45,7 +43,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         .leftJoin(jobs, and(eq(jobs.candidateId, users.id), eq(jobs.managerId, manager.id)))
         .where(managed)
         .groupBy(users.id, profiles.userId, categories.id)
-        .orderBy(asc(profiles.firstName), asc(profiles.lastName)).limit(101);
+        .orderBy(asc(categories.name), asc(profiles.firstName), asc(profiles.lastName)).limit(101);
       if (accounts.length > 100) return reply({ success: false, message: "Too many accounts to list. Contact your administrator." }, 413);
       return reply({ success: true, accounts: accounts.map((account) => ({
         id: account.id,
@@ -76,11 +74,11 @@ export async function GET(request: Request): Promise<NextResponse> {
         .leftJoin(jobs, and(
           eq(jobs.candidateId, users.id),
           eq(jobs.managerId, manager.id),
-          mode === "generation" ? readyGeneration(new Date(), requireMatchingNote) : readyAutoApply(),
+          mode === "generation" ? readyGeneration(new Date()) : readyAutoApply(),
         ))
         .where(ownership)
         .groupBy(users.id, profiles.userId, profiles.firstName, profiles.lastName, profiles.managerCategory, profiles.managerCategoryColor, categories.name)
-        .orderBy(asc(profiles.firstName), asc(profiles.lastName)).limit(101);
+        .orderBy(asc(categories.name), asc(profiles.firstName), asc(profiles.lastName)).limit(101);
       if (accounts.length > 100) return reply({ success: false, message: "Too many accounts to list. Contact your administrator." }, 413);
       return reply({ success: true, accounts: accounts.map(({ id, firstName, lastName, category, categoryColor, categoryName, eligibleJobCount }) => ({
         id,
@@ -94,7 +92,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
     const [account] = await db.select({ id: users.id }).from(users).innerJoin(profiles, eq(profiles.userId, users.id))
       .where(and(ownership, eq(users.id, candidateId))).limit(1);
-    if (!account) return reply({ success: false, message: requireMatchingNote ? "This account is unavailable or has no matching note." : "This account is unavailable or inactive." }, 403);
+    if (!account) return reply({ success: false, message: "This account is unavailable or inactive." }, 403);
     const rows = await db.select({
       id: jobs.id,
       title: jobs.jobTitle,
@@ -111,7 +109,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     })
       .from(jobs).innerJoin(users, eq(users.id, jobs.candidateId)).innerJoin(profiles, eq(profiles.userId, users.id))
       .where(and(ownership, eq(jobs.managerId, manager.id), eq(jobs.candidateId, candidateId),
-        mode === "generation" ? readyGeneration(new Date(), requireMatchingNote) : mode === "apply" ? readyApply() : readyAutoApply()))
+        mode === "generation" ? readyGeneration(new Date()) : mode === "apply" ? readyApply() : readyAutoApply()))
       .orderBy(asc(jobs.createdAt), asc(jobs.id)).limit(201);
     const jobsToShow = rows.slice(0, 200);
     return reply({

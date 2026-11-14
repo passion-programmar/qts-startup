@@ -29,7 +29,7 @@ test.before(async () => {
 test.beforeEach(() => { fixture.role = "manager"; fixture.selectRows = []; fixture.queries = []; fixture.statusTarget = null; fixture.statusUpdate = null; });
 const form = (category?: string, categoryColor = "") => {
   const data = new FormData();
-  for (const field of ["birthday", "phone", "headline", "linkedinUrl", "country", "city", "province", "addressLine1", "postalCode", "jdMatching"]) data.set(field, "");
+  for (const field of ["birthday", "phone", "headline", "linkedinUrl", "country", "city", "province", "addressLine1", "postalCode"]) data.set(field, "");
   for (const [name, value] of Object.entries({ userId: "11111111-1111-4111-8111-111111111111", firstName: "Sample", lastName: "Candidate", candidateEmail: "sample@example.test", pdfTemplate: "qts-standard", categoryId: "forged-global-category", managerCategoryColor: categoryColor })) data.set(name, value);
   if (category !== undefined) data.set("managerCategory", category);
   return data;
@@ -94,30 +94,12 @@ test("category assignment rejects nonexistent categories and malformed IDs", asy
   }
 });
 
-test("manual profile saves accept omitted Gemini notes and preserve stored notes", async () => {
+test("profile saves no longer read or write the JD matching note; stored notes stay untouched", async () => {
   const data = form("Remote only", "#2563eb");
-  data.delete("jdMatching");
+  data.set("jdMatching", "Backend roles");
   data.set("candidateCategoryId", "22222222-2222-4222-8222-222222222222");
   fixture.selectRows = [[{ id: "22222222-2222-4222-8222-222222222222" }]];
   assert.equal((await actions.updateCandidateProfileAction({ error: null, success: null }, data)).error, null);
-  const query = fixture.queries[0];
-  assert.match(query.sql, /jd_matching = case when \? then \? else jd_matching end/);
-  const condition = query.sql.slice(0, query.sql.indexOf("jd_matching = case when ")).split("?").length - 1;
-  assert.equal(query.params[condition], false);
-});
-
-test("submitted Gemini notes can be updated or cleared and still enforce limits", async () => {
-  for (const notes of ["Backend roles", ""]) {
-    fixture.queries = [];
-    const data = form("Remote only"); data.set("jdMatching", notes);
-    assert.equal((await actions.updateCandidateProfileAction({ error: null, success: null }, data)).error, null);
-    const query = fixture.queries[0];
-    const condition = query.sql.slice(0, query.sql.indexOf("jd_matching = case when ")).split("?").length - 1;
-    assert.equal(query.params[condition], true);
-    assert.equal(query.params[condition + 1], notes || null);
-  }
-  fixture.queries = [];
-  const data = form("Remote only"); data.set("jdMatching", "x".repeat(5001));
-  assert.match((await actions.updateCandidateProfileAction({ error: null, success: null }, data)).error!, /missing or too long/);
-  assert.equal(fixture.queries.length, 0);
+  assert.doesNotMatch(fixture.queries[0].sql, /jd_matching/);
+  assert.equal(fixture.queries[0].params.includes("Backend roles"), false);
 });

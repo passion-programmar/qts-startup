@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { Save } from "lucide-react";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import {
@@ -12,10 +12,74 @@ import {
   updateManagerTextHighlightAccessAction,
   type PromptActionState,
 } from "@/app/settings/actions";
-import { MANAGER_SETTINGS, type ManagerSettingKey } from "@/app/settings/manager-settings-meanings";
+import { APPLY_CHOICES, MANAGER_SETTINGS, type ApplyChoice, type ManagerSettingKey } from "@/app/settings/manager-settings-meanings";
 import { ActionFeedback } from "@/app/settings/prompt-forms";
 
 const initialState: PromptActionState = { error: null, success: null };
+
+// Apply for one Manager as one choice of three: Off, ChatGPT or APIs. A click saves at once; the
+// chosen option stays highlighted, and only a failure adds text, so the row stays one line tall.
+export function ManagerApplyChoice({
+  managerId,
+  managerName,
+  choice,
+}: {
+  managerId: string;
+  managerName: string;
+  choice: ApplyChoice;
+}) {
+  const [state, formAction, isActionPending] = useActionState(updateManagerApplyAction, initialState);
+  const [isStarting, startTransition] = useTransition();
+  const isPending = isActionPending || isStarting;
+  const [target, setTarget] = useState<ApplyChoice | null>(null);
+
+  function choose(next: ApplyChoice) {
+    if (next === choice || isPending) return;
+    setTarget(next);
+    const data = new FormData();
+    data.set("managerId", managerId);
+    data.set("applyChoice", next);
+    startTransition(() => formAction(data));
+  }
+
+  return (
+    <div className="min-w-0 space-y-2">
+      <div
+        aria-label={`Apply for ${managerName}`}
+        className="inline-flex items-center gap-0.5 rounded-lg bg-slate-100 p-0.5 ring-1 ring-slate-200"
+        role="radiogroup"
+      >
+        {APPLY_CHOICES.map((option) => {
+          const selected = option.id === choice;
+          return (
+            <button
+              aria-checked={selected}
+              aria-label={`Apply for ${managerName}: ${option.label}`}
+              className={`inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-md px-2.5 text-[11px] font-semibold transition disabled:cursor-not-allowed ${
+                selected
+                  ? option.id === "off"
+                    ? "bg-white text-slate-700 shadow-sm ring-1 ring-slate-300"
+                    : "bg-linear-to-r from-indigo-600 to-violet-500 text-white shadow-sm shadow-indigo-500/30"
+                  : "text-slate-500 enabled:hover:bg-white/70 enabled:hover:text-slate-800"
+              }`}
+              disabled={isPending}
+              key={option.id}
+              onClick={() => choose(option.id)}
+              role="radio"
+              title={option.meaning}
+              type="button"
+            >
+              {isPending && option.id === target && <LoadingIcon className="size-3" />}
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      {isPending && <span className="sr-only" role="status">Saving...</span>}
+      {state.error && <ActionFeedback state={state} />}
+    </div>
+  );
+}
 
 type SwitchSetting = Exclude<ManagerSettingKey, "chatGptUrl">;
 

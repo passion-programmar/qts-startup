@@ -40,7 +40,7 @@ test('sign-in environment selects Hosting by default and the local development s
   const defaultConfig = loadRuntimeConfig();
   assert.equal(await defaultConfig.getServerEnvironment(), 'hosting');
   assert.equal(defaultConfig.getServerUrlForEnvironment('hosting'), 'https://qts-job-system.vercel.app');
-  assert.equal(defaultConfig.getServerUrlForEnvironment('local'), 'http://127.0.0.1:3000');
+  assert.equal(defaultConfig.getServerUrlForEnvironment('local'), 'http://127.0.0.1:1027');
   assert.equal(defaultConfig.getEnvironmentForServerUrl('http://localhost:3000'), 'local');
   assert.throws(() => defaultConfig.getServerUrlForEnvironment('other'), /Choose Hosting or Local/);
 });

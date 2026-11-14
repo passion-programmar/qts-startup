@@ -28,6 +28,7 @@ export function GlobalPromptForm({
   promptTemplate,
   version,
   isDefault,
+  showHeading = true,
 }: {
   provider: PromptProvider;
   purpose: PromptPurpose;
@@ -36,6 +37,8 @@ export function GlobalPromptForm({
   promptTemplate: string;
   version?: number;
   isDefault?: boolean;
+  /** false when the row above the form already names the prompt. */
+  showHeading?: boolean;
 }) {
   const [state, formAction, isPending] = useActionState(
     saveGlobalPromptAction,
@@ -50,14 +53,16 @@ export function GlobalPromptForm({
       {promptGroupId && (
         <input name="promptGroupId" type="hidden" value={promptGroupId} />
       )}
-      <div>
-        <p className="text-xs font-semibold text-slate-800">{name}</p>
-        <p className="mt-1 text-[10px] text-slate-400">
-          {provider === "openai" ? "ChatGPT" : "Gemini"} · {purposeLabel(purpose)}
-          {version ? ` · Version ${version}` : " · New prompt"}
-          {isDefault ? " · Global default" : ""}
-        </p>
-      </div>
+      {showHeading && (
+        <div>
+          <p className="text-xs font-semibold text-slate-800">{name}</p>
+          <p className="mt-1 text-[10px] text-slate-400">
+            {provider === "openai" ? "ChatGPT" : "Gemini"} · {purposeLabel(purpose)}
+            {version ? ` · Version ${version}` : " · New prompt"}
+            {isDefault ? " · Global default" : ""}
+          </p>
+        </div>
+      )}
       <label className="block text-[11px] font-semibold text-slate-600" htmlFor={`promptName-${fieldKey}`}>
         Prompt name
       </label>
@@ -115,9 +120,12 @@ export type PromptVersion = {
 export function PromptVersionPicker({
   versions,
   readOnly = false,
+  bare = false,
 }: {
   versions: PromptVersion[];
   readOnly?: boolean;
+  /** true when a button already opens it: the picker shows without its own fold. */
+  bare?: boolean;
 }) {
   const active = versions.find((version) => version.isActive);
   const [selectedId, setSelectedId] = useState(active?.id ?? versions[0]?.id ?? "");
@@ -128,12 +136,8 @@ export function PromptVersionPicker({
   const selected = versions.find((version) => version.id === selectedId) ?? versions[0];
   if (!selected) return null;
 
-  return (
-    <details className="rounded-lg border border-slate-200 p-3">
-      <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">
-        Versions ({versions.length}){active ? ` · v${active.version} in use` : ""}
-      </summary>
-      <form action={formAction} className="mt-3 space-y-3">
+  const picker = (
+      <form action={formAction} className={bare ? "space-y-3" : "mt-3 space-y-3"}>
         <label className="sr-only" htmlFor={`version-${selected.id}`}>Version</label>
         <select
           className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 sm:max-w-md"
@@ -165,6 +169,15 @@ export function PromptVersionPicker({
           </>
         )}
       </form>
+  );
+  if (bare) return picker;
+
+  return (
+    <details className="rounded-lg border border-slate-200 p-3">
+      <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">
+        Versions ({versions.length}){active ? ` · v${active.version} in use` : ""}
+      </summary>
+      {picker}
     </details>
   );
 }

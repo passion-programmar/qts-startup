@@ -35,7 +35,7 @@ import { type LearnedAnswer } from "./question-memory-values";
 import { loadApplicationAnswers } from "./manager-answers";
 import { decryptSiteAccountPassword } from "./site-account-password";
 import type { WorkSelection } from "@/server/work/work-selection";
-import { hasEligibleExperienceCount, hasMatchingNote } from "@/server/work/work-eligibility";
+import { hasEligibleExperienceCount } from "@/server/work/work-eligibility";
 import { matchesManagerCustomUrl } from "@/server/work/custom-urls";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
@@ -165,7 +165,7 @@ export async function claimNextApplication(
   browser: ExtensionBrowser,
   skipJobIds: string[] = [],
   selection?: WorkSelection,
-  options: { autoApply?: boolean; requireMatchingNote?: boolean } = {},
+  options: { autoApply?: boolean } = {},
 ): Promise<ClaimedApplication | null> {
   // Apply and Auto Apply both follow the Manager's "Maximum open applications" (per Chrome);
   // an Auto Apply run on chosen jobs works one at a time.
@@ -182,10 +182,7 @@ export async function claimNextApplication(
   const skips = selection ? sql`ARRAY(
     select j.id from jobs j where j.manager_id = ${managerId}
       and (j.candidate_id <> ${selection.candidateId}::uuid
-        or not (j.id = any(${`{${selection.jobIds.join(",")}}`}::uuid[]))
-        or (${options.requireMatchingNote === true}
-          and not exists (select 1 from profiles p where p.user_id = j.candidate_id
-            and length(regexp_replace(coalesce(p.jd_matching, ''), '\\s', '', 'g')) > 0)))
+        or not (j.id = any(${`{${selection.jobIds.join(",")}}`}::uuid[])))
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
   )` : skipCustomUrlJobs ? sql`ARRAY(
     -- No alias: the Custom URL check names the table itself ("jobs"."job_url").
@@ -196,7 +193,7 @@ export async function claimNextApplication(
   )` : sql`${`{${skipJobIds.join(",")}}`}::uuid[]`;
   const claim = await db.execute<{ attemptId: string | null }>(sql`
     select claim_apply_attempt(${managerId}, ${browser.id}, ${parallelLimit}, ${APPLY_LEASE_SECONDS},
-      ${skips}, ${options.autoApply === true}, ${options.requireMatchingNote === true})::text as "attemptId"
+      ${skips}, ${options.autoApply === true}, false)::text as "attemptId"
   `);
   const attemptId = claim.rows[0]?.attemptId;
   if (attemptId && selection) {
@@ -210,8 +207,7 @@ export async function claimNextApplication(
       .where(and(eq(applyAttempts.id, attemptId), eq(applyAttempts.managerId, managerId),
         eq(applyAttempts.browserId, browser.id), eq(applyAttempts.candidateId, selection.candidateId),
         inArray(applyAttempts.jobId, selection.jobIds),
-        options.autoApply ? hasEligibleExperienceCount() : sql`true`,
-        options.requireMatchingNote ? hasMatchingNote() : sql`true`)).limit(1);
+        options.autoApply ? hasEligibleExperienceCount() : sql`true`)).limit(1);
     if (!scoped) {
       await db.delete(applyAttempts).where(and(eq(applyAttempts.id, attemptId),
         eq(applyAttempts.managerId, managerId), eq(applyAttempts.browserId, browser.id), eq(applyAttempts.status, "claimed")));

@@ -302,7 +302,6 @@ export async function updateCandidateProfileAction(
     province: 120,
     addressLine1: 256,
     postalCode: 32,
-    jdMatching: 5000,
     managerCategory: 80,
     managerCategoryColor: 7,
   } as const;
@@ -320,7 +319,6 @@ export async function updateCandidateProfileAction(
     province: readText(formData, "province", limits.province),
     addressLine1: readText(formData, "addressLine1", limits.addressLine1),
     postalCode: readText(formData, "postalCode", limits.postalCode),
-    jdMatching: readText(formData, "jdMatching", limits.jdMatching),
     managerCategory: readText(formData, "managerCategory", limits.managerCategory),
     managerCategoryColor: readText(formData, "managerCategoryColor", limits.managerCategoryColor),
   };
@@ -346,8 +344,6 @@ export async function updateCandidateProfileAction(
   if (
     Object.entries(limits).some(([name, maxLength]) => {
       const value = formData.get(name);
-      // Manual-mode profiles omit the Gemini-only notes field.
-      if (name === "jdMatching" && value === null) return false;
       return typeof value !== "string" || value.length > maxLength;
     })
   ) {
@@ -433,7 +429,6 @@ export async function updateCandidateProfileAction(
           linkedin_url = ${normalizedLinkedInUrl || null}, country = ${values.country || null},
           city = ${values.city || null}, province = ${values.province || null},
           address_line_1 = ${values.addressLine1 || null}, postal_code = ${values.postalCode || null},
-          jd_matching = case when ${formData.has("jdMatching")} then ${values.jdMatching || null} else jd_matching end,
           updated_at = now()
         where profiles.user_id = ${userId}::uuid
           and exists (
@@ -683,21 +678,23 @@ export async function deleteCandidateAccountAction(
 
   // A candidate is never erased: Delete marks the account read-only and inactive,
   // with its jobs, bids, and history, and is left out of Get JD, Generation, and Apply.
+  // Only an inactive candidate can be deleted, so the Manager sets them inactive first.
   try {
     const blocked = await neonSql`
       update users
-      set blocked_at = coalesce(blocked_at, now()), blocked_by = ${actor.id}::uuid,
+      set blocked_by = ${actor.id}::uuid,
         deleted_at = now(), auth_version = auth_version + 1, updated_at = now()
       where users.id = ${userId}::uuid
         and users.role = 'account'
         and users.parent_user_id = ${actor.id}::uuid
         and users.deleted_at is null
+        and users.blocked_at is not null
       returning users.id
     `;
     if (blocked.length === 0) {
       return {
         ...emptyState,
-        error: "That candidate account was not found in your team, or it is already deleted.",
+        error: "Set this candidate inactive before deleting. Or they are not in your team, or already deleted.",
       };
     }
   } catch (error) {

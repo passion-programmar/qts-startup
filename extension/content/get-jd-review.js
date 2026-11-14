@@ -1362,16 +1362,18 @@ async function initializeGetJdReviewOnce() {
     }
 
     const manualReview = selectable && currentResult?.status === 'complete' && currentResult.evaluationMode !== 'gemini';
+    // Every list is grouped under each candidate's category (A–Z); manual review also selects by it.
+    const groups = new Map();
+    for (const profile of profiles) {
+      const key = profile.categoryId || 'global';
+      if (!groups.has(key)) groups.set(key, { categoryId: key, name: profile.categoryName || 'Global', ids: [], profiles: [] });
+      groups.get(key).profiles.push(profile);
+      if (!isFixedProfile(profile)) groups.get(key).ids.push(profile.id);
+    }
+    const categoryGroups = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
     let manualCategoryGroups = [];
     if (manualReview) {
-      const groups = new Map();
-      for (const profile of profiles) {
-        const key = profile.categoryId || 'global';
-        if (!groups.has(key)) groups.set(key, { categoryId: key, name: profile.categoryName || 'Global', ids: [], profiles: [] });
-        groups.get(key).profiles.push(profile);
-        if (!isFixedProfile(profile)) groups.get(key).ids.push(profile.id);
-      }
-      manualCategoryGroups = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+      manualCategoryGroups = categoryGroups;
       const section = document.createElement('div');
       section.className = 'category-selection';
       section.setAttribute('aria-label', 'Select candidates by Category');
@@ -1423,21 +1425,17 @@ async function initializeGetJdReviewOnce() {
       }
       elements.profiles.appendChild(section);
     }
-    const profilesToRender = manualReview
-      ? manualCategoryGroups.flatMap((group) => group.profiles)
-      : profiles;
+    const profilesToRender = categoryGroups.flatMap((group) => group.profiles);
     let previousCategoryKey = null;
     for (const profile of profilesToRender) {
-      if (manualReview) {
-        const categoryKey = profile.categoryId || 'global';
-        if (categoryKey !== previousCategoryKey) {
-          const heading = document.createElement('h3');
-          heading.className = 'category-group-heading';
-          heading.dataset.categoryId = categoryKey;
-          heading.textContent = profile.categoryName || 'Global';
-          elements.profiles.appendChild(heading);
-          previousCategoryKey = categoryKey;
-        }
+      const categoryKey = profile.categoryId || 'global';
+      if (categoryKey !== previousCategoryKey) {
+        const heading = document.createElement('h3');
+        heading.className = 'category-group-heading';
+        heading.dataset.categoryId = categoryKey;
+        heading.textContent = profile.categoryName || 'Global';
+        elements.profiles.appendChild(heading);
+        previousCategoryKey = categoryKey;
       }
       const label = document.createElement('label');
       label.className = 'profile';

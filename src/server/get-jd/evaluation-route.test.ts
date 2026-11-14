@@ -12,7 +12,7 @@ test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/extension-auth": `export const getExtensionManager=async()=>({id:'local-manager'});`,
-    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',start:'2021-03',end:null,isCurrent:true}],currentEmployer:'Different Employer'}];const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
+    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',location:null,start:'2021-03',end:null,isCurrent:true,description:'Built APIs.'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}];const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
     "@/server/get-jd/precheck-ticket": `export const getPrecheckTickets=()=>({verify:async(token)=>token==='valid'?{jobUrl:'https://example.test/jobs/1',jobTitle:'Engineer',company:'Example'}:null});`,
     "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>evaluate();`,
     "@/server/database/database-usage": `export const scheduleDailyCleanup=()=>{};`,
@@ -44,7 +44,7 @@ test("Gemini matching keeps the saved prompt, sends the career timeline, and sav
   assert.equal(fixture.calls, 1); assert.equal(fixture.saves[0].description, original);
   assert.equal(body.classification.job.description, original);
   assert.match(fixture.prompts.at(-1) || "", /KEEP MANAGER MATCHING INSTRUCTIONS/);
-  assert.match(fixture.prompts.at(-1) || "", /"employmentTimeline":\[\{"jobTitle":"Python Backend Engineer","start":"2021-03","end":null,"isCurrent":true\}\]/);
+  assert.match(fixture.prompts.at(-1) || "", /"employmentTimeline":\[\{"jobTitle":"Python Backend Engineer","companyName":"Acme","location":null,"start":"2021-03","end":null,"isCurrent":true,"description":"Built APIs\."\}\],"education":\[\{"institution":"State University","degree":"BSc","fieldOfStudy":"Computer Science","start":"2015-09","end":"2019-06","isCurrent":false\}\]/);
   assert.doesNotMatch(fixture.prompts.at(-1) || "", /"jdMatching"/);
   assert.match(fixture.prompts.at(-1) || "", /São Paulo/);
 });

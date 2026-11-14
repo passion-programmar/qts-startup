@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QTS_Startup",
-  "version": "1.52.0",
+  "version": "1.53.0",
   "description": "Capture job postings with QTS_Startup.",
   "permissions": ["activeTab", "storage", "tabs", "scripting", "webNavigation", "alarms", "downloads", "notifications", "debugger", "browsingData"],
   "host_permissions": [
@@ -50,6 +50,14 @@
       "32": "assets/icon32.png",
       "48": "assets/icon48.png",
       "128": "assets/icon128.png"
+    }
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Q"
+      },
+      "description": "Show or hide the QTS panel"
     }
   },
   "icons": {

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, notInArray } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -7,7 +7,7 @@ import { MIN_WORK_EXTENSION_VERSION } from "@/server/apply/apply-values";
 import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { generationFree, generationHeld, holdUntil } from "@/server/generation/generation-hold";
 import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
-import { hasEligibleExperienceCount, hasMatchingNote } from "@/server/work/work-eligibility";
+import { hasEligibleExperienceCount } from "@/server/work/work-eligibility";
 import { readWorkSelection } from "@/server/work/work-selection";
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -68,8 +68,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
     const sameChrome = browser ? [eq(jobs.generationBrowserId, browser.id)] : [];
-    const [managerRow] = await db.select({ useGeminiMatching: users.useGeminiMatching }).from(users).where(eq(users.id, manager.id)).limit(1);
-    const requireMatchingNote = managerRow?.useGeminiMatching === true;
 
     const [activeJob] = await db
         .select({ id: jobs.id })
@@ -109,7 +107,6 @@ export async function POST(request: Request): Promise<NextResponse> {
             generationFree(now),
             isNull(jobs.resumeLocalPath),
             hasEffectiveJobDescription(),
-            requireMatchingNote ? hasMatchingNote() : sql`true`,
             hasEligibleExperienceCount(),
             eq(users.parentUserId, manager.id),
             eq(users.role, "account"),

@@ -192,9 +192,8 @@ to Managers granted `canManageTextHighlights` by a Super Admin.
 Managers start document generation from the extension. The worker claims the
 oldest eligible saved Jobs row (`createdAt`), even if it was not manually
 queued. Eligibility requires a saved job description, at least three candidate
-experience records, and no existing resume path. A JD-matching note is also
-required when the Manager is assigned Gemini matching for Get JD; notes are
-never sent in the Generation prompt. Generation does not use or change the
+experience records, an active candidate, and no existing resume path.
+Generation does not use or change the
 job's application status. The server builds each prompt from the saved job and
 structured candidate profile, using the Manager's active prompt assignment or
 the active global default. A Jobs-row selection can save a prompt for that job,

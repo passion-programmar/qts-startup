@@ -38,7 +38,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         isNull(users.blockedAt),
         sql`exists (select 1 from experiences e where e.profile_user_id = ${profiles.userId} group by e.profile_user_id having count(*) >= 3)`,
       ))
-      .orderBy(asc(profiles.firstName), asc(profiles.lastName))
+      .orderBy(asc(categories.name), asc(profiles.firstName), asc(profiles.lastName))
       .limit(maxManagerAccounts + 1);
 
     if (rows.length > maxManagerAccounts) {

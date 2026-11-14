@@ -22,7 +22,8 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         window.calls.push(message);
         if(message.type === 'QTS_GET_LAUNCHER_STATE') return { active: true };
         if(message.type === 'CHECK_EXTENSION_PAGE_ALLOWED') return { ok: true, excluded: false };
-        if(message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, features: {} };
+        // A Manager with Apply on; with it off the launcher hides Auto Apply.
+        if(message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, canUseApply: true, features: {} };
         if(message.type === 'QTS_DAILY_COUNTS' && window.failDailyCounts) return { ok: false, error: 'Synthetic count refresh failure.' };
         if(message.type === 'QTS_DAILY_COUNTS') return { ok: true, urls: 1, jobs: 2, applied: 3 };
         if(message.action === 'cancel_status' && window.failCancellation) return { ok: false, error: 'Local cancellation failure. Retry.' };
@@ -74,12 +75,12 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     assert.equal(await page.evaluate(C => window.testRoot.querySelector(C).options[0].textContent, C), 'Loading accounts…');
     await page.evaluate(() => window.accountResolvers.all());
     await page.waitForFunction(C => window.testRoot.querySelector(C).options.length === 4, {}, C);
-    assert.deepEqual(await page.evaluate(C => [...window.testRoot.querySelector(C).options].map(o => [o.textContent, o.disabled]), C), [
-      ['All accounts', false],
-      ['Engineering · Jordan Taylor · Platform', false],
-      ['Casey Smith', false],
-      ['Morgan Lee · Design — nothing ready', true],
-    ], 'one list: Category · Name · Label, accounts with nothing ready are disabled');
+    assert.deepEqual(await page.evaluate(C => [...window.testRoot.querySelector(C).options].map(o => [o.parentElement.label || '', o.textContent, o.disabled]), C), [
+      ['', 'All accounts', false],
+      ['Engineering', 'Jordan Taylor · Platform', false],
+      ['Global', 'Casey Smith', false],
+      ['Global', 'Morgan Lee · Design — nothing ready', true],
+    ], 'grouped by category (A–Z): Name · Label, accounts with nothing ready are disabled');
     assert.equal(await page.evaluate(() => window.calls.filter(m => m.type === 'QTS_WORK_ITEMS').map(m => m.mode).join()), 'all', 'one account request for all three modes');
     assert.deepEqual(await readyTexts(), ['11 ready', '2 ready', '3 ready'], 'All accounts shows the totals');
     assert.match(await page.evaluate(() => window.testRoot.querySelector('.candidate-summary').textContent), /Every account: 11 to generate · 2 to apply · 3 for Auto Apply/);

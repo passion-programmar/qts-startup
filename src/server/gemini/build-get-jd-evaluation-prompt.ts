@@ -1,9 +1,10 @@
-import type { CareerTimelineEntry } from "@/server/gemini/candidates-with-career-timeline";
+import type { CareerTimelineEntry, EducationEntry } from "@/server/gemini/candidates-with-career-timeline";
 
 type GetJdCandidatePromptData = {
   candidateIndex: number;
   candidateName: string;
   employmentTimeline: CareerTimelineEntry[];
+  education?: EducationEntry[];
 };
 
 export function buildGetJdEvaluationPrompt({

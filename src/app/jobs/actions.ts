@@ -177,20 +177,15 @@ export async function setJobGenerationQueueAction(
       generationLeaseExpiresAt: jobs.generationLeaseExpiresAt,
       description: effectiveJobDescription(),
       resumeLocalPath: jobs.resumeLocalPath,
-      jdMatching: profiles.jdMatching,
+      active: sql<boolean>`${users.blockedAt} is null`,
       experienceEligible: hasEligibleExperienceCount(),
     })
     .from(jobs)
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
+    .innerJoin(users, eq(users.id, jobs.candidateId))
     .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id)))
     .limit(1);
   if (!job) return { error: "Job was not found.", success: null };
-  const [managerSettings] = await db
-    .select({ useGeminiMatching: users.useGeminiMatching })
-    .from(users)
-    .where(eq(users.id, manager.id))
-    .limit(1);
-  const requireMatchingNote = managerSettings?.useGeminiMatching === true;
   const now = new Date();
   const hasLiveLease = Boolean(job.generationLeaseExpiresAt && job.generationLeaseExpiresAt > now);
 
@@ -203,14 +198,12 @@ export async function setJobGenerationQueueAction(
     }
     if (
       !job.description?.trim()
-      || (requireMatchingNote && !job.jdMatching?.trim())
+      || !job.active
       || !job.experienceEligible
       || job.resumeLocalPath !== null
     ) {
       return {
-        error: requireMatchingNote
-          ? "Generation needs a saved job description, at least three experience records, and the candidate's JD-matching notes, and the job must not already have a resume."
-          : "Generation needs a saved job description and at least three experience records, and the job must not already have a resume.",
+        error: "Generation needs an active candidate, a saved job description and at least three experience records, and the job must not already have a resume.",
         success: null,
       };
     }

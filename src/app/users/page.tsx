@@ -1,20 +1,17 @@
 import { labelTextColor } from "@/server/users/manager-category-color";
 import type { Metadata } from "next";
-import {
-  ShieldCheck,
-  Users,
-} from "lucide-react";
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
+import Link from "next/link";
 import { redirect } from "next/navigation";
-import { categories, educations, experiences, users } from "@/db/schema";
 import {
   CopyableAccountField,
   CopyLinkedInUrl,
+  AddCandidateLink,
   CreateUserForm,
   CredentialResetForm,
   DeleteCandidateAccountForm,
   DeleteStaffUserForm,
-  EditCandidateProfileForm,
+  EditCandidateLink,
   ToggleCandidateAccountStatusForm,
 } from "@/app/users/user-forms";
 import { db } from "@/lib/db";
@@ -22,9 +19,6 @@ import { getCurrentUser } from "@/lib/session";
 import { PageHeader } from "@/app/components/page-header";
 import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PaginatedTable } from "@/app/components/paginated-table";
-import {
-  isPdfTemplate,
-} from "@/server/pdf/pdf-templates";
 
 export const instant = false;
 
@@ -61,7 +55,6 @@ type UserRow = {
   province: string | null;
   address_line_1: string | null;
   postal_code: string | null;
-  jd_matching: string | null;
   category_id: string | null;
   manager_category: string;
   manager_category_color: string | null;
@@ -101,16 +94,16 @@ function userName(user: UserRow): string {
   );
 }
 
-export default async function UsersPage() {
+export default async function UsersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ category?: string | string[] }>;
+}) {
   const actor = await getCurrentUser();
   if (!actor) redirect("/login");
+  const categoryParam = (await searchParams).category;
+  const requestedCategory = typeof categoryParam === "string" ? categoryParam : "";
 
-  const managerSettings = actor.role === "manager"
-    ? await db.select({ useGeminiMatching: users.useGeminiMatching }).from(users).where(eq(users.id, actor.id)).limit(1).then((rows) => rows[0] ?? null)
-    : null;
-  const candidateCategories = actor.role === "manager"
-    ? await db.select({ id: categories.id, name: categories.name }).from(categories).orderBy(asc(categories.name))
-    : [];
   const includeBlocked = actor.role === "super_admin";
   const result = await db.execute<UserRow>(sql`
     with recursive visible_users as (
@@ -151,7 +144,6 @@ export default async function UsersPage() {
       profiles.province,
       profiles.address_line_1,
       profiles.postal_code,
-      profiles.jd_matching,
       profiles.category_id,
       profiles.manager_category,
       profiles.manager_category_color,
@@ -214,51 +206,24 @@ export default async function UsersPage() {
         ? "manager"
         : "account";
 
-  const candidateIds = result.rows
-    .filter((user) => user.role === "account")
-    .map((user) => user.id);
-  const [educationHistory, experienceHistory] = candidateIds.length
-    ? await Promise.all([
-        db
-          .select()
-          .from(educations)
-          .where(inArray(educations.profileUserId, candidateIds))
-          .orderBy(
-            educations.profileUserId,
-            desc(educations.isCurrent),
-            sql`coalesce(${educations.endDate}, ${educations.startDate}) desc nulls last`,
-            sql`${educations.startDate} desc nulls last`,
-            asc(educations.sortOrder),
-          ),
-        db
-          .select()
-          .from(experiences)
-          .where(inArray(experiences.profileUserId, candidateIds))
-          .orderBy(
-            experiences.profileUserId,
-            desc(experiences.isCurrent),
-            sql`coalesce(${experiences.endDate}, ${experiences.startDate}) desc nulls last`,
-            sql`${experiences.startDate} desc nulls last`,
-            asc(experiences.sortOrder),
-          ),
-      ])
-    : [[], []];
-  const educationByCandidate = new Map<string, typeof educationHistory>();
-  for (const entry of educationHistory) {
-    const rows = educationByCandidate.get(entry.profileUserId) ?? [];
-    rows.push(entry);
-    educationByCandidate.set(entry.profileUserId, rows);
-  }
-  const experienceByCandidate = new Map<string, typeof experienceHistory>();
-  for (const entry of experienceHistory) {
-    const rows = experienceByCandidate.get(entry.profileUserId) ?? [];
-    rows.push(entry);
-    experienceByCandidate.set(entry.profileUserId, rows);
-  }
 
-  const visibleCount = result.rows.length;
-  const staffCount = result.rows.filter((user) => user.role !== "account").length;
-  const candidateCount = visibleCount - staffCount;
+  // Candidates by category, A–Z, for the Manager's category tabs; "All" lists every candidate.
+  const allCandidates = result.rows
+    .filter((candidate) => candidate.role === "account")
+    // Grouped under each category (A–Z); the query's name order stays within a category.
+    .sort((a, b) => (a.category_name ?? "Global").localeCompare(b.category_name ?? "Global"));
+  const categoryKey = (candidate: UserRow) => candidate.category_id ?? "global";
+  const categoryTabs: { key: string; label: string; count: number }[] = [];
+  for (const candidate of allCandidates) {
+    const key = categoryKey(candidate);
+    const tab = categoryTabs.find((item) => item.key === key);
+    if (tab) tab.count += 1;
+    else categoryTabs.push({ key, label: candidate.category_name ?? "Global", count: 1 });
+  }
+  const activeCategory = categoryTabs.some((tab) => tab.key === requestedCategory) ? requestedCategory : "all";
+  const shownCandidates = activeCategory === "all"
+    ? allCandidates
+    : allCandidates.filter((candidate) => categoryKey(candidate) === activeCategory);
 
   return (
     <WorkspaceShell activeHref="/users" user={actor}>
@@ -270,44 +235,50 @@ export default async function UsersPage() {
             : "Everyone in your part of the organization, with their roles and reporting lines."}
           title={actor.role === "manager" ? "" : "People"}
         />
-        <section aria-label="Visible user totals" className="mb-5 grid gap-3 sm:grid-cols-3">
-          {[
-            { label: "Visible users", value: visibleCount, icon: Users },
-            { label: "Staff accounts", value: staffCount, icon: ShieldCheck },
-            { label: "Candidate Accounts", value: candidateCount, icon: Users },
-          ].map((item) => {
-            const Icon = item.icon;
-            return (
-              <article
-                className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
-                key={item.label}
-              >
-                <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
-                  <Icon className="size-5" strokeWidth={1.8} />
-                </span>
-                <div>
-                  <p className="text-2xl font-semibold tracking-tight text-slate-900 tabular-nums">
-                    {item.value}
-                  </p>
-                  <p className="text-xs text-slate-500">{item.label}</p>
-                </div>
-              </article>
-            );
-          })}
-        </section>
-
         <div className="mt-5 space-y-5">
-          <section>
-            <CreateUserForm categories={candidateCategories} role={createRole} showJdMatchingNote={actor.role === "manager" && Boolean(managerSettings?.useGeminiMatching)} />
-          </section>
+          {actor.role !== "manager" && (
+            <section>
+              <CreateUserForm role={createRole} />
+            </section>
+          )}
           <section className="min-w-0">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800">
                 {actor.role === "manager" ? "Candidate accounts" : "People"}
               </h2>
             </div>
+            {actor.role === "manager" && (
+              // Category tabs on the left, Add New on the right.
+              <div className="mb-3 flex items-center gap-3">
+                {allCandidates.length > 0 ? (
+                <nav aria-label="Candidate categories" className="flex min-w-0 flex-1 gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+                  {[{ key: "all", label: "All", count: allCandidates.length }, ...categoryTabs].map((tab) => {
+                    const active = tab.key === activeCategory;
+                    return (
+                      <Link
+                        aria-current={active ? "page" : undefined}
+                        className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition ${active ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"}`}
+                        href={tab.key === "all" ? "/users" : `/users?category=${encodeURIComponent(tab.key)}`}
+                        key={tab.key}
+                        scroll={false}
+                      >
+                        {tab.label}
+                        <span className={`rounded-full px-1.5 text-[11px] font-semibold tabular-nums ${active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"}`}>
+                          {tab.count}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </nav>
+                ) : <div className="flex-1" />}
+                <div className="shrink-0">
+                  <AddCandidateLink />
+                </div>
+              </div>
+            )}
             {actor.role === "manager" ? (
               <PaginatedTable
+                key={activeCategory}
                 columns={[
                   { label: "No", className: "w-[4%] text-center" },
                   { label: "Full name", className: "w-[13%]" },
@@ -322,10 +293,11 @@ export default async function UsersPage() {
                   { label: "Delete", className: "w-[8%] text-center" },
                 ]}
                 emptyMessage="No candidate accounts"
-                rows={result.rows
-                  .filter((candidate) => candidate.role === "account")
+                rows={shownCandidates
                   .map((candidate, index) => ({
                     id: candidate.id,
+                    // On a category tab every row has the same category, so the heading row is left out.
+                    group: activeCategory === "all" ? candidate.category_name ?? "Global" : undefined,
                     cells: [
                       <CopyableAccountField
                         ariaLabel={`Copy row number ${index + 1}`}
@@ -390,81 +362,8 @@ export default async function UsersPage() {
                       ) : (
                         "—"
                       ),
-                      <EditCandidateProfileForm
-                        categories={candidateCategories}
-                        showJdMatchingNote={actor.role === "manager" && Boolean(managerSettings?.useGeminiMatching)}
-                        candidate={{
-                          userId: candidate.id,
-                          firstName: candidate.first_name,
-                          lastName: candidate.last_name,
-                          birthday: candidate.birthday,
-                          pdfTemplate: candidate.pdf_template
-                            && isPdfTemplate(candidate.pdf_template)
-                            ? candidate.pdf_template
-                            : "qts-standard",
-                          candidateEmail: candidate.candidate_email,
-                          phone: candidate.phone,
-                          headline: candidate.headline,
-                          linkedinUrl: candidate.linkedin_url,
-                          country: candidate.country,
-                          city: candidate.city,
-                          province: candidate.province,
-                          addressLine1: candidate.address_line_1,
-                          postalCode: candidate.postal_code,
-                          jdMatching: candidate.jd_matching,
-                          categoryId: candidate.category_id,
-                          categoryName: candidate.category_name,
-                          managerCategory: candidate.manager_category || "",
-                          managerCategoryColor: candidate.manager_category_color,
-                          workAuthorization: candidate.work_authorization,
-                          needsSponsorship: candidate.needs_sponsorship,
-                          noticePeriod: candidate.notice_period,
-                          salaryExpectationAmount: candidate.salary_expectation_amount,
-                          salaryExpectationCurrency: candidate.salary_expectation_currency,
-                          salaryExpectationPeriod: candidate.salary_expectation_period,
-                          yearsOfExperience: candidate.years_of_experience,
-                          willingToRelocate: candidate.willing_to_relocate,
-                          githubUrl: candidate.github_url,
-                          portfolioUrl: candidate.portfolio_url,
-                          eeoPreference: candidate.eeo_preference ?? "prefer_not_to_say",
-                          nationality: candidate.nationality,
-                          workCountries: candidate.work_countries,
-                          workPermitExpiry: candidate.work_permit_expiry,
-                          languages: candidate.languages,
-                          contractType: candidate.contract_type,
-                          workHours: candidate.work_hours,
-                          workMode: candidate.work_mode,
-                          applicationNotes: candidate.application_notes,
-                          gender: candidate.gender,
-                          ethnicity: candidate.ethnicity,
-                          veteranStatus: candidate.veteran_status,
-                          disabilityStatus: candidate.disability_status,
-                          sexualOrientation: candidate.sexual_orientation,
-                          pronouns: candidate.pronouns,
-                          education: (educationByCandidate.get(candidate.id) ?? []).map(
-                            (entry) => ({
-                              institution: entry.institution,
-                              degree: entry.degree,
-                              fieldOfStudy: entry.fieldOfStudy,
-                              startDate: entry.startDate?.slice(0, 7) ?? null,
-                              endDate: entry.endDate?.slice(0, 7) ?? null,
-                              isCurrent: entry.isCurrent,
-                              description: entry.description,
-                            }),
-                          ),
-                          experience: (experienceByCandidate.get(candidate.id) ?? []).map(
-                            (entry) => ({
-                              companyName: entry.companyName,
-                              jobTitle: entry.jobTitle,
-                              location: entry.location,
-                              workMode: entry.workMode,
-                              startDate: entry.startDate?.slice(0, 7) ?? null,
-                              endDate: entry.endDate?.slice(0, 7) ?? null,
-                              isCurrent: entry.isCurrent,
-                              description: entry.description,
-                            }),
-                          ),
-                        }}
+                      <EditCandidateLink
+                        candidateId={candidate.id}
                         key="edit"
                         readOnly={Boolean(candidate.deleted_at)}
                       />,
@@ -482,6 +381,7 @@ export default async function UsersPage() {
                         <span className="block text-center text-xs text-slate-400" key="delete">—</span>
                       ) : (
                         <DeleteCandidateAccountForm
+                          active={!Boolean(candidate.blocked_at)}
                           candidateName={userName(candidate)}
                           key="delete"
                           userId={candidate.id}

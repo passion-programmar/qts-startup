@@ -237,7 +237,7 @@ test('Manager URL rule CRUD is permission-gated and scoped to its owner', () => 
     'utf8',
   );
   const managerSettings = fs.readFileSync(
-    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'page.tsx'),
+    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'super-admin-tabs.tsx'),
     'utf8',
   );
   assert.ok(jobDetectionRoute.includes('managerCanManageJobDetectionUrlRules(manager.id)'));
@@ -255,7 +255,13 @@ test('Manager URL rule CRUD is permission-gated and scoped to its owner', () => 
   assert.ok(serviceWorker.includes("msg.type === 'ADD_MANAGER_JOB_DETECTION_URL_RULE'"));
   assert.ok(serviceWorker.includes("msg.type === 'UPDATE_MANAGER_JOB_DETECTION_URL_RULE'"));
   assert.ok(serviceWorker.includes("msg.type === 'DELETE_MANAGER_JOB_DETECTION_URL_RULE'"));
-  assert.ok(managerSettings.includes('ManagerJobDetectionUrlAccessForm'));
+  // Settings shows one switch per Manager; the switch saves through the Super-Admin-only action.
+  const settingSwitches = fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'manager-settings.tsx'),
+    'utf8',
+  );
+  assert.ok(managerSettings.includes('on={manager.canManageJobDetectionUrlRules} setting="jobDetectionUrls"'));
+  assert.ok(settingSwitches.includes('jobDetectionUrls: { action: updateManagerJobDetectionUrlAccessAction,'));
   assert.ok(serviceWorker.includes('isManagerBlockedUrl'));
   assert.ok(serviceWorker.includes('isPageDetectedAsJobForManager'));
   assert.equal(serviceWorker.includes('countPageDetectionKeywordMatches'), false);
@@ -400,7 +406,9 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.equal(releaseRoute.includes('generationStatus: "queued"'), false);
   assert.ok(claimRoute.includes('.orderBy(asc(jobs.createdAt), asc(jobs.id))'));
   assert.equal(claimRoute.includes('jobs.status'), false);
-  assert.ok(claimRoute.includes('requireMatchingNote ? hasMatchingNote() : sql`true`'));
+  // No JD matching note: an active candidate (not blocked) with enough experience can be generated.
+  assert.equal(claimRoute.includes('MatchingNote'), false);
+  assert.ok(claimRoute.includes('isNull(users.blockedAt)'));
   assert.ok(claimRoute.includes('hasEligibleExperienceCount()'));
   assert.ok(claimRoute.includes('isNull(jobs.resumeLocalPath)'));
   // Any job not generated yet and not held by a Chrome; the claim writes only the hold.
@@ -480,9 +488,10 @@ test('queued Generation prompts use saved job and profile data only', () => {
 
   assert.ok(startRoute.includes('jobUrl: normalizeJobUrl(savedJob.jobUrl)'));
   assert.ok(startRoute.includes('jobDescription: savedJob.description'));
-  // Gemini matching notes decide eligibility only for assigned Managers, and stay out of the prompt.
-  assert.ok(startRoute.includes('managerSettings?.useGeminiMatching === true && !savedJob.jdMatching?.trim()'));
-  assert.equal(startRoute.includes('jdMatching: savedJob.jdMatching'), false);
+  // The JD matching note is gone: Generation needs an active candidate, never a note.
+  assert.equal(startRoute.includes('jdMatching'), false);
+  assert.equal(actions.includes('jdMatching'), false);
+  assert.ok(actions.includes('active: sql<boolean>`${users.blockedAt} is null`'));
   assert.ok(startRoute.includes('educations'));
   assert.ok(startRoute.includes('experiences'));
   assert.equal(startRoute.includes('readGenerationJob'), false);
@@ -775,7 +784,7 @@ test('shared text highlights are manager-gated and available from the page launc
     'utf8',
   );
   const settingsPage = fs.readFileSync(
-    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'page.tsx'),
+    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'super-admin-tabs.tsx'),
     'utf8',
   );
   const settingsActions = fs.readFileSync(
@@ -799,7 +808,11 @@ test('shared text highlights are manager-gated and available from the page launc
   assert.ok(worker.includes("msg.type === 'QTS_IS_JOB_PAGE'"));
   assert.ok(featureRoute.includes('managerCanManageTextHighlights(manager.id)'));
   assert.ok(highlightsRoute.includes('managerCanManageTextHighlights(manager.id)'));
-  assert.ok(settingsPage.includes('<ManagerTextHighlightAccessForm'));
+  assert.ok(settingsPage.includes('on={manager.canManageTextHighlights} setting="textHighlights"'));
+  assert.ok(fs.readFileSync(
+    path.join(extensionRoot, '..', 'src', 'app', 'settings', 'manager-settings.tsx'),
+    'utf8',
+  ).includes('textHighlights: { action: updateManagerTextHighlightAccessAction,'));
   assert.ok(settingsActions.includes('actor.role !== "super_admin"'));
   assert.ok(settingsActions.includes('canManageTextHighlights: enabledValue === "true"'));
   const exposedResources = manifest.web_accessible_resources.flatMap((entry) => entry.resources || []);
@@ -954,7 +967,7 @@ test('Get JD matching mode is assigned per Manager, not globally', () => {
   const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
   const modeHelper = read('src', 'server', 'jobs', 'get-jd-mode.ts');
   const migration = read('drizzle', '0048_manager_gemini_matching.sql');
-  const settingsPage = read('src', 'app', 'settings', 'page.tsx');
+  const settingsPage = read('src', 'app', 'settings', 'super-admin-tabs.tsx');
   const routes = ['mode', '', 'save'].map((name) => read('src', 'app', 'api', 'extension', 'get-jd', ...(name ? [name] : []), 'route.ts'));
 
   assert.ok(modeHelper.includes('useGeminiMatching: users.useGeminiMatching'));
@@ -962,7 +975,8 @@ test('Get JD matching mode is assigned per Manager, not globally', () => {
   for (const route of routes) assert.ok(route.includes('getGetJdMatchingMode(manager.id)'));
   // settings.value is jsonb, so the stored mode is compared as the JSON string "gemini".
   assert.ok(migration.includes(`"key" = 'get_jd_matching_mode' AND "value" = '"gemini"'::jsonb`));
-  assert.ok(settingsPage.includes('<ManagerGeminiMatchingForm'));
+  assert.ok(settingsPage.includes('on={manager.useGeminiMatching} setting="geminiMatching"'));
+  assert.ok(read('src', 'app', 'settings', 'manager-settings.tsx').includes('geminiMatching: { action: updateManagerGeminiMatchingAction,'));
   assert.equal(settingsPage.includes('get_jd_matching_mode'), false);
 });
 
@@ -1021,4 +1035,15 @@ test('raw shared-job save SQL types every value Postgres cannot infer', () => {
   // jobs keep no country column (migration 0054), so the save has no country parameter.
   assert.equal(/\bcountry\b/.test(helper), false);
   assert.ok(helper.includes('$15::text, $16::boolean, $7::uuid, $6::uuid, $17::date'));
+});
+
+test('Apply set to Off in Settings hides the Auto Apply button, except while a run can still be stopped', () => {
+  const launcher = fs.readFileSync(path.join(extensionRoot, 'content', 'page-launcher.js'), 'utf8');
+  assert.ok(launcher.includes(".row[hidden] { display: none; }"));
+  assert.ok(launcher.includes(`const autoApplyRow = menu.querySelector('[data-action="auto_apply"]')?.closest('.row');`));
+  assert.ok(launcher.includes("const running = stored.qtsExtensionStatus === 'apply' && stored.qtsApplyKind === 'auto';"));
+  assert.ok(launcher.includes('autoApplyRow.hidden = response?.ok === true && response.canUseApply !== true && !running;'));
+  // The server still refuses Apply and Auto Apply for a Manager with Apply off.
+  const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  assert.ok(worker.includes('canUseApply: result.success === true && result.features?.canUseApply === true'));
 });

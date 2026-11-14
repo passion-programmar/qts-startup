@@ -2,12 +2,15 @@
 
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+import { Fragment, useEffect, useState, useTransition, type ReactNode } from "react";
 
 type PaginatedTableProps = {
   columns: { label: string; className?: string }[];
-  /** search: each row's text per search field, matched by the search bar. */
-  rows: { id: string; cells: ReactNode[]; search?: Record<string, string> }[];
+  /**
+   * search: each row's text per search field, matched by the search bar.
+   * group: a heading row is shown above the first row of each group (rows come already in group order).
+   */
+  rows: { id: string; cells: ReactNode[]; search?: Record<string, string>; group?: string }[];
   emptyMessage: string;
   pageSize?: number;
   /** Drops the outer frame when the table already sits inside a card. */
@@ -38,7 +41,7 @@ export function PaginatedTable({
   columns,
   rows: allRows,
   emptyMessage,
-  pageSize: initialPageSize = 10,
+  pageSize: initialPageSize = 25,
   embedded = false,
   searchFields,
   toolbar,
@@ -169,18 +172,31 @@ export function PaginatedTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {visibleRows.map((row) => (
-              <tr className="align-top transition-colors hover:bg-indigo-50/40" key={row.id}>
-                {row.cells.map((cell, index) => (
-                  <td
-                    className={`whitespace-normal px-3 py-3.5 text-slate-700 sm:px-4 ${columns[index]?.className ?? ""}`}
-                    data-label={columns[index]?.label}
-                    key={`${row.id}-${columns[index]?.label ?? index}`}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
+            {visibleRows.map((row, rowIndex) => (
+              <Fragment key={row.id}>
+                {row.group !== undefined && row.group !== visibleRows[rowIndex - 1]?.group && (
+                  <tr className="paginated-table__group-row bg-slate-50/80">
+                    <th
+                      className="px-3 pb-1.5 pt-3 text-left text-[11px] font-semibold uppercase tracking-wider text-indigo-600 sm:px-4"
+                      colSpan={columns.length}
+                      scope="colgroup"
+                    >
+                      {row.group}
+                    </th>
+                  </tr>
+                )}
+                <tr className="align-top transition-colors hover:bg-indigo-50/40">
+                  {row.cells.map((cell, index) => (
+                    <td
+                      className={`whitespace-normal px-3 py-3.5 text-slate-700 sm:px-4 ${columns[index]?.className ?? ""}`}
+                      data-label={columns[index]?.label}
+                      key={`${row.id}-${columns[index]?.label ?? index}`}
+                    >
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              </Fragment>
             ))}
             {visibleRows.length === 0 && (
               <tr className="paginated-table__empty-row">

@@ -245,6 +245,21 @@ body {
     content: none;
   }
 
+  /* A group heading (such as a category) stays a plain label above its cards. */
+  .paginated-table__grid tbody tr.paginated-table__group-row:not(.paginated-table__empty-row) {
+    display: block;
+    margin: 0.75rem 0 0.25rem;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .paginated-table__grid tbody tr.paginated-table__group-row th {
+    display: block;
+    padding: 0.25rem;
+  }
+
   .paginated-table > div:last-child {
     padding-right: 0.75rem;
     padding-left: 0.75rem;

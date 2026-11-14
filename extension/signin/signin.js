@@ -55,9 +55,21 @@ async function submitSignIn() {
   }
 }
 
+// The Hosting | Local toggle (Local is this computer, 127.0.0.1:1027): its value is the chosen server; "on" (aria-checked) means Local.
+function setEnvironment(environment) {
+  const value = environment === 'local' ? 'local' : 'hosting';
+  environmentInput.value = value;
+  environmentInput.setAttribute('value', value);
+  environmentInput.setAttribute('aria-checked', String(value === 'local'));
+}
+
+environmentInput.addEventListener('click', () => {
+  setEnvironment(environmentInput.value === 'local' ? 'hosting' : 'local');
+});
+
 window.addEventListener('DOMContentLoaded', async () => {
   try {
-    environmentInput.value = await globalThis.__qtsRuntimeConfig.getServerEnvironment();
+    setEnvironment(await globalThis.__qtsRuntimeConfig.getServerEnvironment());
   } catch (error) {
     showError(error?.message || 'Could not load the server selection.');
   }

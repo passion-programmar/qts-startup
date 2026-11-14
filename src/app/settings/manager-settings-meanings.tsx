@@ -37,7 +37,7 @@ export const MANAGER_SETTINGS = {
     off: "General",
     icon: ScanSearch,
     summary: "How Get JD matches jobs to candidates.",
-    onMeaning: "AI matches each job to candidates by the job titles in their profile. Generation and Auto Apply still need a JD matching note.",
+    onMeaning: "AI matches each job to active candidates by their profile experience and education.",
     offMeaning: "No note or match result is needed.",
   },
   chatGptUrl: {
@@ -100,6 +100,71 @@ export const MANAGER_SETTINGS = {
 } satisfies Record<string, ManagerSetting>;
 
 export type ManagerSettingKey = keyof typeof MANAGER_SETTINGS;
+
+// Apply and Auto Apply with APIs shown as one choice of three, because APIs only works with Apply on.
+export type ApplyChoice = "off" | "chatgpt" | "apis";
+
+// normalApply and autoApply are what each choice means for the two ways of applying.
+export const APPLY_CHOICES: { id: ApplyChoice; label: string; meaning: string; normalApply: string; autoApply: string }[] = [
+  {
+    id: "off",
+    label: "Off",
+    meaning: "Off: the Manager cannot apply. Normal Apply and Auto Apply are both off.",
+    normalApply: "Off",
+    autoApply: "Off",
+  },
+  {
+    id: "chatgpt",
+    label: "ChatGPT",
+    meaning: "ChatGPT: Normal Apply and Auto Apply are on. Auto Apply's questions are answered by ChatGPT in a Chrome tab.",
+    normalApply: "On",
+    autoApply: "On · ChatGPT answers in a Chrome tab",
+  },
+  {
+    id: "apis",
+    label: "AI APIs",
+    meaning: "AI APIs: Normal Apply and Auto Apply are on. Auto Apply's questions are answered by Gemini and Groq through the QTS server.",
+    normalApply: "On",
+    autoApply: "On · Gemini and Groq answer through the QTS server",
+  },
+];
+
+export function applyChoiceOf(manager: { canUseApply: boolean; autoApplyApi: boolean }): ApplyChoice {
+  return !manager.canUseApply ? "off" : manager.autoApplyApi ? "apis" : "chatgpt";
+}
+
+export function ApplyChoiceMeanings() {
+  return (
+    <div className="flex min-w-0 gap-3">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white text-indigo-600 shadow-sm ring-1 ring-indigo-100">
+        <Power aria-hidden="true" className="size-4" />
+      </span>
+      <div className="min-w-0 text-xs leading-5 text-slate-600">
+        <p className="text-[13px] font-semibold text-slate-900">Apply</p>
+        <p>One choice covers both ways of applying. Off turns both off; ChatGPT and AI APIs turn both on and only pick who answers Auto Apply&apos;s questions.</p>
+        <table className="mt-2 w-full border-separate border-spacing-y-1 text-left">
+          <thead className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="pr-3 font-semibold">Choice</th>
+              <th className="pr-3 font-semibold">Normal Apply</th>
+              <th className="font-semibold">Auto Apply</th>
+            </tr>
+          </thead>
+          <tbody>
+            {APPLY_CHOICES.map((choice) => (
+              <tr key={choice.id}>
+                <td className="pr-3 align-top"><StatePill label={choice.label} on={choice.id !== "off"} /></td>
+                <td className="pr-3 align-top">{choice.normalApply}</td>
+                <td className="align-top">{choice.autoApply}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-2">Normal Apply fills from the candidate&apos;s profile and never uses AI. In every choice the Manager clicks Next and Submit; QTS never submits by itself.</p>
+      </div>
+    </div>
+  );
+}
 
 function StatePill({ label, on }: { label: string; on: boolean }) {
   return (

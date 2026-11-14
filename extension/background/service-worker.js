@@ -1974,7 +1974,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
             ? geminiResult.message
           : matchingAvailableProfiles.length
             ? `Recommended ${matchingAvailableProfiles.length} candidate${matchingAvailableProfiles.length === 1 ? '' : 's'}. Recommended available candidates are checked; review the list before saving.`
-          : 'Did not recommend any available candidates from their matching notes. All available profiles are listed unchecked so you can review and select manually.',
+          : 'Did not recommend any available candidates from their profiles. All available profiles are listed unchecked so you can review and select manually.',
         hasDuplicates: geminiResult.exists === true,
         toastKind: geminiResult.toastKind,
         toastMessage: geminiResult.toastMessage,
@@ -4498,7 +4498,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             if (!idle[GENERATION_IDLE_NOTICE_KEY]) {
               await chrome.storage.local.set({ [GENERATION_IDLE_NOTICE_KEY]: true });
               await notifyGenerationManager(
-                'Generation is on and waiting: no job is ready yet. Jobs need a description, candidate JD-matching notes, and no saved resume path.',
+                'Generation is on and waiting: no job is ready yet. Jobs need a description, an active candidate with at least three experience records, and no saved resume path.',
               );
             }
           }

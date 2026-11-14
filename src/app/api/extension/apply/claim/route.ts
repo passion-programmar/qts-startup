@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { claimNextApplication } from "@/server/apply/apply-attempts";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
-import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 import { readWorkSelection } from "@/server/work/work-selection";
 
 // The next application for this Chrome: the oldest eligible job, at most 2 open per Chrome.
@@ -21,10 +20,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     catch (error) { return NextResponse.json({ success: false, message: (error as Error).message }, { status: 400 }); }
     // Apply and Auto Apply both take the panel's candidate and checked jobs; none means every account.
     const skipJobIds = Array.isArray(body?.skipJobIds) ? body.skipJobIds.filter(isUuid).slice(0, 200) : [];
-    const requireMatchingNote = mode === "auto_apply" && await getGetJdMatchingMode(auth.manager.id) === "gemini";
     const application = await claimNextApplication(auth.manager.id, auth.browser, skipJobIds, selection, {
       autoApply: mode === "auto_apply",
-      requireMatchingNote,
     });
     return NextResponse.json(
       { success: true, application },

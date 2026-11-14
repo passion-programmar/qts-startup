@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 1027",
     "build": "next build",
     "build:extension": "node scripts/build-extension.cjs",
-    "start": "next start",
+    "start": "next start -p 1027",
     "lint": "eslint",
     "typecheck": "tsc --noEmit --incremental false",
     "test": "npm run test:server && npm run test:extension",

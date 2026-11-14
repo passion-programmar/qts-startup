@@ -70,7 +70,6 @@ export async function POST(request: Request): Promise<NextResponse> {
           province: profiles.province,
           addressLine1: profiles.addressLine1,
           postalCode: profiles.postalCode,
-          jdMatching: profiles.jdMatching,
         })
         .from(jobs)
         .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
@@ -90,14 +89,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         { status: 409 },
       );
     }
-    const [managerSettings] = await db
-      .select({ useGeminiMatching: users.useGeminiMatching })
-      .from(users)
-      .where(eq(users.id, manager.id))
-      .limit(1);
     if (
       !savedJob.description?.trim() ||
-      (managerSettings?.useGeminiMatching === true && !savedJob.jdMatching?.trim()) ||
       savedJob.resumeLocalPath !== null
     ) {
       return NextResponse.json(
@@ -167,7 +160,6 @@ export async function POST(request: Request): Promise<NextResponse> {
         savedJob.postalCode,
       ].filter(Boolean).join(", "),
       resumeLocation: generationResumeLocation(savedJob),
-      // JD matching notes stay out: they pick jobs for Get JD, not what the resume says.
       education,
       experience,
     };

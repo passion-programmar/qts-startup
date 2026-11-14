@@ -6,7 +6,7 @@ import { getExtensionManager } from "@/lib/extension-auth";
 import { isRecord, readText } from "@/server/generation/generation-values";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
-import { hasEligibleExperienceCount, hasMatchingNote } from "@/server/work/work-eligibility";
+import { hasEligibleExperienceCount } from "@/server/work/work-eligibility";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -37,23 +37,19 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const normalizedUrl = normalizeJobUrl(jobUrl);
   try {
-    const [managerSettings] = await db
-      .select({ useGeminiMatching: users.useGeminiMatching })
-      .from(users)
-      .where(eq(users.id, manager.id))
-      .limit(1);
-    const requireMatchingNote = managerSettings?.useGeminiMatching === true;
     const rows = await db
       .select({
         id: jobs.id,
         description: effectiveJobDescription(),
-        jdMatching: profiles.jdMatching,
+        // An inactive candidate is never queued.
+        active: sql<boolean>`${users.blockedAt} is null`,
         resumeLocalPath: jobs.resumeLocalPath,
         generationStatus: jobs.generationStatus,
         experienceEligible: hasEligibleExperienceCount(),
       })
       .from(jobs)
       .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
+      .innerJoin(users, eq(users.id, jobs.candidateId))
       .where(and(
         eq(jobs.managerId, manager.id),
         sql`regexp_replace(split_part(btrim(${jobs.jobUrl}), '#', 1), '/+$', '') = ${normalizedUrl}`,
@@ -73,7 +69,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Every job not generated yet can be generated (failures and cancels record nothing).
       row.generationStatus !== "completed"
       && Boolean(row.description?.trim())
-      && (!requireMatchingNote || Boolean(row.jdMatching?.trim()))
+      && row.active
       && row.experienceEligible
       && row.resumeLocalPath === null,
     );
@@ -102,7 +98,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           isNull(jobs.resumeLocalPath),
           hasEffectiveJobDescription(),
           hasEligibleExperienceCount(),
-          requireMatchingNote ? hasMatchingNote() : sql`true`,
+          sql`exists (select 1 from users u where u.id = ${jobs.candidateId} and u.blocked_at is null)`,
         ));
     }
 

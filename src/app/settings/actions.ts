@@ -289,7 +289,14 @@ export async function updateManagerApplyAction(
   const autoSubmitValue = formData.get("autoSubmit");
   const reviewModeValue = formData.get("reviewMode");
   const autoApplyApiValue = formData.get("autoApplyApi");
-  const change = enabledValue === "true" || enabledValue === "false"
+  const applyChoiceValue = formData.get("applyChoice");
+  // The Settings table's one Apply choice saves both values in one update: Off turns Apply off and
+  // leaves the answer source as it was; ChatGPT and APIs turn Apply on with that answer source.
+  const change = applyChoiceValue === "off"
+    ? { canUseApply: false }
+    : applyChoiceValue === "chatgpt" || applyChoiceValue === "apis"
+      ? { canUseApply: true, autoApplyApi: applyChoiceValue === "apis" }
+    : enabledValue === "true" || enabledValue === "false"
     ? { canUseApply: enabledValue === "true" }
     : aiModeValue === "chatgpt" || aiModeValue === "gemini"
       ? { applyAiMode: aiModeValue }
@@ -323,6 +330,16 @@ export async function updateManagerApplyAction(
   }
 
   revalidatePath("/settings");
+  if (applyChoiceValue === "off" || applyChoiceValue === "chatgpt" || applyChoiceValue === "apis") {
+    return {
+      error: null,
+      success: applyChoiceValue === "off"
+        ? "Apply was turned off for this Manager."
+        : applyChoiceValue === "apis"
+          ? "Apply is on with AI APIs: Auto Apply answers through Gemini and Groq, and the Manager still clicks Submit."
+          : "Apply is on with ChatGPT: Auto Apply answers in a ChatGPT tab, and the Manager still clicks Submit.",
+    };
+  }
   return {
     error: null,
     success: "canUseApply" in change

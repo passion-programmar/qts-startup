@@ -147,6 +147,7 @@ async function initializeQtsPageLauncher() {
     .action.busy { cursor: not-allowed; opacity: .7; }
     /* A mode is one card: its button, its account, its job list and its items. */
     .row { display: flex; flex-direction: column; border: 1px solid #1f2a40; border-radius: 14px; overflow: hidden; background: #111a2d; transition: border-color .2s ease, box-shadow .2s ease; }
+    .row[hidden] { display: none; }
     .row .action, .row .action:hover:not(:disabled) { border: 0; border-radius: 0; }
     .row .action { background: transparent; }
     .row:has(.action.running) { border-color: rgb(16 185 129 / .4); box-shadow: inset 3px 0 0 #10b981; background: linear-gradient(90deg, rgb(16 185 129 / .07), #111a2d 70%); }
@@ -190,6 +191,27 @@ async function initializeQtsPageLauncher() {
     .work-account:hover:not(:disabled) { border-color: #3b4b69; }
     /* The chosen account's label colour, as an accent on the left of its dropdown. */
     .work-account.labelled { border-left-width: 4px; }
+    /* Each account's label as a chip in the Manager's colour (Chrome's customizable dropdown);
+       older Chrome shows the plain "Name · Label" text. */
+    .work-account .account-label { display: none; }
+    @supports (appearance: base-select) {
+      .work-account, .work-account::picker(select) { appearance: base-select; }
+      .work-account { display: flex; align-items: center; }
+      .work-account::picker-icon { color: #8190a7; }
+      .work-account::picker(select) { max-height: 360px; margin-top: 4px; padding: 4px; border: 1px solid #2c3a55; border-radius: 10px; background: #0b1322; color: #cbd5e1; }
+      .work-account optgroup { padding: 0; font: 700 12px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; color: #f1f5f9; }
+      .work-account optgroup::label, .work-account optgroup legend { padding: 6px 8px 2px; }
+      .work-account option { display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 18px; border-radius: 6px; font: 500 12.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; color: #cbd5e1; }
+      .work-account > option { padding-left: 8px; }
+      .work-account option:hover:not(:disabled), .work-account option:focus-visible { background: #1e293b; }
+      .work-account option:checked { background: #1e3a5f; }
+      .work-account option:disabled { color: #64748b; }
+      .work-account option::checkmark { display: none; }
+      .work-account .account-sep { display: none; }
+      /* The chip sits at the right edge, after "— nothing ready", so names and labels line up. */
+      .work-account .account-label { order: 1; margin-left: auto; flex: none; display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+      .work-account option:disabled .account-label { opacity: .55; }
+    }
     .work-account:focus-visible, .work-start:focus-visible, .work-refresh:focus-visible, .work-link:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
     /* Tools: compact tiles, two per line, lighter than the work modes. */
     .tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -509,14 +531,33 @@ async function initializeQtsPageLauncher() {
       candidate.accounts = Array.isArray(reply.accounts) ? reply.accounts : [];
       candidate.loaded = true;
       select.replaceChildren(new Option(candidate.accounts.length ? 'All accounts' : 'No accounts', ''));
+      // Grouped under each account's category (A–Z), the accounts by name within it.
+      const groups = new Map();
       for (const account of candidate.accounts) {
-        const ready = WORK_MODES.some((mode) => readyCount(account, mode) > 0);
-        // Category · Candidate Name · Label; a missing part is left out.
-        const text = [account.categoryName, account.name, account.category].filter(Boolean).join(' · ');
-        const option = new Option(ready ? text : `${text} — nothing ready`, account.id);
-        option.title = option.text;
-        option.disabled = !ready;
-        select.add(option);
+        const categoryName = account.categoryName || 'Global';
+        if (!groups.has(categoryName)) groups.set(categoryName, []);
+        groups.get(categoryName).push(account);
+      }
+      const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
+      for (const [categoryName, accounts] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+        const group = document.createElement('optgroup');
+        group.label = categoryName;
+        for (const account of accounts.sort(byName)) {
+          const ready = WORK_MODES.some((mode) => readyCount(account, mode) > 0);
+          // Candidate Name · Label (the category is the group); a missing label is left out.
+          // The label is its own chip, coloured as the Manager set it; " · " shows only as plain text.
+          const option = new Option('', account.id);
+          option.append(account.name || '');
+          if (account.category) {
+            const chip = labelChip(account.category, account.categoryColor);
+            option.append(Object.assign(document.createElement('span'), { className: 'account-sep', textContent: ' · ' }), chip);
+          }
+          if (!ready) option.append(' — nothing ready');
+          option.title = `${categoryName} · ${option.textContent}`;
+          option.disabled = !ready;
+          group.appendChild(option);
+        }
+        select.appendChild(group);
       }
       const wanted = previous || (typeof stored?.[WORK_CANDIDATE_KEY] === 'string' ? stored[WORK_CANDIDATE_KEY] : '');
       select.value = wanted;
@@ -538,6 +579,19 @@ async function initializeQtsPageLauncher() {
     return request;
   }
 
+  // A label chip in the Manager's colour, with black or white text, whichever reads better on it.
+  function labelChip(text, color) {
+    const background = /^#[0-9a-f]{6}$/i.test(color || '') ? color : '#334155';
+    const [r, g, b] = [1, 3, 5].map((offset) => {
+      const channel = parseInt(background.slice(offset, offset + 2), 16) / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    const chip = Object.assign(document.createElement('span'), { className: 'account-label', textContent: text });
+    chip.style.backgroundColor = background;
+    chip.style.color = 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? '#000000' : '#ffffff';
+    return chip;
+  }
+
   function readyCount(account, mode) {
     return Number(account?.counts?.[mode]) || 0;
   }
@@ -553,7 +607,7 @@ async function initializeQtsPageLauncher() {
     const color = /^#[0-9a-f]{6}$/i.test(account?.categoryColor || '') ? account.categoryColor : '';
     select.classList.toggle('labelled', Boolean(color));
     select.style.borderLeftColor = color;
-    select.title = account ? select.selectedOptions[0]?.text || '' : 'Every account';
+    select.title = account ? select.selectedOptions[0]?.title || '' : 'Every account';
     const counts = Object.fromEntries(WORK_MODES.map((mode) => [mode, account
       ? readyCount(account, mode)
       : candidate.accounts.reduce((sum, item) => sum + readyCount(item, mode), 0)]));
@@ -1021,9 +1075,12 @@ async function initializeQtsPageLauncher() {
     const exclusionsButton = menu.querySelector('[data-action="page_exclusions"]');
     const customUrlsButton = menu.querySelector('[data-action="auto_apply_custom_urls"]');
     const applyPdfFolderButton = menu.querySelector('[data-action="apply_pdf_folder"]');
-    if (!highlightButton && !exclusionsButton && !customUrlsButton && !applyPdfFolderButton) return;
+    const autoApplyRow = menu.querySelector('[data-action="auto_apply"]')?.closest('.row');
+    if (!highlightButton && !exclusionsButton && !customUrlsButton && !applyPdfFolderButton && !autoApplyRow) return;
     const signedIn = await syncSessionAction();
     if (!signedIn) {
+      // Signed out, Auto Apply shows as before; signing in asks for the account first.
+      if (autoApplyRow) autoApplyRow.hidden = false;
       if (highlightButton) highlightButton.hidden = true;
       if (exclusionsButton) exclusionsButton.hidden = true;
       if (customUrlsButton) customUrlsButton.hidden = true;
@@ -1047,6 +1104,13 @@ async function initializeQtsPageLauncher() {
     }
     if (applyPdfFolderButton) {
       applyPdfFolderButton.hidden = response?.ok !== true || response.canUseApply !== true;
+    }
+    if (autoApplyRow) {
+      // Apply set to Off in Settings hides Auto Apply. A run already going stays visible so the
+      // Manager can still stop it, and an unknown answer (offline) changes nothing.
+      const stored = await chrome.storage.local.get(['qtsExtensionStatus', 'qtsApplyKind']);
+      const running = stored.qtsExtensionStatus === 'apply' && stored.qtsApplyKind === 'auto';
+      autoApplyRow.hidden = response?.ok === true && response.canUseApply !== true && !running;
     }
     toolsHeading.hidden = Boolean(
       highlightButton?.hidden !== false

@@ -25,6 +25,8 @@ import {
   UserRound,
   X,
 } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { LoadingIcon } from "@/app/components/loading-icon";
 import { DatePicker, MonthPicker } from "@/app/components/date-picker";
 import { ConfirmButton } from "@/app/components/confirm-button";
@@ -55,22 +57,15 @@ type CreateUserFormProps = {
 };
 
 
-export function CreateUserForm({ role, categories = [], showJdMatchingNote = false }: CreateUserFormProps & { showJdMatchingNote?: boolean }) {
-  const [educationRows, setEducationRows] = useState([0]);
-  const [experienceRows, setExperienceRows] = useState([0]);
-  const [managerCategoryColor, setManagerCategoryColor] = useState("");
+// Staff accounts (Admin, Manager) are created in a pop-up; candidates have their own page (CandidateCreateForm).
+export function CreateUserForm({ role }: CreateUserFormProps) {
   const [isOpen, setIsOpen] = useState(false);
   const closeModal = useCallback(() => setIsOpen(false), []);
   const [state, formAction, isPending] = useActionState(
     async (previous: UserActionState, formData: FormData) => {
       const result = await createUserAction(previous, formData);
       // A saved account closes the window; its row appears in the list, and the next opening is empty.
-      if (result.success) {
-        setIsOpen(false);
-        setEducationRows([0]);
-        setExperienceRows([0]);
-        setManagerCategoryColor("");
-      }
+      if (result.success) setIsOpen(false);
       return result;
     },
     initialState,
@@ -110,9 +105,275 @@ export function CreateUserForm({ role, categories = [], showJdMatchingNote = fal
         }
         title={`Create ${roleLabel}`}
       >
-        <form action={formAction} className={isAccount ? "space-y-3" : "space-y-6"} onInvalidCapture={openCardOfInvalidField}>
-        {isAccount ? (
-          <>
+        <form action={formAction} className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              autoComplete="off"
+              id="loginName"
+              label="Username"
+              maxLength={128}
+              name="loginName"
+              required
+            />
+            <div className="sm:col-span-2">
+              <PasswordField
+                autoComplete="new-password"
+                id="newStaffPassword"
+                label="Temporary password"
+                minLength={minimumPasswordLength}
+                name="password"
+                placeholder="At least 4 characters"
+                required
+              />
+            </div>
+          </div>
+
+        {message.error && <FormMessage variant="error">{message.error}</FormMessage>}
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+            <button
+              className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              onClick={() => setIsOpen(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
+              disabled={isPending}
+              type="submit"
+            >
+              {isPending ? <LoadingIcon className="size-4" /> : <Plus className="size-4" />}
+              {isPending ? "Creating..." : `Create ${roleLabel}`}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </>
+  );
+}
+
+type CredentialResetFormProps = {
+  userId: string;
+  loginName: string;
+};
+
+export function CredentialResetForm({
+  userId,
+  loginName,
+}: CredentialResetFormProps) {
+  const [state, formAction, isPending] = useActionState(
+    updateUserCredentialsAction,
+    initialState,
+  );
+
+  return (
+    <details className="group mt-2">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[10px] font-semibold text-indigo-600 [&::-webkit-details-marker]:hidden">
+        <ShieldCheck className="size-3" />
+        Change credentials
+        <ChevronDown className="size-3 transition group-open:rotate-180" />
+      </summary>
+      <form action={formAction} className="mt-3 space-y-3">
+        <input name="userId" type="hidden" value={userId} />
+        <TextField
+          autoComplete="off"
+          defaultValue={loginName}
+          id={`resetLogin-${userId}`}
+          label="Login name"
+          maxLength={128}
+          name="loginName"
+        />
+        <PasswordField
+          autoComplete="new-password"
+          id={`resetPassword-${userId}`}
+          label="Set a new password (optional)"
+          minLength={minimumPasswordLength}
+          name="password"
+          placeholder="At least 4 characters"
+        />
+        {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
+        {state.success && (
+          <FormMessage variant="success">{state.success}</FormMessage>
+        )}
+        <button
+          className="inline-flex h-8 items-center gap-2 rounded-md bg-slate-900 px-3 text-[10px] font-semibold text-white disabled:opacity-60"
+          disabled={isPending}
+          type="submit"
+        >
+          {isPending && <LoadingIcon className="size-4" />}
+          {isPending ? "Saving..." : "Save credentials"}
+        </button>
+      </form>
+    </details>
+  );
+}
+
+export type CandidateProfileValues = {
+  userId: string;
+  firstName: string | null;
+  lastName: string | null;
+  birthday: string | null;
+  pdfTemplate: PdfTemplate;
+  candidateEmail: string | null;
+  phone: string | null;
+  headline: string | null;
+  linkedinUrl: string | null;
+  country: string | null;
+  city: string | null;
+  province: string | null;
+  addressLine1: string | null;
+  postalCode: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  managerCategory: string;
+  managerCategoryColor: string | null;
+  workAuthorization: string | null;
+  needsSponsorship: boolean | null;
+  noticePeriod: string | null;
+  salaryExpectationAmount: number | null;
+  salaryExpectationCurrency: string | null;
+  salaryExpectationPeriod: string | null;
+  yearsOfExperience: number | null;
+  willingToRelocate: boolean | null;
+  githubUrl: string | null;
+  portfolioUrl: string | null;
+  eeoPreference: string;
+  nationality: string | null;
+  workCountries: string | null;
+  workPermitExpiry: string | null;
+  languages: string | null;
+  contractType: string | null;
+  workHours: string | null;
+  workMode: string | null;
+  applicationNotes: string | null;
+  gender: string | null;
+  ethnicity: string | null;
+  veteranStatus: string | null;
+  disabilityStatus: string | null;
+  sexualOrientation: string | null;
+  pronouns: string | null;
+  education: {
+    institution: string;
+    degree: string | null;
+    fieldOfStudy: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    isCurrent: boolean;
+    description: string | null;
+  }[];
+  experience: {
+    companyName: string;
+    jobTitle: string;
+    location: string | null;
+    workMode: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    isCurrent: boolean;
+    description: string | null;
+  }[];
+};
+
+// The Edit (or View, for a deleted candidate) button in the candidate list opens the edit page.
+export function EditCandidateLink({ candidateId, readOnly = false }: { candidateId: string; readOnly?: boolean }) {
+  return (
+    <Link
+      aria-label={readOnly ? "View deleted candidate profile" : "Edit candidate profile"}
+      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100"
+      href={`/users/${candidateId}/edit`}
+    >
+      {readOnly ? <Eye aria-hidden="true" className="size-3.5" /> : <Pencil aria-hidden="true" className="size-3.5" />}
+      {readOnly ? "View" : "Edit"}
+    </Link>
+  );
+}
+
+// The candidate list's "Add New" button opens the add page.
+export function AddCandidateLink() {
+  return (
+    <Link
+      className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus-visible:outline-indigo-600"
+      href="/users/new"
+    >
+      <UserPlus aria-hidden="true" className="size-4" />
+      Add New
+    </Link>
+  );
+}
+
+// Whether the form was changed (typing, picking, or the calendar and "Add" buttons), so Cancel can ask first.
+function useChangeTracking() {
+  const changedRef = useRef(false);
+  const mark = useCallback(() => { changedRef.current = true; }, []);
+  const markOnClick = useCallback((event: React.MouseEvent) => {
+    if ((event.target as HTMLElement).closest("[data-changes-form]")) changedRef.current = true;
+  }, []);
+  return { changedRef, handlers: { onChangeCapture: mark, onInputCapture: mark, onClickCapture: markOnClick } };
+}
+
+// Cancel and Save at the bottom of the candidate Add and Edit pages; stays in view while scrolling.
+function CandidatePageActions({
+  changedRef,
+  isPending,
+  readOnly = false,
+  submitLabel,
+  pendingLabel,
+  submitIcon,
+}: {
+  changedRef: { current: boolean };
+  isPending: boolean;
+  readOnly?: boolean;
+  submitLabel: string;
+  pendingLabel: string;
+  submitIcon?: React.ReactNode;
+}) {
+  const router = useRouter();
+  return (
+    <div className="sticky bottom-0 z-10 flex flex-col-reverse gap-2 border-t border-slate-200 bg-white/95 py-3 backdrop-blur sm:flex-row sm:justify-end">
+      <button
+        className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+        onClick={() => {
+          if (changedRef.current && !window.confirm("Discard unsaved changes? You changed this form but have not saved it.")) return;
+          router.push("/users");
+        }}
+        type="button"
+      >
+        {readOnly ? "Back" : "Cancel"}
+      </button>
+      {!readOnly && (
+        <button
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
+          disabled={isPending}
+          type="submit"
+        >
+          {isPending ? <LoadingIcon className="size-4" /> : submitIcon}
+          {isPending ? pendingLabel : submitLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// The Add candidate page's form. A saved candidate goes back to the list, where the new row appears.
+export function CandidateCreateForm({ categories = [] }: { categories?: CategoryOption[] }) {
+  const router = useRouter();
+  const [educationRows, setEducationRows] = useState([0]);
+  const [experienceRows, setExperienceRows] = useState([0]);
+  const [managerCategoryColor, setManagerCategoryColor] = useState("");
+  const { changedRef, handlers: changeHandlers } = useChangeTracking();
+  const [state, formAction, isPending] = useActionState(
+    async (previous: UserActionState, formData: FormData) => {
+      const result = await createUserAction(previous, formData);
+      if (result.success) {
+        changedRef.current = false;
+        router.push("/users");
+      }
+      return result;
+    },
+    initialState,
+  );
+
+  return (
+    <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField} {...changeHandlers}>
           <FormCard icon={<UserRound />} summary="Name, contacts, address, category" title="Basic information">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <TextField
@@ -328,190 +589,29 @@ export function CreateUserForm({ role, categories = [], showJdMatchingNote = fal
               </>
             )}
           </HistorySection>
-          </>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <TextField
-              autoComplete="off"
-              id="loginName"
-              label="Username"
-              maxLength={128}
-              name="loginName"
-              required
-            />
-            <div className="sm:col-span-2">
-              <PasswordField
-                autoComplete="new-password"
-                id="newStaffPassword"
-                label="Temporary password"
-                minLength={minimumPasswordLength}
-                name="password"
-                placeholder="At least 4 characters"
-                required
-              />
-            </div>
-          </div>
-        )}
-
-        {message.error && <FormMessage variant="error">{message.error}</FormMessage>}
-          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
-            <button
-              className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-              onClick={() => setIsOpen(false)}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
-              disabled={isPending}
-              type="submit"
-            >
-              {isPending ? <LoadingIcon className="size-4" /> : <Plus className="size-4" />}
-              {isPending ? "Creating..." : `Create ${roleLabel}`}
-            </button>
-          </div>
-        </form>
-      </Modal>
-    </>
+          {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
+      <CandidatePageActions
+        changedRef={changedRef}
+        isPending={isPending}
+        pendingLabel="Creating..."
+        submitIcon={<Plus className="size-4" />}
+        submitLabel="Create candidate"
+      />
+    </form>
   );
 }
 
-type CredentialResetFormProps = {
-  userId: string;
-  loginName: string;
-};
-
-export function CredentialResetForm({
-  userId,
-  loginName,
-}: CredentialResetFormProps) {
-  const [state, formAction, isPending] = useActionState(
-    updateUserCredentialsAction,
-    initialState,
-  );
-
-  return (
-    <details className="group mt-2">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[10px] font-semibold text-indigo-600 [&::-webkit-details-marker]:hidden">
-        <ShieldCheck className="size-3" />
-        Change credentials
-        <ChevronDown className="size-3 transition group-open:rotate-180" />
-      </summary>
-      <form action={formAction} className="mt-3 space-y-3">
-        <input name="userId" type="hidden" value={userId} />
-        <TextField
-          autoComplete="off"
-          defaultValue={loginName}
-          id={`resetLogin-${userId}`}
-          label="Login name"
-          maxLength={128}
-          name="loginName"
-        />
-        <PasswordField
-          autoComplete="new-password"
-          id={`resetPassword-${userId}`}
-          label="Set a new password (optional)"
-          minLength={minimumPasswordLength}
-          name="password"
-          placeholder="At least 4 characters"
-        />
-        {state.error && <FormMessage variant="error">{state.error}</FormMessage>}
-        {state.success && (
-          <FormMessage variant="success">{state.success}</FormMessage>
-        )}
-        <button
-          className="inline-flex h-8 items-center gap-2 rounded-md bg-slate-900 px-3 text-[10px] font-semibold text-white disabled:opacity-60"
-          disabled={isPending}
-          type="submit"
-        >
-          {isPending && <LoadingIcon className="size-4" />}
-          {isPending ? "Saving..." : "Save credentials"}
-        </button>
-      </form>
-    </details>
-  );
-}
-
-export type CandidateProfileValues = {
-  userId: string;
-  firstName: string | null;
-  lastName: string | null;
-  birthday: string | null;
-  pdfTemplate: PdfTemplate;
-  candidateEmail: string | null;
-  phone: string | null;
-  headline: string | null;
-  linkedinUrl: string | null;
-  country: string | null;
-  city: string | null;
-  province: string | null;
-  addressLine1: string | null;
-  postalCode: string | null;
-  jdMatching: string | null;
-  categoryId?: string | null;
-  categoryName?: string | null;
-  managerCategory: string;
-  managerCategoryColor: string | null;
-  workAuthorization: string | null;
-  needsSponsorship: boolean | null;
-  noticePeriod: string | null;
-  salaryExpectationAmount: number | null;
-  salaryExpectationCurrency: string | null;
-  salaryExpectationPeriod: string | null;
-  yearsOfExperience: number | null;
-  willingToRelocate: boolean | null;
-  githubUrl: string | null;
-  portfolioUrl: string | null;
-  eeoPreference: string;
-  nationality: string | null;
-  workCountries: string | null;
-  workPermitExpiry: string | null;
-  languages: string | null;
-  contractType: string | null;
-  workHours: string | null;
-  workMode: string | null;
-  applicationNotes: string | null;
-  gender: string | null;
-  ethnicity: string | null;
-  veteranStatus: string | null;
-  disabilityStatus: string | null;
-  sexualOrientation: string | null;
-  pronouns: string | null;
-  education: {
-    institution: string;
-    degree: string | null;
-    fieldOfStudy: string | null;
-    startDate: string | null;
-    endDate: string | null;
-    isCurrent: boolean;
-    description: string | null;
-  }[];
-  experience: {
-    companyName: string;
-    jobTitle: string;
-    location: string | null;
-    workMode: string | null;
-    startDate: string | null;
-    endDate: string | null;
-    isCurrent: boolean;
-    description: string | null;
-  }[];
-};
-
-export function EditCandidateProfileForm({
+// The Edit candidate page's form. A deleted candidate's profile is shown read-only.
+export function CandidateEditForm({
   candidate,
   categories = [],
   readOnly = false,
-  showJdMatchingNote = false,
 }: {
   candidate: CandidateProfileValues;
   categories?: CategoryOption[];
-  // A deleted candidate: everything can be read, nothing changed.
   readOnly?: boolean;
-  showJdMatchingNote?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const router = useRouter();
   const [managerCategoryColor, setManagerCategoryColor] = useState(candidate.managerCategoryColor ?? "");
   const [educationRows, setEducationRows] = useState(() =>
     candidate.education.length ? candidate.education.map((_, index) => index) : [0],
@@ -521,54 +621,24 @@ export function EditCandidateProfileForm({
   );
   const nextEducationRowId = useRef(Math.max(1, candidate.education.length));
   const nextExperienceRowId = useRef(Math.max(1, candidate.experience.length));
-  const closeModal = useCallback(() => setIsOpen(false), []);
+  const { changedRef, handlers: changeHandlers } = useChangeTracking();
   const [state, formAction, isPending] = useActionState(
     async (previous: UserActionState, formData: FormData) => {
       const result = await updateCandidateProfileAction(previous, formData);
-      // A saved profile closes the window; the list shows the change.
-      if (result.success) setIsOpen(false);
+      // A saved profile goes back to the list, which shows the change.
+      if (result.success) {
+        changedRef.current = false;
+        router.push("/users");
+      }
       return result;
     },
     initialState,
   );
-  // Messages belong to this opening, not to an earlier save or error.
-  const [openedWith, setOpenedWith] = useState(state);
-  const message = state === openedWith ? initialState : state;
+  const message = state;
   const fieldId = (field: string) => `${field}-${candidate.userId}`;
-  // Each opening starts from the saved history, newest first as the page loads it, so rows never
-  // keep an earlier order or point at another entry after a save.
-  const openEditor = () => {
-    setManagerCategoryColor(candidate.managerCategoryColor ?? "");
-    setEducationRows(candidate.education.length ? candidate.education.map((_, index) => index) : [0]);
-    setExperienceRows(candidate.experience.length ? candidate.experience.map((_, index) => index) : [0]);
-    nextEducationRowId.current = Math.max(1, candidate.education.length);
-    nextExperienceRowId.current = Math.max(1, candidate.experience.length);
-    setOpenedWith(state);
-    setIsOpen(true);
-  };
 
   return (
-    <>
-      <button
-        aria-label={readOnly ? "View deleted candidate profile" : "Edit candidate profile"}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100"
-        onClick={openEditor}
-        type="button"
-      >
-        {readOnly ? <Eye aria-hidden="true" className="size-3.5" /> : <Pencil aria-hidden="true" className="size-3.5" />}
-        {readOnly ? "View" : "Edit"}
-      </button>
-      <Modal
-        confirmOnDismiss={!readOnly}
-        dismissQuestion="Discard unsaved changes?"
-        onClose={closeModal}
-        open={isOpen}
-        subtitle={readOnly
-          ? "This candidate is deleted: the profile can be read but not changed, and it is not used for jobs."
-          : "Update the candidate's contact information and profile details."}
-        title={readOnly ? "Deleted candidate (read-only)" : "Edit candidate profile"}
-      >
-        <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField}>
+        <form action={formAction} className="space-y-3" onInvalidCapture={openCardOfInvalidField} {...changeHandlers}>
           <input name="userId" type="hidden" value={candidate.userId} />
           <div className="flex justify-end">
             <CopyProfileButton />
@@ -635,16 +705,6 @@ export function EditCandidateProfileForm({
               name="headline"
             />
           </div>
-          {showJdMatchingNote && (
-            <TextAreaField
-              className="sm:col-span-2 lg:col-span-3"
-              defaultValue={candidate.jdMatching ?? ""}
-              id={fieldId("jdMatching")}
-              label="JD matching notes (required for Gemini-assigned managers)"
-              maxLength={5000}
-              name="jdMatching"
-            />
-          )}
           <TextField
             autoComplete="url"
             defaultValue={candidate.linkedinUrl ?? ""}
@@ -758,28 +818,14 @@ export function EditCandidateProfileForm({
           </HistorySection>
           </fieldset>
           {message.error && <FormMessage variant="error">{message.error}</FormMessage>}
-          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
-            <button
-              className="min-h-10 rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-              onClick={() => setIsOpen(false)}
-              type="button"
-            >
-              {readOnly ? "Close" : "Cancel"}
-            </button>
-            {!readOnly && (
-              <button
-                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-70"
-                disabled={isPending}
-                type="submit"
-              >
-                {isPending && <LoadingIcon className="size-4" />}
-                {isPending ? "Saving..." : "Save profile"}
-              </button>
-            )}
-          </div>
+          <CandidatePageActions
+            changedRef={changedRef}
+            isPending={isPending}
+            pendingLabel="Saving..."
+            readOnly={readOnly}
+            submitLabel="Save profile"
+          />
         </form>
-      </Modal>
-    </>
   );
 }
 
@@ -797,14 +843,24 @@ export function ToggleCandidateAccountStatusForm({
   return (
     <form action={formAction}>
       <input name="userId" type="hidden" value={userId} />
-      <button
-        aria-label={active ? `Set ${candidateName} inactive` : `Set ${candidateName} active`}
-        className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition ${active ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100" : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100"}`}
-        disabled={isPending}
-        type="submit"
-      >
-        {isPending ? "Saving..." : active ? "Active" : "Inactive"}
-      </button>
+      <div className="inline-flex items-center gap-2">
+        <button
+          aria-checked={active}
+          aria-label={active ? `Set ${candidateName} inactive` : `Set ${candidateName} active`}
+          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60 ${active ? "bg-emerald-500 shadow-sm shadow-emerald-500/30" : "bg-slate-300 enabled:hover:bg-slate-400"}`}
+          disabled={isPending}
+          role="switch"
+          title={active ? "Active: click to set inactive" : "Inactive: click to set active"}
+          type="submit"
+        >
+          <span className={`flex size-4 items-center justify-center rounded-full bg-white text-emerald-600 shadow transition-transform duration-200 ${active ? "translate-x-[18px]" : "translate-x-0.5"}`}>
+            {isPending && <LoadingIcon className="size-3" />}
+          </span>
+        </button>
+        <span className={`whitespace-nowrap text-xs font-medium ${active ? "text-emerald-700" : "text-slate-500"}`}>
+          {isPending ? "Saving..." : active ? "Active" : "Inactive"}
+        </span>
+      </div>
       {state.error && (
         <span className="mt-1 block max-w-36 text-[10px] leading-tight text-rose-700" role="alert">
           {state.error}
@@ -858,14 +914,19 @@ function ManagerCategoryColorField({
 export function DeleteCandidateAccountForm({
   userId,
   candidateName,
+  active,
 }: {
   userId: string;
   candidateName: string;
+  // An active candidate cannot be deleted, so Delete is hidden until they are set inactive.
+  active: boolean;
 }) {
   const [state, formAction, isPending] = useActionState(
     deleteCandidateAccountAction,
     initialState,
   );
+
+  if (active) return null;
 
   return (
     <form action={formAction}>

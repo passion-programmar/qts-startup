@@ -2,7 +2,7 @@
   if (global.__qtsRuntimeConfig) return;
 
   const DEFAULT_SERVER_URL = 'https://qts-job-system.vercel.app';
-  const LOCAL_SERVER_URL = 'http://127.0.0.1:3000';
+  const LOCAL_SERVER_URL = 'http://127.0.0.1:1027';
   const SERVER_URL_STORAGE_KEY = 'qtsServerUrl';
   const features = Object.freeze({
     getJd: true,

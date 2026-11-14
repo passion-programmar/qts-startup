@@ -17,7 +17,7 @@ import { db } from "@/lib/db";
 import { AiJobError, aiRequestBudgetMs } from "@/server/gemini/ai-job";
 import { runAiRequest } from "@/server/gemini/ai-request";
 import { geminiJobEvaluationGenerationConfig, groqJobEvaluationJsonHint } from "@/server/gemini/job-evaluation-config";
-import { type CareerTimelineEntry, candidatesWithCareerTimeline } from "@/server/gemini/candidates-with-career-timeline";
+import { type CareerTimelineEntry, type EducationEntry, candidatesWithCareerTimeline } from "@/server/gemini/candidates-with-career-timeline";
 import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
 import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-indexes";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
@@ -42,6 +42,8 @@ const maxPageUrlLength = 2048;
 const maxPageTitleLength = 500;
 const maxPageTextLength = 100_000;
 const maxManagerAccounts = 100;
+// Each job's description is cut to this many characters before it goes to the AI.
+const maxExperienceDescriptionLength = 600;
 const maxGeminiResponseBytes = 1_000_000;
 const invalidPageReason = "The page does not show one clear, active job posting.";
 
@@ -51,8 +53,10 @@ type CandidateProfileForEvaluation = {
   id: string;
   name: string;
   category: string | null;
-  // The profile's job titles and months, newest first. Companies and descriptions stay out.
+  // The profile's experience, newest first: title, company, place, months and a short description.
   employmentTimeline: CareerTimelineEntry[];
+  // The profile's education, newest first.
+  education: EducationEntry[];
   // The company of the candidate's most recent experience; a job there is never saved for them.
   currentEmployer: string | null;
 };
@@ -185,6 +189,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       candidateIndex: index,
       candidateName: candidate.name,
       employmentTimeline: candidate.employmentTimeline,
+      education: candidate.education,
     }));
     const promptText = buildGetJdEvaluationPrompt({
       savedPrompt: prompt.promptTemplate,
@@ -353,12 +358,27 @@ async function loadManagerCandidateProfiles(
       employmentTimeline: sql<CareerTimelineEntry[]>`coalesce((
         select json_agg(json_build_object(
             'jobTitle', btrim(e.job_title),
+            'companyName', nullif(btrim(e.company_name), ''),
+            'location', nullif(btrim(e.location), ''),
             'start', to_char(e.start_date, 'YYYY-MM'),
             'end', to_char(e.end_date, 'YYYY-MM'),
-            'isCurrent', e.is_current
+            'isCurrent', e.is_current,
+            'description', nullif(left(btrim(e.description), ${maxExperienceDescriptionLength}), '')
           ) order by e.is_current desc, e.end_date desc nulls first, e.start_date desc nulls last, e.sort_order asc)
           from experiences e
          where e.profile_user_id = ${profiles.userId} and btrim(e.job_title) <> ''
+      ), '[]'::json)`,
+      education: sql<EducationEntry[]>`coalesce((
+        select json_agg(json_build_object(
+            'institution', btrim(ed.institution),
+            'degree', nullif(btrim(ed.degree), ''),
+            'fieldOfStudy', nullif(btrim(ed.field_of_study), ''),
+            'start', to_char(ed.start_date, 'YYYY-MM'),
+            'end', to_char(ed.end_date, 'YYYY-MM'),
+            'isCurrent', ed.is_current
+          ) order by ed.is_current desc, ed.end_date desc nulls first, ed.start_date desc nulls last, ed.sort_order asc)
+          from educations ed
+         where ed.profile_user_id = ${profiles.userId} and btrim(ed.institution) <> ''
       ), '[]'::json)`,
       // The current job first, else the one that ended last.
       currentEmployer: sql<string | null>`(
@@ -389,6 +409,7 @@ async function loadManagerCandidateProfiles(
         .slice(0, 300),
       category: row.category || null,
       employmentTimeline: row.employmentTimeline,
+      education: row.education,
       currentEmployer: row.currentEmployer,
     })),
   };

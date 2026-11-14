@@ -21,10 +21,11 @@ test("each Manager switch sends its opposite value, and Apply-dependent ones wai
     define: { "process.env.NODE_ENV": '"production"' },
     stdin: { resolveDir: process.cwd(), loader: "tsx", contents: `
       import {createElement as h} from 'react';import {createRoot} from 'react-dom/client';
-      import {ManagerChatGptUrlCell,ManagerSettingSwitch} from './src/app/settings/manager-settings';
+      import {ManagerApplyChoice,ManagerChatGptUrlCell,ManagerSettingSwitch} from './src/app/settings/manager-settings';
       window.saved=[];window.failNext=false;
       const base={managerId:'m1',managerName:'Ann'};
       createRoot(document.getElementById('root')).render(h('div',null,
+        h(ManagerApplyChoice,{managerId:'m2',managerName:'Bob',choice:'chatgpt'}),
         h(ManagerSettingSwitch,{...base,setting:'apply',on:false}),
         h(ManagerSettingSwitch,{...base,setting:'aiMode',on:false}),
         h(ManagerSettingSwitch,{...base,setting:'reviewMode',on:true}),
@@ -71,5 +72,17 @@ test("each Manager switch sends its opposite value, and Apply-dependent ones wai
     await page.click('[aria-label="Save ChatGPT URL for Ann"]');
     await page.waitForFunction((want) => (window as unknown as TestWindow).saved.length === want, {}, 5);
     assert.deepEqual((await saved())[4], { managerId: "m1", chatGptUrl: url });
+
+    // Apply is one choice of three: the current one is marked, clicking it again saves nothing,
+    // and another one saves Apply and its answer source together.
+    const checked = () => page.$$eval('[aria-label^="Apply for Bob: "]', (nodes) =>
+      nodes.map((node) => `${node.getAttribute("aria-label")}=${node.getAttribute("aria-checked")}`));
+    assert.deepEqual(await checked(), ["Apply for Bob: Off=false", "Apply for Bob: ChatGPT=true", "Apply for Bob: AI APIs=false"]);
+    await page.click('[aria-label="Apply for Bob: ChatGPT"]');
+    await click("Apply for Bob: AI APIs", 6);
+    assert.deepEqual((await saved())[5], { managerId: "m2", applyChoice: "apis" });
+    await page.waitForFunction(() => !document.querySelector('[aria-label="Apply for Bob: Off"]')?.hasAttribute("disabled"));
+    await click("Apply for Bob: Off", 7);
+    assert.deepEqual((await saved())[6], { managerId: "m2", applyChoice: "off" });
   } finally { await browser.close(); }
 });

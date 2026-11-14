@@ -10,10 +10,15 @@
     form { display: flex; flex-direction: column; gap: 16px; padding: 3px 3px 6px; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
     .field { display: flex; flex-direction: column; gap: 7px; }
     label { color: #cbd5e1; font: 600 12.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
-    select { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; color: #f1f5f9; font: 500 13px/1 Inter, ui-sans-serif, system-ui, sans-serif; outline: none; }
-    select:focus { border-color: #60a5fa; box-shadow: 0 0 0 4px rgb(96 165 250 / .16); }
-    select:disabled { opacity: .6; }
-    .environment-note { margin: 0; color: #8190a7; font: 400 11px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; }
+    /* Hosting | Local toggle: one button whose value is the chosen server; a click switches it. */
+    .env-toggle { position: relative; display: grid; grid-template-columns: 1fr 1fr; width: 100%; height: 42px; padding: 3px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; cursor: pointer; outline: none; }
+    .env-toggle::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 9px; background: #2563eb; transition: transform .18s ease; }
+    .env-toggle[value="local"]::before { transform: translateX(100%); }
+    .env-toggle span { position: relative; display: flex; align-items: center; justify-content: center; color: #8190a7; font: 600 13px/1 Inter, ui-sans-serif, system-ui, sans-serif; transition: color .15s ease; }
+    .env-toggle[value="hosting"] .env-hosting, .env-toggle[value="local"] .env-local { color: #fff; }
+    .env-toggle:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 4px rgb(96 165 250 / .16); }
+    .env-toggle:disabled { opacity: .6; cursor: default; }
+    @media (prefers-reduced-motion: reduce) { .env-toggle::before, .env-toggle span { transition: none; } }
     .control { position: relative; display: flex; align-items: center; }
     .control .icon { position: absolute; left: 13px; width: 18px; height: 18px; color: #66758c; pointer-events: none; transition: color .15s ease; }
     .control:focus-within .icon { color: #93c5fd; }
@@ -52,11 +57,10 @@
   <form aria-label="Manager sign in" novalidate>
     <div class="field">
       <label for="server-environment">Server</label>
-      <select id="server-environment" aria-describedby="environment-note">
-        <option value="hosting">Hosting — live QTS</option>
-        <option value="local">Local — this computer (127.0.0.1:3000)</option>
-      </select>
-      <p class="environment-note" id="environment-note">Choose where this extension should sign in and send requests.</p>
+      <button class="env-toggle" id="server-environment" type="button" role="switch" value="hosting" aria-checked="false">
+        <span class="env-hosting">Hosting</span>
+        <span class="env-local">Local</span>
+      </button>
     </div>
     <div class="field">
       <label for="login-user">User Name</label>
