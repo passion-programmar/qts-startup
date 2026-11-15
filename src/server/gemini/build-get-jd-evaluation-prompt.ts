@@ -8,22 +8,20 @@ type GetJdCandidatePromptData = {
   employmentTimeline: CareerTimelineEntry[];
 };
 
+/**
+ * The saved prompt, then the JD and the candidates. No page URL or page title: the AI reads the
+ * job's title and company from the JD itself, and the server keeps the URL the extension sent.
+ */
 export function buildGetJdEvaluationPrompt({
   savedPrompt,
-  pageUrl,
-  pageTitle,
   pageText,
   candidates,
 }: {
   savedPrompt: string;
-  pageUrl: string;
-  pageTitle: string;
   pageText: string;
   candidates: GetJdCandidatePromptData[];
 }): string {
   const inputData = {
-    pageUrl,
-    pageTitle,
     visiblePageText: pageText,
     candidates,
   };

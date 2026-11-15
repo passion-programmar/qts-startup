@@ -1719,7 +1719,7 @@ async function initializeGetJdReviewOnce() {
     setPanelVisible(true);
     const [strong, line] = elements.reviewTitle.children;
     strong.textContent = 'Check this job';
-    line.textContent = 'Change anything that is wrong, then send it to Gemini.';
+    line.textContent = 'Fix the JD if anything is wrong, then send it to Gemini.';
     elements.heading.textContent = 'Check this job';
     elements.status.textContent = result.message || 'Check the job details, then send them to Gemini.';
     elements.status.classList.remove('is-loading');
@@ -1732,7 +1732,8 @@ async function initializeGetJdReviewOnce() {
     const draft = manualDrafts.get(draftKey) || { ...(result.draftJob || {}) };
     manualDrafts.set(draftKey, draft);
     if (manualDrafts.size > 100) manualDrafts.delete(manualDrafts.keys().next().value);
-    for (const [key, name, limit] of [['jobUrl', 'URL', 2048], ['title', 'Title', 500], ['company', 'Company', 500], ['description', 'JD', 100000]]) {
+    // Only the URL and the JD: Gemini reads the job's title and company from the JD.
+    for (const [key, name, limit] of [['jobUrl', 'URL', 2048], ['description', 'JD', 100000]]) {
       const label = document.createElement('label');
       label.className = 'manual-field';
       label.textContent = key === 'description' ? `JD (${String(draft.description || '').length.toLocaleString()} characters)` : name;
@@ -1804,7 +1805,8 @@ async function initializeGetJdReviewOnce() {
         elements.details.querySelector('[data-draft-field="description"]')?.focus();
         return;
       }
-      if (await act({ type: 'QTS_GET_JD_SEND_DRAFT', job: { title: draft.title || '', company: draft.company || '', description: draft.description } }, 'Sending to Gemini…')) {
+      // The worker sends the page's URL with it; the title and company come back from Gemini.
+      if (await act({ type: 'QTS_GET_JD_SEND_DRAFT', job: { title: '', company: '', description: draft.description } }, 'Sending to Gemini…')) {
         manualDrafts.delete(draftKey);
       }
     };

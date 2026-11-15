@@ -5,14 +5,15 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 
 const original = "Build Python services using FastAPI.\nPreserve PostgreSQL, requirements, benefits and Unicode: São Paulo.";
-const fixture: { sent?: unknown; candidateFields?: string[]; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
+const fixture: { sent?: unknown; candidateFields?: string[]; duplicate?: boolean; afterChecks: Array<Record<string, string>>; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { afterChecks: [], calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
 (globalThis as Record<string, unknown>).__qtsEvaluationFixture = fixture;
 let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/extension-auth": `export const getExtensionManager=async()=>({id:'local-manager'});`,
-    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',location:null,start:'2021-03',end:null,isCurrent:true,description:'Built APIs.'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}].map((row)=>{globalThis.__qtsEvaluationFixture.candidateFields=Object.keys(fields);return row;});const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
+    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',location:null,start:'2021-03',end:null,isCurrent:true,description:'Built APIs.'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}].map((row)=>{globalThis.__qtsEvaluationFixture.candidateFields=Object.keys(fields);return row;});const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:async()=>({rows:[{skip:globalThis.__qtsEvaluationFixture.duplicate===true}]})};`,
+    "@/server/get-jd/global-precheck": `export const globalJobPrecheckQuery=(identity)=>{globalThis.__qtsEvaluationFixture.afterChecks.push(identity);return 'SQL'};`,
     "@/server/get-jd/precheck-ticket": `export const getPrecheckTickets=()=>({verify:async(token)=>token==='valid'?{jobUrl:'https://example.test/jobs/1',jobTitle:'Engineer',company:'Example'}:null});`,
     "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>{globalThis.__qtsEvaluationFixture.sent=c;return evaluate()};`,
     "@/server/database/database-usage": `export const scheduleDailyCleanup=()=>{};`,
@@ -54,6 +55,47 @@ test("Gemini matching keeps the saved prompt, sends the career timeline, and sav
   assert.match(fixture.prompts.at(-1) || "", /"candidates":\[\{"candidateIndex":0,"employmentTimeline"/);
   assert.doesNotMatch(fixture.prompts.at(-1) || "", /candidateName|Test Candidate/);
   assert.match(fixture.prompts.at(-1) || "", /São Paulo/);
+  // Gemini named the job as the extension did, so Jobs/Bids are not asked again.
+  assert.equal(fixture.afterChecks.length, 0);
+});
+test("Gemini gets only the JD and the candidates: no page URL or page title", async () => {
+  fixture.prompts = [];
+  const response = await POST(request({ pageTitle: undefined }));
+  assert.equal(response.status, 200);
+  const prompt = fixture.prompts.at(-1) || "";
+  assert.match(prompt, /Input data \(JSON\):\n\{"visiblePageText":"Build Python services/);
+  assert.doesNotMatch(prompt, /pageUrl|pageTitle|example\.test/);
+});
+test("the job is saved under Gemini's title and company, after Jobs/Bids are checked with them", async () => {
+  fixture.saves = []; fixture.afterChecks = []; fixture.job = { title: "Staff Engineer", company: "Gemini Read Co" };
+  const response = await POST(request()); const body = await response.json();
+  fixture.job = {};
+  assert.equal(response.status, 200);
+  assert.deepEqual(fixture.afterChecks, [{ jobUrl: "https://example.test/jobs/1", jobTitle: "Staff Engineer", company: "Gemini Read Co" }]);
+  const saved = fixture.saves[0] as unknown as { jobTitle: string; company: string; jobUrl: string };
+  assert.equal(saved.jobTitle, "Staff Engineer");
+  assert.equal(saved.company, "Gemini Read Co");
+  assert.equal(saved.jobUrl, "https://example.test/jobs/1");
+  assert.equal(body.classification.job.title, "Staff Engineer");
+});
+test("a job Jobs/Bids already have under Gemini's title and company is skipped, and nothing is saved", async () => {
+  fixture.saves = []; fixture.duplicate = true; fixture.job = { title: "Staff Engineer", company: "Gemini Read Co" };
+  const response = await POST(request()); const body = await response.json();
+  fixture.duplicate = false; fixture.job = {};
+  assert.equal(response.status, 200);
+  assert.equal(body.alreadyInQts, true);
+  assert.equal(body.expiredApplication, true);
+  assert.equal(body.message, "This job already exists in QTS Jobs or Bids. Skipped.");
+  assert.equal(fixture.saves.length, 0);
+});
+test("when Gemini leaves the title or company empty, the extension's value is used and only the URL counts", async () => {
+  fixture.saves = []; fixture.afterChecks = []; fixture.job = { title: "", company: "  " };
+  const response = await POST(request()); await response.json();
+  fixture.job = {};
+  const saved = fixture.saves[0] as unknown as { jobTitle: string; company: string };
+  assert.equal(saved.jobTitle, "Engineer");
+  assert.equal(saved.company, "Example");
+  assert.equal(fixture.afterChecks.length, 0);
 });
 test("the page check is keyed on the checked title, company and JD, so an edited job is checked again", async () => {
   fixture.sent = undefined;

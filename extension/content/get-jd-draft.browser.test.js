@@ -49,28 +49,25 @@ test('the draft panel shows the read job, keeps edits, and sends only on Check',
     assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-qts-manual-get-jd-review')), 'true', 'the launcher steps aside while the job is checked');
     assert.deepEqual(await fields(), {
       jobUrl: [await page.evaluate(() => location.href), true],
-      title: ['Software Engineer', false],
-      company: ['Example', false],
       description: ['Build Python services.', false],
-    }, 'URL (fixed), Title, Company and the full JD');
+    }, 'URL (fixed) and the full JD only: Gemini reads the title and company from the JD');
     assert.equal(await page.evaluate(() => getComputedStyle(window.testRoot.querySelector('.profiles')).display), 'none', 'no candidate list before Gemini');
     for (const text of ['Check', 'Close', 'Re-read page']) assert.ok(await button(text), text);
     assert.equal(await button('Never on this site'), undefined, 'blocking needs the Super Admin permission');
     assert.equal(await page.evaluate(() => window.calls.length), 0, 'nothing is sent by opening the panel');
 
-    // Edits survive a re-render, and Send carries them.
+    // Edits survive a re-render, and Send carries the JD only (no title or company).
     await page.evaluate(() => {
-      const set = (key, value) => { const input = window.testRoot.querySelector(`[data-draft-field="${key}"]`); input.value = value; input.dispatchEvent(new Event('input')); };
-      set('title', 'Senior Software Engineer');
-      set('description', 'Build Python services.\n\nEdited.');
+      const input = window.testRoot.querySelector('[data-draft-field="description"]');
+      input.value = 'Build Python services.\n\nEdited.'; input.dispatchEvent(new Event('input'));
     });
     await draft();
-    assert.equal((await fields()).title[0], 'Senior Software Engineer');
+    assert.equal((await fields()).description[0], 'Build Python services.\n\nEdited.');
     await click('Check');
     await page.waitForFunction(() => window.calls.length === 1);
     assert.deepEqual(await page.evaluate(() => window.calls[0]), {
       type: 'QTS_GET_JD_SEND_DRAFT',
-      job: { title: 'Senior Software Engineer', company: 'Example', description: 'Build Python services.\n\nEdited.' },
+      job: { title: '', company: '', description: 'Build Python services.\n\nEdited.' },
     });
 
     // An empty JD is not sent.
@@ -83,8 +80,8 @@ test('the draft panel shows the read job, keeps edits, and sends only on Check',
     // only hides and the draft and its edits come back when shown again.
     await draft({ runId: 'close-run' });
     await page.evaluate(() => {
-      const input = window.testRoot.querySelector('[data-draft-field="company"]');
-      input.value = 'Edited Company'; input.dispatchEvent(new Event('input'));
+      const input = window.testRoot.querySelector('[data-draft-field="description"]');
+      input.value = 'Edited JD'; input.dispatchEvent(new Event('input'));
     });
     const sentBeforeClose = await page.evaluate(() => window.calls.length);
     await click('Close');
@@ -94,7 +91,7 @@ test('the draft panel shows the read job, keeps edits, and sends only on Check',
     assert.equal(await page.evaluate(() => window.__qtsGetJdReview.draftAvailable()), true);
     await page.evaluate(() => window.__qtsGetJdReview.openReview());
     assert.equal(await docked(), true, 'shown again on request');
-    assert.equal((await fields()).company[0], 'Edited Company', 'edits are kept while the tab is open');
+    assert.equal((await fields()).description[0], 'Edited JD', 'edits are kept while the tab is open');
 
     // Re-read asks the worker; ‹ QTS only puts the draft aside.
     await draft({ runId: 'reread-run' });

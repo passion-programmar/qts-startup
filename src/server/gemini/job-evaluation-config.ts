@@ -8,8 +8,9 @@ export const geminiJobEvaluationResponseSchema = {
     job: {
       type: "OBJECT",
       properties: {
-        title: { type: "STRING" },
-        company: { type: "STRING" },
+        // QTS saves the job under these, so they are read from the JD, not from anywhere else.
+        title: { type: "STRING", description: "The job title, as written in the job description" },
+        company: { type: "STRING", description: "The hiring company's name, as written in the job description" },
         location: { type: "STRING", description: "City, region and country as written in the posting" },
         employmentType: { type: "STRING" },
         workplaceType: { type: "STRING" },

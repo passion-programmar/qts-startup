@@ -28,9 +28,9 @@ import {
 } from "@/server/jobs/get-jd-jobs";
 import { getGetJdMatchingMode } from "@/server/jobs/get-jd-mode";
 import { getGetJdFailureMessage } from "@/server/gemini/get-jd-failure-message";
-import { normalizeCompanyName } from "@/server/jobs/job-key";
+import { computeTitleCompanyKey, normalizeCompanyName } from "@/server/jobs/job-key";
 import { getPrecheckTickets } from "@/server/get-jd/precheck-ticket";
-import type { GetJdIdentity } from "@/server/get-jd/global-precheck";
+import { type GetJdIdentity, globalJobPrecheckQuery } from "@/server/get-jd/global-precheck";
 import type { GetJdDuplicate } from "@/server/jobs/get-jd-account-states";
 import { sourceSiteUrl } from "@/server/jobs/source-site";
 
@@ -39,7 +39,6 @@ import { sourceSiteUrl } from "@/server/jobs/source-site";
 export const maxDuration = 60;
 
 const maxPageUrlLength = 2048;
-const maxPageTitleLength = 500;
 const maxPageTextLength = 100_000;
 const maxManagerAccounts = 100;
 // Each job's description is cut to this many characters before it goes to the AI.
@@ -134,12 +133,13 @@ function aiFailureResponse(error: AiJobError): NextResponse {
 }
 
 async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, identity: GetJdIdentity, deadlineAt: number): Promise<NextResponse> {
+  // Only the URL and the JD are used: Gemini reads the title and company from the JD. (Older
+  // extensions still send a pageTitle; it is ignored.)
   const pageUrl = readString(body, "pageUrl", maxPageUrlLength);
-  const pageTitle = readString(body, "pageTitle", maxPageTitleLength);
   const pageText = readString(body, "originalDescription", maxPageTextLength);
-  if (!pageUrl || !isHttpUrl(pageUrl) || !pageTitle || !pageText) {
+  if (!pageUrl || !isHttpUrl(pageUrl) || !pageText) {
     return jsonResponse(
-      { success: false, message: "A valid job URL, title, and complete original job description (at most 100,000 characters) are required. Nothing was truncated or saved." },
+      { success: false, message: "A valid job URL and the complete original job description (at most 100,000 characters) are required. Nothing was truncated or saved." },
       400,
     );
   }
@@ -190,10 +190,9 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       candidateIndex: index,
       employmentTimeline: candidate.employmentTimeline,
     }));
+    // Gemini gets the JD and the candidates only; the URL stays on the server.
     const promptText = buildGetJdEvaluationPrompt({
       savedPrompt: prompt.promptTemplate,
-      pageUrl,
-      pageTitle,
       pageText,
       candidates: candidateContext,
     });
@@ -229,11 +228,26 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
     }
     // Where the Manager found the job: the page it was opened from, its link's source tag, or its own site.
     const sourceSite = sourceSiteUrl({ openerUrl: readString(body, "openerUrl", maxPageUrlLength) || null, jobUrl: pageUrl });
-    // No post-Gemini duplicate precheck. Save-time locks/indexes remain in insertGetJdJob.
     const duplicateDetails = new Map<string, GetJdDuplicate>();
     classification.job.description = pageText;
-    classification.job.title = identity.jobTitle || classification.job.title;
-    classification.job.company = identity.company || classification.job.company;
+    // The title and company are Gemini's, read from the JD; what the extension sent is only a
+    // fallback when Gemini left one empty.
+    classification.job.title = classification.job.title.trim() || identity.jobTitle;
+    classification.job.company = classification.job.company.trim() || identity.company;
+    // Before Gemini, Jobs/Bids could only be checked by the URL (and whatever title/company the
+    // extension had). Now that Gemini named the job, the same job saved from another link is
+    // skipped too. Save-time locks/indexes remain in insertGetJdJob.
+    if (await isAlreadyInQts(pageUrl, classification.job.title, classification.job.company, identity)) {
+      return jsonResponse({
+        success: true,
+        classification,
+        profiles: [],
+        alreadyInQts: true,
+        // Extensions up to 1.56.0 show a skipped job (status "Already in QTS", tab closes) for this flag.
+        expiredApplication: true,
+        message: "This job already exists in QTS Jobs or Bids. Skipped.",
+      });
+    }
     const matchingProfileIds = new Set(classification.matchingProfileIds);
     const autoSavedProfileIds = new Set<string>();
     const autoSavedJobs = new Map<string, string>();
@@ -339,6 +353,24 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       },
       status,
     );
+  }
+}
+
+/**
+ * Whether Jobs or Bids already have this job under Gemini's title and company. No database trip
+ * when they add nothing to the check made before Gemini (same title and company, or one empty: then
+ * only the URL counts, and it was checked). A failed lookup doesn't stop the save, whose own
+ * checks still keep a candidate from getting the same job twice.
+ */
+async function isAlreadyInQts(jobUrl: string, jobTitle: string, company: string, checked: GetJdIdentity): Promise<boolean> {
+  const key = computeTitleCompanyKey(jobTitle, company);
+  if (!key || key === computeTitleCompanyKey(checked.jobTitle, checked.company)) return false;
+  try {
+    const result = await db.execute<{ skip: boolean }>(globalJobPrecheckQuery({ jobUrl, jobTitle, company }));
+    return result.rows[0]?.skip === true;
+  } catch (error) {
+    logGetJdFailure(`get_jd_after_check_${getGetJdFailureCode(error)}`);
+    return false;
   }
 }
 

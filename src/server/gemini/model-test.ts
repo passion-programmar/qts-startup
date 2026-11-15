@@ -96,8 +96,6 @@ export function isModelTestAllowed(env: Record<string, string | undefined>): boo
 export function buildModelTestPrompt(testText: string): string {
   return buildGetJdEvaluationPrompt({
     savedPrompt: testInstructions,
-    pageUrl: "https://example.test/jobs/model-test",
-    pageTitle: "Model test job post",
     pageText: testText,
     candidates: [{
       candidateIndex: 0,
