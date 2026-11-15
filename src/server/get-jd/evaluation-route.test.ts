@@ -46,6 +46,9 @@ test("Gemini matching keeps the saved prompt, sends the career timeline, and sav
   assert.match(fixture.prompts.at(-1) || "", /KEEP MANAGER MATCHING INSTRUCTIONS/);
   assert.match(fixture.prompts.at(-1) || "", /"employmentTimeline":\[\{"jobTitle":"Python Backend Engineer","companyName":"Acme","location":null,"start":"2021-03","end":null,"isCurrent":true,"description":"Built APIs\."\}\],"education":\[\{"institution":"State University","degree":"BSc","fieldOfStudy":"Computer Science","start":"2015-09","end":"2019-06","isCurrent":false\}\]/);
   assert.doesNotMatch(fixture.prompts.at(-1) || "", /"jdMatching"/);
+  // Candidates are sent by index only, never by name.
+  assert.match(fixture.prompts.at(-1) || "", /"candidates":\[\{"candidateIndex":0,"employmentTimeline"/);
+  assert.doesNotMatch(fixture.prompts.at(-1) || "", /candidateName|Test Candidate/);
   assert.match(fixture.prompts.at(-1) || "", /São Paulo/);
 });
 test("the page check is keyed on the checked title, company and JD, so an edited job is checked again", async () => {

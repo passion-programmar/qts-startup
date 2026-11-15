@@ -11,7 +11,6 @@ test("passes the saved evaluation prompt and input data without API-side evaluat
     pageText: "Remote role with platform responsibilities.",
     candidates: [{
       candidateIndex: 0,
-      candidateName: "Candidate A",
       employmentTimeline: [{ jobTitle: "Platform Engineer", start: "2021-03", end: null, isCurrent: true }],
     }],
   });

@@ -1,8 +1,9 @@
 import type { CareerTimelineEntry, EducationEntry } from "@/server/gemini/candidates-with-career-timeline";
 
+// No name: the AI answers with candidate indexes and must not match on names, so a name would only
+// send personal data it doesn't need.
 type GetJdCandidatePromptData = {
   candidateIndex: number;
-  candidateName: string;
   employmentTimeline: CareerTimelineEntry[];
   education?: EducationEntry[];
 };

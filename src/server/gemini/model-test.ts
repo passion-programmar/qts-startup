@@ -101,7 +101,6 @@ export function buildModelTestPrompt(testText: string): string {
     pageText: testText,
     candidates: [{
       candidateIndex: 0,
-      candidateName: "Test Candidate",
       employmentTimeline: [{ jobTitle: "Backend Engineer", start: "2021-03", end: null, isCurrent: true }],
     }],
   });

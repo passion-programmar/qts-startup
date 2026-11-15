@@ -189,7 +189,6 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
 
     const candidateContext = candidatesForEvaluation.map((candidate, index) => ({
       candidateIndex: index,
-      candidateName: candidate.name,
       employmentTimeline: candidate.employmentTimeline,
       education: candidate.education,
     }));
