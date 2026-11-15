@@ -41,6 +41,11 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
   row-actions, staff-forms and form-fields; the list asks for 18 columns instead of ~50; the edit
   page loads profile and history together; the page uses the shared pieces. /users 223.4 → 213.4
   KB, /users/new and edit 220.9 → 214.9 KB. The shared table (paginated-table) is unchanged.
+  Committed as ed7e7ae.
+- Step 4 built 2026-11-15 (Jobs): the Edit window (calendar, Apply history) moved to
+  record-edit-dialog.tsx and downloads only when Edit is first clicked (11.9 KB later); the shared
+  ConfirmButton uses the browser's <dialog> (all 11 users of it); the page uses the shared header.
+  /jobs 228.7 → 219.3 KB, /bids 224.3 → 215.9 KB.
 
 ## Steps
 

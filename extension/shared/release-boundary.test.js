@@ -640,10 +640,10 @@ test('manager job rows support safe manual edits and deletion', () => {
     path.join(extensionRoot, '..', 'src', 'app', 'record-action-state.ts'),
     'utf8',
   );
-  const forms = fs.readFileSync(
-    path.join(extensionRoot, '..', 'src', 'app', 'components', 'record-forms.tsx'),
-    'utf8',
-  );
+  // The row buttons, and the edit window that loads when Edit is clicked.
+  const forms = ['record-forms.tsx', 'record-edit-dialog.tsx']
+    .map((file) => fs.readFileSync(path.join(extensionRoot, '..', 'src', 'app', 'components', file), 'utf8'))
+    .join('\n');
 
   assert.ok(jobsPage.includes('<JobEditAction'));
   assert.ok(jobsPage.includes('<JobDeleteAction'));
@@ -665,7 +665,7 @@ test('manager job rows support safe manual edits and deletion', () => {
   assert.ok(actions.includes('revalidatePath("/jobs")'));
   assert.ok(actions.includes('Job deleted. Refresh the page if it is still visible.'));
   assert.ok(forms.includes('aria-label={`Edit ${record.title}`}'));
-  assert.ok(forms.includes('aria-label={`Delete ${record.title}`}'));
+  assert.ok(forms.includes('ariaLabel={`Delete ${record.title}`}'));
   assert.ok(forms.includes('role="alertdialog"'));
   assert.ok(forms.includes('This action cannot be undone.'));
   assert.equal(forms.includes('window.confirm('), false);

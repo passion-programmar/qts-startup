@@ -1,8 +1,8 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { PageHeader } from "@/app/components/page-header";
 import { PaginatedTable } from "@/app/components/paginated-table";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { Badge } from "@/app/ui/badge";
+import { PageHeader } from "@/app/ui/page-header";
 import {
   JobDeleteAction,
   JobEditAction,
@@ -172,13 +172,12 @@ export default async function JobsPage({
   const filtered = query.tab !== "all" || query.candidate !== "all" || query.date !== "all" || query.q !== "";
 
   return (
-    <WorkspaceShell activeHref="/jobs" user={currentUser}>
       <main className="py-1">
         <PageHeader
           actions={
             <div className="flex flex-wrap items-center justify-end gap-2">
               <StopAllButtons />
-              <span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">{list.counts.all} saved</span>
+              <Badge className="px-3 py-1 text-xs">{list.counts.all} saved</Badge>
             </div>
           }
           description="Jobs saved for your candidate accounts. Jobs already applied to are on the Bids page."
@@ -285,6 +284,5 @@ export default async function JobsPage({
           })}
         />
       </main>
-    </WorkspaceShell>
   );
 }
