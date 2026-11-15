@@ -1,10 +1,12 @@
 import type { CareerTimelineEntry } from "@/server/gemini/candidates-with-career-timeline";
 
-// Only the index and the work experience. No name: the AI answers with candidate indexes and must
-// not match on names. No education: matching is on work experience. Both would only make the
-// request bigger and send personal data the AI doesn't need.
+// The index, the country (for remote eligibility; null when the profile has none) and the work
+// experience. No name: the AI answers with candidate indexes and must not match on names. No
+// education: matching is on work experience. Both would only make the request bigger and send
+// personal data the AI doesn't need.
 type GetJdCandidatePromptData = {
   candidateIndex: number;
+  country: string | null;
   employmentTimeline: CareerTimelineEntry[];
 };
 

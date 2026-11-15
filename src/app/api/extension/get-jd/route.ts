@@ -53,6 +53,8 @@ type CandidateProfileForEvaluation = {
   name: string;
   category: string | null;
   // The profile's experience, newest first: title, company, place, months and a short description.
+  // The candidate's country from the profile (null when not filled in), for remote eligibility.
+  country: string | null;
   // Education is not sent: matching is on work experience only.
   employmentTimeline: CareerTimelineEntry[];
   // The company of the candidate's most recent experience; a job there is never saved for them.
@@ -188,6 +190,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
 
     const candidateContext = candidatesForEvaluation.map((candidate, index) => ({
       candidateIndex: index,
+      country: candidate.country,
       employmentTimeline: candidate.employmentTimeline,
     }));
     // Gemini gets the JD and the candidates only; the URL stays on the server.
@@ -386,6 +389,7 @@ async function loadManagerCandidateProfiles(
       firstName: profiles.firstName,
       lastName: profiles.lastName,
       category: profiles.managerCategory,
+      country: sql<string | null>`nullif(btrim(${profiles.country}), '')`,
       employmentTimeline: sql<CareerTimelineEntry[]>`coalesce((
         select json_agg(json_build_object(
             'jobTitle', btrim(e.job_title),
@@ -427,6 +431,7 @@ async function loadManagerCandidateProfiles(
       name: ([row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate")
         .slice(0, 300),
       category: row.category || null,
+      country: row.country,
       employmentTimeline: row.employmentTimeline,
       currentEmployer: row.currentEmployer,
     })),

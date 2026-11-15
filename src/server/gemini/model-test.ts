@@ -99,6 +99,7 @@ export function buildModelTestPrompt(testText: string): string {
     pageText: testText,
     candidates: [{
       candidateIndex: 0,
+      country: "Romania",
       employmentTimeline: [{ jobTitle: "Backend Engineer", start: "2021-03", end: null, isCurrent: true }],
     }],
   });
