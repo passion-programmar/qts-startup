@@ -18,7 +18,7 @@ import { AiJobError, aiRequestBudgetMs } from "@/server/gemini/ai-job";
 import { runAiRequest } from "@/server/gemini/ai-request";
 import { geminiJobEvaluationGenerationConfig, groqJobEvaluationJsonHint } from "@/server/gemini/job-evaluation-config";
 import { type CareerTimelineEntry, candidatesWithCareerTimeline, careerTimelineSql } from "@/server/gemini/candidates-with-career-timeline";
-import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
+import { buildGetJdEvaluationPrompt, getJdPromptUsesSlots } from "@/server/gemini/build-get-jd-evaluation-prompt";
 import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-indexes";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
 import {
@@ -192,9 +192,14 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       employmentTimeline: candidate.employmentTimeline,
     }));
     // Gemini gets the JD and the candidates only; the URL stays on the server.
+    // A prompt with {{slots}} is the whole request: it gets the JD, the title and company the
+    // extension read (from the signed precheck, i.e. what the extension sent) and the candidates.
+    const promptUsesSlots = getJdPromptUsesSlots(prompt.promptTemplate);
     const promptText = buildGetJdEvaluationPrompt({
       savedPrompt: prompt.promptTemplate,
       pageText,
+      extensionJobTitle: identity.jobTitle,
+      extensionCompany: identity.company,
       candidates: candidateContext,
     });
 
@@ -231,10 +236,11 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
     const sourceSite = sourceSiteUrl({ openerUrl: readString(body, "openerUrl", maxPageUrlLength) || null, jobUrl: pageUrl });
     const duplicateDetails = new Map<string, GetJdDuplicate>();
     classification.job.description = pageText;
-    // The title and company are Gemini's when it found them in the JD (the extension can read a
-    // page wrongly); when Gemini left one empty, the one the extension read from the page is saved.
-    classification.job.title = classification.job.title.trim() || identity.jobTitle;
-    classification.job.company = classification.job.company.trim() || identity.company;
+    // The title and company saved are Gemini's. A prompt with slots got the extension's values and
+    // decided itself (JD first, else the extension's if real, else ""), so its answer is saved as
+    // is. An older prompt never saw them, so an empty one falls back to the extension's here.
+    classification.job.title = classification.job.title.trim() || (promptUsesSlots ? "" : identity.jobTitle);
+    classification.job.company = classification.job.company.trim() || (promptUsesSlots ? "" : identity.company);
     // Before Gemini, Jobs/Bids could only be checked by the URL (and whatever title/company the
     // extension had). Now that Gemini named the job, the same job saved from another link is
     // skipped too. Save-time locks/indexes remain in insertGetJdJob.

@@ -5,14 +5,14 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 
 const original = "Build Python services using FastAPI.\nPreserve PostgreSQL, requirements, benefits and Unicode: São Paulo.";
-const fixture: { sent?: unknown; candidateFields?: string[]; duplicate?: boolean; afterChecks: Array<Record<string, string>>; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { afterChecks: [], calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
+const fixture: { promptTemplate?: string; sent?: unknown; candidateFields?: string[]; duplicate?: boolean; afterChecks: Array<Record<string, string>>; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { afterChecks: [], calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
 (globalThis as Record<string, unknown>).__qtsEvaluationFixture = fixture;
 let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/extension-auth": `export const getExtensionManager=async()=>({id:'local-manager'});`,
-    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,country:'Romania',employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',start:'2021-03',isCurrent:true},{jobTitle:'Python Developer',companyName:'Fabrikam',start:'2018-01',end:'2021-02'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}].map((row)=>{globalThis.__qtsEvaluationFixture.candidateFields=Object.keys(fields);return row;});const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:async()=>({rows:[{skip:globalThis.__qtsEvaluationFixture.duplicate===true}]})};`,
+    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:globalThis.__qtsEvaluationFixture.promptTemplate||'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,country:'Romania',employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',start:'2021-03',isCurrent:true},{jobTitle:'Python Developer',companyName:'Fabrikam',start:'2018-01',end:'2021-02'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}].map((row)=>{globalThis.__qtsEvaluationFixture.candidateFields=Object.keys(fields);return row;});const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:async()=>({rows:[{skip:globalThis.__qtsEvaluationFixture.duplicate===true}]})};`,
     "@/server/get-jd/global-precheck": `export const globalJobPrecheckQuery=(identity)=>{globalThis.__qtsEvaluationFixture.afterChecks.push(identity);return 'SQL'};`,
     "@/server/get-jd/precheck-ticket": `export const getPrecheckTickets=()=>({verify:async(token)=>token==='valid'?{jobUrl:'https://example.test/jobs/1',jobTitle:'Engineer',company:'Example'}:null});`,
     "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>{globalThis.__qtsEvaluationFixture.sent=c;return evaluate()};`,
@@ -97,6 +97,21 @@ test("when Gemini leaves the title or company empty, the extension's value is us
   assert.equal(saved.jobTitle, "Engineer");
   assert.equal(saved.company, "Example");
   assert.equal(fixture.afterChecks.length, 0);
+});
+test("a saved prompt with slots gets them filled and nothing added, and Gemini's empty title or company is saved empty", async () => {
+  fixture.promptTemplate = "RULES\nJD: {{job_description}}\nTitle: {{extension_job_title}}\nCompany: {{extension_company}}\nCandidates: {{candidates}}";
+  fixture.saves = []; fixture.prompts = []; fixture.job = { title: "", company: "" };
+  const response = await POST(request()); await response.json();
+  fixture.promptTemplate = undefined; fixture.job = {};
+  assert.equal(response.status, 200);
+  const prompt = fixture.prompts.at(-1) || "";
+  assert.ok(prompt.startsWith("RULES\nJD: Build Python services using FastAPI."));
+  assert.ok(prompt.includes('\nTitle: Engineer\nCompany: Example\nCandidates: [{"candidateIndex":0,"country":"Romania","employmentTimeline":['));
+  assert.doesNotMatch(prompt, /Input data \(JSON\)|Treat job-page text/);
+  // The prompt saw the extension's values and decided: its empty answer is not replaced.
+  const saved = fixture.saves[0] as unknown as { jobTitle: string; company: string };
+  assert.equal(saved.jobTitle, "");
+  assert.equal(saved.company, "");
 });
 test("the page check is keyed on the checked title, company and JD, so an edited job is checked again", async () => {
   fixture.sent = undefined;

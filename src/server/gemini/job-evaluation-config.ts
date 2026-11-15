@@ -1,5 +1,5 @@
-// The answer has no job description: QTS saves the JD it sent, so the AI writing it back would only
-// cost output tokens and time (and long JDs could cut the answer off).
+// Only the answer's shape: the saved prompt says how to fill each field. No job description: QTS
+// saves the JD it sent, so the AI writing it back would only cost output tokens and time.
 export const geminiJobEvaluationResponseSchema = {
   type: "OBJECT",
   properties: {
@@ -8,10 +8,9 @@ export const geminiJobEvaluationResponseSchema = {
     job: {
       type: "OBJECT",
       properties: {
-        // QTS saves the job under these, so they are read from the JD, not from anywhere else.
-        title: { type: "STRING", description: "The job title, as written in the job description" },
-        company: { type: "STRING", description: "The hiring company's name, as written in the job description" },
-        location: { type: "STRING", description: "City, region and country as written in the posting" },
+        title: { type: "STRING" },
+        company: { type: "STRING" },
+        location: { type: "STRING" },
         employmentType: { type: "STRING" },
         workplaceType: { type: "STRING" },
         salary: { type: "STRING" },

@@ -62,6 +62,7 @@ const promptGroups = [
     provider: "gemini",
     purpose: "job_description_evaluation",
     title: "Job-description evaluation",
+    note: "Get JD (Gemini mode). Placeholders: {{job_description}}, {{extension_job_title}}, {{extension_company}}, {{candidates}}. With {{job_description}} in the prompt, QTS fills these and adds nothing else, and saves the title and company Gemini returns as they are. Without it, QTS adds the JD and the candidates at the end. The reply must be the JSON with isJobPage, isRemote, matchingProfileIndexes and job (title, company, location, employmentType, workplaceType, salary, reason).",
   },
   {
     provider: "openai",
