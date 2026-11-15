@@ -75,6 +75,7 @@ export function WorkspaceShellClient({
   const workspaceItems: NavigationItem[] =
     user.role === "manager"
       ? [
+          overviewItem,
           { label: "Jobs", href: "/jobs", icon: BriefcaseBusiness },
           { label: "Bids", href: "/bids", icon: FileCheck2 },
           { label: "Resume", href: "/pdf", icon: FileText },

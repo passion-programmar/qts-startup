@@ -18,7 +18,7 @@ const highlights = [
 
 export default async function LoginPage() {
   const user = await getCurrentUser();
-  if (user) redirect("/");
+  if (user) redirect(user.role === "manager" ? "/jobs" : "/");
 
   return (
     <main className="grid min-h-dvh grid-cols-1 bg-surface lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">

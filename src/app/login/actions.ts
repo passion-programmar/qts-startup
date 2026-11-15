@@ -134,7 +134,8 @@ export async function loginAction(
     throw error;
   }
 
-  redirect("/");
+  // Managers start on Jobs; their Overview is one click away.
+  redirect(user.role === "manager" ? "/jobs" : "/");
 }
 
 function logLoginFailure(stage: string, error: unknown): void {

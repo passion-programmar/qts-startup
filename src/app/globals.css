@@ -53,8 +53,15 @@
  * dark text becomes light), pale tints become translucent glows, and 700-900 text shades
  * become light. Solid 500-600 accents keep their color.
  */
+/* Chart series colours (Overview), checked for colour-blind separation and contrast on the card. */
+:root {
+  --chart-bids: #4f46e5;
+  --chart-interviews: #0d9488;
+}
+
 :root.dark {
   color-scheme: dark;
+  --chart-bids: #6366f1;
   /* Deep navy. Cards sit a step above the page, edges are clear, and text is bright without glare. */
   --color-surface: #0b1120;
   --color-white: #131d33;

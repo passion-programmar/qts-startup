@@ -1,13 +1,14 @@
 import { BriefcaseBusiness, History, Tags, Users } from "lucide-react";
 import { sql } from "drizzle-orm";
-import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
+import { ManagerOverview } from "@/app/components/manager-overview";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { Badge } from "@/app/ui/badge";
 import { Card, CardHeader } from "@/app/ui/card";
 import { PageHeader } from "@/app/ui/page-header";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
+import { parseAnalysisView } from "@/server/analysis/analysis-values";
 
 export const instant = false;
 
@@ -78,10 +79,17 @@ function StatTile({ label, value, icon }: { label: string; value: number; icon: 
   );
 }
 
-// Super Admin and Admin start here; a Manager goes straight to Jobs.
-export default async function Home() {
+// Super Admin and Admin start here. A Manager signs in to Jobs; their Overview here shows bids and
+// interviews over time (this week day by day; ?back=N earlier weeks; ?range=month|year; ?tz=cet|ro).
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const currentUser = await requireUser();
-  if (currentUser.role === "manager") redirect("/jobs");
+  if (currentUser.role === "manager") {
+    return <ManagerOverview user={currentUser} view={parseAnalysisView(await searchParams)} />;
+  }
   const canViewBlocked = currentUser.role === "super_admin";
 
   // The three reads don't depend on each other, so they run together (one wait, not three).
