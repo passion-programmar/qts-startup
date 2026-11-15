@@ -4809,19 +4809,26 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       runId = typeof savedRun?.runId === 'string' && savedRun.runId
         ? savedRun.runId
         : crypto.randomUUID();
-      await persistGenerationQueueRun(runId);
+      // Every worker wake-up comes through here. The run is saved only once Generation is on, just
+      // before its first claim, so a wake-up with Generation off writes nothing: each write
+      // reaches every open tab's storage listeners.
+      let runSaved = false;
       const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
       if (!token) {
         const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (current[EXTENSION_STATUS_KEY] === 'generation') {
           await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
         }
-        await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
+        if (savedRun) await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
         return;
       }
       for (;;) {
         const storedStatus = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
         if (storedStatus[EXTENSION_STATUS_KEY] !== 'generation') return;
+        if (!runSaved) {
+          await persistGenerationQueueRun(runId);
+          runSaved = true;
+        }
         const scope = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
         const claim = await workerApiRequest(
           'POST',
@@ -5045,9 +5052,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const current = await chrome.storage.local.get([
           EXTENSION_STATUS_KEY,
           ACTIVE_GENERATION_JOB_KEY,
+          GENERATION_QUEUE_RUN_KEY,
         ]);
         await finishWorkCancellation();
-        if (current[EXTENSION_STATUS_KEY] !== 'generation') {
+        if (current[EXTENSION_STATUS_KEY] !== 'generation' && current[GENERATION_QUEUE_RUN_KEY]) {
           await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
         }
       } catch (error) {

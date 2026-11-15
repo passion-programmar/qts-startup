@@ -65,9 +65,12 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
    - Dropped: the highlighter skipping the job-page check when there are no highlight rules. It
      fetches new shared rules only from job pages, so skipping the check would stop new rules from
      arriving; after step 2 a page is read once anyway.
-   - To do: the worker writes the Generation queue entry only when Generation needs it.
-   - Half done (450dea5): the unused logo.png (1.18 MB) is removed; wys-launcher.png is still listed
-     in the manifest.
+   - Done (part 2): every worker wake-up wrote and removed qtsGenerationQueueRun even with
+     Generation off, two storage changes sent to every open tab's listeners. The run is now saved
+     just before Generation's first claim; a wake-up with nothing running writes nothing
+     (extension/background/worker-wake-writes.e2e.test.js).
+   - Done: both unused images are gone, logo.png (450dea5) and wys-launcher.png (1.1 MB, part 2,
+     no longer listed in the manifest): 2.3 MB off the package.
 2. Done: one job-page reading per page.
    - After a check the page watches itself until its first change (15 s at most). A retry asks the
      page "changed since?" and reuses the answer when not, so the result is the same as reading it

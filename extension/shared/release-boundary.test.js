@@ -34,10 +34,13 @@ test('the page launcher is the only user entry point', () => {
   // The toolbar icon only forwards to the page launcher; it never opens a popup of its own.
   assert.ok(serviceWorker.includes('chrome.action.onClicked.addListener'));
   assert.ok(serviceWorker.includes("type: 'QTS_TOOLBAR_ICON_CLICKED'"));
+  // The launcher shows the QTS logo from the extension (chrome.runtime.getURL in page-launcher.js).
   assert.ok(manifest.web_accessible_resources.some((entry) => (
     entry.resources || []
-  ).includes('assets/wys-launcher.png')));
-  assert.ok(fs.existsSync(path.join(extensionRoot, 'assets', 'wys-launcher.png')));
+  ).includes('assets/account-logo.png')));
+  assert.ok(fs.existsSync(path.join(extensionRoot, 'assets', 'account-logo.png')));
+  // The old launcher image (1.1 MB) is used nowhere, so it is not shipped.
+  assert.equal(fs.existsSync(path.join(extensionRoot, 'assets', 'wys-launcher.png')), false);
   const launcher = fs.readFileSync(
     path.join(extensionRoot, 'content', 'page-launcher.js'),
     'utf8',
