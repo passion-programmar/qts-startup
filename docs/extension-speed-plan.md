@@ -32,11 +32,13 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
 
 1. On every page while signed in, the text highlighter asks the worker "is this a job page?" even
    when there are no highlight rules. The worker answers by scanning the page up to 4 times over
-   3 seconds (each scan reads the whole page text). A link change on LinkedIn/Indeed restarts it.
-2. On every page, the QTS-site bridge wakes the worker just to ask "is this the QTS site?".
-3. On every finished job page, an old capture path (for the old account Auto Apply, which is off)
-   scans the page again, injects 7 extractor files and a page watcher, and rewrites two storage maps
-   that only the unreachable popup reads.
+   about 10 seconds (each scan reads the whole page text). A link change on LinkedIn/Indeed
+   restarts it. Get JD in Manual mode runs the same 4 scans again on the same page.
+2. On every page, the QTS-site bridge asks the worker "is this the QTS site?". (This alone does not
+   wake the worker on every page: the launcher's own question does that, see 6.)
+3. On every finished page, an old capture path (for the old account Auto Apply, which is off)
+   scans the page again; on a job page it also injects 6 extractor files and a page watcher, and
+   rewrites two storage maps that only the unreachable popup reads.
 4. Each worker wake-up runs ~1.7 MB of code: the PDF library (only needed to count PDF pages), the
    Apply code (only needed while applying), and old scanner code that cannot run in this release.
    On every wake-up it also writes and removes a Generation entry, which notifies every open tab.
@@ -58,12 +60,39 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
 ## Steps
 
 1. Quick, safe wins
-   - The QTS-site bridge runs only on QTS sites (no wake-up on every other page).
-   - The highlighter skips the job-page check when there are no highlight rules.
-   - The worker writes the Generation queue entry only when Generation needs it.
-   - Remove the two unused images (2.3 MB) from the package.
-2. One job-page check per page: the highlighter, Get JD and capture share one answer, and a page
-   that is clearly not a job page is scanned once, not four times. Remove the unused capture path.
+   - Done (450dea5): the QTS-site bridge asks the worker only on the QTS site. One question less
+     per page; the worker still wakes for the launcher (step 5).
+   - Dropped: the highlighter skipping the job-page check when there are no highlight rules. It
+     fetches new shared rules only from job pages, so skipping the check would stop new rules from
+     arriving; after step 2 a page is read once anyway.
+   - To do: the worker writes the Generation queue entry only when Generation needs it.
+   - Half done (450dea5): the unused logo.png (1.18 MB) is removed; wys-launcher.png is still listed
+     in the manifest.
+2. Done: one job-page reading per page.
+   - After a check the page watches itself until its first change (15 s at most). A retry asks the
+     page "changed since?" and reuses the answer when not, so the result is the same as reading it
+     again. Changes made by QTS's own panels do not count; text inside shadow roots is not read.
+   - The highlighter, Get JD (Manual mode and the Gemini draft) share one reading; two of their
+     tries that start together (within 100 ms) share one too.
+   - The old capture path no longer runs: it needs the old account sign-in, which the server no
+     longer gives (extension login accepts Managers only).
+   - Measured, Chrome 157, median of 7, each page watched for the whole check (11 s), test pages on
+     another site than the QTS server, one Chrome per page (`--full-cycle --with-highlights`):
+
+         signed in, one highlight rule     before                after
+         plain page                        16.9 ms, 4 readings   15.3 ms, 1 reading
+         job page                          17.7 ms, 1 reading    15.5 ms, 1 reading
+         signed out (no readings either way): 15.1 → 14.7 ms plain, 18.0 → 14.3 ms job page
+
+     From the end-to-end test (extension/background/job-page-check.e2e.test.js): Get JD in Manual
+     mode plus the highlighter on a plain page 9 readings → 1; a page where only QTS panels open
+     4 → 1. In a Chrome already in use (Step 0 numbers) a job page was read twice and also got the
+     capture path's extractor files and page watcher; now once, and nothing else is injected.
+   - Measuring: a fresh Chrome may not run the old capture path at once, so "before" job-page
+     numbers in fresh Chromes undercount it. Under headless Puppeteer a second new tab in a Chrome
+     with this extension sometimes never starts loading (also before these steps), so each run has
+     its own Chrome; options `--with-highlights`, `--full-cycle`, `--extension=DIR` and
+     `QTS_MEASURE_RUNS` were added to scripts/measure-extension-speed.cjs.
 3. A lighter wake-up: count PDF pages without the PDF library; remove the old scanner and pipeline
    code that cannot run in this release.
 4. Fewer wake-ups: the heartbeat alarm follows idle pacing instead of skipping ticks; navigation

@@ -572,8 +572,16 @@ async function readGetJdJobText(tabId, url) {
 }
 
 // Runs in the page. Resolves once the DOM has been quiet for quietMs (or after maxMs),
-// so single-page sites have rendered the job before it is read.
-function waitForPageToSettleInPage(quietMs, maxMs) {
+// so single-page sites have rendered the job before it is read. Given the token of the tab's last
+// check, it resolves whether the page is still exactly as that check read it (no settling when
+// quietMs is 0); see collectWatchedJobPageSnapshotInPage.
+function waitForPageToSettleInPage(quietMs, maxMs, token = null) {
+  const settled = () => {
+    if (token == null) return true;
+    const watch = globalThis.__qtsJobPageWatch;
+    return Boolean(watch && watch.token === token && !watch.changed && watch.url === location.href);
+  };
+  if (!quietMs) return settled();
   return new Promise((resolve) => {
     let quietTimer = null;
     let finished = false;
@@ -587,7 +595,7 @@ function waitForPageToSettleInPage(quietMs, maxMs) {
       observer.disconnect();
       clearTimeout(quietTimer);
       clearTimeout(maxTimer);
-      resolve(true);
+      resolve(settled());
     }
     const maxTimer = setTimeout(finish, maxMs);
     observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
@@ -615,6 +623,101 @@ async function evaluateJobPageForManager(tabId, settle = null) {
   return { ...self.__qtsJobPageDetection.evaluateJobPage(snapshot), identity: snapshot.identity };
 }
 
+// After a job-page check the page watches itself until its first change, so the check's retries,
+// and the highlighter's and Get JD's checks of the same page, reuse that answer while nothing has
+// changed: a page that is not a job is read once instead of on every retry. The watch lasts longer
+// than the ~10 s of retries (GET_JD_DETECTION_ATTEMPTS), then stops by itself.
+const JOB_PAGE_WATCH_MS = 15_000;
+const lastJobPageCheckByTab = new Map();
+
+// Runs in the page, after the detection file, with the new check's token. What a check reads only
+// changes with the page's elements, text or attributes, a stylesheet loading or the ready state
+// (text inside shadow roots is not part of innerText); the first such change ends the watch.
+// QTS's own additions change nothing it reads: panel hosts keep their content in shadow roots, the
+// dock styles only pad the page's body, and the data-qts-* flags on <html> only switch those styles.
+function collectWatchedJobPageSnapshotInPage(token, watchMs) {
+  const snapshot = globalThis.__qtsJobPageDetection.inspectJobPage();
+  globalThis.__qtsJobPageWatch?.stop();
+  const watch = { token, url: location.href, changed: false };
+  const OWN = '[data-qts-page-launcher],[data-qts-page-toast],[data-qts-get-jd-ui],[data-qts-apply-review],'
+    + '[data-qts-apply-assist],[data-qts-menu-dock],[data-qts-apply-dock],[data-qts-auto-apply-dock],'
+    + '[data-qts-get-jd-dock-style],[data-qts-tab-mark]';
+  const own = (node) => node?.nodeType === Node.ELEMENT_NODE && node.matches(OWN);
+  const pageChanged = (record) => {
+    if (own(record.target)) return false;
+    if (record.type === 'attributes') {
+      return !(record.target === document.documentElement && record.attributeName?.startsWith('data-qts-'));
+    }
+    if (record.type === 'characterData') return !own(record.target.parentElement);
+    return ![...record.addedNodes, ...record.removedNodes].every(own);
+  };
+  const observer = new MutationObserver((records) => { if (records.some(pageChanged)) outdated(); });
+  const stylesheetLoaded = (event) => {
+    if (event.target?.localName === 'link' && /\bstylesheet\b/i.test(event.target.rel || '')) outdated();
+  };
+  const timer = setTimeout(() => outdated(), watchMs);
+  function outdated() {
+    watch.changed = true;
+    watch.stop();
+  }
+  watch.stop = () => {
+    observer.disconnect();
+    clearTimeout(timer);
+    document.removeEventListener('readystatechange', outdated);
+    document.removeEventListener('load', stylesheetLoaded, true);
+  };
+  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true });
+  document.addEventListener('readystatechange', outdated);
+  document.addEventListener('load', stylesheetLoaded, true);
+  globalThis.__qtsJobPageWatch = watch;
+  return snapshot;
+}
+
+// A check of the tab's page that reuses the tab's last check while the page has not changed since;
+// otherwise (another address, a new document, any change) the page is read again. The highlighter
+// and Get JD retry on the same schedule, so two of their tries often start together: a try joins
+// an identical one (same address and settling) started at most JOB_PAGE_SHARE_MS before.
+const JOB_PAGE_SHARE_MS = 100;
+const jobPageChecksInFlight = new Map();
+async function evaluateJobPageUnlessUnchanged(tabId, url, settle = null) {
+  const kind = `${settle?.quietMs || 0} ${settle?.maxMs || 0} ${url}`;
+  const running = jobPageChecksInFlight.get(tabId);
+  if (running?.kind === kind && Date.now() - running.startedAt <= JOB_PAGE_SHARE_MS) return running.promise;
+  const promise = checkJobPageUnlessUnchanged(tabId, url, settle);
+  jobPageChecksInFlight.set(tabId, { kind, startedAt: Date.now(), promise });
+  try {
+    return await promise;
+  } finally {
+    if (jobPageChecksInFlight.get(tabId)?.promise === promise) jobPageChecksInFlight.delete(tabId);
+  }
+}
+
+async function checkJobPageUnlessUnchanged(tabId, url, settle) {
+  const target = { tabId, frameIds: [0] };
+  const last = lastJobPageCheckByTab.get(tabId);
+  if (last?.url === url) {
+    const [probe] = await chrome.scripting.executeScript({
+      target, func: waitForPageToSettleInPage, args: [settle?.quietMs || 0, settle?.maxMs || 0, last.token],
+    });
+    if (probe?.result === true) return last.evaluation;
+  } else if (settle?.quietMs) {
+    await chrome.scripting.executeScript({ target, func: waitForPageToSettleInPage, args: [settle.quietMs, settle.maxMs] });
+  }
+  const token = crypto.randomUUID();
+  await chrome.scripting.executeScript({ target, files: ['shared/job-page-detection.js'] });
+  const [result] = await chrome.scripting.executeScript({
+    target, func: collectWatchedJobPageSnapshotInPage, args: [token, JOB_PAGE_WATCH_MS],
+  });
+  const snapshot = result?.result || null;
+  if (!snapshot) {
+    lastJobPageCheckByTab.delete(tabId);
+    return null;
+  }
+  const evaluation = { ...self.__qtsJobPageDetection.evaluateJobPage(snapshot), identity: snapshot.identity };
+  lastJobPageCheckByTab.set(tabId, { url: snapshot.url, token, evaluation });
+  return evaluation;
+}
+
 // Text highlights show only on job pages: Get JD's check (no Gemini), once per tab and address,
 // retried as Get JD does while the page is still loading.
 const textHighlightJobPages = new Map();
@@ -627,7 +730,7 @@ function isTextHighlightJobPage(tabId, url) {
       for (const attempt of GET_JD_DETECTION_ATTEMPTS) {
         if (attempt.delayMs) await sleep(attempt.delayMs);
         if ((await getTab(tabId))?.url !== url) return false;
-        const evaluation = await evaluateJobPageForManager(tabId, attempt).catch(() => null);
+        const evaluation = await evaluateJobPageUnlessUnchanged(tabId, url, attempt).catch(() => null);
         if (evaluation?.isJobPage) return true;
         if (!evaluation || evaluation.reason === 'closed') return false;
       }
@@ -638,6 +741,7 @@ function isTextHighlightJobPage(tabId, url) {
 }
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const key of textHighlightJobPages.keys()) if (key.startsWith(`${tabId} `)) textHighlightJobPages.delete(key);
+  lastJobPageCheckByTab.delete(tabId);
 });
 
 async function isPageDetectedAsJobForManager(tabId) {
@@ -649,7 +753,8 @@ async function isPageDetectedAsJobForManager(tabId) {
 }
 
 // First inspect immediately. Only an incomplete eligible load gets short-lived settling/retries
-// near 1, 3 and 6 seconds; no observer remains after the bounded cycle.
+// near 1, 3 and 6 seconds. A retry reads the page again only when it changed since the last check;
+// the page's change watch stops at its first change or after JOB_PAGE_WATCH_MS.
 const GET_JD_DETECTION_ATTEMPTS = [
   { delayMs: 0 },
   { delayMs: 1000, quietMs: 300, maxMs: 1200 },
@@ -669,7 +774,7 @@ async function detectGetJdJobPage(tabId, url, pageKey) {
     if (attempt.delayMs) await sleep(attempt.delayMs);
     if (!(await stillCurrent())) return { status: 'cancelled' };
     try {
-      evaluation = await evaluateJobPageForManager(tabId, attempt);
+      evaluation = await evaluateJobPageUnlessUnchanged(tabId, url, attempt);
     } catch {
       return { status: 'cancelled' };
     }
@@ -1808,9 +1913,10 @@ async function isGetJdSkipSite(url) {
 // from the page (its job data or heading). Every field can be changed in the panel.
 // listPage: a search page showing one selected job (LinkedIn, Indeed), which must stay open.
 async function readGetJdDraftJob(tabId, url, description) {
-  const snapshot = await readJobPageSnapshot(tabId).catch(() => null);
-  const found = snapshot?.identity || {};
-  const listPage = snapshot ? self.__qtsJobPageDetection.evaluateJobPage(snapshot).listPage === true : false;
+  // The tab's last job-page check (often the highlighter's) while the page has not changed since.
+  const evaluation = await evaluateJobPageUnlessUnchanged(tabId, url).catch(() => null);
+  const found = evaluation?.identity || {};
+  const listPage = evaluation?.listPage === true;
   return {
     draftJob: {
       jobUrl: url,
@@ -5472,9 +5578,9 @@ function disarmJobPageActivity() {
 async function autoDetectJob(
   tabId,
   url,
-  { forcePipeline = false, captureOnly = false } = {}
+  { forcePipeline = false } = {}
 ) {
-  if (!forcePipeline && !captureOnly && !(await isAutoApplyArmed())) return;
+  if (!forcePipeline && !(await isAutoApplyArmed())) return;
 
   if (!isExtractablePageUrl(url) || isChatGptHostUrl(url)) return;
   if (await isPageBlockedForManager(url) || !(await isPageDetectedAsJobForManager(tabId))) return;
@@ -5505,11 +5611,9 @@ async function autoDetectJob(
   detectApplyTemplateOnTab(tabId, pageUrl).catch(() => {});
 
   notifyCapturePopup(tabId);
-  if (!captureOnly) {
-    maybeStartAutoApplicationPipeline(tabId, pageUrl, entry, {
-      force: Boolean(forcePipeline),
-    }).catch(() => {});
-  }
+  maybeStartAutoApplicationPipeline(tabId, pageUrl, entry, {
+    force: Boolean(forcePipeline),
+  }).catch(() => {});
 }
 
 async function startAutoApplyOnJobTab(tabId) {
@@ -5617,18 +5721,18 @@ async function runDetectForActiveTab(tabId) {
   await autoDetectJob(tabId, tab.url).catch(() => {});
 }
 
+// Only the old account Auto Apply uses a captured job, and only its popup shows one (it cannot open in
+// this release). A Manager never arms it, so a loaded page is not read, injected into or saved here.
 function maybeTrackAutoOpen(tabId, url) {
   if (!isJobPageCandidateUrl(url)) return;
   (async () => {
+    if (!(await isAutoApplyArmed())) return;
     if (await isWorkflowTab(tabId)) return;
     const autoKey = `${tabId}:${url}`;
     if (lastAutoDetectKeyByTab.get(tabId) === autoKey) return;
     lastAutoDetectKeyByTab.set(tabId, autoKey);
-    const autoApplyArmed = await isAutoApplyArmed();
-    if (autoApplyArmed) maybePrewarmCustomGptOnJobPage(tabId, url);
-    await autoDetectJob(tabId, url, {
-      captureOnly: !autoApplyArmed,
-    });
+    maybePrewarmCustomGptOnJobPage(tabId, url);
+    await autoDetectJob(tabId, url);
   })().catch((error) => {
     console.warn('[QTS_Startup] Could not inspect the loaded job page:', error);
   });

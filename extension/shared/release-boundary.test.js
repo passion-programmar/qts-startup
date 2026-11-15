@@ -1049,3 +1049,16 @@ test('Apply set to Off in Settings hides the Auto Apply button, except while a r
   const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
   assert.ok(worker.includes('canUseApply: result.success === true && result.features?.canUseApply === true'));
 });
+
+test('a loaded page is read, injected into or saved for the old capture path only while the old account Auto Apply is armed', () => {
+  const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  const start = worker.indexOf('function maybeTrackAutoOpen(');
+  const track = worker.slice(start, worker.indexOf('\n}\n', start));
+  const armedCheck = track.indexOf('if (!(await isAutoApplyArmed())) return;');
+  assert.ok(armedCheck > 0, 'the armed check comes first');
+  assert.ok(armedCheck < track.indexOf('autoDetectJob('), 'before any reading of the page');
+  // A Manager can never arm it: only the old "account" sign-in could.
+  const pipeline = fs.readFileSync(path.join(extensionRoot, 'shared', 'auto-application-pipeline.js'), 'utf8');
+  assert.ok(pipeline.includes("if (!user || user.role !== 'account') return false;"));
+  assert.equal(worker.includes('captureOnly'), false);
+});
