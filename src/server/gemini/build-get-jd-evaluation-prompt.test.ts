@@ -10,7 +10,10 @@ test("passes the saved evaluation prompt and input data without API-side evaluat
     candidates: [{
       candidateIndex: 0,
       country: "Romania",
-      employmentTimeline: [{ jobTitle: "Platform Engineer", start: "2021-03", end: null, isCurrent: true }],
+      employmentTimeline: [
+        { jobTitle: "Platform Engineer", companyName: "Contoso", start: "2021-03", isCurrent: true },
+        { jobTitle: "DevOps Engineer", companyName: "Fabrikam", start: "2018-01", end: "2021-02" },
+      ],
     }],
   });
 
@@ -23,7 +26,7 @@ test("passes the saved evaluation prompt and input data without API-side evaluat
   assert.ok(!prompt.includes("pageUrl"));
   assert.ok(!prompt.includes("pageTitle"));
   assert.ok(prompt.includes('"candidateIndex":0,"country":"Romania","employmentTimeline":['));
-  assert.ok(prompt.includes('"employmentTimeline":[{"jobTitle":"Platform Engineer","start":"2021-03","end":null,"isCurrent":true}]'));
+  assert.ok(prompt.includes('"employmentTimeline":[{"jobTitle":"Platform Engineer","companyName":"Contoso","start":"2021-03","isCurrent":true},{"jobTitle":"DevOps Engineer","companyName":"Fabrikam","start":"2018-01","end":"2021-02"}]'));
   assert.ok(!prompt.includes("Set isRemote"));
   assert.ok(!prompt.includes("specific job posting"));
   assert.ok(!prompt.includes("reasonable fit"));

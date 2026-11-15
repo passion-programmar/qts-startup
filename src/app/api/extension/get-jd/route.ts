@@ -17,7 +17,7 @@ import { db } from "@/lib/db";
 import { AiJobError, aiRequestBudgetMs } from "@/server/gemini/ai-job";
 import { runAiRequest } from "@/server/gemini/ai-request";
 import { geminiJobEvaluationGenerationConfig, groqJobEvaluationJsonHint } from "@/server/gemini/job-evaluation-config";
-import { type CareerTimelineEntry, candidatesWithCareerTimeline } from "@/server/gemini/candidates-with-career-timeline";
+import { type CareerTimelineEntry, candidatesWithCareerTimeline, careerTimelineSql } from "@/server/gemini/candidates-with-career-timeline";
 import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
 import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-indexes";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
@@ -41,8 +41,6 @@ export const maxDuration = 60;
 const maxPageUrlLength = 2048;
 const maxPageTextLength = 100_000;
 const maxManagerAccounts = 100;
-// Each job's description is cut to this many characters before it goes to the AI.
-const maxExperienceDescriptionLength = 600;
 const maxGeminiResponseBytes = 1_000_000;
 const invalidPageReason = "The page does not show one clear, active job posting.";
 
@@ -52,7 +50,7 @@ type CandidateProfileForEvaluation = {
   id: string;
   name: string;
   category: string | null;
-  // The profile's experience, newest first: title, company, place, months and a short description.
+  // The profile's experience, current job first: title, company and months (see careerTimelineSql).
   // The candidate's country from the profile (null when not filled in), for remote eligibility.
   country: string | null;
   // Education is not sent: matching is on work experience only.
@@ -390,19 +388,8 @@ async function loadManagerCandidateProfiles(
       lastName: profiles.lastName,
       category: profiles.managerCategory,
       country: sql<string | null>`nullif(btrim(${profiles.country}), '')`,
-      employmentTimeline: sql<CareerTimelineEntry[]>`coalesce((
-        select json_agg(json_build_object(
-            'jobTitle', btrim(e.job_title),
-            'companyName', nullif(btrim(e.company_name), ''),
-            'location', nullif(btrim(e.location), ''),
-            'start', to_char(e.start_date, 'YYYY-MM'),
-            'end', to_char(e.end_date, 'YYYY-MM'),
-            'isCurrent', e.is_current,
-            'description', nullif(left(btrim(e.description), ${maxExperienceDescriptionLength}), '')
-          ) order by e.is_current desc, e.end_date desc nulls first, e.start_date desc nulls last, e.sort_order asc)
-          from experiences e
-         where e.profile_user_id = ${profiles.userId} and btrim(e.job_title) <> ''
-      ), '[]'::json)`,
+      // Title, company and months only: matching compares job titles.
+      employmentTimeline: careerTimelineSql(profiles.userId),
       // The current job first, else the one that ended last.
       currentEmployer: sql<string | null>`(
         select e.company_name from experiences e
