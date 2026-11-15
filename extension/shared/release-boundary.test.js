@@ -832,7 +832,7 @@ test('signing out or switching Managers clears stored Get JD reviews', () => {
     worker.indexOf('chrome.runtime.onInstalled.addListener'),
   );
 
-  assert.ok(authRemovedBranch.includes('chrome.storage.local.remove(GET_JD_RESULTS_KEY)'));
+  assert.ok(authRemovedBranch.includes('chrome.storage.session.remove(GET_JD_RESULTS_KEY)'));
 });
 
 test('the page launcher disable path only touches elements it defines', () => {
@@ -1064,4 +1064,21 @@ test('a loaded page is read, injected into or saved for the old capture path onl
   const pipeline = fs.readFileSync(path.join(extensionRoot, 'shared', 'auto-application-pipeline.js'), 'utf8');
   assert.ok(pipeline.includes("if (!user || user.role !== 'account') return false;"));
   assert.equal(worker.includes('captureOnly'), false);
+});
+
+test('paced alarms follow idle pacing, and navigation events reach the worker only for web pages', () => {
+  const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
+  // Each tick re-paces its own alarm; activity brings all three back to every 30 seconds.
+  for (const call of [
+    'pacePeriodicAlarm(BROWSER_HEARTBEAT_ALARM, busy)',
+    'pacePeriodicAlarm(GENERATION_QUEUE_ALARM, busy)',
+    'pacePeriodicAlarm(self.__qtsApplyRunner.APPLY_QUEUE_ALARM, busy)',
+  ]) assert.ok(worker.includes(call), call);
+  assert.ok(worker.includes("if (area !== 'session' || !changes[self.__qtsIdlePacing.ACTIVITY_KEY]) return;"));
+  // The five listeners that use only http and https pages ask Chrome for just those.
+  assert.ok(worker.includes("const WEB_PAGE_EVENTS = { url: [{ schemes: ['http', 'https'] }] };"));
+  assert.equal(worker.split('}, WEB_PAGE_EVENTS);').length - 1, 5);
+  // New tabs opened from a page start blank, so ownership still hears about every one.
+  const created = worker.slice(worker.indexOf('chrome.webNavigation.onCreatedNavigationTarget.addListener'));
+  assert.equal(created.slice(0, created.indexOf('\n});') + 4).includes('WEB_PAGE_EVENTS'), false);
 });

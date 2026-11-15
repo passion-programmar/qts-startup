@@ -76,7 +76,7 @@ test('a busy AI provider never needs Try again: the job waits and retries by its
     const toggled = await worker.evaluate(async (id) => (await chrome.scripting.executeScript({ target: { tabId: id }, func: () => chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: 'get_jd' }) }))[0].result, controlId);
     assert.equal(toggled.ok, true);
 
-    const result = (id) => worker.evaluate(async (tabId) => (await chrome.storage.local.get('qtsGetJdResults')).qtsGetJdResults?.[tabId], id);
+    const result = (id) => worker.evaluate(async (tabId) => (await chrome.storage.session.get('qtsGetJdResults')).qtsGetJdResults?.[tabId], id);
     // Gemini mode reads the page for the Manager to check; the Manager then sends it to Gemini.
     const open = async (pathname) => {
       const tab = await worker.evaluate(async (url) => chrome.tabs.create({ url, active: true }), base + pathname);

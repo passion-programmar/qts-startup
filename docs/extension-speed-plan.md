@@ -108,9 +108,22 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
      on a wake-up (about 5 ms together) while removing them touches many old code paths. A bigger
      remaining cost is the worker loading ~45 separate files on every wake-up, which belongs with
      splitting the worker into feature files.
-4. Fewer wake-ups: the heartbeat alarm follows idle pacing instead of skipping ticks; navigation
-   listeners only for top frames and only where needed; big per-job maps move to session storage so
-   open tabs are not notified of every change.
+4. Fewer wake-ups and fewer storage broadcasts.
+   - Done: the heartbeat, Generation queue and Apply queue alarms tick as often as their check is
+     due (30 s while active or busy, 1 minute after 2 idle minutes, 2 minutes after 5) instead of
+     every 30 s to skip the check: up to 4 times fewer worker wake-ups while a mode is on with
+     nothing to do. Activity (a mode on, the launcher, a page Get JD reads, work) brings them back
+     to 30 s at once; a running job or review keeps 30 s.
+   - Done: Get JD's results (with each page's JD text, for up to 100 tabs) and the idle pacing
+     moved from local to session storage. Only the worker reads them; every local write was sent,
+     whole map included, to every open tab's page scripts (several times per job, and the pacing on
+     every check and every Get JD page). The old local copies are removed after the update.
+   - Done: the five navigation listeners that use only http and https pages ask Chrome for just
+     those, so blank, data: and blob: frames no longer wake the worker. Chrome cannot filter by
+     frame, so https iframes still do (each listener ignores them).
+   - Tests: worker-wake-writes.e2e (no local writes of these keys on a Get JD page; the old code
+     wrote qtsGetJdResults and qtsIdleActivityAt), idle-pacing (the alarm periods), release-boundary
+     (the wiring).
 5. A lighter launcher: the panel and its styles are built only when first needed; launcher state
    is asked for once; styles are not re-added on every focus change.
 6. Structure: split the worker (7,900 lines) into feature files (Get JD, Generation, launcher,

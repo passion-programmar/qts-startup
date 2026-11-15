@@ -12,7 +12,8 @@ function fixture() {
   stored.history = { ownerKey: notifications.sessionKey(stored), history: [entry] };
   const context = {
     URL, Date, self: { __qtsGetJdNotifications: notifications }, GET_JD_NOTIFICATION_STATE_KEY: 'history', GET_JD_RESULTS_KEY: 'results',
-    chrome: { runtime: { id: 'fixture' }, storage: { local: { get: async () => structuredClone(stored) } },
+    // Get JD's results are kept in session storage, the sign-in in local storage.
+    chrome: { runtime: { id: 'fixture' }, storage: { local: { get: async () => structuredClone(stored) }, session: { get: async () => structuredClone({ results: stored.results }) } },
       windows: { update: async (...args) => calls.push(['window', ...args]) },
       tabs: { update: async (...args) => calls.push(['focus', ...args]), create: async (...args) => calls.push(['create', ...args]) } },
     getTab: async () => ({ id: 4, windowId: 2, url: entry.pageUrl }),

@@ -44,27 +44,34 @@
     return Number.isFinite(lease) && lease > 0 ? Math.max(30 * SECOND, (lease * SECOND) / 4) : 30 * SECOND;
   }
 
-  // ---- This Chrome's activity and last checks, kept in storage so a restarted worker remembers ----
+  // ---- This Chrome's activity and last checks, kept in session storage so a restarted worker
+  // remembers. Only the worker reads them; unlike local storage, session storage is not sent to
+  // every open tab's page scripts on each write (a check every 30 seconds while a mode is on, and
+  // activity on every page Get JD reads). A Chrome restart starts the pacing afresh. ----
+  const area = () => global.chrome.storage.session;
+  const KINDS = ['heartbeat', 'generation', 'apply'];
+  // Where versions before the move kept them; removed once after an update.
+  const LEGACY_LOCAL_KEYS = Object.freeze([ACTIVITY_KEY, ...KINDS.map((kind) => CHECKED_KEY_PREFIX + kind)]);
 
   async function activityAt(now) {
-    const stored = await global.chrome.storage.local.get(ACTIVITY_KEY);
+    const stored = await area().get(ACTIVITY_KEY);
     const at = Number(stored[ACTIVITY_KEY]) || 0;
     if (at) return at;
     // Never seen: idle from now, not since 1970.
-    await global.chrome.storage.local.set({ [ACTIVITY_KEY]: now });
+    await area().set({ [ACTIVITY_KEY]: now });
     return now;
   }
 
   async function noteActivity(now = Date.now()) {
-    await global.chrome.storage.local.set({ [ACTIVITY_KEY]: now });
+    await area().set({ [ACTIVITY_KEY]: now });
   }
 
   /** True when a check of this kind should run now, and records it; each kind is paced on its own. */
   async function claimCheck(kind, busy, now = Date.now()) {
     const key = CHECKED_KEY_PREFIX + kind;
-    const stored = await global.chrome.storage.local.get(key);
+    const stored = await area().get(key);
     if (!isDue({ now, activityAt: await activityAt(now), checkedAt: Number(stored[key]) || 0, busy })) return false;
-    await global.chrome.storage.local.set({ [key]: now });
+    await area().set({ [key]: now });
     return true;
   }
 
@@ -72,7 +79,30 @@
     return shouldTurnOff({ now, activityAt: await activityAt(now), busy });
   }
 
-  const api = { checkEveryMs, isDue, shouldTurnOff, renewEveryMs, noteActivity, claimCheck, idleTooLong, TURN_OFF_AFTER_MS };
+  /** How often a check is due right now: every 30 seconds while busy, otherwise by idle time. */
+  async function checkIntervalMs(busy, now = Date.now()) {
+    if (busy) return STEPS[0].everyMs;
+    return checkEveryMs(Math.max(0, now - await activityAt(now)));
+  }
+
+  /**
+   * A heartbeat or queue alarm ticks as often as its check is due, so an idle Chrome is not woken
+   * every 30 seconds only to skip the check (each wake-up starts the whole worker). Called after
+   * each tick and on activity, which brings it back to every 30 seconds. An alarm that is off (its
+   * mode is off) stays off.
+   */
+  async function pacePeriodicAlarm(name, busy, now = Date.now()) {
+    const alarm = await global.chrome.alarms.get(name);
+    if (!alarm) return;
+    const minutes = (await checkIntervalMs(busy, now)) / MINUTE;
+    if (alarm.periodInMinutes === minutes) return;
+    await global.chrome.alarms.create(name, { delayInMinutes: minutes, periodInMinutes: minutes });
+  }
+
+  const api = {
+    checkEveryMs, isDue, shouldTurnOff, renewEveryMs, noteActivity, claimCheck, idleTooLong, checkIntervalMs, pacePeriodicAlarm,
+    TURN_OFF_AFTER_MS, LEGACY_LOCAL_KEYS, ACTIVITY_KEY,
+  };
   global.__qtsIdlePacing = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

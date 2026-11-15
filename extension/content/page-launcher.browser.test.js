@@ -68,7 +68,7 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     const tabId=page=>worker.evaluate(async url=>(await chrome.tabs.query({})).find(t=>t.url===url)?.id,page.url());
     const ask=async(page,msg)=>worker.evaluate(async(id,msg)=>(await chrome.scripting.executeScript({target:{tabId:id},func:m=>chrome.runtime.sendMessage(m),args:[msg]}))[0].result,await tabId(page),msg);
     const prechecks=()=>requests.filter(r=>r.path==='/api/extension/get-jd/check'&&r.body.scope==='global');const manualChecks=()=>requests.filter(r=>r.path==='/api/extension/get-jd/check'&&r.body.scope==='manual');const gemini=()=>requests.filter(r=>r.path==='/api/extension/get-jd');
-    const result=async id=>worker.evaluate(async id=>(await chrome.storage.local.get('qtsGetJdResults')).qtsGetJdResults?.[id],id);
+    const result=async id=>worker.evaluate(async id=>(await chrome.storage.session.get('qtsGetJdResults')).qtsGetJdResults?.[id],id);
     // The extension's own start-up loads (blocked URLs, highlights) finish first; only then is activation measured.
     const uiCount=()=>requests.filter(r=>r.path!=='/api/extension/browsers/heartbeat').length;
     for(let last=-1;last!==uiCount();){last=uiCount();await new Promise(r=>setTimeout(r,800));}
@@ -168,6 +168,6 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     // Strict text reader keeps duplicate lines and rejects overflow rather than truncating it.
     const reader=await browser.newPage();await reader.setContent('<main>'+markup('x'.repeat(100001))+'</main>');await reader.addScriptTag({path:path.join(root,'extension/shared/job-page-text.js')});
     assert.match(await reader.evaluate(()=>{try{return globalThis.__qtsReadOriginalJobDescription();}catch(e){return e.message;}}),/100,000-character limit/);
-  }catch(error){console.error('Local Get JD request trace:',JSON.stringify(requests.map(r=>({path:r.path,url:r.body?.pageUrl||r.body?.job?.jobUrl}))));if(worker)console.error('Local results:',JSON.stringify(await worker.evaluate(async()=>chrome.storage.local.get(['qtsGetJdResults','qtsGetJdOn','qtsGetJdEnabledAt'])).catch(()=>null)));throw error;}
+  }catch(error){console.error('Local Get JD request trace:',JSON.stringify(requests.map(r=>({path:r.path,url:r.body?.pageUrl||r.body?.job?.jobUrl}))));if(worker)console.error('Local results:',JSON.stringify(await worker.evaluate(async()=>({...await chrome.storage.local.get(['qtsGetJdOn','qtsGetJdEnabledAt']),...await chrome.storage.session.get('qtsGetJdResults')})).catch(()=>null)));throw error;}
   finally{await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));}
 });

@@ -1347,14 +1347,18 @@ async function ensureGetJdPanel(tabId) {
 }
 
 // Chrome storage has no atomic read/modify/write; serialize results from concurrent tabs.
+// The results (with each page's JD text) live in session storage: only the worker reads them (a
+// page gets its own result by message), and unlike local storage, session storage does not send
+// the whole map to every open tab's page scripts on each of a job's several updates. They belong
+// to open tabs, which a Chrome restart replaces anyway.
 let getJdResultWrites = Promise.resolve();
 function forgetGetJdResult(tabId) {
   const work = getJdResultWrites.catch(() => {}).then(async () => {
-    const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
+    const stored = await chrome.storage.session.get([GET_JD_RESULTS_KEY]);
     const results = stored[GET_JD_RESULTS_KEY] || {};
     if (!(String(tabId) in results)) return;
     delete results[String(tabId)];
-    await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
+    await chrome.storage.session.set({ [GET_JD_RESULTS_KEY]: results });
   });
   getJdResultWrites = work;
   return work;
@@ -1365,7 +1369,7 @@ function saveGetJdResult(tabId, result, notifyPage = true) {
   return work;
 }
 async function writeGetJdResult(tabId, result, notifyPage = true) {
-  const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
+  const stored = await chrome.storage.session.get([GET_JD_RESULTS_KEY]);
   const results = stored[GET_JD_RESULTS_KEY] || {};
   const tabKey = String(tabId);
   delete results[tabKey];
@@ -1374,7 +1378,7 @@ async function writeGetJdResult(tabId, result, notifyPage = true) {
   for (const oldKey of keys.slice(0, Math.max(0, keys.length - 100))) {
     delete results[oldKey];
   }
-  await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
+  await chrome.storage.session.set({ [GET_JD_RESULTS_KEY]: results });
   if (notifyPage) {
     if ((result?.status === 'complete' && result.evaluationMode !== 'gemini')
       || result?.status === 'saved' || result?.status === 'draft' || result?.autoSaveFailureCount > 0
@@ -1443,14 +1447,14 @@ async function deliverCurrentGetJdNotificationBatch() {
 async function readGetJdResultForTab(tabId) {
   const tab = await getTab(tabId);
   if (!tab?.url) return null;
-  const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
+  const stored = await chrome.storage.session.get([GET_JD_RESULTS_KEY]);
   const result = stored[GET_JD_RESULTS_KEY]?.[String(tabId)];
   return result?.pageUrl === tab.url ? result : null;
 }
 
 async function finishAbandonedGetJdResult(tabId, initial, notify = true) {
-  const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY, 'authExpiresAt', 'qtsSessionUser']);
-  const current = stored[GET_JD_RESULTS_KEY]?.[String(tabId)];
+  const stored = await chrome.storage.local.get(['authExpiresAt', 'qtsSessionUser']);
+  const current = (await chrome.storage.session.get([GET_JD_RESULTS_KEY]))[GET_JD_RESULTS_KEY]?.[String(tabId)];
   if (current?.runId !== initial.runId || current.status !== 'processing'
     || initial.sessionOwner !== self.__qtsGetJdNotifications.sessionKey(stored)) return;
   await saveGetJdResult(tabId, {
@@ -7533,7 +7537,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
       disarmJobPageActivity();
       chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false }).catch(() => {});
       // Reviews contain the previous Manager's candidates and must not survive a session change.
-      chrome.storage.local.remove(GET_JD_RESULTS_KEY).catch(() => {});
+      chrome.storage.session.remove(GET_JD_RESULTS_KEY).catch(() => {});
       chrome.storage.local.remove(GET_JD_NOTIFICATION_STATE_KEY).catch(() => {});
       getJdInFlightTabs.clear();
       getJdLastPageByTab.clear();
@@ -7680,15 +7684,33 @@ async function pacedBrowserHeartbeat() {
     return;
   }
   if (await self.__qtsIdlePacing.claimCheck('heartbeat', busy)) await sendBrowserHeartbeat();
+  // The alarm then ticks only as often as the check is due (idle: every 1 or 2 minutes).
+  await self.__qtsIdlePacing.pacePeriodicAlarm(BROWSER_HEARTBEAT_ALARM, busy);
 }
 
 async function pacedGenerationQueue() {
-  if (await self.__qtsIdlePacing.claimCheck('generation', await isWorkBusy())) await processQueuedGenerationJobs();
+  const busy = await isWorkBusy();
+  if (await self.__qtsIdlePacing.claimCheck('generation', busy)) await processQueuedGenerationJobs();
+  await self.__qtsIdlePacing.pacePeriodicAlarm(GENERATION_QUEUE_ALARM, busy);
 }
 
 async function pacedApplyQueue() {
-  if (await self.__qtsIdlePacing.claimCheck('apply', await isWorkBusy())) await self.__qtsApplyRunner.processApplyQueue();
+  const busy = await isWorkBusy();
+  if (await self.__qtsIdlePacing.claimCheck('apply', busy)) await self.__qtsApplyRunner.processApplyQueue();
+  await self.__qtsIdlePacing.pacePeriodicAlarm(self.__qtsApplyRunner.APPLY_QUEUE_ALARM, busy);
 }
+
+// Activity (a mode turned on, the launcher opened, a page Get JD reads, work done) brings every
+// paced alarm back to every 30 seconds at once, as the checks themselves are.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'session' || !changes[self.__qtsIdlePacing.ACTIVITY_KEY]) return;
+  (async () => {
+    const busy = await isWorkBusy();
+    for (const name of [BROWSER_HEARTBEAT_ALARM, GENERATION_QUEUE_ALARM, self.__qtsApplyRunner?.APPLY_QUEUE_ALARM]) {
+      if (name) await self.__qtsIdlePacing.pacePeriodicAlarm(name, busy);
+    }
+  })().catch(() => {});
+});
 
 /** Opening QTS (the popup or the page launcher): not idle, and this Chrome checks for work right away. */
 async function checkForWorkNow() {
@@ -7737,6 +7759,9 @@ chrome.runtime.onInstalled.addListener((details) => {
   // After an update both switches start off, so a Chrome never resumes work under new rules by itself.
   if (details?.reason === 'update') {
     chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null, [GET_JD_ON_KEY]: false }).catch(() => {});
+    // Only the worker reads Get JD's results and the idle pacing, now kept in session storage: the
+    // copies earlier versions kept in local storage (sent to every tab on each change) go.
+    chrome.storage.local.remove([GET_JD_RESULTS_KEY, ...self.__qtsIdlePacing.LEGACY_LOCAL_KEYS]).catch(() => {});
   }
   syncGenerationQueueAlarm().catch((error) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
@@ -7923,6 +7948,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // Get JD starts once the page HTML is ready instead of waiting for every image and ad;
 // detection then waits for the content to settle.
+// Chrome wakes the worker for every navigation event of every frame. These listeners use only
+// http and https pages, so Chrome is told to send just those: blank, data: and blob: frames (ads,
+// widgets) no longer wake the worker. Each listener still checks for the main frame itself.
+const WEB_PAGE_EVENTS = { url: [{ schemes: ['http', 'https'] }] };
+
 chrome.webNavigation.onDOMContentLoaded.addListener((details) => {
   if (details.frameId !== 0) return;
   if (details.documentLifecycle && details.documentLifecycle !== 'active') return;
@@ -7930,14 +7960,14 @@ chrome.webNavigation.onDOMContentLoaded.addListener((details) => {
   getJdNavigation.handle('ready', details).catch((error) => {
     console.error('[QTS Get JD] Could not process the loaded page:', error);
   });
-});
+}, WEB_PAGE_EVENTS);
 
 // Back/forward-cache restores can omit DOMContentLoaded. The same persisted admission deduplicates
 // this completion fallback against the normal ready event.
 chrome.webNavigation.onCompleted.addListener((details) => {
   if (details.frameId !== 0 || !isExtractablePageUrl(details.url)) return;
   getJdNavigation.handle('ready', details).catch(() => {});
-});
+}, WEB_PAGE_EVENTS);
 
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
@@ -7954,7 +7984,7 @@ chrome.webNavigation.onCommitted.addListener((details) => {
     }
     maybeDetectApplyMethodOnOpen(details.tabId, details.url);
   })().catch(() => {});
-});
+}, WEB_PAGE_EVENTS);
 
 chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   if (details.frameId !== 0) return;
@@ -7968,7 +7998,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
     if (await isAutoApplyArmed()) maybeDetectApplyMethodOnOpen(details.tabId, details.url);
     maybeTrackAutoOpen(details.tabId, details.url);
   })().catch(() => {});
-});
+}, WEB_PAGE_EVENTS);
 
 chrome.windows.onFocusChanged.addListener((windowId) => launcherFocus.sync(windowId).catch(() => {}));
 // Dragging a tab between windows can change ownership without a normal activation event.
@@ -8044,7 +8074,7 @@ chrome.webNavigation.onCommitted.addListener((details) => {
     }
     return { source, last: details.url };
   });
-});
+}, WEB_PAGE_EVENTS);
 
 // Ownership passes to tabs opened from a workflow's tab or in a workflow's window.
 chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
