@@ -2,7 +2,10 @@
 // Chrome on this PC loads extension/ itself, so the zip is the only build output:
 // older zips and unpacked build folders in dist/ are removed.
 // Files stay one-to-one with extension/ because the extension loads them by
-// path (manifest, importScripts, chrome.scripting.executeScript).
+// path (manifest, chrome.scripting.executeScript). The one change: the background
+// worker's importScripts files are placed inside it, in the same order, so a
+// wake-up loads one file instead of 46 (about twice as fast to wake in a quick test).
+// Those files stay in the zip too, since pages load some of them by path.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -12,6 +15,28 @@ const esbuild = require("esbuild");
 const root = path.resolve(__dirname, "..");
 const sourceDir = path.join(root, "extension");
 const distDir = path.join(root, "dist");
+const WORKER = "background/service-worker.js";
+
+// Classic scripts loaded with importScripts share one global scope, so placing their text in
+// the worker, in order, runs the same code. Anything but one importScripts of plain file names
+// stops the build rather than ship a worker that might not start.
+function mergeWorkerImports(workerSource, readImport) {
+  const calls = workerSource.match(/\bimportScripts\s*\(/g) || [];
+  const call = workerSource.match(/^importScripts\(((?:\s*'[^']+',?)+)\s*\);/m);
+  if (calls.length !== 1 || !call) {
+    throw new Error(`${WORKER}: expected one importScripts(...) of plain file names`);
+  }
+  const files = [...call[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  const merged = files.map((file) => `// ${file}\n${readImport(file)}\n;\n`).join("");
+  // A function, so "$&" and the like in the files' text are kept as they are.
+  return { files, source: workerSource.replace(call[0], () => merged) };
+}
+
+function readWorkerImport(file) {
+  const fullPath = path.resolve(sourceDir, path.dirname(WORKER), file);
+  if (!fullPath.startsWith(sourceDir + path.sep)) throw new Error(`${WORKER}: ${file} is outside extension/`);
+  return fs.readFileSync(fullPath, "utf8");
+}
 
 function listFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -24,9 +49,11 @@ async function buildFile(sourcePath) {
   const name = path.relative(sourceDir, sourcePath).split(path.sep).join("/");
   const extension = path.extname(sourcePath);
   if (extension === ".js" || extension === ".css") {
+    let source = fs.readFileSync(sourcePath, "utf8");
+    if (name === WORKER) source = mergeWorkerImports(source, readWorkerImport).source;
     // Without a module format esbuild keeps top-level names, which these
     // classic scripts share as globals across files.
-    const result = await esbuild.transform(fs.readFileSync(sourcePath, "utf8"), {
+    const result = await esbuild.transform(source, {
       loader: extension.slice(1),
       minify: true,
       target: "chrome120",
@@ -111,7 +138,11 @@ async function main() {
   console.log(`Zip: ${path.relative(root, zipPath)} (${Math.round(zip.length / 1024)} KB)`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+module.exports = { mergeWorkerImports };
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

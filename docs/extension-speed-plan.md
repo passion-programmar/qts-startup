@@ -136,15 +136,29 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
    - Measured after (9 interleaved runs each, this PC was busy): a plain page's main-thread time
      151.8 → 144.8 ms median (112.6 ms with no launcher at all), so about 7 ms less per page.
    - Not done: asking for the launcher state once (the second ask covers starts from the toolbar,
-     shortcuts and restores; one worker round trip, no page time). Moved to step 6: building the
-     panel and loading its code only when first opened (most of what is left: compiling the
-     116 KB launcher and building hundreds of elements on every page).
+     shortcuts and restores; one worker round trip, no page time). Building the panel and loading
+     its code only when first opened was moved to step 6, then dropped there after measuring.
    - Tests: launcher-lazy-panel.browser (closed: no panel fill, no Tools request, the dot still
      shows the run; opened: up to date when it shows); two launcher tests now open the panel before
      reading it.
-6. Structure: split the worker (7,900 lines) into feature files (Get JD, Generation, launcher,
-   message routing) and the launcher into parts; decide what to do with the unreachable popup.
-7. Measure again, record the after numbers, release one new extension version.
+6. Structure.
+   - Measured first (traces of a plain page, interleaved runs): what the launcher still costs a
+     page (about 13 ms of style, layout and paint) comes from showing its small tab. Its code
+     compiles in about 0.5 ms and the hidden panel costs nothing, so building the panel or loading
+     its code only when first opened would save nothing: dropped. Also tried, no change: no
+     docking style in the page, layout containment, a serif tab, only the tab's styles.
+   - Done: the release zip's background worker holds its 45 importScripts files, in the same
+     order (scripts/build-extension.cjs), so a wake-up loads one file instead of 46. In a quick
+     test it answered from asleep in about 72 ms instead of about 139 ms (median of 3 rounds;
+     this PC was busy). The source keeps the separate files, and this PC loads extension/ itself,
+     so only the zip has it. The files share one global scope either way: none checks or
+     redeclares another's names (checked), and the build stops on anything but one importScripts
+     of plain file names. Test: extension/shared/release-build.test.js.
+   - Skipped (the user's choice, 2026-11-15): splitting the worker into feature files and removing
+     the old scanner and pipeline code (no speed a Manager would notice, and other sessions edit
+     the worker every day), and the unreachable popup (it never loads, so it costs nothing).
+7. Release.
+   - The final round of measuring was skipped (the user stopped it); each step's numbers are above.
    - First release done: 1.56.0 (2026-11-15) has steps 1-3 and the résumé-folder check; the built
      zip (dist/qts-extension-1.56.0.zip, 759 KB) passed the job-page, wake-up, folder and printing
      end-to-end tests itself. Steps 4-6 go out in the next release.
