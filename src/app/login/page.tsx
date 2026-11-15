@@ -55,11 +55,11 @@ export default async function LoginPage() {
             <span className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-md shadow-indigo-500/25">
               <BriefcaseBusiness className="size-5" />
             </span>
-            <p className="text-lg font-bold tracking-tight text-slate-900">QTS Job System</p>
+            <p className="text-lg font-bold tracking-tight text-fg">QTS Job System</p>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md sm:p-8">
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Welcome back</h1>
-            <p className="mt-1.5 text-sm text-slate-500">Sign in with your QTS login name and password.</p>
+          <div className="rounded-card border border-line bg-card p-6 shadow-md sm:p-8">
+            <h1 className="text-2xl font-bold tracking-tight text-fg">Welcome back</h1>
+            <p className="mt-1.5 text-sm text-fg-muted">Sign in with your QTS login name and password.</p>
             <LoginForm />
           </div>
         </section>

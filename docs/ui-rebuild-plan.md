@@ -73,7 +73,9 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
   when it opens (response-actions.ts). The old-record clean-up runs after the page is sent
   (after()), and each tab's reads run together. Database usage's state read is shared within a
   request (React cache), so the page and the banner read it once. Both pages use the shared
-  header, buttons and tab colours.
+  header, buttons and tab colours. Committed as e27e80f.
+- Step 12 built 2026-11-15 (Login): the sign-in card, field, error and button use the named
+  colours and the shared Button and Notice. The brand panel was already modern and is unchanged.
 
 ## Steps
 
