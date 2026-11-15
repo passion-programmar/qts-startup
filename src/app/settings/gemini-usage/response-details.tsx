@@ -1,12 +1,16 @@
 "use client";
 
 import { FileSearch, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { LoadingIcon } from "@/app/components/loading-icon";
+import { loadGeminiResponseBodyAction } from "./response-actions";
 
 export type ResponseDetailsCall = {
+  id: string;
   summary: { label: string; value: string }[];
   reason: string;
-  responseBody: string | null;
+  // Left out by the list (replies can be up to 1 MB each); the window loads it when it opens.
+  responseBody?: string | null;
   responseTruncated: boolean;
   errorMessage: string | null;
 };
@@ -98,9 +102,25 @@ function readSections(call: ResponseDetailsCall) {
   return { body, sections };
 }
 
-export function ResponseDetailsButton({ call }: { call: ResponseDetailsCall }) {
+export function ResponseDetailsButton({ call: listed }: { call: ResponseDetailsCall }) {
   const [open, setOpen] = useState(false);
-  const { body, sections } = useMemo(() => (open ? readSections(call) : { body: undefined, sections: [] }), [call, open]);
+  // The reply, fetched once the first time the window opens; "failed" when it could not be read.
+  const [fetched, setFetched] = useState<{ responseBody: string | null } | "failed" | null>(null);
+  const needsBody = listed.responseBody === undefined;
+  useEffect(() => {
+    if (!open || !needsBody || fetched) return;
+    let current = true;
+    loadGeminiResponseBodyAction(listed.id)
+      .then((result) => { if (current) setFetched(result ?? "failed"); })
+      .catch(() => { if (current) setFetched("failed"); });
+    return () => { current = false; };
+  }, [open, needsBody, fetched, listed.id]);
+  const loading = open && needsBody && fetched === null;
+  const call = useMemo(
+    () => (needsBody && fetched && fetched !== "failed" ? { ...listed, responseBody: fetched.responseBody } : listed),
+    [listed, needsBody, fetched],
+  );
+  const { body, sections } = useMemo(() => (open && !loading ? readSections(call) : { body: undefined, sections: [] }), [call, open, loading]);
   const raw = body === undefined ? call.responseBody : JSON.stringify(body, null, 2);
   return (
     <>
@@ -134,6 +154,12 @@ export function ResponseDetailsButton({ call }: { call: ResponseDetailsCall }) {
               <FieldSection fields={call.summary} title="Request" />
               {call.errorMessage ? (
                 <FieldSection fields={[{ label: "Error", value: call.errorMessage, long: true }]} title="Network error" />
+              ) : null}
+              {loading ? (
+                <p className="flex items-center gap-2 text-xs text-slate-500" role="status"><LoadingIcon className="size-4" />Loading Google&apos;s reply…</p>
+              ) : null}
+              {fetched === "failed" ? (
+                <p className="text-xs text-rose-700" role="alert">The reply could not be loaded. Close the window and open it again.</p>
               ) : null}
               {sections.map((section) => (
                 <FieldSection fields={section.fields} key={section.title} title={section.title} />

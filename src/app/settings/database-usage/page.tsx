@@ -22,9 +22,9 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/session";
 import { formatRomaniaTime, ROMANIA_TIME_ZONE } from "@/lib/romania-time";
-import { PageHeader } from "@/app/components/page-header";
+import { LinkButton } from "@/app/ui/button";
+import { PageHeader } from "@/app/ui/page-header";
 import { PaginatedTable } from "@/app/components/paginated-table";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { ZoneClock } from "@/app/components/zone-clock";
 import { SettingsCard } from "@/app/settings/settings-card";
 import {
@@ -62,7 +62,7 @@ const LEVELS: Record<Level, { label: string; badge: string; bar: string; Icon: L
   reached: { label: "Limit reached", badge: "bg-rose-100 text-rose-800 ring-rose-300", bar: "bg-rose-600", Icon: Ban },
 };
 
-const cardClass = "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6";
+const cardClass = "rounded-card border border-line bg-card p-5 shadow-sm sm:p-6";
 const hours = (value: number) => `${value.toFixed(value < 10 ? 2 : 1)} CU-h`;
 const formatOf = (key: QuotaView["key"]) => (key === "compute" ? hours : formatBytes);
 const ago = (minutes: number) =>
@@ -81,42 +81,38 @@ export default async function DatabaseUsagePage({
   const state = await readUsageState();
 
   return (
-    <WorkspaceShell activeHref="/settings/database-usage" user={currentUser}>
-    <main className="py-1 text-slate-900">
+    <main className="py-1 text-fg">
       <div className="mx-auto max-w-5xl">
         <PageHeader
           actions={
             <>
-              <Link className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50" href="/settings">
-                Settings
-              </Link>
+              <LinkButton href="/settings" variant="secondary">Settings</LinkButton>
               <MonitorButton kind={activeTab === "diagnostics" ? "diagnostics" : "quota"} />
             </>
           }
           description="Neon usage against the plan's limits, what is left, forecasts, database health, and diagnostics. Nothing is measured until you click, and the last result stays until the next click."
-          eyebrow="Administration"
           title="Database usage"
         />
 
         {/* Stays under the fixed workspace header (60px below 640px, 64px above) while the page scrolls. */}
         <div className="sticky top-[60px] z-30 -mx-1 mb-4 flex flex-col gap-3 bg-surface/95 px-1 py-2 backdrop-blur sm:top-16 sm:flex-row sm:items-stretch">
         <ZoneClock className="sm:w-52" label="Romania time" timeZone={ROMANIA_TIME_ZONE} />
-        <nav aria-label="Database usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
+        <nav aria-label="Database usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-card border border-line bg-card p-1 shadow-sm">
           {DATABASE_USAGE_TABS.map((tab) => {
             const active = tab.id === activeTab;
             return (
               <Link
                 aria-current={active ? "page" : undefined}
-                className={`min-w-0 flex-1 rounded-lg px-4 py-2.5 text-left transition sm:min-w-[12rem] ${
+                className={`min-w-0 flex-1 rounded-control px-4 py-2.5 text-left transition-colors sm:min-w-[12rem] ${
                   active
-                    ? "bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200"
-                    : "text-slate-600 hover:bg-white/60 hover:text-slate-900"
+                    ? "bg-primary text-white shadow-sm"
+                    : "text-fg-muted hover:bg-line-soft hover:text-fg"
                 }`}
                 href={`/settings/database-usage?tab=${tab.id}`}
                 key={tab.id}
               >
                 <span className="block text-sm font-semibold">{tab.label}</span>
-                <span className={`mt-0.5 block text-xs ${active ? "text-slate-500" : "text-slate-400"}`}>
+                <span className={`mt-0.5 block text-xs ${active ? "text-white/75" : "text-fg-faint"}`}>
                   {tab.description}
                 </span>
               </Link>
@@ -130,7 +126,6 @@ export default async function DatabaseUsagePage({
         {activeTab === "cleanup" && <CleanupTab state={state} />}
       </div>
     </main>
-    </WorkspaceShell>
   );
 }
 

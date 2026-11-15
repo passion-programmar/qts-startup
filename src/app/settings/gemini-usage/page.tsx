@@ -1,6 +1,7 @@
 import { and, desc, gte, inArray, sql } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import {
   geminiApiCallLogs,
   geminiKeyBusyLeases,
@@ -13,8 +14,8 @@ import {
   removeOldGeminiApiCallLogs,
 } from "@/lib/gemini-usage";
 import { requireUser } from "@/lib/session";
-import { PageHeader } from "@/app/components/page-header";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { LinkButton } from "@/app/ui/button";
+import { PageHeader } from "@/app/ui/page-header";
 import { PaginatedTable } from "@/app/components/paginated-table";
 import { AiLimitsForm } from "./model-limits-form";
 import { ModelTestPanel } from "./model-test-panel";
@@ -45,13 +46,12 @@ export default async function GeminiUsagePage({
 }) {
   const currentUser = await requireUser();
   if (currentUser.role !== "super_admin") redirect("/");
-  // Old Google response records (3+ Pacific days ago) are cleaned up only when a Super Admin visits.
-  await removeOldGeminiApiCallLogs();
+  // Old Google response records (3+ Pacific days ago) are cleaned up only when a Super Admin visits,
+  // after the page is sent: the list shows today's records only, so nothing on it waits for this.
+  after(removeOldGeminiApiCallLogs);
   // Sub tabs are links (?tab=responses), so each tab is server-rendered and can be bookmarked.
   const requestedTab = (await searchParams).tab;
   const activeTab: GeminiUsageTab = requestedTab === "responses" || requestedTab === "test" ? requestedTab : "limits";
-  const tokenCountMode = activeTab === "responses" ? await getGeminiTokenCountMode() : "local";
-  const modelTest = activeTab === "test" ? await readModelTestState() : null;
 
   const keys = getGeminiApiKeys();
   const groqKeys = getGroqApiKeys();
@@ -63,14 +63,17 @@ export default async function GeminiUsagePage({
     date_trunc('day', now() at time zone 'America/Los_Angeles')
       at time zone 'America/Los_Angeles'
   `;
-  // Each tab loads only the data it shows.
-  const [aiSettings, slotUsage] = activeTab === "limits"
-    ? await Promise.all([readAiSettings(), readAiSlotUsage(slotIds)])
-    : [null, new Map<string, typeof emptyAiSlotUsage>()];
+  // Each tab loads only the data it shows, all of it at once (one wait).
   // Calls before the switch to key + model slots were filed under the key alone.
   const logKeys = [...keyHashes, ...groqKeyHashes, ...slotIds];
-  const recentApiCalls = logKeys.length && activeTab === "responses"
-    ? await db
+  const [tokenCountMode, modelTest, [aiSettings, slotUsage], recentApiCalls, busyRows] = await Promise.all([
+    activeTab === "responses" ? getGeminiTokenCountMode() : Promise.resolve("local" as const),
+    activeTab === "test" ? readModelTestState() : Promise.resolve(null),
+    activeTab === "limits"
+      ? Promise.all([readAiSettings(), readAiSlotUsage(slotIds)])
+      : Promise.resolve([null, new Map<string, typeof emptyAiSlotUsage>()] as const),
+    logKeys.length && activeTab === "responses"
+    ? db
         .select({
           id: geminiApiCallLogs.id,
           keyHash: geminiApiCallLogs.keyHash,
@@ -94,13 +97,9 @@ export default async function GeminiUsagePage({
         )
         .orderBy(desc(geminiApiCallLogs.startedAt))
         .limit(100)
-    : [];
-  const keyNameByHash = new Map([
-    ...keyHashes.map((hash, index) => [hash, `Key ${index + 1}`] as const),
-    ...groqKeyHashes.map((hash, index) => [hash, `Groq ${index + 1}`] as const),
-  ]);
-  const busyRows = slotIds.length && activeTab === "limits"
-    ? await db
+    : Promise.resolve([]),
+    slotIds.length && activeTab === "limits"
+    ? db
         .select({ slotId: geminiKeyBusyLeases.keyHash })
         .from(geminiKeyBusyLeases)
         .where(
@@ -109,7 +108,12 @@ export default async function GeminiUsagePage({
             gte(geminiKeyBusyLeases.expiresAt, sql`now()`),
           ),
         )
-    : [];
+    : Promise.resolve([]),
+  ]);
+  const keyNameByHash = new Map([
+    ...keyHashes.map((hash, index) => [hash, `Key ${index + 1}`] as const),
+    ...groqKeyHashes.map((hash, index) => [hash, `Groq ${index + 1}`] as const),
+  ]);
   const busySlots = new Set(busyRows.map((row) => row.slotId));
   const statusAt = modelTest?.readAt ?? await currentTime();
 
@@ -161,44 +165,38 @@ export default async function GeminiUsagePage({
   }
 
   return (
-    <WorkspaceShell activeHref="/settings/gemini-usage" user={currentUser}>
     <main className="py-1 text-slate-900">
       <div className="mx-auto max-w-5xl">
         <PageHeader
           actions={
             <>
-              <Link className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50" href={`/settings/gemini-usage?tab=${activeTab}`}>
-                Refresh
-              </Link>
-              <Link className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50" href="/settings">
-                Settings
-              </Link>
+              <LinkButton href={`/settings/gemini-usage?tab=${activeTab}`} variant="secondary">Refresh</LinkButton>
+              <LinkButton href="/settings" variant="secondary">Settings</LinkButton>
             </>
           }
           description="Configure per-key limits, check key status, and review Google API responses."
-          eyebrow="Administration"
           title="Gemini usage"
         />
 
         {/* Stays under the fixed workspace header (60px below 640px, 64px above) while the page scrolls. */}
         <div className="sticky top-[60px] z-30 -mx-1 mb-4 flex flex-col gap-3 bg-surface/95 px-1 py-2 backdrop-blur sm:top-16 sm:flex-row sm:items-stretch">
         <ZoneClock className="sm:w-52" label="Pacific time" timeZone="America/Los_Angeles" />
-        <nav aria-label="Gemini usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100/70 p-1">
+        <nav aria-label="Gemini usage sections" className="flex min-w-0 flex-1 flex-wrap gap-1 rounded-card border border-line bg-card p-1 shadow-sm">
           {GEMINI_USAGE_TABS.map((tab) => {
             const active = tab.id === activeTab;
             return (
               <Link
                 aria-current={active ? "page" : undefined}
-                className={`min-w-0 flex-1 rounded-lg px-4 py-2.5 text-left transition sm:min-w-[14rem] ${
+                className={`min-w-0 flex-1 rounded-control px-4 py-2.5 text-left transition-colors sm:min-w-[14rem] ${
                   active
-                    ? "bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200"
-                    : "text-slate-600 hover:bg-white/60 hover:text-slate-900"
+                    ? "bg-primary text-white shadow-sm"
+                    : "text-fg-muted hover:bg-line-soft hover:text-fg"
                 }`}
                 href={`/settings/gemini-usage?tab=${tab.id}`}
                 key={tab.id}
               >
                 <span className="block text-sm font-semibold">{tab.label}</span>
-                <span className={`mt-0.5 block text-xs ${active ? "text-slate-500" : "text-slate-400"}`}>
+                <span className={`mt-0.5 block text-xs ${active ? "text-white/75" : "text-fg-faint"}`}>
                   {tab.description}
                 </span>
               </Link>
@@ -316,6 +314,7 @@ export default async function GeminiUsagePage({
                   durationLabel,
                   <ResponseDetailsButton
                     call={{
+                      id: call.id,
                       summary: [
                         { label: "Time (Pacific)", value: `${startedDate}, ${startedTime}` },
                         { label: "API key", value: keyLabel },
@@ -326,7 +325,6 @@ export default async function GeminiUsagePage({
                         { label: "Gemini tokens", value: call.geminiInputTokens?.toLocaleString() ?? "—" },
                       ],
                       reason,
-                      responseBody: call.responseBody,
                       responseTruncated: call.responseTruncated,
                       errorMessage: call.errorMessage,
                     }}
@@ -353,7 +351,6 @@ export default async function GeminiUsagePage({
         )}
       </div>
     </main>
-    </WorkspaceShell>
   );
 }
 

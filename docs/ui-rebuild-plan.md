@@ -67,7 +67,13 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
 - Step 10 built 2026-11-15 (Resume): panels and buttons use the named colours and shapes; the
   page no longer wraps itself in the old shell. The PDF renderer already runs only on the server;
   the page's own browser code (resume data handling, default resume, ~37 KB) is all needed at
-  start. /resume-template (the preview frame) needed nothing.
+  start. /resume-template (the preview frame) needed nothing. Committed as cb048fe.
+- Step 11 built 2026-11-15 (Gemini usage, Database usage): the responses list no longer sends
+  each Google reply (up to 1 MB each, 100 per page) to the browser; View details loads one reply
+  when it opens (response-actions.ts). The old-record clean-up runs after the page is sent
+  (after()), and each tab's reads run together. Database usage's state read is shared within a
+  request (React cache), so the page and the banner read it once. Both pages use the shared
+  header, buttons and tab colours.
 
 ## Steps
 

@@ -2,6 +2,7 @@ import "server-only";
 
 import { eq, inArray, sql, type SQL } from "drizzle-orm";
 import { after } from "next/server";
+import { cache } from "react";
 import { settings } from "@/db/schema";
 import { db } from "@/lib/db";
 import { removeOldGeminiApiCallLogs } from "@/lib/gemini-usage";
@@ -284,8 +285,11 @@ function parseHealth(value: unknown): HealthLog {
 
 const minutesSince = (at: string | undefined) => (at ? Math.max(0, (Date.now() - Date.parse(at)) / 60_000) : null);
 
-/** Everything the page shows, as the last clicks and clean-up saved it: one small read. */
-export async function readUsageState(): Promise<UsageState> {
+/**
+ * Everything the page shows, as the last clicks and clean-up saved it: one small read. Shared within
+ * one request, so the Database usage page and the Super Admin banner never read it twice.
+ */
+export const readUsageState = cache(async function readUsageState(): Promise<UsageState> {
   const rows = await db
     .select({ key: settings.key, value: settings.value })
     .from(settings)
@@ -306,7 +310,7 @@ export async function readUsageState(): Promise<UsageState> {
     quotaAgeMinutes: minutesSince(quota?.checkedAt),
     diagnosticsAgeMinutes: minutesSince(diagnostics?.checkedAt),
   };
-}
+});
 
 // A saved check per project per hour at most, so the history stays small: the newer replaces it.
 function addHistory(history: HistoryPoint[], points: HistoryPoint[]): HistoryPoint[] {
