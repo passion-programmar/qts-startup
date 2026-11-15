@@ -1,8 +1,10 @@
 "use client";
 
 import { Download } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { DatePicker } from "@/app/components/date-picker";
+import { useEffect, useState } from "react";
+import { LoadingIcon } from "@/app/components/loading-icon";
+import { urlsAddedOnDayAction } from "@/app/components/export-urls-action";
+import { romaniaClock } from "@/lib/romania-time";
 
 /** A URL and its date (YYYY-MM-DD, Romania time) as the table shows it. */
 export type ExportUrlEntry = { url: string; date: string };
@@ -32,124 +34,68 @@ export function uniqueUrlsOn(entries: ExportUrlEntry[], day: string): string[] {
   return urls;
 }
 
-// Saves the job URLs of one chosen day as a .txt file, one URL per line and none twice.
-// entries: every row, when the page has them all. loadEntries: asks the server for one day's rows,
-// when the page shows only one page of them.
-export function ExportUrlsButton({
-  entries = [],
-  loadEntries,
-  fileLabel,
-  today,
-}: {
-  entries?: ExportUrlEntry[];
-  loadEntries?: (day: string) => Promise<ExportUrlEntry[]>;
-  fileLabel: string;
-  today: string;
-}) {
-  // The panel is fixed under the button so the table frame (overflow-clip) can't cut it off.
-  // A calendar opened near the bottom of the window makes the panel scroll inside itself.
-  const [panelPosition, setPanelPosition] = useState<{ top: number; right: number; maxHeight: number } | null>(null);
-  const [day, setDay] = useState(today);
-  const [loaded, setLoaded] = useState<{ day: string; entries: ExportUrlEntry[] } | null>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const open = panelPosition !== null;
-  const loading = Boolean(loadEntries && open && day && loaded?.day !== day);
-  const dayEntries = loadEntries ? (loaded?.day === day ? loaded.entries : []) : entries;
-  const urls = day ? uniqueUrlsOn(dayEntries, day) : [];
+type Outcome = { tone: "done" | "empty" | "error"; text: string };
 
+// One click saves one .txt file with the URLs added today (Romania time) on both the Jobs and Bids
+// pages: one URL per line, each once. The same button sits on both pages.
+// "Today" is read at the click, so a page left open past midnight exports the new day.
+export function ExportUrlsButton() {
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+
+  // The result line hides itself after a few seconds.
   useEffect(() => {
-    if (!loadEntries || !open || !day) return;
-    let current = true;
-    loadEntries(day)
-      .then((rows) => { if (current) setLoaded({ day, entries: rows }); })
-      .catch(() => { if (current) setLoaded({ day, entries: [] }); });
-    return () => { current = false; };
-  }, [loadEntries, open, day]);
+    if (!outcome) return;
+    const timer = window.setTimeout(() => setOutcome(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [outcome]);
 
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setPanelPosition(null);
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) close();
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    // The page scrolling moves the button away from the panel; scrolling inside the panel is fine.
-    const closeOnPageScroll = (event: Event) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) close();
-    };
-    document.addEventListener("pointerdown", closeOnOutsideClick);
-    document.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", closeOnPageScroll, true);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsideClick);
-      document.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", closeOnPageScroll, true);
-    };
-  }, [open]);
-
-  function toggle() {
-    const rect = wrapperRef.current?.getBoundingClientRect();
-    setPanelPosition(open || !rect ? null : {
-      top: rect.bottom + 8,
-      right: Math.max(16, window.innerWidth - rect.right),
-      maxHeight: window.innerHeight - rect.bottom - 24,
-    });
-  }
-
-  function download() {
-    const blob = new Blob([`${urls.join("\r\n")}\r\n`], { type: "text/plain;charset=utf-8" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `${fileLabel}-urls_${day}.txt`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(link.href);
-    setPanelPosition(null);
+  async function exportToday() {
+    const day = romaniaClock().day;
+    setBusy(true);
+    setOutcome(null);
+    try {
+      const urls = uniqueUrlsOn(await urlsAddedOnDayAction(day), day);
+      if (urls.length === 0) {
+        setOutcome({ tone: "empty", text: "No job or bid URLs were added today." });
+        return;
+      }
+      const blob = new Blob([`${urls.join("\r\n")}\r\n`], { type: "text/plain;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `jobs-and-bids-urls_${day}.txt`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+      setOutcome({ tone: "done", text: `Saved ${urls.length} unique URL${urls.length === 1 ? "" : "s"} from Jobs and Bids.` });
+    } catch {
+      setOutcome({ tone: "error", text: "The URLs could not be loaded. Try again." });
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
-    <div className="sm:ml-auto" ref={wrapperRef}>
+    <div className="flex items-center gap-2 sm:ml-auto">
+      {outcome ? (
+        <span
+          className={`text-xs ${outcome.tone === "error" ? "text-danger-text" : outcome.tone === "empty" ? "text-fg-muted" : "text-success-text"}`}
+          role={outcome.tone === "error" ? "alert" : "status"}
+        >
+          {outcome.text}
+        </span>
+      ) : null}
       <button
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:border-indigo-200 hover:text-indigo-600"
-        onClick={toggle}
+        className="inline-flex h-9 items-center gap-2 rounded-control border border-line bg-card px-3 text-xs font-semibold text-fg-soft shadow-sm transition-colors hover:border-primary-ring hover:text-primary-text disabled:cursor-wait disabled:opacity-70"
+        disabled={busy}
+        onClick={exportToday}
+        title="Download one .txt file with today's job and bid URLs (Romania time), one per line, each once"
         type="button"
       >
-        <Download aria-hidden="true" className="size-4" />
-        Export URLs
+        {busy ? <LoadingIcon className="size-4" /> : <Download aria-hidden="true" className="size-4" />}
+        {busy ? "Exporting…" : "Export today's URLs"}
       </button>
-      {panelPosition && (
-        <div
-          aria-label="Export job URLs"
-          className="fixed z-50 w-80 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-lg"
-          role="dialog"
-          style={panelPosition}
-        >
-          <p className="text-xs font-semibold text-slate-700">Export job URLs (.txt)</p>
-          <p className="mt-0.5 text-[11px] text-slate-500">One URL per line, each job once. Dates are Romania time.</p>
-          {/* The same calendar as the birthday field. */}
-          <DatePicker className="mt-3" defaultValue={day} id={`${fileLabel}-export-day`} label="Date" name="exportDay" onChange={setDay} required />
-
-          <p className="mt-3 text-xs text-slate-600">
-            {!day ? "Choose a date" : loading ? "Counting…" : `${urls.length} unique URL${urls.length === 1 ? "" : "s"}`}
-          </p>
-          <button
-            className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-xs font-semibold text-white shadow-sm shadow-indigo-500/25 hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-            disabled={urls.length === 0}
-            onClick={download}
-            type="button"
-          >
-            <Download aria-hidden="true" className="size-4" />
-            Download .txt
-          </button>
-        </div>
-      )}
     </div>
   );
 }

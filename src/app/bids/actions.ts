@@ -1,6 +1,6 @@
 "use server";
 
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { bids, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -9,7 +9,6 @@ import { computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import type { RecordActionState } from "@/app/record-action-state";
 import type { SubmittedAnswer } from "@/app/components/submitted-answers";
-import { ROMANIA_TIME_ZONE } from "@/lib/romania-time";
 
 // A bid is an independent, permanent record of one confirmed application: it can be edited but not
 // deleted, and editing it never changes a jobs row. Its submitted answers and applied time stay as they were.
@@ -76,14 +75,4 @@ export async function loadBidAnswersAction(bidId: string): Promise<SubmittedAnsw
     .where(and(eq(bids.id, bidId), eq(bids.managerId, manager.id))).limit(1);
   if (!row) return null;
   return Array.isArray(row.answers) ? row.answers as SubmittedAnswer[] : [];
-}
-
-/** The job URLs of the bids created on one day (Romania time), for Export URLs. */
-export async function bidUrlsOnDayAction(day: string): Promise<{ url: string; date: string }[]> {
-  const manager = await getCurrentUser();
-  if (!manager || manager.role !== "manager" || typeof day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return [];
-  const rows = await db.select({ url: bids.jobUrl }).from(bids)
-    .where(and(eq(bids.managerId, manager.id), sql`(${bids.createdAt} at time zone ${ROMANIA_TIME_ZONE})::date = ${day}::date`))
-    .orderBy(desc(bids.appliedAt));
-  return rows.map((row) => ({ url: row.url, date: day }));
 }

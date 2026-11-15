@@ -1,6 +1,5 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { bidUrlsOnDayAction } from "@/app/bids/actions";
 import { ExportUrlsButton } from "@/app/components/export-urls";
 import { OpenFolderButton } from "@/app/components/open-folder";
 import { PaginatedTable } from "@/app/components/paginated-table";
@@ -9,7 +8,7 @@ import { Badge } from "@/app/ui/badge";
 import { PageHeader } from "@/app/ui/page-header";
 import { profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
-import { formatRomaniaDate, formatRomaniaTime, romaniaClock } from "@/lib/romania-time";
+import { formatRomaniaDate, formatRomaniaTime } from "@/lib/romania-time";
 import { requireUser } from "@/lib/session";
 import { bidSearchFields, defaultBidPageSize, parseBidsQuery, readBidsPage } from "@/server/bids/bids-list";
 
@@ -57,7 +56,7 @@ export default async function BidsPage({
           { label: "View", className: "w-[11%]" },
         ]}
         emptyMessage={query.q ? "No bids match your search" : "No applications confirmed yet"}
-        toolbar={<ExportUrlsButton fileLabel="bids" loadEntries={bidUrlsOnDayAction} today={romaniaClock().day} />}
+        toolbar={<ExportUrlsButton />}
         searchFields={[...bidSearchFields]}
         server={{
           path: "/bids",

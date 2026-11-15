@@ -17,7 +17,6 @@ import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
 import { AnswerApplicationButtons, ApplyAgainButton } from "@/app/jobs/apply-buttons";
 import { JobsFilters } from "@/app/jobs/jobs-filters";
 import { JobSelectionProvider, SelectAllJobsCheckbox, SelectedJobsBar, SelectJobCheckbox } from "@/app/jobs/job-selection";
-import { jobUrlsOnDayAction } from "@/app/jobs/actions";
 import { profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { romaniaClock } from "@/lib/romania-time";
@@ -207,7 +206,7 @@ export default async function JobsPage({
           toolbar={
             <div className="flex flex-wrap items-center gap-2">
               <SelectedJobsBar />
-              <ExportUrlsButton fileLabel="jobs" loadEntries={jobUrlsOnDayAction} today={today} />
+              <ExportUrlsButton />
             </div>
           }
           searchFields={[...jobSearchFields]}
