@@ -55,18 +55,19 @@
  */
 :root.dark {
   color-scheme: dark;
-  --color-surface: #0a0f1c;
-  --color-white: #111a2e;
-  --color-slate-50: #0e1626;
-  --color-slate-100: #1a2438;
-  --color-slate-200: #243047;
-  --color-slate-300: #34425a;
-  --color-slate-400: #66758c;
-  --color-slate-500: #94a3b8;
-  --color-slate-600: #aab5c5;
-  --color-slate-700: #cbd5e1;
-  --color-slate-800: #e2e8f0;
-  --color-slate-900: #f1f5f9;
+  /* Deep navy. Cards sit a step above the page, edges are clear, and text is bright without glare. */
+  --color-surface: #0b1120;
+  --color-white: #131d33;
+  --color-slate-50: #0f182b;
+  --color-slate-100: #1c273d;
+  --color-slate-200: #2a3651;
+  --color-slate-300: #3b4966;
+  --color-slate-400: #7886a1;
+  --color-slate-500: #a0adc2;
+  --color-slate-600: #b7c1d0;
+  --color-slate-700: #cfd8e4;
+  --color-slate-800: #e3e9f1;
+  --color-slate-900: #eef2f8;
   --color-indigo-50: rgb(99 102 241 / 0.1);
   --color-indigo-100: rgb(99 102 241 / 0.16);
   --color-indigo-200: rgb(99 102 241 / 0.3);
@@ -109,8 +110,9 @@
   --color-amber-700: #fcd34d;
   --color-amber-800: #fde68a;
   --color-amber-900: #fef3c7;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%), 0 1px 3px rgb(0 0 0 / 25%);
-  --shadow-md: 0 6px 16px -4px rgb(0 0 0 / 45%), 0 2px 4px -2px rgb(0 0 0 / 30%);
+  /* A faint top highlight lifts cards and buttons off the navy page. */
+  --shadow-sm: inset 0 1px 0 rgb(255 255 255 / 4%), 0 1px 2px rgb(0 0 0 / 35%), 0 1px 3px rgb(0 0 0 / 25%);
+  --shadow-md: inset 0 1px 0 rgb(255 255 255 / 5%), 0 8px 20px -6px rgb(0 0 0 / 55%), 0 2px 4px -2px rgb(0 0 0 / 30%);
 }
 
 /* White text sits on solid accents, so it stays white even though --color-white is now dark. */
@@ -127,7 +129,7 @@
 .dark .text-rose-600, .dark .hover\:text-rose-600:hover { color: #fb7185; }
 .dark .workspace-logout { color: #fb7185; }
 .dark .workspace-header { border-bottom-color: var(--color-slate-200); }
-.dark .workspace-sidebar { background: #0d1526; }
+.dark .workspace-sidebar { background: #0d1527; }
 
 /* Areas designed with fixed colors (the resume paper, code editors, the sign-in brand panel) keep the light palette. */
 .theme-light {
@@ -202,6 +204,14 @@ body {
   margin: 0;
   background: var(--color-surface);
   color: var(--color-slate-900);
+}
+
+/* While the theme changes, colours fade over a moment instead of jumping (the switch adds the class). */
+.theme-changing, .theme-changing *, .theme-changing *::before, .theme-changing *::after {
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease, fill .2s ease, box-shadow .2s ease !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-changing, .theme-changing * { transition: none !important; }
 }
 
 .paginated-table th,
@@ -453,8 +463,8 @@ textarea {
 .workspace-nav-link--active > svg, .workspace-nav-link--active:hover > svg { color: var(--color-indigo-600); }
 .workspace-nav-link--active::before { content: ""; position: absolute; top: 10px; bottom: 10px; left: -12px; width: 3px; border-radius: 0 3px 3px 0; background: #6366f1; }
 .workspace-theme { margin: 0 12px 10px; }
-.workspace-theme-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border: 1px solid var(--color-slate-200); border-radius: 12px; background: var(--color-slate-50); }
-.workspace-theme-switch > button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; border: 0; border-radius: 9px; background: transparent; color: var(--color-slate-500); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, box-shadow .15s; }
+.workspace-theme-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 4px; border: 1px solid var(--color-slate-200); border-radius: 12px; background: var(--color-slate-50); }
+.workspace-theme-switch > button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; border: 0; border-radius: 9px; background: transparent; color: var(--color-slate-500); font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s, box-shadow .15s; }
 .workspace-theme-switch > button:hover { color: var(--color-slate-800); }
 .workspace-theme-switch > button[aria-pressed="true"] { background: var(--color-white); color: var(--color-indigo-700); box-shadow: 0 1px 2px rgb(15 23 42 / 10%), 0 0 0 1px var(--color-slate-200); }
 .workspace-theme-toggle { display: none; place-items: center; width: 40px; height: 40px; margin: 0 auto; border: 1px solid var(--color-slate-200); border-radius: 11px; background: var(--color-slate-50); color: var(--color-slate-600); cursor: pointer; }
