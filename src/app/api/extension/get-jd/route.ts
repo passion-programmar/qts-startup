@@ -17,7 +17,7 @@ import { db } from "@/lib/db";
 import { AiJobError, aiRequestBudgetMs } from "@/server/gemini/ai-job";
 import { runAiRequest } from "@/server/gemini/ai-request";
 import { geminiJobEvaluationGenerationConfig, groqJobEvaluationJsonHint } from "@/server/gemini/job-evaluation-config";
-import { type CareerTimelineEntry, type EducationEntry, candidatesWithCareerTimeline } from "@/server/gemini/candidates-with-career-timeline";
+import { type CareerTimelineEntry, candidatesWithCareerTimeline } from "@/server/gemini/candidates-with-career-timeline";
 import { buildGetJdEvaluationPrompt } from "@/server/gemini/build-get-jd-evaluation-prompt";
 import { mapMatchingProfileIndexes } from "@/server/gemini/matching-profile-indexes";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
@@ -54,9 +54,8 @@ type CandidateProfileForEvaluation = {
   name: string;
   category: string | null;
   // The profile's experience, newest first: title, company, place, months and a short description.
+  // Education is not sent: matching is on work experience only.
   employmentTimeline: CareerTimelineEntry[];
-  // The profile's education, newest first.
-  education: EducationEntry[];
   // The company of the candidate's most recent experience; a job there is never saved for them.
   currentEmployer: string | null;
 };
@@ -190,7 +189,6 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
     const candidateContext = candidatesForEvaluation.map((candidate, index) => ({
       candidateIndex: index,
       employmentTimeline: candidate.employmentTimeline,
-      education: candidate.education,
     }));
     const promptText = buildGetJdEvaluationPrompt({
       savedPrompt: prompt.promptTemplate,
@@ -369,18 +367,6 @@ async function loadManagerCandidateProfiles(
           from experiences e
          where e.profile_user_id = ${profiles.userId} and btrim(e.job_title) <> ''
       ), '[]'::json)`,
-      education: sql<EducationEntry[]>`coalesce((
-        select json_agg(json_build_object(
-            'institution', btrim(ed.institution),
-            'degree', nullif(btrim(ed.degree), ''),
-            'fieldOfStudy', nullif(btrim(ed.field_of_study), ''),
-            'start', to_char(ed.start_date, 'YYYY-MM'),
-            'end', to_char(ed.end_date, 'YYYY-MM'),
-            'isCurrent', ed.is_current
-          ) order by ed.is_current desc, ed.end_date desc nulls first, ed.start_date desc nulls last, ed.sort_order asc)
-          from educations ed
-         where ed.profile_user_id = ${profiles.userId} and btrim(ed.institution) <> ''
-      ), '[]'::json)`,
       // The current job first, else the one that ended last.
       currentEmployer: sql<string | null>`(
         select e.company_name from experiences e
@@ -410,7 +396,6 @@ async function loadManagerCandidateProfiles(
         .slice(0, 300),
       category: row.category || null,
       employmentTimeline: row.employmentTimeline,
-      education: row.education,
       currentEmployer: row.currentEmployer,
     })),
   };

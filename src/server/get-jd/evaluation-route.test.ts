@@ -5,14 +5,14 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 
 const original = "Build Python services using FastAPI.\nPreserve PostgreSQL, requirements, benefits and Unicode: São Paulo.";
-const fixture: { sent?: unknown; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
+const fixture: { sent?: unknown; candidateFields?: string[]; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
 (globalThis as Record<string, unknown>).__qtsEvaluationFixture = fixture;
 let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/extension-auth": `export const getExtensionManager=async()=>({id:'local-manager'});`,
-    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',location:null,start:'2021-03',end:null,isCurrent:true,description:'Built APIs.'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}];const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
+    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',location:null,start:'2021-03',end:null,isCurrent:true,description:'Built APIs.'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}].map((row)=>{globalThis.__qtsEvaluationFixture.candidateFields=Object.keys(fields);return row;});const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
     "@/server/get-jd/precheck-ticket": `export const getPrecheckTickets=()=>({verify:async(token)=>token==='valid'?{jobUrl:'https://example.test/jobs/1',jobTitle:'Engineer',company:'Example'}:null});`,
     "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>{globalThis.__qtsEvaluationFixture.sent=c;return evaluate()};`,
     "@/server/database/database-usage": `export const scheduleDailyCleanup=()=>{};`,
@@ -44,7 +44,11 @@ test("Gemini matching keeps the saved prompt, sends the career timeline, and sav
   assert.equal(fixture.calls, 1); assert.equal(fixture.saves[0].description, original);
   assert.equal(body.classification.job.description, original);
   assert.match(fixture.prompts.at(-1) || "", /KEEP MANAGER MATCHING INSTRUCTIONS/);
-  assert.match(fixture.prompts.at(-1) || "", /"employmentTimeline":\[\{"jobTitle":"Python Backend Engineer","companyName":"Acme","location":null,"start":"2021-03","end":null,"isCurrent":true,"description":"Built APIs\."\}\],"education":\[\{"institution":"State University","degree":"BSc","fieldOfStudy":"Computer Science","start":"2015-09","end":"2019-06","isCurrent":false\}\]/);
+  assert.match(fixture.prompts.at(-1) || "", /"employmentTimeline":\[\{"jobTitle":"Python Backend Engineer","companyName":"Acme","location":null,"start":"2021-03","end":null,"isCurrent":true,"description":"Built APIs\."\}\]\}\]/);
+  // Education is not sent.
+  assert.doesNotMatch(fixture.prompts.at(-1) || "", /education|State University/);
+  assert.equal(fixture.candidateFields?.includes("education"), false);
+  assert.equal(fixture.candidateFields?.includes("employmentTimeline"), true);
   assert.doesNotMatch(fixture.prompts.at(-1) || "", /"jdMatching"/);
   // Candidates are sent by index only, never by name.
   assert.match(fixture.prompts.at(-1) || "", /"candidates":\[\{"candidateIndex":0,"employmentTimeline"/);

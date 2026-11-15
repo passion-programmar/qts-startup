@@ -10,16 +10,6 @@ export type CareerTimelineEntry = {
   description?: string | null;
 };
 
-// One school of a candidate's profile, as the AI sees it.
-export type EducationEntry = {
-  institution: string;
-  degree: string | null;
-  fieldOfStudy: string | null;
-  start: string | null;
-  end: string | null;
-  isCurrent: boolean;
-};
-
 // A candidate with no job titles cannot be matched, so the AI is never asked about them.
 export function candidatesWithCareerTimeline<
   T extends { employmentTimeline: CareerTimelineEntry[] },

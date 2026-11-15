@@ -1,11 +1,11 @@
-import type { CareerTimelineEntry, EducationEntry } from "@/server/gemini/candidates-with-career-timeline";
+import type { CareerTimelineEntry } from "@/server/gemini/candidates-with-career-timeline";
 
-// No name: the AI answers with candidate indexes and must not match on names, so a name would only
-// send personal data it doesn't need.
+// Only the index and the work experience. No name: the AI answers with candidate indexes and must
+// not match on names. No education: matching is on work experience. Both would only make the
+// request bigger and send personal data the AI doesn't need.
 type GetJdCandidatePromptData = {
   candidateIndex: number;
   employmentTimeline: CareerTimelineEntry[];
-  education?: EducationEntry[];
 };
 
 export function buildGetJdEvaluationPrompt({
