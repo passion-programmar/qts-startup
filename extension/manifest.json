@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QTS_Startup",
-  "version": "1.54.0",
+  "version": "1.55.0",
   "description": "Capture job postings with QTS_Startup.",
   "permissions": ["activeTab", "storage", "tabs", "scripting", "webNavigation", "alarms", "downloads", "notifications", "debugger", "browsingData"],
   "host_permissions": [
@@ -58,6 +58,18 @@
         "default": "Alt+Q"
       },
       "description": "Show or hide the QTS panel"
+    },
+    "toggle-get-jd": {
+      "suggested_key": {
+        "default": "Alt+G"
+      },
+      "description": "Turn Get JD on or off"
+    },
+    "toggle-text-highlights": {
+      "suggested_key": {
+        "default": "Alt+H"
+      },
+      "description": "Show or hide the Highlight panel"
     }
   },
   "icons": {

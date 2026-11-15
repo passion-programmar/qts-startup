@@ -2376,6 +2376,39 @@ async function isGetJdActive() {
   return stored[GET_JD_ON_KEY] === true;
 }
 
+/**
+ * Get JD on, from the launcher's row or the Get JD shortcut. askAppliedCleanup: false when no
+ * launcher can show the daily "Clear applied jobs?" question, so that day's question is not used up.
+ */
+async function turnGetJdOn({ askAppliedCleanup = true } = {}) {
+  const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
+  if (!token) return { ok: false, authRequired: true, error: 'Sign in before starting Get JD.' };
+  await enableGetJdMonitoring();
+  // After 4:00 PM Romania time the first Get JD start of the day (in any Chrome) asks to clear
+  // applied job rows; the server answers whether to ask, once a day.
+  const cleanup = askAppliedCleanup
+    ? await workerApiRequest('POST', '/api/extension/get-jd/applied-cleanup', { action: 'check' }).catch(() => null)
+    : null;
+  return {
+    ok: true,
+    status: 'get_jd',
+    message: 'Get JD is on. QTS checks each job page you open.',
+    appliedCleanupCount: cleanup?.success === true && cleanup.ask === true ? Number(cleanup.appliedCount) || 0 : 0,
+  };
+}
+
+/** Get JD off; a finished review on tabId closes with it. */
+async function turnGetJdOff(tabId) {
+  await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
+  getJdInFlightTabs.clear();
+  getJdLastPageByTab.clear();
+  if (tabId != null) {
+    const result = await readGetJdResultForTab(tabId);
+    if (result?.status === 'complete') await cancelGetJdReview(tabId);
+  }
+  return { ok: true, status: 'get_jd_off', message: 'Get JD cancelled.' };
+}
+
 async function verifyFormScanScripts(tabId) {
   try {
     const results = await chrome.scripting.executeScript({
@@ -6003,14 +6036,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       // Get JD's switch is separate from the work slot, so it has its own Cancel.
       if (action === 'cancel_get_jd') {
-        await chrome.storage.local.set({ [GET_JD_ON_KEY]: false });
-        getJdInFlightTabs.clear();
-        getJdLastPageByTab.clear();
-        if (tabId != null) {
-          const result = await readGetJdResultForTab(tabId);
-          if (result?.status === 'complete') await cancelGetJdReview(tabId);
-        }
-        sendResponse({ ok: true, status: 'get_jd_off', message: 'Get JD cancelled.' });
+        sendResponse(await turnGetJdOff(tabId));
         return;
       }
       if (action === 'cancel_status') {
@@ -6197,21 +6223,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, error: 'Get JD must be started from a web page.' });
         return;
       }
-      const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
-      if (!token) {
-        sendResponse({ ok: false, authRequired: true, error: 'Sign in before starting Get JD.' });
-        return;
-      }
-      await enableGetJdMonitoring();
-      // After 4:00 PM Romania time the first Get JD start of the day (in any Chrome) asks to clear
-      // applied job rows; the server answers whether to ask, once a day.
-      const cleanup = await workerApiRequest('POST', '/api/extension/get-jd/applied-cleanup', { action: 'check' }).catch(() => null);
-      sendResponse({
-        ok: true,
-        status: 'get_jd',
-        message: 'Get JD is on. QTS checks each job page you open.',
-        appliedCleanupCount: cleanup?.success === true && cleanup.ask === true ? Number(cleanup.appliedCount) || 0 : 0,
-      });
+      sendResponse(await turnGetJdOn());
     })().catch((error) => sendResponse({
       ok: false,
       error: error instanceof Error ? error.message : 'Could not run this QTS action.',
@@ -7626,9 +7638,8 @@ self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
 // installed or reloaded, which Chrome leaves without the manifest's content scripts.
 const TOOLBAR_LAUNCHER_FILES = ['shared/get-jd-notifications.js', 'content/page-toast.js', 'content/page-launcher.js'];
 
-async function sendToolbarClick(tab) {
-  if (await self.__qtsApplyRunner?.openOwnedPanel?.(tab.id)) return { ok: true };
-  const message = { type: 'QTS_TOOLBAR_ICON_CLICKED' };
+// A message for the tab's launcher, adding its page scripts first when the tab has none.
+async function sendToLauncher(tab, message) {
   try {
     return await chrome.tabs.sendMessage(tab.id, message, { frameId: 0 });
   } catch (error) {
@@ -7636,6 +7647,11 @@ async function sendToolbarClick(tab) {
     await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, files: TOOLBAR_LAUNCHER_FILES });
     return chrome.tabs.sendMessage(tab.id, message, { frameId: 0 });
   }
+}
+
+async function sendToolbarClick(tab) {
+  if (await self.__qtsApplyRunner?.openOwnedPanel?.(tab.id)) return { ok: true };
+  return sendToLauncher(tab, { type: 'QTS_TOOLBAR_ICON_CLICKED' });
 }
 
 // On owned Apply tabs reveal their panel; elsewhere toggle Sign In or the launcher actions.
@@ -7664,6 +7680,66 @@ chrome.action.onClicked.addListener((tab) => {
           : 'QTS works on web pages. Open a website and click the icon again.',
       });
     });
+});
+
+// ---- Keyboard shortcuts: Alt+G (Get JD) and Alt+H (Highlight), changeable in chrome://extensions/shortcuts ----
+const GET_JD_SHORTCUT_COMMAND = 'toggle-get-jd';
+const HIGHLIGHT_SHORTCUT_COMMAND = 'toggle-text-highlights';
+
+/** The keys Chrome has for a shortcut now, for example "Alt+G"; '' when it has none. */
+async function shortcutKeys(commandName) {
+  const commands = await chrome.commands.getAll().catch(() => []);
+  return commands.find((command) => command.name === commandName)?.shortcut || '';
+}
+
+function notifyFromShortcut(message) {
+  chrome.notifications?.create?.(`qts-shortcut-${Date.now()}`, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('assets/icon128.png'),
+    title: 'QTS_Startup',
+    message,
+  });
+}
+
+async function toggleGetJdFromShortcut(tab) {
+  const shortcut = await shortcutKeys(GET_JD_SHORTCUT_COMMAND);
+  // The page's launcher switches Get JD as a click on its Get JD row does, and says so in a toast.
+  if (tab?.id != null) {
+    const reply = await sendToLauncher(tab, { type: 'QTS_GET_JD_SHORTCUT', shortcut }).catch(() => null);
+    if (reply?.ok) return;
+  }
+  // No launcher on this page (a browser page, or QTS is turned off here): switch it here and say so
+  // in a Chrome notification. The daily "Clear applied jobs?" question waits for a start from a page.
+  const wasOn = await isGetJdActive();
+  const result = wasOn ? await turnGetJdOff(tab?.id) : await turnGetJdOn({ askAppliedCleanup: false });
+  const pressAgain = shortcut ? ` Press ${shortcut} to turn it ${wasOn ? 'on again' : 'off'}.` : '';
+  notifyFromShortcut(!result.ok
+    ? result.error
+    : wasOn ? `Get JD is off.${pressAgain}` : `Get JD is on. QTS checks each job page you open.${pressAgain}`);
+}
+
+async function toggleHighlightsFromShortcut(tab) {
+  const shortcut = await shortcutKeys(HIGHLIGHT_SHORTCUT_COMMAND);
+  // The page's launcher opens the Highlight panel as its Highlight button does, or closes it when open.
+  const reply = tab?.id != null
+    ? await sendToLauncher(tab, { type: 'QTS_HIGHLIGHT_SHORTCUT', shortcut }).catch(() => null)
+    : null;
+  if (reply?.ok) return;
+  // The panel belongs to a web page, so a page without the launcher only gets a notification.
+  notifyFromShortcut(reply?.excluded
+    ? 'QTS is turned off on this page, so the Highlight panel cannot open here.'
+    : `The Highlight panel opens on web pages. Open a website, then ${shortcut ? `press ${shortcut}` : 'use the shortcut'} again.`);
+}
+
+const SHORTCUT_RUNS = new Map([
+  [GET_JD_SHORTCUT_COMMAND, toggleGetJdFromShortcut],
+  [HIGHLIGHT_SHORTCUT_COMMAND, toggleHighlightsFromShortcut],
+]);
+
+chrome.commands?.onCommand?.addListener((command, tab) => {
+  const run = SHORTCUT_RUNS.get(command);
+  if (!run) return;
+  run(tab).catch((error) => console.warn(`[QTS] The ${command} shortcut failed:`, error));
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {

@@ -43,6 +43,8 @@ async function initializeGetJdReviewOnce() {
   let profileLoadError = '';
   let panelHideTimer = null;
   let managerSettingsOpen = false;
+  // Which Manager settings page is open ('text-highlights', 'page-exclusions', …), read with managerSettingsOpen.
+  let managerSettingsPanel = '';
   let managerSettingsPermissions = {};
   let highlightRules = [];
   let selectedHighlightRuleId = null;
@@ -752,6 +754,7 @@ async function initializeGetJdReviewOnce() {
       throw new Error('Ask your Super Admin for access to these settings.');
     }
     managerSettingsOpen = true;
+    managerSettingsPanel = panel;
     elements.panelContent.hidden = true;
     settings.root.hidden = false;
     elements.panel.classList.add('is-manager-settings');
@@ -2190,6 +2193,11 @@ async function initializeGetJdReviewOnce() {
       renderCurrentResult();
     },
     openManagerSettings,
+    // The Highlight shortcut closes its page as the page's Back button does.
+    openManagerSettingsPanel() {
+      return managerSettingsOpen ? managerSettingsPanel : '';
+    },
+    closeManagerSettings,
     disable() {
       setPanelVisible(false);
       chrome.runtime.onMessage.removeListener(onRuntimeMessage);

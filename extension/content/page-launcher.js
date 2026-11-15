@@ -1778,6 +1778,62 @@ async function initializeQtsPageLauncher() {
     }
   }
 
+  // Keyboard shortcuts (manifest commands, changeable in Chrome). Their toasts have no duplicate
+  // key: pressing one on, off and on again shows each change.
+  const shortcutToast = (message, type) => globalThis.__qtsPageToast?.show(message, { type });
+
+  // A shortcut pressed while signed out opens Sign In and says what to do then.
+  async function signedInForShortcut(shortcut, purpose) {
+    if (await syncSessionAction()) return true;
+    showSignInForm();
+    shortcutToast(`Sign in to QTS first, then ${shortcut ? `press ${shortcut}` : 'use the shortcut'} to ${purpose}.`, 'warn');
+    return false;
+  }
+
+  // The Get JD shortcut (Alt+G): what a click on Get JD's row does, then a toast says what changed.
+  // A second press while the first is still switching is ignored.
+  let getJdShortcutRunning = false;
+  async function toggleGetJdFromShortcut(shortcut) {
+    if (getJdShortcutRunning) return;
+    getJdShortcutRunning = true;
+    const toast = shortcutToast;
+    const pressAgain = (turnedOn) => (shortcut ? ` Press ${shortcut} to turn it ${turnedOn ? 'off' : 'on again'}.` : '');
+    rowNotes.delete('get_jd');
+    try {
+      if (!(await signedInForShortcut(shortcut, 'turn on Get JD'))) return;
+      const turnOn = (await chrome.storage.local.get('qtsGetJdOn')).qtsGetJdOn !== true;
+      const response = await chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: turnOn ? 'get_jd' : 'cancel_get_jd' });
+      if (!response?.ok) throw new Error(response?.error || `Could not turn Get JD ${turnOn ? 'on' : 'off'}.`);
+      toast(
+        turnOn ? `Get JD is on. QTS checks each job page you open.${pressAgain(true)}` : `Get JD is off.${pressAgain(false)}`,
+        turnOn ? 'success' : 'info',
+      );
+      if (turnOn && response.appliedCleanupCount > 0) askAppliedCleanup(response.appliedCleanupCount);
+    } catch (error) {
+      const message = error?.message || 'Could not switch Get JD.';
+      rowNotes.set('get_jd', [message, 'error']);
+      toast(message, 'error');
+    } finally {
+      getJdShortcutRunning = false;
+      refreshModeActions();
+    }
+  }
+
+  // The Highlight shortcut (Alt+H): open, the panel closes as its Back button does; otherwise what a
+  // click on the Highlight button does (another settings page open switches to Highlight). Without
+  // access the button's own check says to ask the Super Admin; a press while it opens is ignored.
+  async function toggleHighlightsFromShortcut(shortcut) {
+    const review = globalThis.__qtsGetJdReview;
+    if (review?.openManagerSettingsPanel?.() === 'text-highlights') {
+      review.closeManagerSettings();
+      return;
+    }
+    if (!(await signedInForShortcut(shortcut, 'open Highlight'))) return;
+    const button = menu.querySelector('[data-action="text_highlights"]');
+    if (!button || button.disabled) return;
+    await openHighlightPanel(button);
+  }
+
   async function handleLauncherClick() {
     // The launcher is only visible while signed in; a session that just expired hides it here.
     if (!(await syncSessionAction())) return;
@@ -1899,6 +1955,8 @@ async function initializeQtsPageLauncher() {
     syncTextHighlightAction,
     openPageExclusionPanel,
     toggleFromToolbar,
+    toggleGetJdFromShortcut,
+    toggleHighlightsFromShortcut,
     setActive(value) {
       if (active === value && (!value || host.isConnected)) return;
       active = value;
@@ -1984,6 +2042,11 @@ function restorePageLauncher() {
 }
 
 globalThis.__qtsInitializePageLauncher = initializeQtsPageLauncherOnce;
+// A keyboard shortcut's message, and the launcher method that answers it.
+const SHORTCUT_RUNS = new Map([
+  ['QTS_GET_JD_SHORTCUT', 'toggleGetJdFromShortcut'],
+  ['QTS_HIGHLIGHT_SHORTCUT', 'toggleHighlightsFromShortcut'],
+]);
 // These listeners outlive any one launcher so a disabled launcher can come back.
 if (!globalThis.__qtsPageLauncherNavigationListener) {
   globalThis.__qtsPageLauncherNavigationListener = true;
@@ -2011,6 +2074,27 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
         })
         .catch((error) => {
           console.error('[QTS extension] Could not respond to the toolbar icon:', error);
+          sendResponse({ ok: false });
+        });
+      return true;
+    }
+    const shortcutRun = SHORTCUT_RUNS.get(message?.type);
+    if (shortcutRun) {
+      // Started like the toolbar icon. Without a launcher here (QTS turned off on this page), the
+      // service worker answers instead: it switches Get JD itself, or says Highlight cannot open here.
+      refreshPageLauncherActivity()
+        .then(() => initializeQtsPageLauncherOnce())
+        .then(async () => {
+          const pageLauncher = globalThis.__qtsPageLauncher;
+          if (typeof pageLauncher?.[shortcutRun] !== 'function' || globalThis.__qtsLauncherActive !== true) {
+            sendResponse({ ok: false, excluded: pageLauncher?.excluded === true });
+            return;
+          }
+          await pageLauncher[shortcutRun](String(message.shortcut || ''));
+          sendResponse({ ok: true });
+        })
+        .catch((error) => {
+          console.error(`[QTS extension] Could not respond to the ${message.type} shortcut:`, error);
           sendResponse({ ok: false });
         });
       return true;
