@@ -2,6 +2,8 @@ import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { Archive, ChevronDown, Clock, Info, ListChecks, MessageSquareText, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { ActionRow } from "@/app/settings/action-row";
+import { Badge as UiBadge } from "@/app/ui/badge";
+import { Card, CardHeader } from "@/app/ui/card";
 import { jobRecordTimeZoneOptions } from "@/server/jobs/job-record-time-zones";
 import { GlobalPromptForm, PromptVersionPicker, type PromptVersion } from "@/app/settings/prompt-forms";
 import { ManagerApplyChoice, ManagerChatGptUrlCell, ManagerSettingSwitch } from "@/app/settings/manager-settings";
@@ -72,34 +74,15 @@ const promptGroups = [
   },
 ] as const;
 
-// Small building blocks shared by the Prompts, General and Old tabs, so they look alike.
-function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:px-6 ${className}`}>{children}</div>;
-}
+// The Prompts, General and Old tabs use the shared card and badge (src/app/ui), so they look alike.
+const badgeTones = { slate: "neutral", indigo: "primary", sky: "primary", emerald: "success", amber: "warning" } as const;
 
-function Badge({ children, tone = "slate" }: { children: ReactNode; tone?: "slate" | "indigo" | "emerald" | "sky" | "amber" }) {
-  const tones = {
-    slate: "bg-slate-100 text-slate-600",
-    indigo: "bg-indigo-100 text-indigo-700",
-    emerald: "bg-emerald-100 text-emerald-700",
-    sky: "bg-sky-100 text-sky-700",
-    amber: "bg-amber-100 text-amber-800",
-  };
-  return <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${tones[tone]}`}>{children}</span>;
+function Badge({ children, tone = "slate" }: { children: ReactNode; tone?: keyof typeof badgeTones }) {
+  return <UiBadge tone={badgeTones[tone]}>{children}</UiBadge>;
 }
 
 function CardTitle({ icon: Icon, title, children }: { icon: LucideIcon; title: ReactNode; children?: ReactNode }) {
-  return (
-    <div className="flex min-w-0 items-start gap-3">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
-        <Icon aria-hidden="true" className="size-4" />
-      </span>
-      <div className="min-w-0">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-        {children && <div className="mt-1 text-xs leading-5 text-slate-500">{children}</div>}
-      </div>
-    </div>
-  );
+  return <CardHeader description={children} icon={<Icon aria-hidden="true" />} title={title} />;
 }
 
 // Active Managers with every per-Manager setting; the Managers, Prompts and Old tabs list them.
@@ -138,8 +121,8 @@ function managerNameOf(manager: { displayName: string | null; loginName: string 
 function TabIntro({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="mb-4">
-      <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-      <p className="mt-1 text-xs leading-5 text-slate-500">{children}</p>
+      <h2 className="text-sm font-semibold text-fg">{title}</h2>
+      <p className="mt-1 text-xs leading-5 text-fg-muted">{children}</p>
     </div>
   );
 }

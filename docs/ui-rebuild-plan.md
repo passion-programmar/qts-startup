@@ -53,6 +53,11 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
 - Step 6 built 2026-11-15 (Home, Super Admin and Admin): the people, category count and sign-in
   reads run together (4 waits → 2); recent sign-ins read each staff member's last five from the
   (user, time) index instead of ranking every sign-in; the page uses the shared pieces.
+  Committed as e5821e2.
+- Step 7 built 2026-11-15 (Settings): the page and its tabs use the shared header, card and badge;
+  the tab bar uses the named colours. Left for later: the Prompts tab still loads every version's
+  full text for its version pickers (Super Admin only); loading the text on demand needs the
+  pickers reworked.
 
 ## Steps
 
