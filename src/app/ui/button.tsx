@@ -3,7 +3,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
 import { cn } from "@/app/ui/cn";
 
-export type ButtonVariant = "primary" | "secondary" | "danger" | "soft" | "ghost";
+export type ButtonVariant = "primary" | "secondary" | "danger" | "dangerSoft" | "soft" | "ghost";
 export type ButtonSize = "sm" | "md";
 
 const base =
@@ -14,6 +14,7 @@ const variants: Record<ButtonVariant, string> = {
   primary: "bg-primary text-white shadow-sm hover:bg-primary-hover",
   secondary: "border border-line bg-card text-fg-soft shadow-sm hover:border-slate-300 hover:bg-subtle",
   danger: "bg-danger text-white shadow-sm hover:bg-danger-hover",
+  dangerSoft: "border border-danger-ring bg-danger-soft text-danger-text hover:border-rose-300",
   soft: "border border-primary-ring bg-primary-soft text-primary-text hover:border-indigo-300",
   ghost: "text-fg-muted hover:bg-line-soft hover:text-fg",
 };

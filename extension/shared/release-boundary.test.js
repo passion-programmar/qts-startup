@@ -735,7 +735,7 @@ test('every candidate has a category, falling back to the default Global categor
   const defaultMigration = read('drizzle', '0060_manager_prompts_default_category.sql');
   const categoryActions = read('src', 'app', 'categories', 'actions.ts');
   const userActions = read('src', 'app', 'users', 'actions.ts');
-  const userForms = read('src', 'app', 'users', 'user-forms.tsx');
+  const userForms = read('src', 'app', 'users', 'candidate-form.tsx');
 
   assert.ok(!schema.includes('subCategories'));
   assert.ok(

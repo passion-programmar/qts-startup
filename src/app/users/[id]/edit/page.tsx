@@ -1,15 +1,12 @@
 import type { Metadata } from "next";
 import { asc } from "drizzle-orm";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
 import { categories } from "@/db/schema";
+import { PageHeader } from "@/app/ui/page-header";
+import { CandidateEditForm } from "@/app/users/candidate-form";
 import { loadManagerCandidateProfile } from "@/app/users/candidate-profile";
-import { CandidateEditForm } from "@/app/users/user-forms";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
-import { PageHeader } from "@/app/components/page-header";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
 
 export const instant = false;
 
@@ -37,20 +34,15 @@ export default async function EditCandidatePage({
   const name = [candidate.firstName, candidate.lastName].filter(Boolean).join(" ") || "Candidate";
 
   return (
-    <WorkspaceShell activeHref="/users" user={actor}>
-      <main className="py-1">
-        <Link className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 transition hover:text-slate-800" href="/users">
-          <ArrowLeft aria-hidden="true" className="size-4" />
-          Candidate accounts
-        </Link>
-        <PageHeader
-          description={deleted
-            ? "This candidate is deleted: the profile can be read but not changed, and it is not used for jobs."
-            : "Update the candidate's contact information and profile details."}
-          title={deleted ? `${name} (deleted, read-only)` : `Edit ${name}`}
-        />
-        <CandidateEditForm candidate={candidate} categories={candidateCategories} readOnly={deleted} />
-      </main>
-    </WorkspaceShell>
+    <main className="py-1">
+      <PageHeader
+        back={{ href: "/users", label: "Candidate accounts" }}
+        description={deleted
+          ? "This candidate is deleted: the profile can be read but not changed, and it is not used for jobs."
+          : "Update the candidate's contact information and profile details."}
+        title={deleted ? `${name} (deleted, read-only)` : `Edit ${name}`}
+      />
+      <CandidateEditForm candidate={candidate} categories={candidateCategories} readOnly={deleted} />
+    </main>
   );
 }

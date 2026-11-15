@@ -3,7 +3,7 @@ import { asc, desc, eq, sql } from "drizzle-orm";
 import { educations, experiences } from "@/db/schema";
 import { db } from "@/lib/db";
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
-import type { CandidateProfileValues } from "@/app/users/user-forms";
+import type { CandidateProfileValues } from "@/app/users/candidate-form";
 
 type CandidateRow = {
   id: string;
@@ -63,7 +63,9 @@ export async function loadManagerCandidateProfile(
   candidateId: string,
 ): Promise<{ candidate: CandidateProfileValues; deleted: boolean } | null> {
   if (!uuidPattern.test(candidateId)) return null;
-  const result = await db.execute<CandidateRow>(sql`
+  // The profile and its history load together (one wait, not two). History for an id that is not
+  // this Manager's candidate is thrown away below, never returned.
+  const [result, educationRows, experienceRows] = await Promise.all([db.execute<CandidateRow>(sql`
     select
       users.id, users.deleted_at,
       profiles.first_name, profiles.last_name, profiles.birthday, profiles.pdf_template,
@@ -86,12 +88,8 @@ export async function loadManagerCandidateProfile(
       and users.role = 'account'
       and users.parent_user_id = ${managerId}::uuid
     limit 1
-  `);
-  const row = result.rows[0];
-  if (!row) return null;
-
-  // Newest first, the same order the list page used.
-  const [educationRows, experienceRows] = await Promise.all([
+  `),
+    // Newest first, the same order the list page used.
     db.select().from(educations).where(eq(educations.profileUserId, candidateId)).orderBy(
       desc(educations.isCurrent),
       sql`coalesce(${educations.endDate}, ${educations.startDate}) desc nulls last`,
@@ -105,6 +103,8 @@ export async function loadManagerCandidateProfile(
       asc(experiences.sortOrder),
     ),
   ]);
+  const row = result.rows[0];
+  if (!row) return null;
 
   return {
     deleted: Boolean(row.deleted_at),
