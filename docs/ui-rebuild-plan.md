@@ -63,7 +63,11 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
   Committed as 4e94240.
 - Step 9 built 2026-11-15 (Profile): shared header and cards, a role badge. The page reads the
   Manager's saved answers twice (once for the list, once for "Needs answer"); both run at the same
-  time, so it costs a little database work, not time. Left as it is.
+  time, so it costs a little database work, not time. Left as it is. Committed as 1529d80.
+- Step 10 built 2026-11-15 (Resume): panels and buttons use the named colours and shapes; the
+  page no longer wraps itself in the old shell. The PDF renderer already runs only on the server;
+  the page's own browser code (resume data handling, default resume, ~37 KB) is all needed at
+  start. /resume-template (the preview frame) needed nothing.
 
 ## Steps
 

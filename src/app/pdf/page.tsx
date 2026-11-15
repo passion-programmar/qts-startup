@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { PdfWorkspace } from "@/app/pdf/pdf-workspace";
 import { requireUser } from "@/lib/session";
 import { loadTemplateStyles } from "@/server/pdf/template-styles";
@@ -17,8 +16,6 @@ export default async function PdfPage() {
   // The Manager's saved template styles: the layout settings start from them.
   const savedStyles = await loadTemplateStyles(currentUser.id);
   return (
-    <WorkspaceShell activeHref="/pdf" user={currentUser}>
-      <PdfWorkspace managerName={currentUser.displayName} savedStyles={savedStyles} />
-    </WorkspaceShell>
+    <PdfWorkspace managerName={currentUser.displayName} savedStyles={savedStyles} />
   );
 }

@@ -249,7 +249,7 @@ export function PdfWorkspace({
     <main className="py-1 lg:flex lg:h-[calc(100dvh-8.5rem)] lg:min-h-[28rem] lg:flex-col">
       <header className="mb-4 flex shrink-0 flex-wrap items-start justify-between gap-3">
         <a
-          className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
+          className="inline-flex items-center gap-2 rounded-control border border-primary-ring bg-primary-soft px-3 py-2 text-sm font-semibold text-primary-text hover:border-indigo-300"
           href="/resume-template"
           rel="noreferrer"
           target="_blank"
@@ -262,7 +262,7 @@ export function PdfWorkspace({
         <nav aria-label="Document preview selection" className="flex items-center gap-3">
           <button
             aria-label="Show resume"
-            className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex size-10 items-center justify-center rounded-full border border-line bg-card text-fg-soft shadow-sm hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-40"
             disabled={activeDocument === "resume"}
             onClick={() => setActiveDocument("resume")}
             type="button"
@@ -274,7 +274,7 @@ export function PdfWorkspace({
           </span>
           <button
             aria-label="Show cover letter"
-            className="inline-flex size-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex size-10 items-center justify-center rounded-full border border-line bg-card text-fg-soft shadow-sm hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-40"
             disabled={activeDocument === "cover-letter"}
             onClick={() => setActiveDocument("cover-letter")}
             type="button"
@@ -287,7 +287,7 @@ export function PdfWorkspace({
           Whole-number fr values let the PDF panel take all remaining space when the JSON panel is at
           its minimum width (fractions below 1 would leave part of the row empty). */}
       <div className="grid items-start gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(17rem,34fr)_minmax(0,66fr)]">
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:max-h-full lg:overflow-y-auto">
+        <section className="overflow-hidden rounded-card border border-line bg-card shadow-sm lg:max-h-full lg:overflow-y-auto">
           <div className="space-y-4 p-5">
             <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-template">Resume and cover-letter template
               <select className={inputClass} id="pdf-template" onChange={(event) => {
@@ -334,7 +334,7 @@ export function PdfWorkspace({
                   : "Choose a folder once in supported browsers; otherwise PDFs use the normal download location."}
               </p>
               <button
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-control border border-line bg-card px-3 py-2 text-sm font-semibold text-fg-soft shadow-sm hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={busy || !downloadDirectoryReady}
                 onClick={() => void changeDownloadDirectory()}
                 type="button"
@@ -345,7 +345,7 @@ export function PdfWorkspace({
             <p className="text-xs text-slate-500">Both PDFs are saved under QTS_Resume / {managerName} / candidate within your chosen folder. Browsers without folder access use their normal download location.</p>
             <div className="mt-4 space-y-3">
               <button
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-control bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={busy || !parsed || previewOutOfDate || !downloadDirectoryReady}
                 onClick={() => void downloadPair()}
                 type="button"
@@ -363,7 +363,7 @@ export function PdfWorkspace({
         </section>
         <section
           aria-label="PDF preview"
-          className="min-w-0 rounded-xl border border-slate-200 bg-slate-100 p-3 shadow-sm sm:p-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden"
+          className="min-w-0 rounded-card border border-line bg-subtle p-3 shadow-sm sm:p-4 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden"
         >
           <h2 className="mb-3 text-sm font-semibold text-slate-800">{documentLabel} · {pdfTemplateLabels[selectedTemplate]}</h2>
           {!parsed && <p className="mb-3 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">Sample preview — enter valid resume JSON to preview your document. The selected template is shown below.</p>}
