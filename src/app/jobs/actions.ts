@@ -6,6 +6,7 @@ import { applyAttempts, jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
 import { jobHasBid } from "@/server/jobs/job-bids";
+import { deleteJobsMessage, deleteManagerJobs, MAX_JOBS_PER_DELETE, type DeleteJobsResult } from "@/server/jobs/delete-jobs";
 import { answerApplication, applyJobAgain } from "@/server/apply/apply-attempts";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { jobStatusChangeError, type JobStatus } from "@/server/jobs/job-status-change";
@@ -310,6 +311,49 @@ export async function deleteJobAction(
     };
   }
   return { error: null, success: "Job deleted." };
+}
+
+/** "Delete selected" on the Jobs page: the jobs ticked on the page, as repeated "ids" values. */
+export async function deleteJobsAction(
+  _state: RecordActionState,
+  formData: FormData,
+): Promise<RecordActionState> {
+  let manager: Awaited<ReturnType<typeof getCurrentUser>>;
+  try {
+    manager = await getCurrentUser();
+  } catch (error) {
+    console.error("Could not verify the session before deleting selected jobs.", error);
+    return { error: "Your session could not be verified. Refresh the page and try again.", success: null };
+  }
+  if (!manager) return { error: "Your session has expired. Sign in again.", success: null };
+  if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
+  const ids = [...new Set(formData.getAll("ids")
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(uuid))];
+  if (ids.length === 0) return { error: "Select at least one job to delete.", success: null };
+  if (ids.length > MAX_JOBS_PER_DELETE) {
+    return { error: `Delete at most ${MAX_JOBS_PER_DELETE} jobs at a time.`, success: null };
+  }
+  let result: DeleteJobsResult;
+  try {
+    result = await deleteManagerJobs(manager.id, ids);
+  } catch (error) {
+    console.error("Could not delete the selected jobs.", error);
+    if (isForeignKeyViolation(error)) {
+      return { error: "A selected job is linked to another record and cannot be deleted. Nothing was deleted.", success: null };
+    }
+    return { error: "The jobs could not be deleted because of a server or database error. Nothing was deleted.", success: null };
+  }
+  if (result.deleted > 0) {
+    try {
+      revalidatePath("/jobs");
+    } catch (error) {
+      console.error("Jobs were deleted, but the Jobs page could not be refreshed.", error);
+    }
+  }
+  const message = deleteJobsMessage(result);
+  return result.deleted > 0 ? { error: null, success: message } : { error: message, success: null };
 }
 
 function text(data: FormData, name: string, max: number): string {

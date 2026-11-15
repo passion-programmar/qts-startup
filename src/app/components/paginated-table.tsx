@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useState, useTransition, type ReactNode } from "react";
 
 type PaginatedTableProps = {
-  columns: { label: string; className?: string }[];
+  /** header: shown in the column's heading instead of the label (e.g. a "select all" box); the label
+   *  still names the column on narrow screens and for screen readers. */
+  columns: { label: string; className?: string; header?: ReactNode }[];
   /**
    * search: each row's text per search field, matched by the search bar.
    * group: a heading row is shown above the first row of each group (rows come already in group order).
@@ -166,7 +168,7 @@ export function PaginatedTable({
                   key={column.label}
                   scope="col"
                 >
-                  {column.label}
+                  {column.header ?? column.label}
                 </th>
               ))}
             </tr>

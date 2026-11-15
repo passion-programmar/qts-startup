@@ -16,6 +16,7 @@ import { ExportUrlsButton } from "@/app/components/export-urls";
 import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
 import { AnswerApplicationButtons, ApplyAgainButton } from "@/app/jobs/apply-buttons";
 import { JobsFilters } from "@/app/jobs/jobs-filters";
+import { JobSelectionProvider, SelectAllJobsCheckbox, SelectedJobsBar, SelectJobCheckbox } from "@/app/jobs/job-selection";
 import { jobUrlsOnDayAction } from "@/app/jobs/actions";
 import { profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -170,6 +171,9 @@ export default async function JobsPage({
   const pageQuery = { ...query, page: list.page };
   const offset = (list.page - 1) * query.size;
   const filtered = query.tab !== "all" || query.candidate !== "all" || query.date !== "all" || query.q !== "";
+  // A job still making its résumé cannot be deleted, so it cannot be ticked either.
+  const generatingNow = (row: { generationStatus: string }) => row.generationStatus === "processing";
+  const selectableIds = list.rows.filter((row) => !generatingNow(row)).map((row) => row.id);
 
   return (
       <main className="py-1">
@@ -184,20 +188,28 @@ export default async function JobsPage({
           title="Jobs"
         />
         <JobsFilters candidates={filterCandidates} counts={list.counts} query={pageQuery} today={today} />
+        {/* Tick boxes and the Delete selected bar share one selection, limited to this page. */}
+        <JobSelectionProvider selectableIds={selectableIds}>
         <PaginatedTable
           columns={[
+            { label: "Select", className: "w-[3%]", header: <SelectAllJobsCheckbox /> },
             { label: "No", className: "w-[4%]" },
             { label: "Name", className: "w-[11%]" },
-            { label: "Job title", className: "w-[19%]" },
+            { label: "Job title", className: "w-[17%]" },
             { label: "Company", className: "w-[12%]" },
             { label: "Status", className: "w-[14%]" },
             { label: "Résumé", className: "w-[8%]" },
-            { label: "Prompt · Template", className: "w-[12%]" },
+            { label: "Prompt · Template", className: "w-[11%]" },
             { label: "Date", className: "w-[7%]" },
             { label: "Actions", className: "w-[13%]" },
           ]}
           emptyMessage={filtered ? "No jobs match these filters" : "No jobs saved yet"}
-          toolbar={<ExportUrlsButton fileLabel="jobs" loadEntries={jobUrlsOnDayAction} today={today} />}
+          toolbar={
+            <div className="flex flex-wrap items-center gap-2">
+              <SelectedJobsBar />
+              <ExportUrlsButton fileLabel="jobs" loadEntries={jobUrlsOnDayAction} today={today} />
+            </div>
+          }
           searchFields={[...jobSearchFields]}
           server={{
             path: "/jobs",
@@ -243,6 +255,12 @@ export default async function JobsPage({
             return {
               id: row.id,
               cells: [
+                <SelectJobCheckbox
+                  disabledReason={generatingNow(row) ? "Making its résumé now: cancel Generation to delete it" : undefined}
+                  jobId={row.id}
+                  key="select"
+                  title={`${row.title} — ${row.company}`}
+                />,
                 offset + index + 1,
                 candidateName,
                 <a
@@ -283,6 +301,7 @@ export default async function JobsPage({
             };
           })}
         />
+        </JobSelectionProvider>
       </main>
   );
 }
