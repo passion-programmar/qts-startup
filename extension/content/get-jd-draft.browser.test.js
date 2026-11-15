@@ -149,9 +149,22 @@ test('the draft panel shows the read job, keeps edits, and sends only on Check',
     assert.equal(await page.evaluate(() => document.querySelector('link[rel="qts-hidden-icon"]')?.dataset.qtsIconRel), 'icon', 'the page icon steps aside');
     assert.match(await page.evaluate(() => window.testRoot.querySelector('.details').textContent), /Alice/);
     assert.deepEqual(await visibleButtons(), ['Close'], 'a saved job is not checked again');
-    // The worker closes the tab 5 seconds after a successful check; the panel counts down.
-    await checked({ status: 'complete', closesAt: Date.now() + 5000, classification: { isJobPage: true, isRemote: true, job: {} }, profiles: [{ id: 'a', name: 'Alice', autoSaved: true }] });
-    assert.match(await page.evaluate(() => window.testRoot.querySelector('.review-title span').textContent), /^Closing this tab in [45] seconds.$/);
+    // The worker closes the tab 10 seconds after every Gemini result; the panel counts down and
+    // offers Keep open.
+    await checked({ status: 'complete', closesAt: Date.now() + 10000, classification: { isJobPage: true, isRemote: true, job: {} }, profiles: [{ id: 'a', name: 'Alice', autoSaved: true }] });
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('.review-title span').textContent), /^Closing this tab in (9|10) seconds.$/);
+    const keepOpenShown = () => page.evaluate(() => Boolean(window.testRoot.querySelector('[data-keep-open]')));
+    assert.equal(await keepOpenShown(), true);
+    await page.evaluate(() => window.testRoot.querySelector('[data-keep-open]').click());
+    await page.waitForFunction(() => window.calls.at(-1)?.type === 'QTS_GET_JD_KEEP_OPEN');
+    // The worker clears the countdown; the panel then says the tab stays.
+    await checked({ status: 'complete', keptOpen: true, classification: { isJobPage: true, isRemote: true, job: {} }, profiles: [{ id: 'a', name: 'Alice', autoSaved: true }] });
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('.review-title span').textContent), 'This tab stays open.');
+    assert.equal(await keepOpenShown(), false);
+    // Not a job closes too, with the same countdown.
+    await checked({ status: 'error', closesAt: Date.now() + 10000, message: 'Not a valid job page: a list.', classification: { isJobPage: false, isRemote: false, job: { reason: 'A list of jobs.' } } });
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('.review-title span').textContent), /^Closing this tab in (9|10) seconds.$/);
+    assert.equal(await keepOpenShown(), true);
 
     // A check that saved nothing can be edited and checked again.
     // Circles only on known jobs: red for a job not saved; none when the page is not a job or the

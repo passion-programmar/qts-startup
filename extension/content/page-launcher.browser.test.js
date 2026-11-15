@@ -58,6 +58,10 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     }
     res.setHeader('Content-Type','application/json');res.end(JSON.stringify(result));
   });
+  // Node closes an idle keep-alive connection after 5 s; a request Chrome sends on it right then is
+  // lost (no reply until the worker's 20 s timeout). The 10 s Get JD result countdown leaves the
+  // connection idle that long, so this test server keeps idle connections open longer.
+  server.keepAliveTimeout=60000;
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;let browser,worker;
   try{
     browser=await require('puppeteer-core').launch({executablePath:CHROME,headless:true,pipe:true,enableExtensions:[path.join(root,'extension')],args:['--no-first-run']});
@@ -109,13 +113,14 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     assert.equal(gemini()[0].body.pageTitle,'Senior Software Engineer');
     assert.equal(gemini()[0].body.precheckToken,'local-fixture-ticket');
     await until('background completion',async()=>(await result(background.id))?.status==='complete');
-    // The result shows on the tab, which closes 5 seconds later (even with auto-close off).
+    // The result shows on the tab, which closes 10 seconds later (even with auto-close off).
     // The success alert says what this check did; the candidate just saved is never "already" having it.
     const done=await result(background.id);
     assert.equal(done.message,'Successfully saved this job for 1');
     assert.equal(done.summaryText,done.message);assert.equal(done.toastMessage,done.message);
     assert.doesNotMatch(JSON.stringify([done.message,done.summaryText,done.toastMessage]),/already/i);
     await until('countdown shown',async()=>Number((await result(background.id))?.closesAt)>Date.now());
+    assert.ok(Number((await result(background.id)).closesAt)-Date.now()>6000,'a Gemini result is shown for 10 seconds before its tab closes');
     // Saved: a blue circle on the job tab itself; nothing in Get JD history or toasts on other pages.
     await until('blue circle on the tab',async()=>(await worker.evaluate(async id=>(await chrome.scripting.executeScript({target:{tabId:id},func:()=>document.querySelector('link[data-qts-tab-mark]')?.dataset.qtsTabMark||''}))[0].result,background.id))==='saved');
     await until('Chrome shows the circle as the tab icon',async()=>(await worker.evaluate(async id=>(await chrome.tabs.get(id)).favIconUrl||'',background.id)).startsWith('data:image/svg+xml'));

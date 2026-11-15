@@ -1713,6 +1713,9 @@ async function saveGetJdSelection(tabId, profileIds, manualJob) {
 
 const GET_JD_AUTO_CLOSE_KEY = 'qtsGetJdAutoClose';
 const GET_JD_CLOSE_SECONDS = 5;
+// Every Gemini result (saved, no match, already in QTS, not a job, not eligible) is shown this long,
+// then its tab closes; Keep open or Edit and check again stops it.
+const GET_JD_RESULT_CLOSE_SECONDS = 10;
 const GET_JD_CLOSE_ALARM = 'qtsGetJdClose:';
 const getJdCloseTimers = new Map();
 async function cancelGetJdClose(tabId) {
@@ -1824,8 +1827,9 @@ async function showGetJdOutcome(tabId, url, outcome) {
     });
   }
   const autoClose = outcome.forceClose === true || await isGetJdAutoCloseOn();
+  const closeSeconds = Number(outcome.closeSeconds) > 0 ? Number(outcome.closeSeconds) : GET_JD_CLOSE_SECONDS;
   const closeDeadline = outcome.kind === 'done'
-    ? await scheduleGetJdTabClose(tabId, url, GET_JD_CLOSE_SECONDS, { force: outcome.forceClose === true })
+    ? await scheduleGetJdTabClose(tabId, url, closeSeconds, { force: outcome.forceClose === true })
     : (await cancelGetJdClose(tabId), 0);
   const closable = closeDeadline > 0;
   // A checked job shows its result in the panel, with the countdown, until the tab closes.
@@ -1839,7 +1843,7 @@ async function showGetJdOutcome(tabId, url, outcome) {
       ...outcome,
       pageUrl: url,
       autoClose,
-      closeInSeconds: closable ? GET_JD_CLOSE_SECONDS : 0,
+      closeInSeconds: closable ? closeSeconds : 0,
       closeDeadline,
     },
   }, { frameId: 0 }).catch(() => {});
@@ -1850,8 +1854,12 @@ function showGetJdNotice(tabId, url, message, actions, extra = {}) {
 }
 
 // forceClose: the tab closes after the countdown even when the launcher's auto-close is off.
-function showGetJdDone(tabId, url, message, tone = 'success', { forceClose = false } = {}) {
-  return showGetJdOutcome(tabId, url, { kind: 'done', tone, message, forceClose });
+function showGetJdDone(tabId, url, message, tone = 'success', { forceClose = false, closeSeconds = 0 } = {}) {
+  return showGetJdOutcome(tabId, url, { kind: 'done', tone, message, forceClose, closeSeconds });
+}
+// A Gemini result: shown for GET_JD_RESULT_CLOSE_SECONDS, then its tab closes (even with auto-close off).
+function showGetJdResultThenClose(tabId, url, message, tone) {
+  return showGetJdDone(tabId, url, message, tone, { forceClose: true, closeSeconds: GET_JD_RESULT_CLOSE_SECONDS });
 }
 
 // The narrowest blocked-URL fragment for a page: its host and path, without the query.
@@ -1977,7 +1985,9 @@ async function handleGetJdDraftAction(tabId, msg) {
     if (!tab?.url || current?.fromDraft !== true || !current.draftJob || current.status === 'processing' || getJdInFlightTabs.has(tabId)) {
       return { ok: false, error: 'This job cannot be edited right now.' };
     }
-    const { fromDraft: _fromDraft, ...rest } = current;
+    // Editing keeps the tab: the result's countdown stops.
+    await cancelGetJdClose(tabId);
+    const { fromDraft: _fromDraft, closesAt: _closesAt, ...rest } = current;
     await saveGetJdResult(tabId, { ...getJdDraftResult(rest, tab, current.draftJob), rereadAt: Date.now() });
     return { ok: true };
   }
@@ -2226,7 +2236,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           classification: geminiResult.classification,
           updatedAt: Date.now(),
         });
-        await showGetJdNotice(tabId, url, message, [], { tone: 'info' });
+        // Shown, then closed like every Gemini result; Edit and check again or Keep open stops it.
+        await showGetJdResultThenClose(tabId, url, message, 'info');
         return;
       }
       if (geminiResult.classification?.isRemote !== true) {
@@ -2244,7 +2255,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           classification: geminiResult.classification,
           updatedAt: Date.now(),
         });
-        await showGetJdNotice(tabId, url, message, [], { tone: 'info' });
+        await showGetJdResultThenClose(tabId, url, message, 'info');
         return;
       }
       const profiles = Array.isArray(geminiResult.profiles) ? geminiResult.profiles : [];
@@ -2265,7 +2276,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           inBids: true,
           updatedAt: Date.now(),
         });
-        await showGetJdDone(tabId, url, geminiResult.message, 'info', { forceClose: true });
+        await showGetJdResultThenClose(tabId, url, geminiResult.message, 'info');
         return;
       }
       // Gemini's answer in plain words: who the job was saved for now, or why nothing was saved.
@@ -2291,7 +2302,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           inBids: geminiResult.inBids === true,
           updatedAt: Date.now(),
         });
-        await showGetJdDone(tabId, url, 'Every candidate already had this job. Nothing new was saved.', 'info', { forceClose: true });
+        await showGetJdResultThenClose(tabId, url, 'Every candidate already had this job. Nothing new was saved.', 'info');
         return;
       }
       const matchingIds = new Set(geminiResult.classification.matchingProfileIds || []);
@@ -2335,16 +2346,10 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
         ])],
       });
       // Gemini's picks are final: no manual review. The job is saved for the candidates it matched
-      // (or for none); the panel shows the result and the tab closes 5 seconds later. Only a failed
+      // (or for none); the panel shows the result and the tab closes 10 seconds later. Only a failed
       // save stays open, so the Manager can retry it.
       if (!(geminiResult.autoSaveFailureCount > 0)) {
-        await showGetJdDone(
-          tabId,
-          url,
-          resultMessage,
-          savedNow ? 'success' : 'info',
-          { forceClose: true },
-        );
+        await showGetJdResultThenClose(tabId, url, resultMessage, savedNow ? 'success' : 'info');
       }
       return;
     }
@@ -5967,7 +5972,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'QTS_GET_JD_KEEP_OPEN') {
     if (sender.tab?.id == null || sender.frameId !== 0) return false;
-    cancelGetJdClose(sender.tab.id).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    const tabId = sender.tab.id;
+    (async () => {
+      await cancelGetJdClose(tabId);
+      // A checked job's panel shows the countdown from its result: clear it so the panel stops too.
+      const result = await readGetJdResultForTab(tabId);
+      if (result?.fromDraft === true && result.closesAt) {
+        const { closesAt: _closesAt, ...kept } = result;
+        await saveGetJdResult(tabId, { ...kept, keptOpen: true });
+      }
+    })().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
     return true;
   }
 

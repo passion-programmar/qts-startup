@@ -1886,9 +1886,24 @@ async function initializeGetJdReviewOnce() {
     elements.cancel.disabled = false;
     elements.cancel.textContent = 'Close';
     elements.cancel.onclick = () => closeJobTab();
-    // A successful check: the result shows, then the tab closes after the countdown.
+    // Every Gemini result shows, then the tab closes after the countdown. Keep open (or Edit and
+    // check again) stops it: the worker clears closesAt and this view shows again without it.
     clearInterval(closeCountdownTimer);
     if (Number(result.closesAt) > Date.now()) {
+      const tools = document.createElement('div');
+      tools.className = 'draft-tools';
+      const keepOpen = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Keep open' });
+      keepOpen.dataset.keepOpen = 'true';
+      keepOpen.onclick = async () => {
+        keepOpen.disabled = true;
+        const response = await chrome.runtime.sendMessage({ type: 'QTS_GET_JD_KEEP_OPEN' }).catch(() => null);
+        if (!response?.ok) {
+          keepOpen.disabled = false;
+          elements.message.textContent = 'Could not keep this tab open.';
+        }
+      };
+      tools.append(keepOpen);
+      elements.details.insertBefore(tools, elements.details.firstChild);
       const tick = () => {
         const seconds = Math.max(0, Math.ceil((Number(result.closesAt) - Date.now()) / 1000));
         line.textContent = 'Closing this tab in ' + seconds + (seconds === 1 ? ' second.' : ' seconds.');
@@ -1896,6 +1911,8 @@ async function initializeGetJdReviewOnce() {
       };
       tick();
       closeCountdownTimer = setInterval(tick, 250);
+    } else if (result.keptOpen === true && !running) {
+      line.textContent = 'This tab stays open.';
     }
   }
 
