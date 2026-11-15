@@ -60,6 +60,10 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
   pickers reworked. Committed as dc9edc5.
 - Step 8 built 2026-11-15 (My AI prompts, Useful prompts, Categories): shared header, card and
   badges; the prompts guidance line is the header's description. Their data was already small.
+  Committed as 4e94240.
+- Step 9 built 2026-11-15 (Profile): shared header and cards, a role badge. The page reads the
+  Manager's saved answers twice (once for the list, once for "Needs answer"); both run at the same
+  time, so it costs a little database work, not time. Left as it is.
 
 ## Steps
 
