@@ -51,7 +51,7 @@ test('invalid paths, missing permission and newly revoked Manager access never w
   const f = fixture(); await settle(); f.input.value = 'C:/Downloads'; await f.save();
   assert.match(f.status.textContent, /end with QTS_Resume/);
   f.input.value = config.rootPath; f.state.permission = false; await f.save(); assert.match(f.status.textContent, /Enable Allow access/);
-  f.state.permission = true; f.state.access = false; await f.save(); assert.match(f.status.textContent, /Manager with Apply/);
+  f.state.permission = true; f.state.access = false; await f.save(); assert.match(f.status.textContent, /Sign in as a Manager/);
   assert.equal(f.state.writes.length, 0);
 });
 

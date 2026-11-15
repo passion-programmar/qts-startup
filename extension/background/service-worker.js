@@ -5719,6 +5719,26 @@ async function isQtsSite(pageUrl) {
   }
 }
 
+// Generation saves the résumé PDFs in Downloads/QTS_Resume and Apply reads them back from there, so
+// none of Generation, Apply or Auto Apply starts until the Manager has saved that folder under Apply
+// PDFs folder: a chosen folder, or its typed full path. The launcher then opens that setting.
+async function hasSavedResumeFolder() {
+  const store = self.__qtsScannerDocumentStore;
+  const [typedPath, chosenFolder] = await Promise.all([
+    store.getSetting(self.__qtsApplyFileAccess.SETTING_KEY),
+    store.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY),
+  ]);
+  return typedPath?.value != null || Boolean(chosenFolder?.value);
+}
+
+function resumeFolderRequired(work) {
+  return {
+    ok: false,
+    resumeFolderRequired: true,
+    error: `Save the QTS_Resume folder first (Downloads › QTS_Resume), then click ${work} again: Generation saves the résumés there and Apply reads them from it.`,
+  };
+}
+
 function checkedWorkSelection(selection) {
   if (selection === undefined) return null;
   const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -6019,9 +6039,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'apply_pdf_folder') {
+        // Every Manager saves the QTS_Resume folder: Generation needs it too, not only Apply.
         const access = await getManagerExtensionFeatures(true);
-        if (access.success !== true || access.features?.canUseApply !== true) {
-          sendResponse({ ok: false, error: access.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+        if (access.success !== true) {
+          sendResponse({ ok: false, error: access.message || 'Sign in as a Manager to choose the QTS_Resume folder.' });
           return;
         }
         const chooser = await chrome.windows.create({
@@ -6102,6 +6123,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // A Chrome that restarted with Apply on keeps "Apply" saved but its job loop is not running
           // yet: a click starts it again (open job pages are taken up first) instead of doing nothing.
           const restart = !self.__qtsApplyRunner.isQueueRunning();
+          if (restart && !(await hasSavedResumeFolder())) {
+            sendResponse(resumeFolderRequired('Apply'));
+            return;
+          }
           sendResponse({ ok: true, status: 'apply', message: restart ? 'Apply started again: looking for the next ready job.' : 'Apply is already running.' });
           if (restart) {
             self.__qtsApplyRunner.processApplyQueue().catch((error) => {
@@ -6117,6 +6142,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const features = await workerApiRequest('GET', '/api/extension/features/me');
         if (features.success !== true || features.features?.canUseApply !== true) {
           sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+          return;
+        }
+        if (!(await hasSavedResumeFolder())) {
+          sendResponse(resumeFolderRequired('Apply'));
           return;
         }
         // The panel's candidate and checked jobs; none means Apply works through every account.
@@ -6161,6 +6190,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
           return;
         }
+        if (!(await hasSavedResumeFolder())) {
+          sendResponse(resumeFolderRequired('Auto Apply'));
+          return;
+        }
         const selection = checkedWorkSelection(msg.selection);
         await chrome.storage.local.set({ qtsWorkSelection: selection ? { mode: 'auto_apply', ...selection } : null });
         await chrome.storage.local.set({ [self.__qtsAutoApply.KIND_KEY]: 'auto', [EXTENSION_STATUS_KEY]: 'apply' });
@@ -6187,6 +6220,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         if (currentStatus[EXTENSION_STATUS_KEY] === 'apply') {
           sendResponse({ ok: false, error: 'Apply is running in this Chrome. Stop it first, or run Generation in another Chrome.' });
+          return;
+        }
+        if (!(await hasSavedResumeFolder())) {
+          sendResponse(resumeFolderRequired('Generation'));
           return;
         }
         const selection = checkedWorkSelection(msg.selection);
@@ -6786,9 +6823,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, error: 'Open the folder chooser from QTS Tools.' });
         return;
       }
+      // Every Manager saves the QTS_Resume folder: Generation needs it too, not only Apply.
       const access = await getManagerExtensionFeatures(true);
-      if (access.success !== true || access.features?.canUseApply !== true) {
-        sendResponse({ ok: false, error: access.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
+      if (access.success !== true) {
+        sendResponse({ ok: false, error: access.message || 'Sign in as a Manager to choose the QTS_Resume folder.' });
         return;
       }
       const chooser = await chrome.windows.create({

@@ -28,6 +28,7 @@ test('real worker passes exact account/job scope to Generation, Apply and Auto A
       try{
         const worker=await(await browser.waitForTarget(t=>t.type()==='service_worker')).worker();
         await worker.evaluate(async base=>chrome.storage.local.set({qtsServerUrl:base,authToken:'synthetic',authExpiresAt:Date.now()+3600000,qtsSessionUser:{id:'manager',role:'manager'},qtsGetJdOn:false}),base);
+        await worker.evaluate(()=>self.__qtsScannerDocumentStore.putSetting(self.__qtsApplyFileAccess.SETTING_KEY,self.__qtsApplyFileAccess.configuration('C:\\Users\\Manager\\Downloads\\QTS_Resume'))); // the QTS_Resume folder is saved, so work may start
         const control=await browser.newPage();await control.goto('chrome-extension://'+new URL(worker.url()).host+'/signin/signin.html');
         const ask=message=>control.evaluate(m=>chrome.runtime.sendMessage(m),message);
         const accounts=await ask({type:'QTS_WORK_ITEMS',mode});assert.equal(accounts.ok,true,JSON.stringify(accounts));assert.equal(accounts.accounts[0].id,scope.candidateId);
@@ -73,6 +74,7 @@ test('real worker passes exact account/job scope to Generation, Apply and Auto A
     try{
       const worker=await(await browser.waitForTarget(t=>t.type()==='service_worker')).worker();
       await worker.evaluate(async base=>chrome.storage.local.set({qtsServerUrl:base,authToken:'synthetic',authExpiresAt:Date.now()+3600000,qtsSessionUser:{id:'manager',role:'manager'},qtsGetJdOn:false}),base);
+      await worker.evaluate(()=>self.__qtsScannerDocumentStore.putSetting(self.__qtsApplyFileAccess.SETTING_KEY,self.__qtsApplyFileAccess.configuration('C:\\Users\\Manager\\Downloads\\QTS_Resume'))); // the QTS_Resume folder is saved, so work may start
       const control=await browser.newPage();await control.goto('chrome-extension://'+new URL(worker.url()).host+'/signin/signin.html');
       const startedAt=Date.now();
       const result=await control.evaluate(()=>chrome.runtime.sendMessage({type:'QTS_WORK_ITEMS',mode:'generation'}));

@@ -1103,7 +1103,8 @@ async function initializeQtsPageLauncher() {
       customUrlsButton.dataset.tabId = response?.tabId == null ? '' : String(response.tabId);
     }
     if (applyPdfFolderButton) {
-      applyPdfFolderButton.hidden = response?.ok !== true || response.canUseApply !== true;
+      // Every Manager saves the QTS_Resume folder: Generation needs it too, not only Apply.
+      applyPdfFolderButton.hidden = response?.ok !== true;
     }
     if (autoApplyRow) {
       // Apply set to Off in Settings hides Auto Apply. A run already going stays visible so the
@@ -1137,9 +1138,11 @@ async function initializeQtsPageLauncher() {
         type: 'GET_MANAGER_EXTENSION_FEATURES',
         refresh: true,
       });
-      const hasPermission = Array.isArray(permissionKey)
-        ? permissionKey.some((key) => response?.[key] === true)
-        : response?.[permissionKey] === true;
+      // permissionKey null: any signed-in Manager may open this panel.
+      const hasPermission = permissionKey === null
+        || (Array.isArray(permissionKey)
+          ? permissionKey.some((key) => response?.[key] === true)
+          : response?.[permissionKey] === true);
       if (!response?.ok || !hasPermission) {
         button.hidden = true;
         throw new Error(response?.error || `Ask your Super Admin for ${permissionName}.`);
@@ -1193,12 +1196,13 @@ async function initializeQtsPageLauncher() {
     );
   }
 
+  // Open to every signed-in Manager (no extra permission): Generation needs the folder too.
   async function openApplyPdfFolderPanel(button) {
     await openManagerPanel(
       button,
       'apply-pdf-folder',
-      'canUseApply',
-      'Apply access',
+      null,
+      'a Manager account',
     );
   }
 
@@ -1758,6 +1762,13 @@ async function initializeQtsPageLauncher() {
         ...(resolvedAction === 'cancel_status' ? { expectedAction: action } : {}),
         ...(selection ? { selection } : {}),
       });
+      // No QTS_Resume folder saved yet: nothing started. The row says so and the folder setting opens.
+      if (response?.resumeFolderRequired && row) {
+        rowNotes.set(row, [response.error, 'warn']);
+        const folderButton = menu.querySelector('[data-action="apply_pdf_folder"]');
+        if (folderButton) await openApplyPdfFolderPanel(folderButton);
+        return;
+      }
       if (!response?.ok) throw new Error(response?.error || 'Could not run this QTS action.');
       if (resolvedAction === 'sign_out') {
         preview.hidden = true;

@@ -13,9 +13,10 @@
     // A picker warning is irrelevant to direct reads, but legacy relinking still needs a handle.
     folderPicker.hidden = Boolean(config) && !/(?:^|[?&])attemptId=/.test(globalThis.location?.search || '');
   };
+  // Every signed-in Manager saves the QTS_Resume path: Generation needs it too, not only Apply.
   const manager = async () => {
     const response = await chrome.runtime.sendMessage({ type: 'GET_MANAGER_EXTENSION_FEATURES', refresh: true });
-    if (!response?.ok || response.canUseApply !== true) throw new Error(response?.error || 'Sign in as a Manager with Apply access, then reopen this page.');
+    if (!response?.ok) throw new Error(response?.error || 'Sign in as a Manager, then reopen this page.');
   };
 
   async function refresh() {

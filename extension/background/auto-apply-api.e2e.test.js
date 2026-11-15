@@ -789,26 +789,38 @@ test('an Apply drawn without a real button is found and clicked, quickly', { ski
   } finally { await browser.close(); }
 });
 
-test('without the PDF folder no AI request goes out and the run stops at the first job', { skip, timeout: 120000 }, async () => {
+// No QTS_Resume folder saved: the worker's settings say so for every key.
+const noFolderSaved = () => {
+  Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: { getSetting: async () => ({ value: null }) } });
+};
+// A folder is saved, but it cannot be read (not a real folder): Auto Apply may start; only a form
+// with uploads would read it.
+const unreadableFolderSaved = () => {
+  Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: {
+    getSetting: async (key) => ({ value: key === self.__qtsApplyLocalPdfs.SETTING_KEY ? { name: 'QTS_Resume' } : null }),
+  } });
+};
+
+test('without a saved PDF folder Auto Apply does not start: no job is taken and no AI request goes out', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(19, 'form'), application(20, 'form')], autoApplyParallelLimit: 1 });
   const { browser, action, storage, worker } = await launch();
   try {
-    await worker.evaluate(() => { Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: { getSetting: async () => ({ value: null }) } }); });
-    assert.equal((await action('auto_apply')).ok, true);
-    await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus !== 'apply', 60000, 'the run to stop');
-    await until(() => mock.released.length === 1, 20000, 'the job to be given back');
+    await worker.evaluate(noFolderSaved);
+    const reply = await action('auto_apply');
+    assert.equal(reply.ok, false);
+    assert.equal(reply.resumeFolderRequired, true);
+    assert.match(reply.error, /QTS_Resume/);
+    assert.notEqual((await storage(['qtsExtensionStatus'])).qtsExtensionStatus, 'apply');
+    assert.equal(mock.claims, 0, 'no job is taken');
     assert.equal(mock.answers, 0, 'no AI request');
-    assert.equal(mock.claims, 1, 'the next job is not taken');
-    assert.match(mock.released[0].reason, /QTS_Resume/);
-    await until(async () => !(await formPage(browser, '/form')), 10000, 'its tab to close');
   } finally { await browser.close(); }
 });
 
-test('a job whose form has no uploads does not need the PDF folder', { skip, timeout: 120000 }, async () => {
+test('a form with no uploads never reads the saved PDF folder', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(22, 'small')] });
   const { browser, action, storage, worker } = await launch();
   try {
-    await worker.evaluate(() => { Object.defineProperty(self, '__qtsScannerDocumentStore', { configurable: true, value: { getSetting: async () => ({ value: null }) } }); });
+    await worker.evaluate(unreadableFolderSaved);
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     assert.equal(await valueOf(await formPage(browser, '/small'), 'fn'), 'Ana');

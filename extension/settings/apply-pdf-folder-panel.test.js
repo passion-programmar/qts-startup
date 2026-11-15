@@ -67,16 +67,21 @@ function directory(permission = 'granted', requested = 'granted') {
   };
 }
 
-test('folder control stays unavailable unless the Manager has Apply access', async () => {
-  for (const access of [{ ok: false }, { ok: true, canUseApply: false }]) {
-    const f = fixture({ access });
-    await settle();
-    assert.equal(f.button.disabled, true);
-    assert.equal(f.status.dataset.state, 'denied');
-    await f.choose();
-    assert.equal(f.calls.some(([kind]) => kind === 'picker'), false);
-    assert.equal(f.state.writes.length, 0);
-  }
+test('folder control stays unavailable unless a Manager is signed in', async () => {
+  const f = fixture({ access: { ok: false } });
+  await settle();
+  assert.equal(f.button.disabled, true);
+  assert.equal(f.status.dataset.state, 'denied');
+  await f.choose();
+  assert.equal(f.calls.some(([kind]) => kind === 'picker'), false);
+  assert.equal(f.state.writes.length, 0);
+});
+
+test('a Manager with Apply off can still choose the folder: Generation needs it too', async () => {
+  const f = fixture({ access: { ok: true, canUseApply: false } });
+  await settle();
+  assert.equal(f.button.disabled, false);
+  assert.notEqual(f.status.dataset.state, 'denied');
 });
 
 test('embedded panel opens the top-level chooser instead of requesting browser permissions in an iframe', async () => {

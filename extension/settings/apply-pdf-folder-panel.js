@@ -57,8 +57,9 @@
         refresh: true,
       });
       if (current !== revision) return;
-      if (response?.ok !== true || response.canUseApply !== true) {
-        report(response?.error || 'Sign in as a Manager with Apply access to configure this folder.', 'denied');
+      // Every signed-in Manager saves this folder: Generation needs it too, not only Apply.
+      if (response?.ok !== true) {
+        report(response?.error || 'Sign in as a Manager to choose this folder.', 'denied');
         return;
       }
       if (!embedded && typeof window.showDirectoryPicker !== 'function') {
@@ -106,9 +107,9 @@
         refresh: true,
       });
       if (current !== revision) return;
-      if (response?.ok !== true || response.canUseApply !== true) {
+      if (response?.ok !== true) {
         allowed = false;
-        throw new Error(response?.error || 'Apply access is no longer available.');
+        throw new Error(response?.error || 'Sign in as a Manager to save this folder.');
       }
       await store.putSetting(key, directory);
       window.dispatchEvent(new Event('qts-pdf-folder-updated'));

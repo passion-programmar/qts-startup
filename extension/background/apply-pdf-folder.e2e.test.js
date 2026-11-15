@@ -101,11 +101,15 @@ test('authorized Managers configure one persistent read-only folder and both App
       await self.__qtsAccountAuth.storeAuth('synthetic-token', { id: 'manager', role: 'manager' }, Date.now() + 3600000);
     }, base);
     const action = (page, name) => page.evaluate((action) => chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action }), name);
-    assert.equal((await action(control, 'apply_pdf_folder')).ok, false, 'Manager without Apply access cannot open setup');
+    // Every signed-in Manager sets the folder up, Apply or not: Generation needs it too.
+    const opened = await action(control, 'apply_pdf_folder');
+    assert.equal(opened.ok, true, 'a Manager without Apply access can open setup');
+    await worker.evaluate((id) => chrome.windows.remove(id), opened.windowId);
+    // The Apply PDFs recovery page itself (relinking PDFs during an Apply run) stays Apply-only.
     await control.reload();
     await control.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'denied');
     canUseApply = true;
-    console.log('[folder setup] unauthorized Manager refused; opening supported launcher');
+    console.log('[folder setup] Manager without Apply can open setup; opening supported launcher');
 
     const job = await browser.newPage();
     await job.goto(`${base}/job`);

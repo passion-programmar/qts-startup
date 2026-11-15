@@ -749,7 +749,7 @@ async function initializeGetJdReviewOnce() {
         && !managerSettingsPermissions.canManageJobDetectionUrlRules)
       || (panel === 'auto-apply-custom-urls'
         && !managerSettingsPermissions.canManageJobDetectionUrlRules)
-      || (panel === 'apply-pdf-folder' && !managerSettingsPermissions.canUseApply)
+      // The QTS_Resume folder is open to every signed-in Manager: Generation needs it too.
     ) {
       throw new Error('Ask your Super Admin for access to these settings.');
     }
@@ -767,7 +767,7 @@ async function initializeGetJdReviewOnce() {
       : panel === 'auto-apply-custom-urls'
         ? 'Add domains that Auto Apply should skip unless you select their jobs.'
         : panel === 'apply-pdf-folder'
-          ? 'Choose the folder Generation uses for PDFs that Apply and Auto Apply upload.'
+          ? 'Choose the QTS_Resume folder in Downloads. Generation saves the résumé PDFs there, and Apply and Auto Apply upload them from it. None of them starts until this folder is saved.'
         : 'Manage the URL rules assigned to this Manager account.';
     settings.status.textContent = 'Loading settings…';
     settings.status.classList.remove('is-error');
