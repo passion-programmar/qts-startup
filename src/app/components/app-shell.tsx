@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { WorkspaceShellClient } from "@/app/components/workspace-shell-client";
 import { dismissAlertsAction } from "@/app/settings/database-usage/actions";
 import { getCurrentUser } from "@/lib/session";
+import { countTodayInterviews } from "@/server/interviews/interviews-list";
 import { appLevels, readSavedState } from "@/server/database/database-usage";
 import { levelRank, quotasToAlert } from "@/server/database/database-usage-values";
 
@@ -20,7 +21,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
 
   // Super Admin is warned on every page when a database quota passes a level, from what the last
   // Check quota or clean-up saved (no measuring here). Dismiss hides it until a level gets worse.
-  const state = user.role === "super_admin" ? await readSavedState().catch(() => null) : null;
+  // A Manager sees today's interview count beside Interviews (one small indexed count). It updates
+  // when a page reloads or an interview is saved.
+  const [state, todayInterviews] = await Promise.all([
+    user.role === "super_admin" ? readSavedState().catch(() => null) : null,
+    user.role === "manager" ? countTodayInterviews(user.id).catch(() => 0) : 0,
+  ]);
   const levels = state ? appLevels(state) : {};
   const alerts = state ? quotasToAlert(levels, state.dismissed) : [];
   const severe = alerts.some((key) => levelRank(levels[key] ?? "ok") >= levelRank("critical"));
@@ -43,7 +49,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
   ) : null;
 
   return (
-    <WorkspaceShellClient alert={alert} user={user}>
+    <WorkspaceShellClient alert={alert} counts={{ "/interviews": todayInterviews }} user={user}>
       {children}
     </WorkspaceShellClient>
   );

@@ -3,10 +3,12 @@
 import {
   Activity,
   BriefcaseBusiness,
+  CalendarClock,
   ChevronDown,
   Database,
   FileCheck2,
   FileText,
+  Headset,
   X,
   LayoutDashboard,
   LogOut,
@@ -49,10 +51,13 @@ const barePaths = new Set(["/login", "/resume-template"]);
 export function WorkspaceShellClient({
   user,
   alert,
+  counts = {},
   children,
 }: {
   user: StaffSession;
   alert?: ReactNode;
+  // A number shown beside a menu item, by its address (e.g. today's interviews).
+  counts?: Record<string, number>;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -78,10 +83,13 @@ export function WorkspaceShellClient({
           overviewItem,
           { label: "Jobs", href: "/jobs", icon: BriefcaseBusiness },
           { label: "Bids", href: "/bids", icon: FileCheck2 },
+          { label: "Interviews", href: "/interviews", icon: CalendarClock },
           { label: "Resume", href: "/pdf", icon: FileText },
           peopleItem,
         ]
-      : [overviewItem, peopleItem];
+      : user.role === "admin"
+        ? [overviewItem, peopleItem, { label: "Callers", href: "/callers", icon: Headset }]
+        : [overviewItem, peopleItem];
   const adminItems: NavigationItem[] =
     user.role === "super_admin"
       ? [
@@ -184,6 +192,9 @@ export function WorkspaceShellClient({
                   <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} aria-label={item.label} className={`workspace-nav-link ${active ? "workspace-nav-link--active" : ""}`} onClick={() => setMobileNavigationOpen(false)} title={sidebarCollapsed ? item.label : undefined}>
                     <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
                     <span>{item.label}</span>
+                    {counts[item.href] ? (
+                      <span className="ml-auto min-w-5 rounded-full bg-indigo-600 px-1.5 text-center text-[11px] font-semibold text-white" title={`${counts[item.href]} today`}>{counts[item.href]}</span>
+                    ) : null}
                   </Link>
                 );
               })}

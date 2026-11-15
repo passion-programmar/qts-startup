@@ -77,6 +77,9 @@ const listColumns = {
   lastName: profiles.lastName,
   candidateBlocked: users.blockedAt,
   category: categories.name,
+  // The bid's interview rounds in time order as "step:result,…" (e.g. "intro:passed,tech:waiting"),
+  // or null; only this page's rows are looked up, through the interviews (bid_id, …) index.
+  interviewRounds: sql<string | null>`(select string_agg(i.step::text || ':' || i.result::text, ',' order by i.starts_at) from interviews i where i.bid_id = ${bids.id})`,
 };
 
 /** One page of the Manager's bids, newest first, and how many there are in all and matching the search. */

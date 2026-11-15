@@ -33,6 +33,8 @@ export function DatePicker({
   required = false,
   className,
   onChange,
+  formatValue,
+  hideLabel = false,
 }: {
   id: string;
   label: string;
@@ -42,6 +44,10 @@ export function DatePicker({
   className?: string;
   /** Called with each complete date (YYYY-MM-DD), or "" when cleared; half-typed text is not reported. */
   onChange?: (value: string) => void;
+  /** Shows the date in words (e.g. "Mon, 16 Nov 2026") on a button that opens the calendar, instead of a typed box. */
+  formatValue?: (value: string) => string;
+  /** The label is read by screen readers only. */
+  hideLabel?: boolean;
 }) {
   const initialDate = parseDateValue(defaultValue) ?? new Date();
   const [value, setStoredValue] = useState(defaultValue);
@@ -114,11 +120,28 @@ export function DatePicker({
   return (
     <div className={`relative ${className ?? ""}`} ref={pickerRef}>
       <label
-        className="mb-2 block text-xs font-semibold text-slate-700"
+        className={hideLabel ? "sr-only" : "mb-2 block text-xs font-semibold text-slate-700"}
         htmlFor={id}
       >
         {label}
       </label>
+      {formatValue ? (
+        <>
+          <input name={name} type="hidden" value={value} />
+          <button
+            aria-controls={calendarId}
+            aria-expanded={open}
+            aria-haspopup="dialog"
+            className="inline-flex h-10 w-full items-center gap-2 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 transition hover:bg-slate-50 focus:border-indigo-400 focus:outline-none focus:ring-4 focus:ring-indigo-100"
+            id={id}
+            onClick={() => setOpen((isOpen) => !isOpen)}
+            type="button"
+          >
+            <CalendarDays aria-hidden="true" className="size-4 text-slate-500" />
+            {selectedDate ? formatValue(value) : "Choose a date"}
+          </button>
+        </>
+      ) : (
       <div className="relative">
         <input
           aria-haspopup="dialog"
@@ -156,6 +179,7 @@ export function DatePicker({
           <CalendarDays aria-hidden="true" className="size-4" />
         </button>
       </div>
+      )}
       {open && (
         <div
           aria-label={`${label} calendar`}

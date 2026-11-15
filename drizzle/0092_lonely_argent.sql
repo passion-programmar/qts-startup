@@ -1,0 +1,2 @@
+ALTER TABLE "interviews" ADD COLUMN "interview_end_time" text;--> statement-breakpoint
+ALTER TABLE "interviews" ADD CONSTRAINT "interviews_end_time_after_start" CHECK ("interviews"."interview_end_time" is null or ("interviews"."interview_end_time" ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' and "interviews"."interview_end_time" > "interviews"."interview_time"));

@@ -1,4 +1,5 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ExportUrlsButton } from "@/app/components/export-urls";
 import { OpenFolderButton } from "@/app/components/open-folder";
@@ -11,6 +12,32 @@ import { db } from "@/lib/db";
 import { formatRomaniaDate, formatRomaniaTime } from "@/lib/romania-time";
 import { requireUser } from "@/lib/session";
 import { bidSearchFields, defaultBidPageSize, parseBidsQuery, readBidsPage } from "@/server/bids/bids-list";
+import { interviewSteps, isInterviewResult, isInterviewStep, resultClasses, resultLabel, stepLabel, type InterviewResult, type InterviewStep } from "@/server/interviews/interview-values";
+
+const trackDotClasses: Record<InterviewResult | "none", string> = {
+  passed: "bg-emerald-500",
+  waiting: "bg-amber-400",
+  rejected: "bg-rose-500",
+  no_show: "bg-rose-500",
+  none: "bg-slate-200",
+};
+
+// "Interviewing" on a bid: one dot per step (Intro, Tech, Final, Offer) coloured by how its latest
+// round went, then the latest round, e.g. "Tech · Waiting". Opens the Interviews By job view.
+function InterviewTrack({ value }: { value: string }) {
+  const rounds = value.split(",").map((part) => part.split(":")).filter((pair): pair is [InterviewStep, InterviewResult] => isInterviewStep(pair[0]) && isInterviewResult(pair[1]));
+  const latest = rounds.at(-1);
+  if (!latest) return null;
+  const byStep = new Map(rounds);
+  return (
+    <Link className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset hover:opacity-80 ${resultClasses[latest[1]]}`} href="/interviews?mode=jobs" title={interviewSteps.map((step) => `${step.label}: ${byStep.has(step.key) ? resultLabel(byStep.get(step.key) ?? "waiting") : "–"}`).join(" · ")}>
+      <span aria-hidden="true" className="flex gap-0.5">
+        {interviewSteps.map((step) => <span className={`size-1.5 rounded-full ${trackDotClasses[byStep.get(step.key) ?? "none"]}`} key={step.key} />)}
+      </span>
+      {stepLabel(latest[0])} · {resultLabel(latest[1])}
+    </Link>
+  );
+}
 
 export const instant = false;
 
@@ -84,7 +111,13 @@ export default async function BidsPage({
                   {row.sourceSiteUrl.replace(/^https?:\/\/(www\.)?/, "")}
                 </a>
               ) : "—",
-              <a className="font-medium text-blue-700 hover:underline" href={row.url} key="job" rel="noreferrer" target="_blank" title={row.url}>{row.title}</a>,
+              <div key="job">
+                <a className="font-medium text-blue-700 hover:underline" href={row.url} rel="noreferrer" target="_blank" title={row.url}>{row.title}</a>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {row.interviewRounds && <InterviewTrack value={row.interviewRounds} />}
+                  <Link className="text-[11px] font-semibold text-indigo-600 hover:underline" href={`/interviews?add=${row.id}`}>+ Interview</Link>
+                </div>
+              </div>,
               row.company,
               <OpenFolderButton folder={row.resumeFolder} key="folder" label="Résumé" savedOn={row.resumeSavedOn} />,
               <span className="text-xs" key="created">{created}</span>,

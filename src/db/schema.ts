@@ -665,6 +665,86 @@ export const bids = pgTable(
   ],
 );
 
+// The people who take interview calls, kept by an Admin; the Admin's Managers pick one on each
+// interview. A removed caller (archived) stays on the interviews it took but is not offered again.
+export const callers = pgTable(
+  "callers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    adminId: uuid("admin_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    label: text("label"),
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("callers_admin_name_active_unique")
+      .on(table.adminId, sql`lower(btrim(${table.name}))`)
+      .where(sql`${table.archivedAt} is null`),
+  ],
+);
+
+export const interviewStep = pgEnum("interview_step", ["intro", "tech", "final", "offer"]);
+export const interviewResult = pgEnum("interview_result", ["waiting", "passed", "rejected", "no_show"]);
+
+// One interview round of an applied job, on the Interviews page and its calendar. Each round is its
+// own row, so a job can have Intro, Tech and Final. The job values start as copies of the bid it was
+// added from (or are typed in) and can all be edited. Kept for good: a Manager has a few rounds a
+// week, against hundreds of bids a day.
+export const interviews = pgTable(
+  "interviews",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    // The job's track: all rounds of one job (Intro, Tech, Final, Offer) share it, whether or not
+    // they came from a bid. Add next step keeps it; a round for a bid joins that bid's track.
+    trackId: uuid("track_id").defaultRandom().notNull(),
+    // The bid it came from; bids are never deleted, but if one ever is, the round keeps its copies.
+    bidId: uuid("bid_id").references(() => bids.id, { onDelete: "set null" }),
+    candidateId: uuid("candidate_id")
+      .notNull()
+      .references(() => profiles.userId, { onDelete: "restrict" }),
+    category: text("category"),
+    appliedAt: timestamp("applied_at", { withTimezone: true, mode: "date" }).notNull(),
+    company: text("company").notNull(),
+    jobTitle: text("job_title").notNull(),
+    jobUrl: text("job_url").notNull(),
+    // One line of who interviews, e.g. "Recruiter, Team Member".
+    interviewer: text("interviewer"),
+    // Our person who takes the call, from the Admin's callers.
+    callerId: uuid("caller_id").references(() => callers.id, { onDelete: "set null" }),
+    step: interviewStep("step").notNull(),
+    result: interviewResult("result").default("waiting").notNull(),
+    // Start and end as moments; the page shows them in the Manager's chosen time zone.
+    startsAt: timestamp("starts_at", { withTimezone: true, mode: "date" }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true, mode: "date" }).notNull(),
+    meetingLink: text("meeting_link"),
+    comment: text("comment"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check("interviews_ends_after_start", sql`${table.endsAt} > ${table.startsAt}`),
+    index("interviews_manager_starts_at_index").on(table.managerId, table.startsAt),
+    index("interviews_manager_track_index").on(table.managerId, table.trackId, table.startsAt),
+    // The same round of the same job at the same moment is added once.
+    uniqueIndex("interviews_bid_step_starts_at_unique").on(table.bidId, table.step, table.startsAt),
+  ],
+);
+
 // One application of one jobs row. A Chrome claims it (lease renewed by heartbeats) and fills it
 // ("claimed"), the Manager reviews it ("waiting_review"), clicks Submit ("waiting_confirmation"), and
 // answers Yes ("confirmed", which makes the bid) or No ("failed"). Once submitted the job is never
