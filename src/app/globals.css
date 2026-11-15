@@ -12,6 +12,42 @@
 }
 
 /*
+ * Named colours and shapes for the shared pieces in src/app/ui. They point at the palette above, so
+ * dark mode (and .theme-light areas) restyle them with no extra rules. "inline" makes each utility
+ * read the palette variable where it is used.
+ */
+@theme inline {
+  --color-primary: #4f46e5;
+  --color-primary-hover: #4338ca;
+  --color-primary-soft: var(--color-indigo-50);
+  --color-primary-ring: var(--color-indigo-200);
+  --color-primary-text: var(--color-indigo-700);
+  --color-danger: #e11d48;
+  --color-danger-hover: #be123c;
+  --color-danger-soft: var(--color-rose-50);
+  --color-danger-ring: var(--color-rose-200);
+  --color-danger-text: var(--color-rose-700);
+  --color-success: #059669;
+  --color-success-soft: var(--color-emerald-50);
+  --color-success-ring: var(--color-emerald-200);
+  --color-success-text: var(--color-emerald-700);
+  --color-warning: #d97706;
+  --color-warning-soft: var(--color-amber-50);
+  --color-warning-ring: var(--color-amber-200);
+  --color-warning-text: var(--color-amber-700);
+  --color-card: var(--color-white);
+  --color-subtle: var(--color-slate-50);
+  --color-line: var(--color-slate-200);
+  --color-line-soft: var(--color-slate-100);
+  --color-fg: var(--color-slate-900);
+  --color-fg-soft: var(--color-slate-700);
+  --color-fg-muted: var(--color-slate-500);
+  --color-fg-faint: var(--color-slate-400);
+  --radius-card: 1rem;
+  --radius-control: 0.625rem;
+}
+
+/*
  * Dark theme. Tailwind utilities read the palette through CSS variables, so remapping the
  * scales here restyles every page: slate is inverted (white cards become dark surfaces and
  * dark text becomes light), pale tints become translucent glows, and 700-900 text shades
