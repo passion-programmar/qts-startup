@@ -5,8 +5,27 @@
 (function initQtsSiteBridge() {
   if (window.top !== window || window.__qtsSiteBridge) return;
   window.__qtsSiteBridge = true;
+  if (window.location.protocol !== 'https:' && window.location.protocol !== 'http:') return;
 
-  chrome.runtime.sendMessage({ type: 'QTS_IS_QTS_SITE' }).then((answer) => {
+  // The QTS server's origin, read the way shared/runtime-config.js reads it: the saved address when
+  // it is HTTPS (or HTTP on this machine), else Production. Only a page on that origin asks the
+  // service worker, so every other page stops here without waking it.
+  const DEFAULT_SERVER_URL = 'https://qts-job-system.vercel.app';
+  function serverOrigin(saved) {
+    try {
+      const url = new URL(String(saved || '').trim());
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if (url.protocol === 'https:' || (url.protocol === 'http:' && loopback)) return url.origin;
+    } catch {
+      // Not an address: Production, as runtime-config does.
+    }
+    return new URL(DEFAULT_SERVER_URL).origin;
+  }
+
+  chrome.storage.local.get('qtsServerUrl').then((stored) => {
+    if (window.location.origin !== serverOrigin(stored.qtsServerUrl)) return null;
+    return chrome.runtime.sendMessage({ type: 'QTS_IS_QTS_SITE' });
+  }).then((answer) => {
     if (answer?.qtsSite !== true) return;
     window.addEventListener('message', (event) => {
       if (event.source !== window || event.origin !== window.location.origin) return;
