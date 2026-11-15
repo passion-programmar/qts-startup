@@ -57,7 +57,9 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
 - Step 7 built 2026-11-15 (Settings): the page and its tabs use the shared header, card and badge;
   the tab bar uses the named colours. Left for later: the Prompts tab still loads every version's
   full text for its version pickers (Super Admin only); loading the text on demand needs the
-  pickers reworked.
+  pickers reworked. Committed as dc9edc5.
+- Step 8 built 2026-11-15 (My AI prompts, Useful prompts, Categories): shared header, card and
+  badges; the prompts guidance line is the header's description. Their data was already small.
 
 ## Steps
 

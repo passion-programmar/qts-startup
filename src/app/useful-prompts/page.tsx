@@ -1,8 +1,8 @@
 import { NotebookPen, Plus } from "lucide-react";
 import { redirect } from "next/navigation";
 import { FormCard } from "@/app/components/form-card";
-import { PageHeader } from "@/app/components/page-header";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { Badge } from "@/app/ui/badge";
+import { PageHeader } from "@/app/ui/page-header";
 import {
   CopyPromptButton,
   DeleteUsefulPromptForm,
@@ -21,11 +21,9 @@ export default async function UsefulPromptsPage() {
   const prompts = await listUsefulPrompts(currentUser.id);
 
   return (
-    <WorkspaceShell activeHref="/useful-prompts" user={currentUser}>
-      <main className="py-1 text-slate-900">
-        <div className="mx-auto max-w-4xl space-y-3">
+      <main className="mx-auto max-w-4xl space-y-3 py-1 text-fg">
           <PageHeader
-            actions={<span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">{prompts.length} saved</span>}
+            actions={<Badge className="px-3 py-1 text-xs">{prompts.length} saved</Badge>}
             description="Prompts you keep for special cases. Jobs, Generation and Apply never use them. Each save adds a version, and earlier versions stay in the history."
             title="Useful prompts"
           />
@@ -55,8 +53,6 @@ export default async function UsefulPromptsPage() {
               <UsefulPromptHistory versions={prompt.versions} />
             </FormCard>
           ))}
-        </div>
       </main>
-    </WorkspaceShell>
   );
 }

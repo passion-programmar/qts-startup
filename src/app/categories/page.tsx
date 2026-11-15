@@ -10,8 +10,9 @@ import {
 import { categories, profiles } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
-import { PageHeader } from "@/app/components/page-header";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { Badge } from "@/app/ui/badge";
+import { Card, CardHeader } from "@/app/ui/card";
+import { PageHeader } from "@/app/ui/page-header";
 import { PaginatedTable } from "@/app/components/paginated-table";
 
 export const instant = false;
@@ -37,24 +38,19 @@ export default async function CategoriesPage() {
     .orderBy(asc(categories.name));
 
   return (
-    <WorkspaceShell activeHref="/categories" user={actor}>
-      <main className="py-1 text-slate-900">
+      <main className="space-y-6 py-1 text-fg">
         <PageHeader
           description="Group candidates by category. Every candidate has one; the default category catches the rest."
-          eyebrow="Administration"
           title="Candidate categories"
         />
 
-        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-base font-semibold text-slate-800">Add category</h2>
+        <Card>
+          <CardHeader className="mb-4" title="Add category" />
           <CreateCategoryForm />
-        </section>
+        </Card>
 
         <section>
-          <div className="mb-3 flex items-center gap-2">
-            <Tags className="size-4 text-indigo-600" />
-            <h2 className="text-base font-semibold text-slate-800">Categories</h2>
-          </div>
+          <CardHeader actions={<Badge tone="primary">{categoryRows.length} total</Badge>} className="mb-3" icon={<Tags />} title="Categories" />
           <PaginatedTable
             columns={[
               { label: "Category", className: "w-[60%]" },
@@ -68,18 +64,17 @@ export default async function CategoriesPage() {
                 <div className="space-y-1" key="category">
                   <EditCategoryForm id={category.id} name={category.name} />
                   {category.isDefault && (
-                    <span className="text-[11px] text-slate-500">Default · new candidates start here</span>
+                    <Badge tone="primary">Default · new candidates start here</Badge>
                   )}
                 </div>,
                 category.assignedProfiles,
                 category.isDefault
-                  ? <span className="text-xs text-slate-400" key="delete">Cannot be deleted</span>
+                  ? <span className="text-xs text-fg-faint" key="delete">Cannot be deleted</span>
                   : <DeleteCategoryForm id={category.id} key="delete" name={category.name} />,
               ],
             }))}
           />
         </section>
       </main>
-    </WorkspaceShell>
   );
 }

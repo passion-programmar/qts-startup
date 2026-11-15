@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { PageHeader } from "@/app/components/page-header";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
+import { PageHeader } from "@/app/ui/page-header";
 import { DeleteManagerPromptForm, ManagerPromptForm } from "@/app/prompts/prompt-forms";
 import { groupVersions } from "@/app/prompts/prompt-groups";
 import { PromptCards } from "@/app/prompts/prompt-cards";
@@ -53,22 +52,18 @@ export default async function ManagerPromptsPage() {
   const defaultPrompt = defaultRows[0];
 
   return (
-    <WorkspaceShell activeHref="/prompts" user={currentUser}>
-      <main className="py-1 text-slate-900">
-        <div className="mx-auto max-w-4xl space-y-6">
+      <main className="mx-auto max-w-4xl space-y-6 py-1 text-fg">
           <PageHeader
-            description=""
-            title="My AI prompts"
-          />
-
-          <p className="text-xs text-slate-500">
+            description={<>
             {myPrompts.length === 0
               ? "You have no prompts yet, so Generation uses the default prompt. Click + to add one."
               : myPrompts.length === 1
                 ? "Generation uses your prompt for every job."
                 : `Generation uses your ${myPrompts.length} prompts in least-recent-use order unless you choose one for a queued job.`}
             {" "}Click a prompt to open it. Saving a change adds a version; earlier versions are kept and can be put back in use.
-          </p>
+            </>}
+            title="My AI prompts"
+          />
 
           <PromptCards
             create={<ManagerPromptForm />}
@@ -126,8 +121,6 @@ export default async function ManagerPromptsPage() {
               ),
             }]}
           />
-        </div>
       </main>
-    </WorkspaceShell>
   );
 }
