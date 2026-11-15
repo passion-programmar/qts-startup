@@ -116,3 +116,6 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
 6. Structure: split the worker (7,900 lines) into feature files (Get JD, Generation, launcher,
    message routing) and the launcher into parts; decide what to do with the unreachable popup.
 7. Measure again, record the after numbers, release one new extension version.
+   - First release done: 1.56.0 (2026-11-15) has steps 1-3 and the résumé-folder check; the built
+     zip (dist/qts-extension-1.56.0.zip, 759 KB) passed the job-page, wake-up, folder and printing
+     end-to-end tests itself. Steps 4-6 go out in the next release.
