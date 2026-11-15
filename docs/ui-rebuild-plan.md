@@ -30,7 +30,11 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
 - Step 0 done 2026-11-15: before numbers in ui-rebuild-baseline.md (server render time still to
   be taken from a signed-in browser).
 - Step 1 built 2026-11-15: named colours in globals.css, pieces in src/app/ui, preview at /ui-kit
-  (signed-in staff only, not in the menu). No page uses them yet.
+  (signed-in staff only, not in the menu). No page uses them yet. Committed as adf511c.
+- Step 2 built 2026-11-15: the sidebar and top bar are drawn once in the root layout (AppShell,
+  inside Suspense) and stay on screen between pages; the active menu item follows the address;
+  loading.tsx is a content skeleton; one session lookup per request (React cache). Pages still
+  wrap themselves in WorkspaceShell, which now only passes them through; each page step removes it.
 
 ## Steps
 

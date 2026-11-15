@@ -21,6 +21,7 @@ import {
   Users,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
@@ -42,15 +43,19 @@ const overviewItem: NavigationItem = { label: "Overview", href: "/", icon: Layou
 const peopleItem: NavigationItem = { label: "People", href: "/users", icon: Users };
 const profileItem: NavigationItem = { label: "My profile", href: "/profile", icon: UserRound };
 
+// Pages that show without the sidebar even when signed in: the resume preview is loaded in a frame.
+const barePaths = new Set(["/login", "/resume-template"]);
+
 export function WorkspaceShellClient({
   user,
-  activeHref,
+  alert,
   children,
 }: {
   user: StaffSession;
-  activeHref: string;
+  alert?: ReactNode;
   children: ReactNode;
 }) {
+  const pathname = usePathname();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   useEffect(() => {
@@ -97,6 +102,11 @@ export function WorkspaceShellClient({
     { label: "Account", items: [profileItem] },
   ].filter((group) => group.items.length > 0);
   const navigation = navigationGroups.flatMap((group) => group.items);
+  // The menu item whose address is the longest start of this page's (/users/new → People); Overview only on /.
+  const activeHref = navigation
+    .map((item) => item.href)
+    .filter((href) => pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)))
+    .sort((a, b) => b.length - a.length)[0] ?? "";
   const pageLabel = navigation.find((item) => item.href === activeHref)?.label || "Overview";
   const initials = user.displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "Q";
   // Managers and admins see two time-zone clocks; Super Admins have their own clock on Gemini usage.
@@ -115,6 +125,8 @@ export function WorkspaceShellClient({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [mobileNavigationOpen]);
+
+  if (barePaths.has(pathname)) return children;
 
   return (
     <div className={`workspace-shell ${sidebarCollapsed ? "workspace-shell--collapsed" : ""}`}>
@@ -186,11 +198,12 @@ export function WorkspaceShellClient({
       <div className="workspace-body"><div id="workspace-content" tabIndex={-1} className="workspace-content">
         {/* Below 1280px the header has no room for the clocks, so they stay under it while the page scrolls.
             The Resume page keeps them in its own header instead, since its panels fill the window and never scroll. */}
-        {showClocks && activeHref !== "/pdf" ? (
+        {showClocks && pathname !== "/pdf" ? (
           <div className="sticky top-(--header-height) z-30 -mx-1 mb-4 flex justify-center bg-surface/95 px-1 py-2 backdrop-blur xl:hidden">
             <WorkspaceClocks />
           </div>
         ) : null}
+        {alert}
         {children}
       </div></div>
     </div>

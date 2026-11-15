@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { Suspense } from "react";
+import { AppShell } from "@/app/components/app-shell";
 import { themeStorageKey } from "@/app/components/theme";
 import "./globals.css";
 
@@ -21,7 +23,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full">
+        {/* The shell needs the signed-in user, so it streams in; until then the page background shows. */}
+        <Suspense fallback={<div className="min-h-screen bg-surface" />}>
+          <AppShell>{children}</AppShell>
+        </Suspense>
+      </body>
     </html>
   );
 }

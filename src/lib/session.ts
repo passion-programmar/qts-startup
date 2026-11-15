@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
@@ -59,7 +60,8 @@ export async function clearSession(): Promise<void> {
   cookieStore.delete(sessionCookieName);
 }
 
-export async function getCurrentUser(): Promise<StaffSession | null> {
+// One lookup per request: the layout (for the sidebar) and the page both ask, and share the answer.
+export const getCurrentUser = cache(async function getCurrentUser(): Promise<StaffSession | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(sessionCookieName)?.value;
   if (!token) return null;
@@ -116,7 +118,7 @@ export async function getCurrentUser(): Promise<StaffSession | null> {
     loginName: user.loginName,
     authVersion: user.authVersion,
   };
-}
+});
 
 export async function requireUser(): Promise<StaffSession> {
   const user = await getCurrentUser();
