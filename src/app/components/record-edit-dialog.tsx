@@ -3,7 +3,8 @@
 // The Edit window for a job or a bid. It is loaded only when Edit is clicked (see record-forms).
 import { Activity, AlertTriangle, Briefcase, FileText, ListChecks, X } from "lucide-react";
 import { useActionState, useEffect, useRef, useState } from "react";
-import { updateBidAction } from "@/app/bids/actions";
+import { loadBidAnswersAction, updateBidAction } from "@/app/bids/actions";
+import type { SubmittedAnswer } from "@/app/components/submitted-answers";
 import { updateJobAction } from "@/app/jobs/actions";
 import { initialRecordState, type RecordActionState } from "@/app/record-action-state";
 import { resumeFolderOf, type ApplyRun } from "@/server/apply/apply-values";
@@ -294,6 +295,19 @@ function ApplyRunCard({ run, startOpen }: { run: ApplyRun; startOpen: boolean })
 // A bid's read-only cards: where and when it was made, its documents and setup, and the answers it
 // was submitted with.
 function BidCards({ record, details }: { record: EditableBid; details: BidDetails }) {
+  // The list leaves the answers out, so they load here once; null while loading or if they cannot be read.
+  const [loaded, setLoaded] = useState<SubmittedAnswer[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (details.answers) return;
+    let current = true;
+    loadBidAnswersAction(record.id)
+      .then((answers) => { if (current) { if (answers) setLoaded(answers); else setFailed(true); } })
+      .catch(() => { if (current) setFailed(true); });
+    return () => { current = false; };
+  }, [details.answers, record.id]);
+  const answers = details.answers ?? loaded;
+
   return (
     <>
       <FormCard
@@ -322,14 +336,18 @@ function BidCards({ record, details }: { record: EditableBid; details: BidDetail
       </FormCard>
       <FormCard
         icon={<ListChecks />}
-        summary={`${details.answers.length} ${details.answers.length === 1 ? "answer" : "answers"}`}
+        summary={answers ? `${answers.length} ${answers.length === 1 ? "answer" : "answers"}` : failed ? "Could not load" : "Loading…"}
         title="Submitted answers"
       >
-        {details.answers.length === 0
+        {!answers
+          ? failed
+            ? <p className="text-sm text-rose-700" role="alert">The answers could not be loaded. Close and open the bid again.</p>
+            : <p className="flex items-center gap-2 text-sm text-slate-500" role="status"><LoadingIcon className="size-4" />Loading answers…</p>
+          : answers.length === 0
           ? <p className="text-sm text-slate-500">No answers were kept for this bid.</p>
           : (
             <ul className="divide-y divide-slate-100">
-              {details.answers.map((answer, index) => (
+              {answers.map((answer, index) => (
                 <li className="grid gap-1 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_auto] sm:gap-3" key={`${answer.question}-${index}`}>
                   <span className="text-xs font-medium text-slate-700">{answer.question}</span>
                   <span className="whitespace-pre-wrap break-words text-xs text-slate-900">{answer.answer || "—"}</span>

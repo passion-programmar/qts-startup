@@ -45,7 +45,11 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
 - Step 4 built 2026-11-15 (Jobs): the Edit window (calendar, Apply history) moved to
   record-edit-dialog.tsx and downloads only when Edit is first clicked (11.9 KB later); the shared
   ConfirmButton uses the browser's <dialog> (all 11 users of it); the page uses the shared header.
-  /jobs 228.7 → 219.3 KB, /bids 224.3 → 215.9 KB.
+  /jobs 228.7 → 219.3 KB, /bids 224.3 → 215.9 KB. Committed as fd4e097.
+- Step 5 built 2026-11-15 (Bids): the list was every bid with all its answers; it is now one page
+  at a time, searched and counted on the server (src/server/bids/bids-list.ts, tested); a bid's
+  answers load when its View window opens; Export URLs asks the server for one day's URLs; the
+  bids and candidates queries run together (3 waits → 2).
 
 ## Steps
 

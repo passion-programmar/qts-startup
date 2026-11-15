@@ -50,7 +50,8 @@ export type BidDetails = {
   resumeSavedOn: string | null;
   promptName: string | null;
   templateName: string | null;
-  answers: SubmittedAnswer[];
+  // Left out by the Bids list (it can be large); the window loads them when it opens.
+  answers?: SubmittedAnswer[];
 };
 
 export function JobEditAction({ record, candidates, track }: { record: EditableJob; candidates: CandidateOption[]; track: JobTrack }) {
