@@ -6,6 +6,7 @@
 //   --full-cycle       watch each page for 11 s, the whole job-page check (4 s covers its first 3 tries)
 //   --extension=DIR    measure another copy of the extension, e.g. one exported with
 //                      `git archive <commit> extension | tar -x -C DIR/..` for before/after numbers
+//   --worker-only      only the background worker's numbers (answer and wake-up), not the pages
 //   QTS_MEASURE_RUNS=2 fewer runs for a quick look; QTS_MEASURE_VERBOSE=1 prints each step
 const http = require("http");
 const path = require("path");
@@ -203,8 +204,9 @@ async function wakeUpCode(browser, extensionPage, cdp) {
   const pages = base.replace("127.0.0.1", "localhost");
   let browser = null;
   try {
-    const plain = await pageCost(base, `${pages}/plain`);
-    const job = await pageCost(base, `${pages}/job`);
+    const workerOnly = process.argv.includes("--worker-only");
+    const plain = workerOnly ? null : await pageCost(base, `${pages}/plain`);
+    const job = workerOnly ? null : await pageCost(base, `${pages}/job`);
     const prepared = await launchPrepared(base);
     browser = prepared.browser;
     const { extensionPage } = prepared;
@@ -215,7 +217,7 @@ async function wakeUpCode(browser, extensionPage, cdp) {
 
     const who = withHighlights ? "signed in as a test Manager with a highlight rule" : signedIn ? "signed in as a test Manager" : "signed out";
     console.log(`== ${label}, ${who}, each page watched ${watchMs / 1000} s (median of ${RUNS} runs)`);
-    for (const [name, result] of [["plain page", plain], ["job page", job]]) {
+    for (const [name, result] of [["plain page", plain], ["job page", job]].filter(([, result]) => result)) {
       console.log(`Extension work inside a ${name}: ${ms(result.total)}, page scans: ${result.scans}`);
       for (const [file, value] of result.files.slice(0, 8)) console.log(`   ${ms(value).padStart(9)}  ${file}`);
     }

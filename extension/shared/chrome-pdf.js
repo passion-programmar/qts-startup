@@ -34,18 +34,37 @@
   // Tabs printing right now: QTS's own page scripts stay out of them.
   const printTabs = new Set();
 
-  // Count the actual PDF page tree, never the template's estimated layout or warnings.
-  async function validatePdf(base64, document) {
-    const library = global.PDFLib;
+  // The actual PDF page tree is counted, never the template's estimated layout or warnings. The PDF
+  // library (525 KB) runs in the printing tab, only while printing, instead of loading in the
+  // background worker on every wake-up.
+  const PDF_LIBRARY_FILE = 'vendor/pdf-lib/pdf-lib.min.js';
+
+  // Runs in the printing tab, after PDF_LIBRARY_FILE.
+  async function countPdfPagesInPage(base64) {
+    const library = globalThis.PDFLib;
     if (!library) throw new Error('The PDF validator is unavailable.');
-    const pdf = await library.PDFDocument.load(base64);
-    const count = pdf.getPageCount();
+    return (await library.PDFDocument.load(base64)).getPageCount();
+  }
+
+  async function countPdfPages(tabId, base64) {
+    const target = { tabId };
+    await chrome.scripting.executeScript({ target, files: [PDF_LIBRARY_FILE] });
+    const [result] = await chrome.scripting.executeScript({ target, func: countPdfPagesInPage, args: [base64] });
+    if (!Number.isInteger(result?.result)) throw new Error('The PDF validator could not read the PDF.');
+    return result.result;
+  }
+
+  function validatePageCount(count, document) {
     if (count < 1) throw new Error('Chrome produced an empty PDF.');
     if (count > PAGE_LIMITS[document]) {
       const error = new Error('The cover letter exceeds one A4 page. Shorten its paragraphs.');
       error.name = 'DocumentPageLimitError';
       throw error;
     }
+  }
+
+  async function validatePdf(tabId, base64, document) {
+    validatePageCount(await countPdfPages(tabId, base64), document);
   }
 
   function templatePageUrl(serverUrl, document, template) {
@@ -82,7 +101,7 @@
       await waitForRender(send, document);
       await send('Runtime.evaluate', { expression: 'document.fonts.ready.then(() => true)', awaitPromise: true });
       printed[document] = (await send('Page.printToPDF', PRINT_TO_PDF)).data;
-      await validatePdf(printed[document], document);
+      await validatePdf(tabId, printed[document], document);
     }
     return printed;
   }
@@ -121,7 +140,10 @@
 
   const isPrintTab = (tabId) => printTabs.has(tabId);
 
-  const api = { PRINT_TO_PDF, VIEWPORT, PAGE_LIMITS, validatePdf, templatePageUrl, printDocuments, isPrintTab };
+  const api = {
+    PRINT_TO_PDF, VIEWPORT, PAGE_LIMITS, PDF_LIBRARY_FILE, countPdfPagesInPage, validatePageCount, validatePdf,
+    templatePageUrl, printDocuments, isPrintTab,
+  };
   global.__qtsChromePdf = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

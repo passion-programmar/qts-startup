@@ -43,21 +43,35 @@ test('the template page is the QTS site\'s, as the server prints it', () => {
   );
 });
 
-// A stand-in for Chrome's tabs and debugger: `renderState` is what each template page reports.
+// A stand-in for Chrome's tabs, debugger and scripting: `renderState` is what each template page
+// reports. The page-count function runs as Chrome would run it in the printing tab, with the PDF
+// library (here Node's copy, as global.PDFLib) injected first.
 function fakeChrome({ renderState = 'ready', printFails = false, resumePages = 3, coverPages = 1, invalidPdf = false } = {}) {
   const calls = [];
-  const state = { tabs: new Set(), attached: new Set(), page: '' };
+  const state = { tabs: new Set(), attached: new Set(), page: '', injected: false };
   global.chrome = {
     tabs: {
       create: async (options) => { calls.push(['create', options]); state.tabs.add(7); return { id: 7 }; },
       remove: async (tabId) => { calls.push(['remove', tabId]); state.tabs.delete(tabId); },
+    },
+    scripting: {
+      executeScript: async ({ target, files, func, args }) => {
+        calls.push(['executeScript', target.tabId, files || func.name]);
+        if (files) {
+          state.injected = files.includes(chromePdf.PDF_LIBRARY_FILE);
+          return [{ result: undefined }];
+        }
+        if (!state.injected) throw new Error('The PDF library was not injected first.');
+        return [{ result: await func(...args) }];
+      },
     },
     debugger: {
       attach: async ({ tabId }) => { calls.push(['attach', tabId, chromePdf.isPrintTab(tabId)]); state.attached.add(tabId); },
       detach: async ({ tabId }) => { calls.push(['detach', tabId]); state.attached.delete(tabId); },
       sendCommand: async (_target, method, params) => {
         calls.push([method, params]);
-        if (method === 'Page.navigate') state.page = params.url;
+        // A new page has none of the scripts injected into the previous one.
+        if (method === 'Page.navigate') { state.page = params.url; state.injected = false; }
         if (method === 'Runtime.evaluate' && !params.awaitPromise) {
           const document = /\/(resume|cover-letter)\.html/.exec(state.page)[1];
           return { result: { value: params.expression.includes(`/${document}.html`) ? renderState : '' } };
@@ -151,12 +165,31 @@ test('a résumé longer than 3 pages is printed, never rejected (the template al
 });
 
 test('the packaged PDF validator reads compressed PDF page trees', async () => {
-  // Service-worker globals, without Node's require/module or a DOM: exercise the browser UMD path.
+  // A bare script world without Node's require/module or a DOM, as in the printing tab: the
+  // packaged UMD build, then the page-count function chrome-pdf.js runs there.
   const context = vm.createContext({ setTimeout, clearTimeout });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../vendor/pdf-lib/pdf-lib.min.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', chromePdf.PDF_LIBRARY_FILE), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'chrome-pdf.js'), 'utf8'), context);
   const pdf = await PDFDocument.create();
   for (let index = 0; index < 2; index += 1) pdf.addPage();
   context.base64 = await pdf.saveAsBase64({ useObjectStreams: true });
-  await assert.rejects(vm.runInContext('__qtsChromePdf.validatePdf(base64, "cover-letter")', context), { name: 'DocumentPageLimitError' });
+  const count = await vm.runInContext('__qtsChromePdf.countPdfPagesInPage(base64)', context);
+  assert.equal(count, 2);
+  assert.throws(() => chromePdf.validatePageCount(count, 'cover-letter'), { name: 'DocumentPageLimitError' });
+});
+
+test('the PDF library runs in the printing tab, once per printed page, never in the worker', async () => {
+  const { calls } = fakeChrome();
+  try {
+    assert.ok(await chromePdf.printDocuments(job, { serverUrl: 'https://qts.example.com' }));
+    const scripting = calls.filter(([kind]) => kind === 'executeScript');
+    assert.deepEqual(scripting, [
+      ['executeScript', 7, [chromePdf.PDF_LIBRARY_FILE]], ['executeScript', 7, 'countPdfPagesInPage'],
+      ['executeScript', 7, [chromePdf.PDF_LIBRARY_FILE]], ['executeScript', 7, 'countPdfPagesInPage'],
+    ]);
+  } finally {
+    delete global.chrome;
+  }
+  const worker = fs.readFileSync(path.join(__dirname, '..', 'background', 'service-worker.js'), 'utf8');
+  assert.equal(worker.includes('pdf-lib'), false, 'the worker does not load the PDF library');
 });

@@ -96,8 +96,18 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
      with this extension sometimes never starts loading (also before these steps), so each run has
      its own Chrome; options `--with-highlights`, `--full-cycle`, `--extension=DIR` and
      `QTS_MEASURE_RUNS` were added to scripts/measure-extension-speed.cjs.
-3. A lighter wake-up: count PDF pages without the PDF library; remove the old scanner and pipeline
-   code that cannot run in this release.
+3. A lighter wake-up.
+   - Done: the PDF library (pdf-lib, 525 KB) no longer loads in the worker on every wake-up. The
+     same library counts the printed PDF's pages inside the printing tab, only while printing, so
+     the check and its results are unchanged (a cover letter over one page still stops delivery;
+     any other failure still makes QTS print on the server).
+   - Measured (signed in, worker only, three rounds before/after; this PC varies a lot run to run):
+     answer from asleep 185/162/194 ms → 146/130/187 ms (about 26 ms faster on average); code run
+     on each wake-up 124/119/130 ms → 86/115/122 ms; pdf-lib's own 16-24 ms is gone.
+   - Moved to step 6: removing the old scanner and pipeline code. Its files cost only 1-2 ms each
+     on a wake-up (about 5 ms together) while removing them touches many old code paths. A bigger
+     remaining cost is the worker loading ~45 separate files on every wake-up, which belongs with
+     splitting the worker into feature files.
 4. Fewer wake-ups: the heartbeat alarm follows idle pacing instead of skipping ticks; navigation
    listeners only for top frames and only where needed; big per-job maps move to session storage so
    open tabs are not notified of every change.

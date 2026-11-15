@@ -39,7 +39,6 @@ importScripts(
   '../shared/apply-local-pdfs.js',
   '../shared/scanner-document-store.js',
   '../shared/idle-pacing.js',
-  '../vendor/pdf-lib/pdf-lib.min.js',
   '../shared/chrome-pdf.js',
   '../shared/resume-print-requests.js',
   '../shared/site-sessions.js',
