@@ -56,7 +56,8 @@ test('the draft panel shows the read job, keeps edits, and sends only on Check',
     assert.equal(await button('Never on this site'), undefined, 'blocking needs the Super Admin permission');
     assert.equal(await page.evaluate(() => window.calls.length), 0, 'nothing is sent by opening the panel');
 
-    // Edits survive a re-render, and Send carries the JD only (no title or company).
+    // Edits survive a re-render. Send carries the JD and, unseen, the title and company read from
+    // the page (the server's fallback when Gemini finds none in the JD).
     await page.evaluate(() => {
       const input = window.testRoot.querySelector('[data-draft-field="description"]');
       input.value = 'Build Python services.\n\nEdited.'; input.dispatchEvent(new Event('input'));
@@ -67,7 +68,7 @@ test('the draft panel shows the read job, keeps edits, and sends only on Check',
     await page.waitForFunction(() => window.calls.length === 1);
     assert.deepEqual(await page.evaluate(() => window.calls[0]), {
       type: 'QTS_GET_JD_SEND_DRAFT',
-      job: { title: '', company: '', description: 'Build Python services.\n\nEdited.' },
+      job: { title: 'Software Engineer', company: 'Example', description: 'Build Python services.\n\nEdited.' },
     });
 
     // An empty JD is not sent.

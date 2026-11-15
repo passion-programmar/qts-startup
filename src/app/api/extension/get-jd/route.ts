@@ -230,8 +230,8 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
     const sourceSite = sourceSiteUrl({ openerUrl: readString(body, "openerUrl", maxPageUrlLength) || null, jobUrl: pageUrl });
     const duplicateDetails = new Map<string, GetJdDuplicate>();
     classification.job.description = pageText;
-    // The title and company are Gemini's, read from the JD; what the extension sent is only a
-    // fallback when Gemini left one empty.
+    // The title and company are Gemini's when it found them in the JD (the extension can read a
+    // page wrongly); when Gemini left one empty, the one the extension read from the page is saved.
     classification.job.title = classification.job.title.trim() || identity.jobTitle;
     classification.job.company = classification.job.company.trim() || identity.company;
     // Before Gemini, Jobs/Bids could only be checked by the URL (and whatever title/company the

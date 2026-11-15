@@ -1805,8 +1805,10 @@ async function initializeGetJdReviewOnce() {
         elements.details.querySelector('[data-draft-field="description"]')?.focus();
         return;
       }
-      // The worker sends the page's URL with it; the title and company come back from Gemini.
-      if (await act({ type: 'QTS_GET_JD_SEND_DRAFT', job: { title: '', company: '', description: draft.description } }, 'Sending to Gemini…')) {
+      // The worker sends the page's URL with it. The title and company the extension read from the
+      // page go along unseen: the server saves Gemini's, read from the JD, and uses these only
+      // when Gemini finds none.
+      if (await act({ type: 'QTS_GET_JD_SEND_DRAFT', job: { title: draft.title || '', company: draft.company || '', description: draft.description } }, 'Sending to Gemini…')) {
         manualDrafts.delete(draftKey);
       }
     };
