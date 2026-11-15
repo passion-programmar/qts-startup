@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Inbox, Plus, Settings2, Sparkles } from "lucide-react";
 import { getCurrentUser } from "@/lib/session";
-import { WorkspaceShell } from "@/app/components/workspace-shell";
 import { Badge } from "@/app/ui/badge";
 import { Button, LinkButton } from "@/app/ui/button";
 import { Card, CardHeader, Section } from "@/app/ui/card";
@@ -26,7 +25,6 @@ export default async function UiKitPage({ searchParams }: { searchParams: Promis
   const tab = (await searchParams).tab === "second" ? "second" : "first";
 
   return (
-    <WorkspaceShell activeHref="/ui-kit" user={actor}>
       <main className="space-y-6 py-1">
         <PageHeader
           actions={<LinkButton href="/ui-kit" icon={<Plus aria-hidden="true" className="size-4" />}>Add New</LinkButton>}
@@ -170,6 +168,5 @@ export default async function UiKitPage({ searchParams }: { searchParams: Promis
           />
         </Card>
       </main>
-    </WorkspaceShell>
   );
 }

@@ -76,6 +76,9 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
   header, buttons and tab colours. Committed as e27e80f.
 - Step 12 built 2026-11-15 (Login): the sign-in card, field, error and button use the named
   colours and the shared Button and Notice. The brand panel was already modern and is unchanged.
+  Committed as fd8e468.
+- Step 13 done 2026-11-15 (clean-up): the old WorkspaceShell pass-through and the old PageHeader
+  are removed; after numbers are in ui-rebuild-baseline.md. The palette recolouring stays (see there).
 
 ## Steps
 

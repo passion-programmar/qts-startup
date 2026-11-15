@@ -70,3 +70,50 @@ nothing streams, so each page waits for all of its queries before showing anythi
 
 Not measured yet: it needs a signed-in browser. To be taken from the `next dev` terminal lines
 ("GET /jobs 200 in ...") while the user opens each page.
+
+# After the rebuild (Step 13)
+
+Measured 2026-11-15 after steps 1-12, the same way as above.
+
+## Browser download per page (first load, gzip): before → after
+
+    /jobs                     228.7 → 219.2 KB   (+12.2 KB only when Edit is clicked)
+    /bids                     224.3 → 215.8 KB   (+12.2 KB only when Edit/View is clicked)
+    /pdf                      224.0 → 223.4 KB
+    /users                    223.4 → 213.7 KB
+    /settings                 223.0 → 223.1 KB
+    /profile                  221.5 → 220.9 KB
+    /users/[id]/edit          220.9 → 215.1 KB
+    /users/new                220.9 → 215.1 KB
+    /settings/gemini-usage    218.4 → 218.2 KB
+    /settings/database-usage  211.6 → 210.8 KB
+    /useful-prompts           208.5 → 207.7 KB
+    /prompts                  208.1 → 207.3 KB
+    /categories               206.9 → 206.1 KB
+    /                         204.7 → 204.0 KB
+    /login                    191.5 → 205.1 KB   (the sidebar now loads with every page)
+
+Shared by every page: 186.7 → 201.2 KB. The sidebar moved into the root layout so it stays on
+screen between pages; its code is now part of the shared download.
+
+## Data and waits: before → after
+
+    /bids                     every bid + every answer → 25 bids a page, no answers; 3 → 2 waits
+    /settings/gemini-usage    up to 100 replies × 1 MB → one line each; up to 5 → 2 waits
+    /users                    ~50 columns a candidate → 18
+    /users/[id]/edit          3 → 2 waits (profile and history together)
+    /  (Super Admin)          4 → 2 waits; sign-ins from the index instead of ranking them all
+    /settings/database-usage  the saved state is read once, not twice
+    Every page                one session lookup shared by the layout and the page
+
+## Loading
+
+Before: a click blanked the whole screen until the page's data arrived. After: the sidebar and top
+bar stay, and the content area shows a skeleton at once.
+
+## Not changed
+
+- The dark-mode palette recolouring in globals.css stays: many forms inside pages still use the
+  plain palette colours that depend on it.
+- The Prompts tab in AI settings still loads every version's full text for its pickers.
+- Server render times were not measured (they need a signed-in browser).

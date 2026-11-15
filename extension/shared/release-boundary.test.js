@@ -679,7 +679,7 @@ test('each Manager rotates through their own prompts and every template, with a 
   const read = (...parts) => fs.readFileSync(path.join(repositoryRoot, ...parts), 'utf8');
   const resolver = read('src', 'server', 'generation', 'manager-prompt.ts');
   const managerActions = read('src', 'app', 'prompts', 'actions.ts');
-  const workspaceShell = read('src', 'app', 'components', 'workspace-shell.tsx');
+  const workspaceShell = read('src', 'app', 'components', 'app-shell.tsx');
   const workspaceClient = read('src', 'app', 'components', 'workspace-shell-client.tsx');
 
   // The Manager's own prompts, the one used longest ago first, then Super Admin's default.
