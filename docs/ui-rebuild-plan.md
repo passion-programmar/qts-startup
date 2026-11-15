@@ -49,7 +49,10 @@ Manager or Super Admin can do changes; only how it looks and how fast it loads.
 - Step 5 built 2026-11-15 (Bids): the list was every bid with all its answers; it is now one page
   at a time, searched and counted on the server (src/server/bids/bids-list.ts, tested); a bid's
   answers load when its View window opens; Export URLs asks the server for one day's URLs; the
-  bids and candidates queries run together (3 waits → 2).
+  bids and candidates queries run together (3 waits → 2). Committed as 24d536f.
+- Step 6 built 2026-11-15 (Home, Super Admin and Admin): the people, category count and sign-in
+  reads run together (4 waits → 2); recent sign-ins read each staff member's last five from the
+  (user, time) index instead of ranking every sign-in; the page uses the shared pieces.
 
 ## Steps
 
