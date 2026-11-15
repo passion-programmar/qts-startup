@@ -98,7 +98,9 @@ test('a work row refused for a missing QTS_Resume folder says so and opens the f
       // The folder setting opens on its own.
       await page.waitForFunction(() => Boolean(window.openedSettings));
       assert.equal(await page.evaluate(() => window.openedSettings[0]), 'apply-pdf-folder', mode);
-      // The row explains why nothing started, as a warning rather than a failure.
+      // The row explains why nothing started, as a warning rather than a failure: seen in the panel,
+      // which the folder setting closed (it fills again when it opens).
+      await page.evaluate(() => window.__qtsPageLauncher.setOpen(true));
       await page.waitForFunction((mode) => /Save the QTS_Resume folder first/.test(window.testRoot.querySelector(`[data-action="${mode}"] .action-detail`)?.textContent || ''), {}, mode);
       assert.equal(await page.evaluate((mode) => window.testRoot.querySelector(`[data-action="${mode}"] .action-detail`).className, mode), 'action-detail warn');
       assert.notEqual(await page.evaluate((mode) => window.testRoot.querySelector(`[data-action="${mode}"] .action-tag`).textContent, mode), 'Failed');

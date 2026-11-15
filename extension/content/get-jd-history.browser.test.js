@@ -67,6 +67,9 @@ test('launcher shows three completed results only while Get JD is on and restore
       };
     }, await page.evaluate(() => window.stored));
     for (const file of ['shared/runtime-config.js', 'shared/get-jd-notifications.js', 'content/page-launcher.js']) await restored.addScriptTag({ path: path.resolve('extension', file) });
+    // The panel fills when it opens (closed, only the tab is kept up to date).
+    await restored.waitForFunction(() => Boolean(window.__qtsPageLauncher?.setOpen));
+    await restored.evaluate(() => window.__qtsPageLauncher.setOpen(true));
     await restored.waitForFunction((s) => window.testRoot?.querySelectorAll(s).length === 3, {}, selector);
     assert.equal(await restored.evaluate((s) => window.testRoot.querySelector(s).textContent.includes('Saved for 2 accounts'), selector), true);
     await restored.close();

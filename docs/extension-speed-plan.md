@@ -124,8 +124,24 @@ launcher (116 KB) and five more scripts load on every page; popup.js 305 KB; two
    - Tests: worker-wake-writes.e2e (no local writes of these keys on a Get JD page; the old code
      wrote qtsGetJdResults and qtsIdleActivityAt), idle-pacing (the alarm periods), release-boundary
      (the wiring).
-5. A lighter launcher: the panel and its styles are built only when first needed; launcher state
-   is asked for once; styles are not re-added on every focus change.
+5. A lighter launcher.
+   - Measured first (interleaved medians, a plain page, signed in): the launcher was the biggest
+     extension cost on a page, about 26-39 ms of main-thread work, more than all other extension
+     scripts together. Filling its hidden panel (rows, lists, pickers, the Tools check) was about
+     half of that, on every page and on every switch back to a tab.
+   - Done: the panel is filled only while it shows. Closed, a page keeps just the tab up to date
+     (signed in, and its dot for running / needs you / failed) and asks the worker nothing for the
+     panel; opening (the tab, the toolbar icon) fills it first, so a click never acts on an old
+     row. A session change empties the panel's lists at once, open or not.
+   - Measured after (9 interleaved runs each, this PC was busy): a plain page's main-thread time
+     151.8 → 144.8 ms median (112.6 ms with no launcher at all), so about 7 ms less per page.
+   - Not done: asking for the launcher state once (the second ask covers starts from the toolbar,
+     shortcuts and restores; one worker round trip, no page time). Moved to step 6: building the
+     panel and loading its code only when first opened (most of what is left: compiling the
+     116 KB launcher and building hundreds of elements on every page).
+   - Tests: launcher-lazy-panel.browser (closed: no panel fill, no Tools request, the dot still
+     shows the run; opened: up to date when it shows); two launcher tests now open the panel before
+     reading it.
 6. Structure: split the worker (7,900 lines) into feature files (Get JD, Generation, launcher,
    message routing) and the launcher into parts; decide what to do with the unreachable popup.
 7. Measure again, record the after numbers, release one new extension version.

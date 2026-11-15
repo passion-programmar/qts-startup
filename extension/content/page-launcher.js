@@ -637,7 +637,7 @@ async function initializeQtsPageLauncher() {
   }
   candidateSelect.addEventListener('focus', () => loadWorkAccounts().catch(() => {}));
   candidateSelect.addEventListener('change', chooseCandidate);
-  renderCandidate();
+  // Rendered when the panel first opens (catchUpPanel).
 
   function loadAllWorkAccounts() {
     loadWorkAccounts().catch(() => {});
@@ -916,8 +916,28 @@ async function initializeQtsPageLauncher() {
   root.append(style, cleanupStyle, launcher, menu, preview, applyPick, outcomeCard, cleanup);
   (document.documentElement || document.body).appendChild(host);
 
+  // The panel is kept up to date only while it shows. Closed, a sync updates just the tab itself
+  // (signed in or not, and its dot), and the panel catches up before it opens: filling the hidden
+  // panel on every page and every tab switch was about half of the launcher's work on a page.
+  let panelStale = true;
+  let catchingUp = false;
+  const panelShowing = () => catchingUp || launcher.classList.contains('open');
+  async function catchUpPanel() {
+    if (!panelStale) return;
+    panelStale = false;
+    catchingUp = true;
+    try {
+      renderCandidate();
+      await Promise.all([syncModeActions(), syncTextHighlightAction()]);
+    } finally {
+      catchingUp = false;
+    }
+  }
+
   function setOpen(open) {
     if (!open) clearTimeout(countsTimer);
+    // Opened without catching up first (the Sign In card, a test): it catches up now.
+    if (open && panelStale) catchUpPanel().catch(() => {});
     launcher.classList.toggle('open', open);
     menu.hidden = !open;
     host.toggleAttribute('data-menu-open', open);
@@ -1045,7 +1065,10 @@ async function initializeQtsPageLauncher() {
   // The toolbar icon: signed out it shows or hides the Sign In card; signed in it opens or closes the actions.
   async function toggleFromToolbar() {
     if (await syncSessionAction()) {
-      setOpen(!launcher.classList.contains('open'));
+      const opening = !launcher.classList.contains('open');
+      // Up to date before it shows, so a click never acts on an old row.
+      if (opening) await catchUpPanel();
+      setOpen(opening);
       if (launcher.classList.contains('open')) loadAllWorkAccounts();
       main.focus();
       return;
@@ -1071,6 +1094,11 @@ async function initializeQtsPageLauncher() {
   };
 
   async function syncTextHighlightAction(refresh = false) {
+    // The Tools rows show only in the open panel: closed, nothing is asked (see catchUpPanel).
+    if (!panelShowing()) {
+      panelStale = true;
+      return;
+    }
     const highlightButton = menu.querySelector('[data-action="text_highlights"]');
     const exclusionsButton = menu.querySelector('[data-action="page_exclusions"]');
     const customUrlsButton = menu.querySelector('[data-action="auto_apply_custom_urls"]');
@@ -1528,6 +1556,9 @@ async function initializeQtsPageLauncher() {
     ]);
     const workStatus = stored.qtsExtensionStatus;
     const getJdOn = stored.qtsGetJdOn === true;
+    // Closed, only the tab's dot is updated: the rows, lists and pickers wait for catchUpPanel.
+    const render = panelShowing();
+    if (!render) panelStale = true;
     // Apply and Auto Apply share the work slot ('apply'); qtsApplyKind says which holds it.
     const autoApplyOn = workStatus === 'apply' && stored.qtsApplyKind === 'auto';
     const rows = {
@@ -1543,20 +1574,20 @@ async function initializeQtsPageLauncher() {
         ? ['This page needs you: see the card beside the panel.', 'warn']
         : pageNote?.url === location.href ? [pageNote.text, ''] : ['Checking each job page you open.', ''];
     }
-    const results = getJdOn && Number(stored.authExpiresAt) > Date.now()
+    const results = render && getJdOn && Number(stored.authExpiresAt) > Date.now()
       ? globalThis.__qtsGetJdNotifications?.recentResults(stored.qtsGetJdNotificationState, stored) || [] : [];
     // This page's manual review, left with "‹ QTS" or Cancel: one click goes back to it.
     const review = globalThis.__qtsGetJdReview;
     const checking = review?.draftAvailable?.() === true;
     const checked = review?.checkedAvailable?.() === true;
-    const reviewItems = getJdOn && review?.manualReviewAvailable?.() ? [{
+    const reviewItems = render && getJdOn && review?.manualReviewAvailable?.() ? [{
       name: checking ? 'Check this job before Gemini' : checked ? 'Show this job\'s check' : 'Choose candidates for this page',
       company: document.title || location.hostname,
       avatar: '✓', goLabel: checking ? 'Check ›' : checked ? 'Show ›' : 'Review ›',
       openTitle: checking ? 'Show the job read from this page' : checked ? 'Show the progress or result of the check' : 'Show the candidates for this job',
       onOpen: async () => { setOpen(false); review.openReview(); return { ok: true }; },
     }] : [];
-    renderSub('get_jd', [...reviewItems, ...results.map((entry) => {
+    if (render) renderSub('get_jd', [...reviewItems, ...results.map((entry) => {
       let site = ''; try { site = new URL(entry.pageUrl).hostname; } catch { /* Historical entries can lack a URL. */ }
       const time = Number(entry.updatedAt) > 0 ? new Date(entry.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
       return {
@@ -1601,7 +1632,7 @@ async function initializeQtsPageLauncher() {
         rows.generation.detail = latest ? [latest.text, latest.type === 'error' ? 'error' : ''] : ['Looking for the next ready job.', ''];
       }
     }
-    renderSub('generation', generationCards, jobFailed ? 'failed' : 'running');
+    if (render) renderSub('generation', generationCards, jobFailed ? 'failed' : 'running');
 
     const open = Array.isArray(stored.qtsApplyState?.open) ? stored.qtsApplyState.open : [];
     if (rows.apply.active) {
@@ -1646,12 +1677,12 @@ async function initializeQtsPageLauncher() {
 
     let failed = false;
     for (const [action, row] of Object.entries(rows)) {
-      const button = menu.querySelector(`[data-action="${action}"]`);
-      if (!button) continue;
       const note = rowNotes.get(action);
       const chip = note?.[1] === 'error' ? ['Failed', 'failed'] : busy[action] ? ['Busy', ''] : row.chip;
       const detail = note || (busy[action] ? [busy[action], ''] : row.detail);
       if (chip?.[1] === 'failed') failed = true;
+      const button = render ? menu.querySelector(`[data-action="${action}"]`) : null;
+      if (!button) continue;
       const active = row.active;
       button.classList.toggle('running', active);
       button.classList.toggle('busy', Boolean(busy[action]));
@@ -1670,14 +1701,14 @@ async function initializeQtsPageLauncher() {
       line.className = `action-detail ${detail?.[1] || ''}`.trim();
     }
 
-    renderSub('apply', rows.apply.active ? open.map((entry) => ({
+    if (render) renderSub('apply', rows.apply.active ? open.map((entry) => ({
       name: entry.candidate,
       company: entry.company,
       title: entry.title,
       open: { type: 'QTS_SHOW_APPLICATION', attemptId: entry.attemptId },
       openTitle: 'Show this application',
     })) : [], 'needs');
-    renderSub('auto_apply', autoRun ? [{
+    if (render) renderSub('auto_apply', autoRun ? [{
       name: autoRun.candidate,
       company: autoRun.company,
       title: autoRun.title,
@@ -1692,6 +1723,7 @@ async function initializeQtsPageLauncher() {
     launcher.classList.toggle('needs', needs);
     launcher.classList.toggle('failed', !needs && failed);
     launcher.classList.toggle('running', !needs && !failed && Object.values(rows).some((row) => row.active));
+    if (!render) return;
     // The candidate stays fixed while a run uses it.
     candidate.select.disabled = ['generation', 'apply'].includes(workStatus)
       || [...workPickers.values()].some((picker) => picker.cancelling);
@@ -1855,6 +1887,8 @@ async function initializeQtsPageLauncher() {
       return;
     }
     const opening = !launcher.classList.contains('open');
+    // Up to date before it shows, so a click never acts on an old row.
+    if (opening) await catchUpPanel();
     setOpen(opening);
     // Opening QTS ends any idle back-off: this Chrome checks for work right away.
     if (opening) chrome.runtime.sendMessage({ type: 'QTS_ACTIVITY' }).catch(() => {});
@@ -1890,6 +1924,9 @@ async function initializeQtsPageLauncher() {
       candidate.select.replaceChildren(new Option('All accounts', ''));
       resetWorkPickers();
       renderCandidate();
+      // What the panel lists for the previous session (its results, candidates and jobs) goes at
+      // once, open or not; the rest fills when the panel next opens.
+      for (const action of ['get_jd', 'generation', 'apply', 'auto_apply']) renderSub(action, []);
       syncSessionAction()
         .then(() => syncTextHighlightAction())
         .catch((error) => console.warn('[QTS launcher] Could not sync session after authentication changed:', error));
