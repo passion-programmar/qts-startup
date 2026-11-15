@@ -3,6 +3,41 @@
 This describes the local implementation. It has not been deployed by this change.
 The older Manager-keyword detection flow is superseded by this document.
 
+## Gemini mode: the Manager checks every job before Gemini (2026-11-15)
+
+Gemini is never called automatically. In Gemini mode the job-page detection rules (keywords, score,
+"plausible", closed text, list pages, article paths, headings) are not used; Manual mode still uses them.
+
+```
+New tab / reload
+  ├─ blocked URL (Manager) or Super Admin skip site ─────────► nothing
+  ├─ extract the full JD, title and company once, as soon as the text shows (checked every 0.3 s, up to 12 s)
+  ├─ Jobs/Bids duplicate check with the extracted title/company ─► already in QTS: "Skipped", stop
+  └─ panel "Check this job": URL (fixed), Title, Company, JD (editable)
+        Check          ─ duplicate check again with the checked title/company, then Gemini
+                         reads the Manager's JD; matching and saving are unchanged
+        Close          ─ closes the tab (only hides the panel on a pinned tab, a search page
+                         showing one job, or the window's last tab); nothing sent or saved
+        After Check    ─ the panel shows "Checking with Gemini…", then the result; a successful
+                         answer closes the tab 5 seconds later (even with auto-close off);
+                         not a job / not eligible stay open with "Edit and check again"
+        ‹ QTS          ─ hides the panel; QTS / Alt+Q shows it again until the tab closes
+        Re-read page   ─ reads the JD again (title/company kept if already filled)
+        Never on this site ─ adds the host to the Manager's blocked URLs (needs that permission)
+```
+
+- **Skip sites:** Super Admin edits them in Settings → General → "Sites Get JD skips", stored under the
+  `settings` key `get_jd_skip_sites` (no migration). Until first saved, the starting list in
+  `src/server/get-jd/skip-sites-values.ts` applies. They travel with the Manager's blocked URLs
+  (`GET /api/extension/job-detection-url-rules` → `skipSites`) and share its 5-minute cache. An entry is
+  an exact host ("www." ignored, other subdomains are separate sites) with an optional path start.
+- **Quiet reading:** reading a page for the panel adds nothing to Get JD history or toasts; a page
+  whose text can't be read opens the panel with an empty JD box. Sending is reported as before.
+- **Background tabs** are read in the background; the panel shows when the Manager opens the tab.
+- **Automatic retries** (AI busy, quota) re-send the same checked draft.
+- Code: `processGetJdPage` and `handleGetJdDraftAction` in `extension/background/service-worker.js`,
+  `renderDraft` in `extension/content/get-jd-review.js`.
+
 ## Workflow
 
 1. A tab is created after Get JD is enabled, or an existing tab is explicitly reloaded.

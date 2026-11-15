@@ -8,6 +8,8 @@ import {
   normalizeJobDetectionUrlRule,
 } from "@/server/job-detection-url-rules";
 import { errorCode, isRecord } from "@/server/text-highlights";
+import { getGetJdSkipSites } from "@/server/get-jd/skip-sites";
+import { defaultGetJdSkipSites } from "@/server/get-jd/skip-sites-values";
 
 const maxRules = 200;
 
@@ -68,7 +70,10 @@ async function listResponse(managerId: string): Promise<NextResponse> {
       .limit(maxRules),
     managerCanManageJobDetectionUrlRules(managerId),
   ]);
-  return jsonResponse({ success: true, managerId, canManageJobDetectionUrlRules, rules });
+  // Super Admin's list of sites Get JD never reads, sent with the Manager's own blocked URLs so the
+  // extension loads both in one request. A failed read falls back to the default list.
+  const skipSites = await getGetJdSkipSites().then((result) => result.sites, () => [...defaultGetJdSkipSites]);
+  return jsonResponse({ success: true, managerId, canManageJobDetectionUrlRules, rules, skipSites });
 }
 
 function jsonResponse(body: object, status = 200): NextResponse {

@@ -28,6 +28,7 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { DEFAULT_CHATGPT_URL, normalizeChatGptUrl } from "@/server/chatgpt/chatgpt-url";
 import { MAX_AUTO_APPLY_PARALLEL_LIMIT } from "@/server/apply/apply-values";
+import { getJdSkipSitesSettingKey, parseGetJdSkipSites } from "@/server/get-jd/skip-sites-values";
 
 export type PromptActionState = {
   error: string | null;
@@ -405,6 +406,28 @@ export async function updateJobRecordTimeZoneAction(
   revalidatePath("/settings");
   const label = jobRecordTimeZoneOptions.find((option) => option.value === timeZone)?.label ?? timeZone;
   return { error: null, success: `New job records are dated in ${label} time (${timeZone}).` };
+}
+
+// The sites Get JD never reads, for every Manager: one site per line in the Settings text box.
+export async function updateGetJdSkipSitesAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") return { ...emptyState, error: "Only Super Admin can change the sites Get JD skips." };
+  const text = formData.get("skipSites");
+  if (typeof text !== "string" || text.length > 60_000) return { ...emptyState, error: "Enter one site per line." };
+  const parsed = parseGetJdSkipSites(text);
+  if ("error" in parsed) return { ...emptyState, error: parsed.error };
+  try {
+    await db.insert(settings).values({ key: getJdSkipSitesSettingKey, value: parsed.sites, updatedByUserId: actor.id })
+      .onConflictDoUpdate({ target: settings.key, set: { value: parsed.sites, updatedByUserId: actor.id, updatedAt: new Date() } });
+  } catch (error) {
+    logPromptActionFailure("updating the Get JD skipped sites", error);
+    return { ...emptyState, error: "The skipped sites could not be saved." };
+  }
+  revalidatePath("/settings");
+  return { error: null, success: `Saved ${parsed.sites.length} site${parsed.sites.length === 1 ? "" : "s"}. Extensions pick it up within 5 minutes.` };
 }
 
 export async function saveAiLimitsAction(

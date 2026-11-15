@@ -39,6 +39,7 @@ async function initializeGetJdReviewOnce() {
   // Manual results need immediate review; Gemini keeps its existing automatic flow.
   let reviewOpen = false;
   let dismissedReviewKey = null;
+  let closeCountdownTimer = null;
   let profileLoadError = '';
   let panelHideTimer = null;
   let managerSettingsOpen = false;
@@ -279,6 +280,15 @@ async function initializeGetJdReviewOnce() {
       .manual-field input:focus, .manual-field textarea:focus { border-color: #8b7cf6; outline: none; box-shadow: 0 0 0 2px rgb(139 124 246 / .2); }
       .message { margin: 8px 0 0; color: #fca5a5; }
       .manual-review .message:empty { display: none; }
+      /* Gemini mode's check before sending: the job's fields fill the panel; no candidate list yet. */
+      .draft-review .profiles, .draft-review .account-heading, .draft-review .fields-toggle { display: none; }
+      .draft-review .details { display: block; flex: 1 1 auto; max-height: none; min-height: 0; overflow: auto; }
+      .draft-review .manual-field textarea { min-height: 38vh; resize: vertical; }
+      .draft-review .manual-field input[readonly] { color: #8b9ab3; }
+      .draft-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
+      .draft-tools button { padding: 6px 10px; border: 1px solid #2c3a55; border-radius: 9px; background: #111a2d; color: #cbd5e1; font: 600 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: none; }
+      .draft-tools button:hover:not(:disabled) { transform: none; border-color: #3b4b69; background: #16213a; }
+      .draft-tools button[hidden] { display: none; }
       /* Save and Cancel stay in a footer, like Sign Out in the QTS panel. */
       .actions { margin: 10px -14px 0; padding: 10px 14px; border-top: 1px solid #1f2a40; background: #0d1526; }
       .save { background: linear-gradient(135deg, #6d5bd0, #4f6ef7); box-shadow: none; }
@@ -388,7 +398,13 @@ async function initializeGetJdReviewOnce() {
     );
     reviewBar.append(reviewBack, reviewTitle);
     reviewBack.addEventListener('click', () => {
-      host.__qtsElements.cancel.onclick?.();
+      // A draft is only put aside (the Get JD row reopens it); a review is cancelled as before.
+      if (panel.classList.contains('draft-review')) {
+        reviewOpen = false;
+        setPanelVisible(false);
+      } else {
+        host.__qtsElements.cancel.onclick?.();
+      }
       const launcher = globalThis.__qtsPageLauncher;
       launcher?.setOpen?.(true);
       launcher?.syncModeActions?.().catch(() => {});
@@ -405,7 +421,7 @@ async function initializeGetJdReviewOnce() {
     panel.append(brandHeader, panelContent, managerSettings.root);
     root.appendChild(panel);
     host.__qtsElements = {
-      panel, panelContent, managerSettings, fieldsToggle,
+      panel, panelContent, managerSettings, fieldsToggle, reviewTitle,
       heading, status, details, accountCount, profiles, message, save, cancel,
     };
     (document.documentElement || document.body).appendChild(host);
@@ -451,8 +467,8 @@ async function initializeGetJdReviewOnce() {
       document.documentElement?.removeAttribute('data-qts-get-jd-docked');
     }
     const hideLauncher = shouldShow && !managerSettingsOpen
-      && currentResult?.evaluationMode !== 'gemini'
-      && ['complete', 'saved'].includes(currentResult?.status);
+      && ((currentResult?.evaluationMode !== 'gemini' && ['complete', 'saved'].includes(currentResult?.status))
+        || currentResult?.status === 'draft' || currentResult?.fromDraft === true);
     if (hideLauncher) {
       document.documentElement?.setAttribute('data-qts-manual-get-jd-review', 'true');
     } else {
@@ -1493,8 +1509,20 @@ async function initializeGetJdReviewOnce() {
     }
   }
 
+  // Back from the draft view: its classes and the review bar's own words.
+  function leaveDraftView(elements) {
+    clearInterval(closeCountdownTimer);
+    elements.panel.classList.remove('draft-review');
+    const [strong, line] = elements.reviewTitle.children;
+    strong.textContent = 'Save this job';
+    line.textContent = 'Tick the candidates who should get it.';
+    elements.save.onclick = null;
+    elements.cancel.onclick = null;
+  }
+
   function renderIdlePanel(message) {
     const elements = host.__qtsElements;
+    leaveDraftView(elements);
     elements.panel.classList.remove('manual-review');
     elements.panel.classList.remove('save-result');
     elements.status.parentElement.insertBefore(elements.heading, elements.status);
@@ -1524,6 +1552,7 @@ async function initializeGetJdReviewOnce() {
 
   function renderReview(result) {
     const elements = host.__qtsElements;
+    leaveDraftView(elements);
     elements.panel.classList.toggle('manual-review', result.evaluationMode !== 'gemini');
     elements.panel.classList.remove('save-result');
     elements.status.parentElement.insertBefore(elements.heading, elements.status);
@@ -1675,8 +1704,197 @@ async function initializeGetJdReviewOnce() {
     };
   }
 
+  // Gemini mode: the job read from this page, for the Manager to check or change before Gemini.
+  // Nothing goes to Gemini until "Check"; "Close" sends nothing.
+  function renderDraft(result) {
+    const elements = host.__qtsElements;
+    clearInterval(closeCountdownTimer);
+    elements.panel.classList.add('manual-review', 'draft-review');
+    elements.panel.classList.remove('save-result');
+    setFieldsOpen(true);
+    elements.status.parentElement.insertBefore(elements.heading, elements.status);
+    setPanelVisible(true);
+    const [strong, line] = elements.reviewTitle.children;
+    strong.textContent = 'Check this job';
+    line.textContent = 'Change anything that is wrong, then send it to Gemini.';
+    elements.heading.textContent = 'Check this job';
+    elements.status.textContent = result.message || 'Check the job details, then send them to Gemini.';
+    elements.status.classList.remove('is-loading');
+    elements.message.textContent = '';
+    elements.details.hidden = false;
+    elements.details.replaceChildren();
+
+    // Edits survive re-renders; reading the page again starts from its new text.
+    const draftKey = `draft:${result.runId || result.pageUrl}:${result.rereadAt || 0}`;
+    const draft = manualDrafts.get(draftKey) || { ...(result.draftJob || {}) };
+    manualDrafts.set(draftKey, draft);
+    if (manualDrafts.size > 100) manualDrafts.delete(manualDrafts.keys().next().value);
+    for (const [key, name, limit] of [['jobUrl', 'URL', 2048], ['title', 'Title', 500], ['company', 'Company', 500], ['description', 'JD', 100000]]) {
+      const label = document.createElement('label');
+      label.className = 'manual-field';
+      label.textContent = key === 'description' ? `JD (${String(draft.description || '').length.toLocaleString()} characters)` : name;
+      const input = document.createElement(key === 'description' ? 'textarea' : 'input');
+      if (key === 'description') input.rows = 14;
+      else input.type = key === 'jobUrl' ? 'url' : 'text';
+      // The URL is the page itself; Jobs/Bids and the saved job use it as it is.
+      if (key === 'jobUrl') input.readOnly = true;
+      input.maxLength = limit;
+      input.value = String(draft[key] || '');
+      input.dataset.draftField = key;
+      input.addEventListener('input', () => {
+        draft[key] = input.value;
+        if (key === 'description') label.firstChild.textContent = `JD (${input.value.length.toLocaleString()} characters)`;
+      });
+      label.appendChild(input);
+      elements.details.appendChild(label);
+    }
+
+    const tools = document.createElement('div');
+    tools.className = 'draft-tools';
+    const reread = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Re-read page' });
+    reread.title = 'Read the JD from this page again (your JD changes are replaced)';
+    const never = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Never on this site', hidden: true });
+    never.title = `Block ${location.hostname.replace(/^www\./i, '')}: Get JD will not run on it again`;
+    tools.append(reread, never);
+    elements.details.appendChild(tools);
+    // Blocking needs the Super Admin's permission, the same as the blocked-URL list.
+    chrome.storage.local.get(['qtsCanManageJobDetectionUrlRules'])
+      .then((stored) => { never.hidden = stored.qtsCanManageJobDetectionUrlRules !== true; })
+      .catch(() => {});
+
+    const buttons = [elements.save, elements.cancel, reread, never];
+    const busy = (on) => buttons.forEach((button) => { button.disabled = on; });
+    const act = async (message, waiting) => {
+      busy(true);
+      elements.message.textContent = '';
+      elements.status.textContent = waiting;
+      elements.status.classList.add('is-loading');
+      try {
+        const response = await chrome.runtime.sendMessage(message);
+        if (!response?.ok) throw new Error(response?.error || 'Get JD could not do that.');
+        return true;
+      } catch (error) {
+        elements.message.textContent = error?.message || 'Get JD could not do that.';
+        elements.status.textContent = result.message || 'Check the job details, then send them to Gemini.';
+        elements.status.classList.remove('is-loading');
+        busy(false);
+        return false;
+      }
+    };
+    reread.onclick = () => {
+      manualDrafts.delete(draftKey);
+      act({ type: 'QTS_GET_JD_REREAD_DRAFT' }, 'Reading this page again…');
+    };
+    never.onclick = async () => {
+      if (await act({ type: 'QTS_GET_JD_NEVER_ON_SITE' }, 'Blocking this site…')) manualDrafts.delete(draftKey);
+    };
+
+    elements.save.hidden = false;
+    elements.save.disabled = false;
+    elements.save.textContent = 'Check';
+    elements.cancel.hidden = false;
+    elements.cancel.disabled = false;
+    elements.cancel.textContent = 'Close';
+    elements.save.onclick = async () => {
+      if (!String(draft.description || '').trim()) {
+        elements.message.textContent = 'Paste or keep the JD before sending it to Gemini.';
+        elements.details.querySelector('[data-draft-field="description"]')?.focus();
+        return;
+      }
+      if (await act({ type: 'QTS_GET_JD_SEND_DRAFT', job: { title: draft.title || '', company: draft.company || '', description: draft.description } }, 'Sending to Gemini…')) {
+        manualDrafts.delete(draftKey);
+      }
+    };
+    elements.cancel.onclick = () => closeJobTab();
+  }
+
+  // Hides the panel of a job read in Gemini mode; clicking QTS (or Alt+Q) shows it again.
+  function hideDraftPanel() {
+    reviewOpen = false;
+    setPanelVisible(false);
+  }
+
+  // Close: the job tab closes. Where closing is not safe (a pinned tab, a search page showing one
+  // job, the window's last tab) the worker keeps it, and the panel only hides.
+  async function closeJobTab() {
+    const elements = host.__qtsElements;
+    elements.cancel.disabled = true;
+    const response = await chrome.runtime.sendMessage({ type: 'QTS_GET_JD_CLOSE_JOB_TAB' }).catch(() => null);
+    if (response?.closed === true) return;
+    elements.cancel.disabled = false;
+    hideDraftPanel();
+  }
+
+  // A checked job after "Check": its progress, then its result, shown in the panel for as long as
+  // the tab is open. A check that saved nothing can be edited and checked again.
+  function renderDraftStatus(result) {
+    const elements = host.__qtsElements;
+    elements.panel.classList.add('manual-review', 'draft-review');
+    elements.panel.classList.remove('save-result');
+    setFieldsOpen(true);
+    elements.status.parentElement.insertBefore(elements.heading, elements.status);
+    setPanelVisible(true);
+    const running = result.status === 'processing';
+    const saved = (result.profiles || []).filter((profile) => profile.autoSaved === true);
+    const verdict = result.classification || {};
+    let headline;
+    if (running) headline = 'Checking with Gemini…';
+    else if (result.status === 'duplicate') headline = 'Already in QTS';
+    else if (result.status === 'error' && verdict.isJobPage === false) headline = 'Not a job page';
+    else if (result.status === 'error' && verdict.isJobPage === true && verdict.isRemote === false) headline = 'Not eligible';
+    else if (result.status === 'error' || result.status === 'cancelled') headline = 'The check did not finish';
+    else if (saved.length) headline = 'Saved for ' + saved.length + (saved.length === 1 ? ' candidate' : ' candidates');
+    else headline = 'No candidate matched';
+    const [strong, line] = elements.reviewTitle.children;
+    strong.textContent = headline;
+    line.textContent = running ? 'You can hide this panel; the check goes on.' : 'Shown until this tab is closed.';
+    elements.heading.textContent = headline;
+    elements.status.textContent = result.message || headline;
+    elements.status.classList.toggle('is-loading', running);
+    elements.message.textContent = '';
+    elements.details.hidden = false;
+    elements.details.replaceChildren();
+    const job = result.draftJob || {};
+    appendDetail(elements.details, 'Title', verdict.job?.title || job.title || '');
+    appendDetail(elements.details, 'Company', verdict.job?.company || job.company || '');
+    if (saved.length) appendDetail(elements.details, 'Saved for', saved.map((profile) => profile.name).join(', '));
+    if (verdict.job?.reason) appendDetail(elements.details, 'Reason', verdict.job.reason);
+    appendDetail(elements.details, 'Job description', job.description || '', 'description');
+
+    const canEdit = !running && !saved.length && result.status !== 'duplicate';
+    elements.save.hidden = !canEdit;
+    elements.save.disabled = false;
+    elements.save.textContent = 'Edit and check again';
+    elements.save.onclick = async () => {
+      elements.save.disabled = true;
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'QTS_GET_JD_RESTORE_DRAFT' });
+        if (!response?.ok) throw new Error(response?.error || 'This job cannot be edited right now.');
+      } catch (error) {
+        elements.message.textContent = error?.message || 'This job cannot be edited right now.';
+        elements.save.disabled = false;
+      }
+    };
+    elements.cancel.hidden = false;
+    elements.cancel.disabled = false;
+    elements.cancel.textContent = 'Close';
+    elements.cancel.onclick = () => closeJobTab();
+    // A successful check: the result shows, then the tab closes after the countdown.
+    clearInterval(closeCountdownTimer);
+    if (Number(result.closesAt) > Date.now()) {
+      const tick = () => {
+        const seconds = Math.max(0, Math.ceil((Number(result.closesAt) - Date.now()) / 1000));
+        line.textContent = 'Closing this tab in ' + seconds + (seconds === 1 ? ' second.' : ' seconds.');
+        if (!seconds) clearInterval(closeCountdownTimer);
+      };
+      tick();
+      closeCountdownTimer = setInterval(tick, 250);
+    }
+  }
+
   function renderSaveResult(result) {
     const elements = host.__qtsElements;
+    leaveDraftView(elements);
     elements.panel.classList.remove('manual-review');
     elements.panel.classList.add('save-result');
     elements.status.parentElement.insertBefore(elements.status, elements.heading);
@@ -1736,6 +1954,15 @@ async function initializeGetJdReviewOnce() {
       return;
     }
     setPanelVisible(true);
+    // A checked job (Gemini mode): its draft, progress or result.
+    if (currentResult?.status === 'draft') {
+      renderDraft(currentResult);
+      return;
+    }
+    if (currentResult?.fromDraft === true) {
+      renderDraftStatus(currentResult);
+      return;
+    }
     if (
       currentResult?.status === 'complete' &&
       (currentResult.evaluationMode !== 'gemini' || (currentResult.classification?.isJobPage === true &&
@@ -1792,24 +2019,83 @@ async function initializeGetJdReviewOnce() {
     renderCurrentResult();
   }
 
+  // The tab's own icon shows how Get JD ended on a job page (Gemini mode): a blue circle when the
+  // job was saved for a candidate, a red circle when it is a job that was not saved (no match, not
+  // eligible, already in QTS Jobs/Bids). Only known jobs are marked: a page Gemini calls "not a
+  // job", an error, a stopped check, and a job still being read, checked or edited get no circle.
+  const TAB_MARK_COLORS = { saved: '#2563eb', other: '#dc2626' };
+  let tabMarkLink = null;
+  function tabMarkFor(result) {
+    if (!result || result.pageOnly !== true) return null;
+    // Gemini answered, so the page is a job (the server never saves for a page that is not).
+    if (result.status === 'complete') {
+      return (result.autoSavedProfileIds || []).length > 0 ? TAB_MARK_COLORS.saved : TAB_MARK_COLORS.other;
+    }
+    // A job already in QTS Jobs or Bids.
+    if (result.status === 'duplicate') return TAB_MARK_COLORS.other;
+    // Gemini's answer: a job, but not eligible (for example not remote).
+    if (result.status === 'error' && result.classification?.isJobPage === true) return TAB_MARK_COLORS.other;
+    return null;
+  }
+  function updateTabMark(result) {
+    const color = tabMarkFor(result);
+    if (!color) {
+      if (!tabMarkLink) return;
+      tabMarkLink.remove();
+      tabMarkLink = null;
+      // The page's own icons come back.
+      for (const link of document.querySelectorAll('link[data-qts-icon-rel]')) {
+        link.rel = link.dataset.qtsIconRel;
+        delete link.dataset.qtsIconRel;
+      }
+      return;
+    }
+    // The page's icons step aside while the mark shows, so Chrome uses the mark.
+    for (const link of document.querySelectorAll('link[rel~="icon"]')) {
+      if (link === tabMarkLink) continue;
+      link.dataset.qtsIconRel = link.rel;
+      link.rel = 'qts-hidden-icon';
+    }
+    if (!tabMarkLink) {
+      tabMarkLink = document.createElement('link');
+      tabMarkLink.rel = 'icon';
+      tabMarkLink.type = 'image/svg+xml';
+      tabMarkLink.dataset.qtsTabMark = 'true';
+    }
+    tabMarkLink.dataset.qtsTabMark = color === TAB_MARK_COLORS.saved ? 'saved' : 'other';
+    tabMarkLink.href = 'data:image/svg+xml,' + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${color}"/></svg>`,
+    );
+    (document.head || document.documentElement).appendChild(tabMarkLink);
+  }
+
   function applyResult(result) {
     ensureRoot();
     if (result?.pageUrl !== currentResult?.pageUrl) reviewOpen = false;
     if (!result || result.pageUrl !== location.href) {
       currentResult = null;
+      updateTabMark(null);
       renderCurrentResult();
       return;
     }
     currentResult = result;
+    updateTabMark(result);
     if (result.status === 'complete' && result.evaluationMode !== 'gemini'
       && (result.runId || result.pageUrl) !== dismissedReviewKey) {
       reviewOpen = true;
     }
-    if (result.status === 'processing') profilesLoaded = false;
+    // A job read for the Manager to check opens the panel; a sent one keeps it open while it runs.
+    if (result.status === 'draft' && (result.runId || result.pageUrl) !== dismissedReviewKey) reviewOpen = true;
+    if (result.status === 'processing' && result.fromDraft !== true) profilesLoaded = false;
     else profilesLoaded = true;
     if (!signedIn) return;
     const elements = host.__qtsElements;
     setPanelVisible(true);
+    // A checked job: progress and result stay in the panel (shown again on request) until the tab closes.
+    if (result.fromDraft === true && result.status !== 'draft' && result.status !== 'dismissed') {
+      renderDraftStatus(result);
+      return;
+    }
     if (result.status === 'duplicate') {
       const message = result.toastMessage || jobPresenceMessage(result);
       renderIdlePanel(result.message || message);
@@ -1823,9 +2109,13 @@ async function initializeGetJdReviewOnce() {
       renderIdlePanel(result.message || 'Could not check this job.');
       return;
     }
-    if (result.status === 'cancelled') {
+    if (result.status === 'cancelled' || result.status === 'dismissed') {
       currentResult = null;
       renderCurrentResult();
+      return;
+    }
+    if (result.status === 'draft') {
+      renderDraft(result);
       return;
     }
     if (result.status === 'saved') {
@@ -1882,7 +2172,16 @@ async function initializeGetJdReviewOnce() {
     excluded: false,
     applyResult,
     manualReviewAvailable() {
-      return currentResult?.status === 'complete' && currentResult.evaluationMode !== 'gemini';
+      return (currentResult?.status === 'complete' && currentResult.evaluationMode !== 'gemini')
+        || currentResult?.status === 'draft' || currentResult?.fromDraft === true;
+    },
+    // A Gemini-mode job waiting for the Manager to check and send it.
+    draftAvailable() {
+      return currentResult?.status === 'draft';
+    },
+    // A Gemini-mode job the Manager checked: its progress or result can be shown again.
+    checkedAvailable() {
+      return currentResult?.fromDraft === true && currentResult.status !== 'draft';
     },
     // From the QTS panel's Get JD row: show this page's candidates to change who gets the job.
     openReview() {
@@ -1941,5 +2240,7 @@ function initializeGetJdReviewAfterLoad() {
   });
 }
 
-if (document.readyState === 'complete') initializeGetJdReviewAfterLoad();
-else window.addEventListener('load', initializeGetJdReviewAfterLoad, { once: true });
+// The panel opens as soon as the page can be used: Get JD reads the job as soon as its text shows,
+// so the Manager does not wait for every image and ad to load.
+if (document.readyState !== 'loading') initializeGetJdReviewAfterLoad();
+else document.addEventListener('DOMContentLoaded', initializeGetJdReviewAfterLoad, { once: true });

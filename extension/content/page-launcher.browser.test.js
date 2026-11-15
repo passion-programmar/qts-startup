@@ -69,6 +69,9 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     const ask=async(page,msg)=>worker.evaluate(async(id,msg)=>(await chrome.scripting.executeScript({target:{tabId:id},func:m=>chrome.runtime.sendMessage(m),args:[msg]}))[0].result,await tabId(page),msg);
     const prechecks=()=>requests.filter(r=>r.path==='/api/extension/get-jd/check'&&r.body.scope==='global');const manualChecks=()=>requests.filter(r=>r.path==='/api/extension/get-jd/check'&&r.body.scope==='manual');const gemini=()=>requests.filter(r=>r.path==='/api/extension/get-jd');
     const result=async id=>worker.evaluate(async id=>(await chrome.storage.local.get('qtsGetJdResults')).qtsGetJdResults?.[id],id);
+    // The extension's own start-up loads (blocked URLs, highlights) finish first; only then is activation measured.
+    const uiCount=()=>requests.filter(r=>r.path!=='/api/extension/browsers/heartbeat').length;
+    for(let last=-1;last!==uiCount();){last=uiCount();await new Promise(r=>setTimeout(r,800));}
     const uiRequestsBefore=requests.filter(r=>r.path!=='/api/extension/browsers/heartbeat').length;
     for(const index of [0,4,2,0]){await pages[index].bringToFront();await until('one launcher',async()=>{const states=await Promise.all(pages.map(visible));return states[index]&&states.filter(Boolean).length===1;});}
     assert.equal(requests.filter(r=>r.path!=='/api/extension/browsers/heartbeat').length,uiRequestsBefore,'launcher activation is cache-only and makes no server request');
@@ -87,30 +90,65 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     const manualResult=await result(await tabId(pages[0]));
     assert.deepEqual(manualResult.selectedProfileIds.sort(),[ID,APPLIED_ID].sort());
     assert.equal(manualResult.profiles.find(profile=>profile.id===NEW_ID).available,true,'a candidate without this job remains available to select');
-    mode='gemini';const before=prechecks().length;
+    // Gemini mode: every page is read for the Manager to check; Gemini runs only on Send.
+    mode='gemini';await worker.evaluate(()=>{getJdModeCache=null;});const before=prechecks().length;
     await pages[0].keyboard.down(process.platform==='darwin'?'Meta':'Control');await pages[0].click('#open-job');await pages[0].keyboard.up(process.platform==='darwin'?'Meta':'Control');
-    await until('Ctrl-click background job evaluated',()=>gemini().length===1);
-    assert.equal(prechecks().length,before+1);assert.equal(gemini()[0].body.originalDescription,ORIGINAL);
-    assert.equal(gemini()[0].body.precheckToken,'local-fixture-ticket');
-    const background=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(t=>t.url===url),base+'/jobs/ctrl-background');
+    const background=await (async()=>{let tab;await until('Ctrl-click background tab',async()=>Boolean(tab=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(t=>t.url===url),base+'/jobs/ctrl-background')));return tab;})();
+    await until('Ctrl-click background job read for checking',async()=>(await result(background.id))?.status==='draft');
+    assert.equal(prechecks().length,before+1,'one duplicate check before the panel');assert.equal(gemini().length,0,'Gemini is never called automatically');
+    const draft=(await result(background.id)).draftJob;
+    assert.deepEqual([draft.jobUrl,draft.title,draft.company,draft.description],[base+'/jobs/ctrl-background','Software Engineer','Example',ORIGINAL]);
     assert.equal(background.active,false);assert.equal(await worker.evaluate(async id=>(await chrome.scripting.executeScript({target:{tabId:id},func:()=>Boolean(document.querySelector('[data-qts-page-launcher]'))}))[0].result,background.id),false);
+    const EDITED='\n\nEdited by the Manager.';
+    const inTab=(id,msg)=>worker.evaluate(async(id,msg)=>(await chrome.scripting.executeScript({target:{tabId:id},func:m=>chrome.runtime.sendMessage(m),args:[msg]}))[0].result,id,msg);
+    assert.equal((await inTab(background.id,{type:'QTS_GET_JD_SEND_DRAFT',job:{title:'Senior Software Engineer',company:'Example',description:ORIGINAL+EDITED}})).ok,true);
+    await until('sent draft evaluated',()=>gemini().length===1);
+    assert.equal(prechecks().length,before+2,'Send checks Jobs/Bids again with the checked title and company');
+    assert.equal(prechecks().at(-1).body.job.jobTitle,'Senior Software Engineer');
+    assert.equal(gemini()[0].body.originalDescription,ORIGINAL+EDITED,'the JD from the Manager is what Gemini reads');
+    assert.equal(gemini()[0].body.pageTitle,'Senior Software Engineer');
+    assert.equal(gemini()[0].body.precheckToken,'local-fixture-ticket');
     await until('background completion',async()=>(await result(background.id))?.status==='complete');
-    assert.equal(await worker.evaluate(async id=>(await chrome.scripting.executeScript({target:{tabId:id},func:()=>typeof globalThis.__qtsInitializeGetJdReview}))[0].result,background.id),'undefined','normal Gemini background work does not initialize the candidate-review UI');
+    // The result shows on the tab, which closes 5 seconds later (even with auto-close off).
+    // The success alert says what this check did; the candidate just saved is never "already" having it.
+    const done=await result(background.id);
+    assert.equal(done.message,'Successfully saved this job for 1');
+    assert.equal(done.summaryText,done.message);assert.equal(done.toastMessage,done.message);
+    assert.doesNotMatch(JSON.stringify([done.message,done.summaryText,done.toastMessage]),/already/i);
+    await until('countdown shown',async()=>Number((await result(background.id))?.closesAt)>Date.now());
+    // Saved: a blue circle on the job tab itself; nothing in Get JD history or toasts on other pages.
+    await until('blue circle on the tab',async()=>(await worker.evaluate(async id=>(await chrome.scripting.executeScript({target:{tabId:id},func:()=>document.querySelector('link[data-qts-tab-mark]')?.dataset.qtsTabMark||''}))[0].result,background.id))==='saved');
+    await until('Chrome shows the circle as the tab icon',async()=>(await worker.evaluate(async id=>(await chrome.tabs.get(id)).favIconUrl||'',background.id)).startsWith('data:image/svg+xml'));
+    assert.equal(await worker.evaluate(async url=>((await chrome.storage.local.get('qtsGetJdNotificationState')).qtsGetJdNotificationState?.history||[]).filter(e=>e.pageUrl===url).length,base+'/jobs/ctrl-background'),0,'Gemini-mode results stay on their own page');
+    await until('tab closed after the countdown',async()=>!(await worker.evaluate(async id=>Boolean(await chrome.tabs.get(id).catch(()=>null)),background.id)));
     const middleChecks=prechecks().length;await pages[0].click('#open-job',{button:'middle'});
     await until('middle-click background duplicate checked',()=>prechecks().length===middleChecks+1);assert.equal(gemini().length,1);
+    // Close on a job waiting to be checked closes its tab; nothing goes to Gemini.
+    const middle=await worker.evaluate(async url=>chrome.tabs.create({url,active:false}),base+'/jobs/close-me');
+    await until('draft to close',async()=>(await result(middle.id))?.status==='draft');
+    // The tab closes before its own reply could arrive, so only the closing is checked.
+    await worker.evaluate(async id=>chrome.scripting.executeScript({target:{tabId:id},func:()=>{chrome.runtime.sendMessage({type:'QTS_GET_JD_CLOSE_JOB_TAB'}).catch(()=>{});}}),middle.id);
+    await until('closed by Close',async()=>!(await worker.evaluate(async id=>Boolean(await chrome.tabs.get(id).catch(()=>null)),middle.id)));
+    assert.equal(gemini().length,1);
     for(const type of ['jobs-url','bids-url','jobs-title','bids-title','precheck-error']){
       const pathname=type==='precheck-error'?'/jobs/precheck-error':'/jobs/duplicate-'+type;const n=prechecks().length;
       const tab=await worker.evaluate(async url=>chrome.tabs.create({url,active:false}),base+pathname);
       await until('precheck '+type,()=>prechecks().length===n+1);await until('skip/error recorded',async()=>{const stored=await result(tab.id);return ['duplicate','error'].includes(stored?.status)||/retrying automatically/.test(stored?.message||'');});
       assert.equal(gemini().length,1,'duplicate/precheck failure must not reach Gemini');
-      const loaded=await worker.evaluate(async id=>(await chrome.scripting.executeScript({target:{tabId:id},func:()=>typeof globalThis.__qtsReadOriginalJobDescription}))[0].result,tab.id);
-      assert.equal(loaded,'undefined','full JD reader never loaded for skipped jobs');
+      // The job is extracted first, then checked: the duplicate check carries the extracted title and company.
+      assert.deepEqual([prechecks().at(-1).body.job.jobTitle,prechecks().at(-1).body.job.company],['Software Engineer','Example']);
+      assert.notEqual((await result(tab.id))?.status,'draft','a duplicate never opens the panel');
+      // A job already in QTS: red circle on its tab. A failed check says nothing about the page: no circle.
+      const tabMark=()=>worker.evaluate(async id=>(await chrome.scripting.executeScript({target:{tabId:id},func:()=>document.querySelector('link[data-qts-tab-mark]')?.dataset.qtsTabMark||''}))[0].result,tab.id);
+      if(type==='precheck-error'){await new Promise(r=>setTimeout(r,800));assert.equal(await tabMark(),'');}
+      else await until('red circle for '+type,async()=>(await tabMark())==='other');
     }
     const redirect=await worker.evaluate(async url=>chrome.tabs.create({url,active:false}),base+'/redirect');
-    await until('redirect final document',()=>gemini().length===2);assert.equal(prechecks().at(-1).body.job.jobUrl,base+'/jobs/redirect-final');
+    await until('redirect final document',async()=>(await result(redirect.id))?.status==='draft');assert.equal(prechecks().at(-1).body.job.jobUrl,base+'/jobs/redirect-final');
     const late=await worker.evaluate(async url=>chrome.tabs.create({url,active:false}),base+'/jobs/late');
-    await until('late-loaded posting',()=>gemini().length===3);assert.equal(gemini().at(-1).body.originalDescription,ORIGINAL);
-    for(const bypassCache of [false,true]){const n=gemini().length,checksBefore=prechecks().length;await worker.evaluate(async(id,bypassCache)=>chrome.tabs.reload(id,{bypassCache}),await tabId(pages[1]),bypassCache);await until('old-tab normal/hard refresh precheck',()=>prechecks().length===checksBefore+1);await until('refresh done',async()=>['complete','duplicate'].includes((await result(await tabId(pages[1])))?.status));assert.ok(gemini().length<=n+1);}
+    await until('late-loaded posting',async()=>(await result(late.id))?.status==='draft');assert.equal((await result(late.id)).draftJob.description,ORIGINAL);
+    for(const bypassCache of [false,true]){const checksBefore=prechecks().length;await worker.evaluate(async(id,bypassCache)=>chrome.tabs.reload(id,{bypassCache}),await tabId(pages[1]),bypassCache);await until('old-tab normal/hard refresh precheck',()=>prechecks().length===checksBefore+1);await until('refresh done',async()=>['draft','duplicate'].includes((await result(await tabId(pages[1])))?.status));}
+    assert.equal(gemini().length,1,'reading pages never calls Gemini');
     const beforeOverflow=gemini().length;
     const oversized=await worker.evaluate(async url=>chrome.tabs.create({url,active:false}),base+'/jobs/oversized');
     await until('oversized extraction error propagated from content script',async()=>/100,000-character limit/.test((await result(oversized.id))?.message || ''));
@@ -122,7 +160,10 @@ test('active launcher, new background tabs/reloads, one global precheck and orig
     await new Promise(r=>setTimeout(r,1000));const second=await session.send('Performance.getMetrics');const metrics=list=>Object.fromEntries(list.metrics.map(m=>[m.name,m.value]));const a=metrics(first),b=metrics(second);
     fs.mkdirSync(path.join(root,'.pdf-verification'),{recursive:true});fs.writeFileSync(path.join(root,'.pdf-verification/get-jd-resource-observation.json'),JSON.stringify({scope:'synthetic local Chrome idle background tab; no baseline comparison',sampleSeconds:1,taskDurationDeltaSeconds:b.TaskDuration-a.TaskDuration,jsHeapBefore:a.JSHeapUsedSize,jsHeapAfter:b.JSHeapUsedSize,requestDelta:requests.length-count,launcherMounted:await visible(pages[2])},null,2));
     assert.equal(requests.some(r=>r.path.includes('/generation/')||r.path.includes('/apply/')),false);
-    assert.equal(await result(late.id).then(r=>r.jobDescription),ORIGINAL);
+    assert.equal(await result(late.id).then(r=>r.draftJob.description),ORIGINAL);
+    // The page's Get JD state lives only while its tab is open.
+    await worker.evaluate(async id=>chrome.tabs.remove(id),late.id);
+    await until('closed tab forgotten',async()=>(await result(late.id))===undefined);
     assert.ok(await result(redirect.id),'concurrent tab results retained');
     // Strict text reader keeps duplicate lines and rejects overflow rather than truncating it.
     const reader=await browser.newPage();await reader.setContent('<main>'+markup('x'.repeat(100001))+'</main>');await reader.addScriptTag({path:path.join(root,'extension/shared/job-page-text.js')});

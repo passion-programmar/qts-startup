@@ -92,7 +92,7 @@ test('waiting saves the plan, sets an alarm, and shows the wait with no button',
   const f = worker();
   await f.context.waitForGetJdAutoRetry(7, initial.pageUrl, initial, { at: now + 30_000, message: 'Waiting' }, { attempt: 2, force: true });
   assert.deepEqual(plain(f.calls.alarms[0]), ['qtsGetJdRetry:7', { when: now + 30_000 }]);
-  assert.deepEqual(plain(f.session['qtsGetJdRetry:7']), { url: initial.pageUrl, attempt: 2, force: true, runId: 'run' });
+  assert.deepEqual(plain(f.session['qtsGetJdRetry:7']), { url: initial.pageUrl, attempt: 2, force: true, runId: 'run', draftJob: null });
   assert.equal(f.calls.saved[0][1].status, 'processing');
   assert.equal(f.calls.saved[0][1].runId, 'run');
   assert.equal(f.calls.saved[0][1].message, 'Waiting');

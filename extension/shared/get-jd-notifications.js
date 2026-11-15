@@ -19,7 +19,7 @@
     else if (result?.status === 'saved') {
       outcome = 'updated';
       label = Number(result?.saveResponse?.removedCount) > 0 ? 'Selection updated' : result?.saveResponse ? 'No new saves' : 'Saved';
-    } else if (result?.evaluationMode === 'gemini') { outcome = 'skipped'; label = 'No new saves'; }
+    } else if (result?.evaluationMode === 'gemini') { outcome = 'skipped'; label = 'No candidate matched'; }
     else { outcome = 'review'; label = 'Review needed'; }
     return { outcome, label, savedCount, failedCount, title: String(job.title || result?.pageTitle || ''), company: String(job.company || '') };
   }
@@ -54,6 +54,8 @@
   }
 
   function recordResult(current, result, tabId, now = Date.now()) {
+    // Gemini mode's results stay on their own job page: no history entry, no toast elsewhere.
+    if (result?.pageOnly === true) return { state: current, changed: false };
     const status = classifyResult(result);
     if (!status || !result?.runId) return { state: current, changed: false };
 

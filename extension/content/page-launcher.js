@@ -1543,9 +1543,13 @@ async function initializeQtsPageLauncher() {
       ? globalThis.__qtsGetJdNotifications?.recentResults(stored.qtsGetJdNotificationState, stored) || [] : [];
     // This page's manual review, left with "‹ QTS" or Cancel: one click goes back to it.
     const review = globalThis.__qtsGetJdReview;
+    const checking = review?.draftAvailable?.() === true;
+    const checked = review?.checkedAvailable?.() === true;
     const reviewItems = getJdOn && review?.manualReviewAvailable?.() ? [{
-      name: 'Choose candidates for this page', company: document.title || location.hostname,
-      avatar: '✓', goLabel: 'Review ›', openTitle: 'Show the candidates for this job',
+      name: checking ? 'Check this job before Gemini' : checked ? 'Show this job\'s check' : 'Choose candidates for this page',
+      company: document.title || location.hostname,
+      avatar: '✓', goLabel: checking ? 'Check ›' : checked ? 'Show ›' : 'Review ›',
+      openTitle: checking ? 'Show the job read from this page' : checked ? 'Show the progress or result of the check' : 'Show the candidates for this job',
       onOpen: async () => { setOpen(false); review.openReview(); return { ok: true }; },
     }] : [];
     renderSub('get_jd', [...reviewItems, ...results.map((entry) => {

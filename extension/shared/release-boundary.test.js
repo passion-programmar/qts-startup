@@ -54,7 +54,9 @@ test('the page launcher is the only user entry point', () => {
   assert.ok(launcher.includes('hasValidExtensionContext'));
   assert.ok(launcher.includes("if (document.readyState !== 'loading') initializePageLauncherAfterLoad();"));
   assert.ok(launcher.includes("else document.addEventListener('DOMContentLoaded', initializePageLauncherAfterLoad, { once: true })"));
-  assert.ok(review.includes("window.addEventListener('load', initializeGetJdReviewAfterLoad, { once: true })"));
+  // The Get JD panel opens once the page can be used, as the job is read as soon as its text shows.
+  assert.ok(review.includes("if (document.readyState !== 'loading') initializeGetJdReviewAfterLoad();"));
+  assert.ok(review.includes("else document.addEventListener('DOMContentLoaded', initializeGetJdReviewAfterLoad, { once: true })"));
   // Highlights start as soon as the script runs (278c2e4: open job pages are highlighted after sign-in).
   assert.ok(highlighter.includes('\nstartPageTextHighlighterAfterLoad();'));
   // The launcher waits as a tab on the right edge, without endless animations; its actions open as a docked panel.

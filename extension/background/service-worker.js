@@ -149,6 +149,13 @@ let pageExclusionsRefreshPromise = null;
 const JOB_DETECTION_URL_RULES_STORAGE_KEY = 'qtsManagerJobDetectionUrlRules';
 const JOB_DETECTION_URL_RULES_UPDATED_AT_KEY = 'qtsManagerJobDetectionUrlRulesUpdatedAt';
 const JOB_DETECTION_URL_RULES_MANAGER_ID_KEY = 'qtsManagerJobDetectionUrlRulesManagerId';
+// Super Admin's sites Get JD never reads; they come with the blocked URLs and share their cache.
+const GET_JD_SKIP_SITES_STORAGE_KEY = 'qtsGetJdSkipSites';
+function readGetJdSkipSitesResponse(result) {
+  return Array.isArray(result?.skipSites)
+    ? result.skipSites.filter((site) => typeof site === 'string' && site.length <= 200).slice(0, 300)
+    : [];
+}
 const JOB_DETECTION_URL_RULES_REFRESH_TTL_MS = 5 * 60_000;
 let jobDetectionUrlRulesRefreshPromise = null;
 const MANAGER_FEATURES_STORAGE_KEY = 'qtsManagerExtensionFeatures';
@@ -343,6 +350,7 @@ async function refreshManagerJobDetectionUrlRules() {
       [JOB_DETECTION_URL_RULES_UPDATED_AT_KEY]: Date.now(),
       [JOB_DETECTION_URL_RULES_MANAGER_ID_KEY]: manager.id,
       qtsCanManageJobDetectionUrlRules: result.canManageJobDetectionUrlRules === true,
+      [GET_JD_SKIP_SITES_STORAGE_KEY]: readGetJdSkipSitesResponse(result),
     });
     return { ...result, rules };
   })();
@@ -489,7 +497,8 @@ async function waitForJobText(tabId) {
     }).catch(() => []);
     const state = result?.result;
     if (!state || state.hasJobBoardFrame || state.length >= JOB_BOARD_FRAME_MIN_TEXT || Date.now() > deadline) return;
-    await sleep(1000);
+    // Looked at often, so the job is read as soon as its text shows rather than after the page loads.
+    await sleep(300);
   }
 }
 
@@ -690,6 +699,7 @@ async function saveManagerJobDetectionUrlRulesResponse(result) {
     [JOB_DETECTION_URL_RULES_UPDATED_AT_KEY]: Date.now(),
     [JOB_DETECTION_URL_RULES_MANAGER_ID_KEY]: manager.id,
     qtsCanManageJobDetectionUrlRules: result.canManageJobDetectionUrlRules === true,
+    [GET_JD_SKIP_SITES_STORAGE_KEY]: readGetJdSkipSitesResponse(result),
   });
   return { ...result, rules };
 }
@@ -1234,6 +1244,17 @@ async function ensureGetJdPanel(tabId) {
 
 // Chrome storage has no atomic read/modify/write; serialize results from concurrent tabs.
 let getJdResultWrites = Promise.resolve();
+function forgetGetJdResult(tabId) {
+  const work = getJdResultWrites.catch(() => {}).then(async () => {
+    const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY]);
+    const results = stored[GET_JD_RESULTS_KEY] || {};
+    if (!(String(tabId) in results)) return;
+    delete results[String(tabId)];
+    await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
+  });
+  getJdResultWrites = work;
+  return work;
+}
 function saveGetJdResult(tabId, result, notifyPage = true) {
   const work = getJdResultWrites.catch(() => {}).then(() => writeGetJdResult(tabId, result, notifyPage));
   getJdResultWrites = work;
@@ -1252,7 +1273,9 @@ async function writeGetJdResult(tabId, result, notifyPage = true) {
   await chrome.storage.local.set({ [GET_JD_RESULTS_KEY]: results });
   if (notifyPage) {
     if ((result?.status === 'complete' && result.evaluationMode !== 'gemini')
-      || result?.status === 'saved' || result?.autoSaveFailureCount > 0) {
+      || result?.status === 'saved' || result?.status === 'draft' || result?.autoSaveFailureCount > 0
+      // A job already in QTS gets a red circle on its tab, which needs the panel script there.
+      || (result?.pageOnly === true && result.status === 'duplicate')) {
       // A freshly injected panel loads the stored result itself, so a missed message below is harmless.
       // UI injection can wait on a background renderer; matching must not wait for that UI.
       ensureGetJdPanel(tabId).catch((error) => {
@@ -1321,14 +1344,14 @@ async function readGetJdResultForTab(tabId) {
   return result?.pageUrl === tab.url ? result : null;
 }
 
-async function finishAbandonedGetJdResult(tabId, initial) {
+async function finishAbandonedGetJdResult(tabId, initial, notify = true) {
   const stored = await chrome.storage.local.get([GET_JD_RESULTS_KEY, 'authExpiresAt', 'qtsSessionUser']);
   const current = stored[GET_JD_RESULTS_KEY]?.[String(tabId)];
   if (current?.runId !== initial.runId || current.status !== 'processing'
     || initial.sessionOwner !== self.__qtsGetJdNotifications.sessionKey(stored)) return;
   await saveGetJdResult(tabId, {
     ...initial, status: 'cancelled', message: 'Checking stopped before completion: Get JD was stopped or the page changed.', updatedAt: Date.now(),
-  });
+  }, notify);
 }
 
 async function openGetJdHistoryResult(operationId, sender) {
@@ -1629,9 +1652,10 @@ async function cancelGetJdAutoRetry(tabId) {
   await chrome.alarms.clear(key);
   await chrome.storage.session.remove(key);
 }
-async function waitForGetJdAutoRetry(tabId, url, initialResult, plan, { attempt, force }) {
+async function waitForGetJdAutoRetry(tabId, url, initialResult, plan, { attempt, force, draftJob = null }) {
   const key = `${GET_JD_RETRY_ALARM}${tabId}`;
-  await chrome.storage.session.set({ [key]: { url, attempt, force, runId: initialResult.runId } });
+  // A sent draft is kept, so the retry sends exactly what the Manager checked.
+  await chrome.storage.session.set({ [key]: { url, attempt, force, runId: initialResult.runId, draftJob } });
   await chrome.alarms.create(key, { when: plan.at });
   // Still "processing", under the same run id, so the job stays one entry in the Manager's history.
   await saveGetJdResult(tabId, { ...initialResult, status: 'processing', message: plan.message, updatedAt: Date.now() });
@@ -1644,7 +1668,10 @@ async function runGetJdAutoRetry(tabId) {
   await chrome.storage.session.remove(key);
   const tab = await getTab(tabId);
   if (tab?.url !== pending.url || !(await isGetJdActive())) return;
-  await processGetJdPage(tabId, pending.url, `retry:${Date.now()}`, { force: pending.force === true, autoRetryAttempt: pending.attempt + 1, autoRetryRunId: pending.runId });
+  await processGetJdPage(tabId, pending.url, `retry:${Date.now()}`, {
+    force: pending.force === true, autoRetryAttempt: pending.attempt + 1, autoRetryRunId: pending.runId,
+    draftJob: pending.draftJob || null,
+  });
 }
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name.startsWith(GET_JD_RETRY_ALARM)) {
@@ -1688,11 +1715,16 @@ async function showGetJdOutcome(tabId, url, outcome) {
       console.warn('[QTS Get JD] Could not publish the completed notification:', error);
     });
   }
-  const autoClose = await isGetJdAutoCloseOn();
+  const autoClose = outcome.forceClose === true || await isGetJdAutoCloseOn();
   const closeDeadline = outcome.kind === 'done'
-    ? await scheduleGetJdTabClose(tabId, url, GET_JD_CLOSE_SECONDS)
+    ? await scheduleGetJdTabClose(tabId, url, GET_JD_CLOSE_SECONDS, { force: outcome.forceClose === true })
     : (await cancelGetJdClose(tabId), 0);
   const closable = closeDeadline > 0;
+  // A checked job shows its result in the panel, with the countdown, until the tab closes.
+  if (closable) {
+    const result = await readGetJdResultForTab(tabId);
+    if (result?.fromDraft === true) await saveGetJdResult(tabId, { ...result, closesAt: closeDeadline });
+  }
   chrome.tabs.sendMessage(tabId, {
     type: 'QTS_GET_JD_OUTCOME',
     outcome: {
@@ -1709,8 +1741,9 @@ function showGetJdNotice(tabId, url, message, actions, extra = {}) {
   return showGetJdOutcome(tabId, url, { kind: 'notice', tone: 'warn', message, actions, ...extra });
 }
 
-function showGetJdDone(tabId, url, message, tone = 'success') {
-  return showGetJdOutcome(tabId, url, { kind: 'done', tone, message });
+// forceClose: the tab closes after the countdown even when the launcher's auto-close is off.
+function showGetJdDone(tabId, url, message, tone = 'success', { forceClose = false } = {}) {
+  return showGetJdOutcome(tabId, url, { kind: 'done', tone, message, forceClose });
 }
 
 // The narrowest blocked-URL fragment for a page: its host and path, without the query.
@@ -1743,7 +1776,147 @@ function showGetJdRejection(tabId, url, reason) {
   return undefined;
 }
 
+// The Manager's Get JD mode, asked once a minute at most: every page opened needs it.
+let getJdModeCache = null;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.qtsGetJdOn || changes.qtsSessionUser)) getJdModeCache = null;
+});
+const GET_JD_MODE_CACHE_MS = 60_000;
+async function readGetJdModeResult() {
+  const { qtsSessionUser } = await chrome.storage.local.get(['qtsSessionUser']);
+  const owner = qtsSessionUser?.id || '';
+  if (getJdModeCache && getJdModeCache.owner === owner && Date.now() - getJdModeCache.at < GET_JD_MODE_CACHE_MS) {
+    return getJdModeCache.result;
+  }
+  const result = await workerApiRequest('GET', '/api/extension/get-jd/mode');
+  getJdModeCache = result.success === true ? { owner, at: Date.now(), result } : null;
+  return result;
+}
+async function readGetJdModeCached() {
+  const result = await readGetJdModeResult().catch(() => null);
+  return result?.success === true ? result.mode : null;
+}
+
+// Super Admin's sites that are never jobs, loaded with the Manager's blocked URLs (same cache).
+async function isGetJdSkipSite(url) {
+  const stored = await chrome.storage.local.get([GET_JD_SKIP_SITES_STORAGE_KEY]);
+  const sites = Array.isArray(stored[GET_JD_SKIP_SITES_STORAGE_KEY]) ? stored[GET_JD_SKIP_SITES_STORAGE_KEY] : [];
+  return sites.some((site) => self.__qtsJobDetectionUrlRules.skipSiteMatches(url, site));
+}
+
+// The job the Manager checks before Gemini: the page's full JD and the title and company read
+// from the page (its job data or heading). Every field can be changed in the panel.
+// listPage: a search page showing one selected job (LinkedIn, Indeed), which must stay open.
+async function readGetJdDraftJob(tabId, url, description) {
+  const snapshot = await readJobPageSnapshot(tabId).catch(() => null);
+  const found = snapshot?.identity || {};
+  const listPage = snapshot ? self.__qtsJobPageDetection.evaluateJobPage(snapshot).listPage === true : false;
+  return {
+    draftJob: {
+      jobUrl: url,
+      title: String(found.jobTitle || '').trim().slice(0, 500),
+      company: String(found.company || '').trim().slice(0, 500),
+      description: String(description || ''),
+    },
+    listPage,
+  };
+}
+
+function getJdDraftResult(initialResult, tab, draftJob) {
+  return {
+    ...initialResult,
+    pageTitle: tab.title || '',
+    status: 'draft',
+    evaluationMode: 'gemini',
+    classification: null,
+    draftJob,
+    message: draftJob.description.trim()
+      ? 'Check the job details, then send them to Gemini.'
+      : 'No job text was found on this page. Paste the JD to send it, or mark the page as not a job.',
+    updatedAt: Date.now(),
+  };
+}
+
+// A draft from the panel, checked like the server checks it; null when it can't be sent.
+function readGetJdDraftFromPanel(value, url) {
+  if (!value || typeof value !== 'object') return null;
+  const text = (key, limit) => (typeof value[key] === 'string' ? value[key].trim() : '').slice(0, limit + 1);
+  const draft = { jobUrl: url, title: text('title', 500), company: text('company', 500), description: text('description', 100_000) };
+  // Title and company may be left empty: Gemini reads them from the JD.
+  if (draft.title.length > 500 || draft.company.length > 500) return null;
+  if (!draft.description || draft.description.length > 100_000) return null;
+  return draft;
+}
+
+// The draft panel's buttons. Each acts only on this tab's current draft.
+async function handleGetJdDraftAction(tabId, msg) {
+  const tab = await getTab(tabId);
+  const current = await readGetJdResultForTab(tabId);
+  // After a check (any result but one still running), the same job can be edited and checked again.
+  // Close: the job tab closes, unless closing it is not safe (pinned, a search page showing one
+  // job, a QTS work tab, the window's last tab); then the panel only hides.
+  if (msg.type === 'QTS_GET_JD_CLOSE_JOB_TAB') {
+    if (!tab?.url || !(current?.status === 'draft' || current?.fromDraft === true)) return { ok: true, closed: false };
+    const windowTabs = await chrome.tabs.query({ windowId: tab.windowId });
+    const safe = !tab.pinned && current.listPage !== true && windowTabs.length > 1 && !(await isWorkflowTab(tabId, tab));
+    if (!safe) return { ok: true, closed: false };
+    await cancelGetJdClose(tabId);
+    await chrome.tabs.remove(tabId);
+    return { ok: true, closed: true };
+  }
+  if (msg.type === 'QTS_GET_JD_RESTORE_DRAFT') {
+    if (!tab?.url || current?.fromDraft !== true || !current.draftJob || current.status === 'processing' || getJdInFlightTabs.has(tabId)) {
+      return { ok: false, error: 'This job cannot be edited right now.' };
+    }
+    const { fromDraft: _fromDraft, ...rest } = current;
+    await saveGetJdResult(tabId, { ...getJdDraftResult(rest, tab, current.draftJob), rereadAt: Date.now() });
+    return { ok: true };
+  }
+  if (!tab?.url || current?.status !== 'draft') {
+    return { ok: false, error: 'This page has no job waiting to be checked. Reload the page to read it again.' };
+  }
+  const url = tab.url;
+  if (msg.type === 'QTS_GET_JD_DISMISS_DRAFT') {
+    await saveGetJdResult(tabId, { ...current, status: 'dismissed', message: 'Marked as not a job.', updatedAt: Date.now() });
+    return { ok: true };
+  }
+  if (msg.type === 'QTS_GET_JD_NEVER_ON_SITE') {
+    const host = new URL(url).hostname.replace(/^www\./i, '');
+    const result = await workerApiRequest('POST', '/api/extension/job-detection-url-rules', { url: host });
+    // 409: the site is blocked already, which is what the Manager asked for.
+    if (result.success === true) await saveManagerJobDetectionUrlRulesResponse(result);
+    else if (result._httpStatus === 409) await refreshManagerJobDetectionUrlRules().catch(() => {});
+    else return { ok: false, error: result.message || 'Could not block this site.' };
+    await saveGetJdResult(tabId, { ...current, status: 'dismissed', message: `Get JD will not run on ${host} again.`, updatedAt: Date.now() });
+    return { ok: true, host };
+  }
+  if (msg.type === 'QTS_GET_JD_REREAD_DRAFT') {
+    const jobText = await readGetJdJobText(tabId, url);
+    if (jobText.applyFormOnly) return { ok: false, error: 'This page has only the application form. Open the job description instead.' };
+    if (jobText.text.length > 100_000) return { ok: false, error: 'The JD exceeds the 100,000-character limit. Nothing was truncated.' };
+    const { draftJob: found } = await readGetJdDraftJob(tabId, url, jobText.text);
+    // The JD is read again; a title or company the page didn't give before is filled in.
+    const draftJob = {
+      ...current.draftJob,
+      description: found.description,
+      title: current.draftJob?.title || found.title,
+      company: current.draftJob?.company || found.company,
+    };
+    await saveGetJdResult(tabId, { ...getJdDraftResult(current, tab, draftJob), rereadAt: Date.now() });
+    return { ok: true };
+  }
+  const draftJob = readGetJdDraftFromPanel(msg.job, url);
+  if (!draftJob) return { ok: false, error: 'Enter the JD (at most 100,000 characters) before sending it to Gemini.' };
+  if (getJdInFlightTabs.has(tabId)) return { ok: false, error: 'Get JD is already working on this page.' };
+  // Runs on its own; the panel follows the result as it changes.
+  processGetJdPage(tabId, url, `send:${Date.now()}`, { draftJob, listPage: current.listPage === true, autoRetryRunId: current.runId }).catch((error) => {
+    console.warn('[QTS Get JD] Could not send the checked job:', error);
+  });
+  return { ok: true };
+}
+
 // options.force runs Get JD without the job-page check and reads the page as it is ("Send anyway").
+// options.draftJob sends the job the Manager checked in the panel to Gemini (Gemini mode).
 async function processGetJdPage(tabId, url, documentId = '', options = {}) {
   if (!isExtractablePageUrl(url) || isChatGptHostUrl(url)) return;
   if (getJdInFlightTabs.has(tabId) || getJdHelperTabs.has(tabId)) return;
@@ -1756,6 +1929,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
   if (await isWorkflowTab(tabId, tab)) return;
 
   if (await isPageBlockedForManager(url)) return;
+  // Super Admin's list of sites that are never jobs (Settings): nothing is read or sent there.
+  if (await isGetJdSkipSite(url)) return;
 
   const pageKey = `${documentId}:${url}`;
   if (getJdLastPageByTab.get(tabId) === pageKey) return;
@@ -1765,7 +1940,14 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     .catch(() => {});
   let listPage = false;
   let identity = { jobUrl: url, jobTitle: '', company: '' };
-  if (options.force) {
+  // Gemini mode never guesses whether a page is a job: every page not skipped above is read and
+  // shown to the Manager to check, and Gemini runs only when the Manager sends it. An unknown
+  // mode (no answer yet) takes this path too; the request below settles it or retries.
+  const reviewFirst = Boolean(options.draftJob) || (!options.force && (await readGetJdModeCached()) !== 'manual');
+  if (reviewFirst) {
+    // Nothing to detect; the page's title and company are read with its text.
+    listPage = options.listPage === true;
+  } else if (options.force) {
     const snapshot = await evaluateJobPageForManager(tabId).catch(() => null);
     listPage = snapshot?.listPage === true;
     identity = snapshot?.identity || identity;
@@ -1790,7 +1972,13 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     pageTitle: tab.title || '',
     sessionOwner: self.__qtsGetJdNotifications.sessionKey(await chrome.storage.local.get(['authExpiresAt', 'qtsSessionUser'])),
     status: 'processing',
-    message: 'Reading this page and checking Jobs and Bids…',
+    message: options.draftJob ? 'Checking this job with Gemini…' : 'Reading this page and checking Jobs and Bids…',
+    // A checked job keeps its draft on every result, so the panel can show its progress and result
+    // and the Manager can edit and check it again, for as long as the tab is open.
+    ...(options.draftJob ? { fromDraft: true, draftJob: options.draftJob, listPage: options.listPage === true } : {}),
+    // Gemini mode's results are shown only on their own job page (panel, launcher, tab icon), never
+    // as toasts or history on other pages.
+    ...(reviewFirst ? { pageOnly: true } : {}),
     updatedAt: Date.now(),
     classification: null,
   };
@@ -1801,15 +1989,20 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     const plan = self.__qtsGetJdAutoRetry.planRetry(result, autoRetryAttempt, Date.now());
     if (!plan) return false;
     waitingForRetry = true;
-    await waitForGetJdAutoRetry(tabId, url, initialResult, plan, { attempt: autoRetryAttempt, force: options.force === true });
+    await waitForGetJdAutoRetry(tabId, url, initialResult, plan, {
+      attempt: autoRetryAttempt, force: options.force === true, draftJob: options.draftJob || null,
+    });
     return true;
   };
+  // Reading a page for the Manager to check is quiet: no "Checking" entry in Get JD history or
+  // toast for every page opened. Sending a checked draft is reported as before.
+  const quietRead = reviewFirst && !options.draftJob;
   try {
     await cancelGetJdAutoRetry(tabId);
     await saveGetJdResult(tabId, {
       ...initialResult,
       classification: { isJobPage: true },
-    });
+    }, !quietRead);
     const token = await self.__qtsAccountAuth?.getWorkerAuthToken?.();
     if (!token) {
       await saveGetJdResult(tabId, {
@@ -1830,29 +2023,37 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     }
     getJdInFlightJobKeys.add(claimedJobKey);
     if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
-    const modeResult = await workerApiRequest('GET', '/api/extension/get-jd/mode');
+    const modeResult = await readGetJdModeResult();
     if (modeResult.success !== true) {
       if (await retryLater(modeResult)) return;
       throw new Error(modeResult.message || 'Could not load the Get JD matching mode.');
     }
-    let precheck = null;
-    if (modeResult.mode === 'gemini') {
-      precheck = await workerApiRequest('POST', '/api/extension/get-jd/check', { scope: 'global', job: identity }, { timeoutMs: 20000 });
+    // Jobs/Bids duplicate check (no AI): a job already in QTS is skipped, never shown or sent.
+    const checkDuplicate = async (job) => {
+      const precheck = await workerApiRequest('POST', '/api/extension/get-jd/check', { scope: 'global', job }, { timeoutMs: 20000 });
       if (precheck.success !== true || typeof precheck.skip !== 'boolean') {
-        if (await retryLater(precheck)) return;
+        if (await retryLater(precheck)) return null;
         throw new Error(precheck.message || 'Could not check Jobs and Bids. Refresh to retry; Gemini was not called.');
       }
       if (precheck.skip) {
         await saveGetJdResult(tabId, { ...initialResult, status: 'duplicate', message: 'This job already exists in QTS Jobs or Bids. Skipped.', updatedAt: Date.now() });
         await showGetJdDone(tabId, url, 'Already in QTS Jobs or Bids. Skipped.', 'info');
-        return;
+        return null;
       }
-      if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
-    }
-    if (modeResult.mode === 'gemini') {
-      const jobText = options.force
-        ? { text: await readVisiblePageText(tabId, true), descriptionUrl: '', applyFormOnly: false }
-        : await readGetJdJobText(tabId, url);
+      return precheck;
+    };
+    if (modeResult.mode === 'gemini' && !options.draftJob) {
+      // Step 1: extract the page's full JD, title and company once, as soon as its text shows;
+      // then check Jobs/Bids with them; then hand the job to the Manager (Send checks again).
+      // Text that can't be read leaves the JD box empty for the Manager to paste into; only an
+      // over-long JD stops here.
+      const jobText = await (options.force
+        ? readVisiblePageText(tabId, true).then((text) => ({ text, descriptionUrl: '', applyFormOnly: false }))
+        : readGetJdJobText(tabId, url)
+      ).catch((error) => {
+        if (/100,000-character limit/.test(String(error?.message || error))) throw error;
+        return { text: '', descriptionUrl: '', applyFormOnly: false };
+      });
       if (jobText.applyFormOnly) {
         const message = 'This page has only the application form. Open the job description, and Get JD runs there.';
         await saveGetJdResult(tabId, { ...initialResult, pageTitle: tab.title || '', status: 'error', message, updatedAt: Date.now() });
@@ -1861,15 +2062,28 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
         });
         return;
       }
-      const pageText = jobText.text;
-      if (!pageText.trim()) throw new Error('Could not read the job text from the loaded page.');
-      if (pageText.length > 100_000) throw new Error('The original JD exceeds the 100,000-character limit. Nothing was truncated or saved.');
+      if (jobText.text.length > 100_000) throw new Error('The original JD exceeds the 100,000-character limit. Nothing was truncated or saved.');
+      if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
+      const { draftJob, listPage: draftListPage } = await readGetJdDraftJob(tabId, url, jobText.text);
+      getJdFinishedPageByTab.set(tabId, { url, listPage: draftListPage });
+      if (!(await checkDuplicate({ jobUrl: url, jobTitle: draftJob.title, company: draftJob.company }))) return;
+      if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
+      await saveGetJdResult(tabId, { ...getJdDraftResult(initialResult, tab, draftJob), listPage: draftListPage });
+      return;
+    }
+    if (modeResult.mode === 'gemini') {
+      // Step 2: the Manager sent the draft. Its title and company are checked against Jobs/Bids
+      // again (they may have been edited), then only the Manager's text goes to Gemini.
+      const draftJob = options.draftJob;
+      const pageText = draftJob.description;
+      const precheck = await checkDuplicate({ jobUrl: url, jobTitle: draftJob.title, company: draftJob.company });
+      if (!precheck) return;
       if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
       // A waiting job retrying on its own isn't the Manager being active.
       if (!options.autoRetryAttempt) await self.__qtsIdlePacing.noteActivity();
       const geminiResult = await workerApiRequest('POST', '/api/extension/get-jd', {
         pageUrl: url,
-        pageTitle: tab.title || documentId || url,
+        pageTitle: draftJob.title || tab.title || documentId || url,
         pageText,
         originalDescription: pageText,
         precheckToken: precheck.precheckToken,
@@ -1903,7 +2117,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           classification: geminiResult.classification,
           updatedAt: Date.now(),
         });
-        await showGetJdDone(tabId, url, message, 'info');
+        await showGetJdNotice(tabId, url, message, [], { tone: 'info' });
         return;
       }
       if (geminiResult.classification?.isRemote !== true) {
@@ -1921,7 +2135,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           classification: geminiResult.classification,
           updatedAt: Date.now(),
         });
-        await showGetJdDone(tabId, url, message, 'info');
+        await showGetJdNotice(tabId, url, message, [], { tone: 'info' });
         return;
       }
       const profiles = Array.isArray(geminiResult.profiles) ? geminiResult.profiles : [];
@@ -1942,22 +2156,33 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
           inBids: true,
           updatedAt: Date.now(),
         });
-        await showGetJdDone(tabId, url, geminiResult.message, 'info');
+        await showGetJdDone(tabId, url, geminiResult.message, 'info', { forceClose: true });
         return;
       }
-      if (profiles.every((profile) => GET_JD_FIXED_STATES.has(getJdProfileState(profile)))) {
+      // Gemini's answer in plain words: who the job was saved for now, or why nothing was saved.
+      // Candidates saved by this check are "saved", never "already had it".
+      const savedNames = profiles.filter((profile) => autoSavedProfileIds.includes(profile.id)).map((profile) => profile.name).filter(Boolean);
+      const savedNow = autoSavedProfileIds.length;
+      const resultMessage = geminiResult.autoSaveFailureCount > 0
+        ? geminiResult.message
+        : savedNow
+          ? `Successfully saved this job for ${savedNow}`
+          : 'No matching candidate for this job.';
+      // Only when this check saved nothing and every candidate had the job before is it a repeat.
+      if (!savedNow && !(geminiResult.autoSaveFailureCount > 0)
+        && profiles.every((profile) => GET_JD_FIXED_STATES.has(getJdProfileState(profile)))) {
         await saveGetJdResult(tabId, {
           ...initialResult,
           pageTitle: tab.title || '',
           status: 'duplicate',
-          message: geminiResult.message || 'This job already exists for every active candidate.',
+          message: 'Every candidate already had this job before this check. Nothing new was saved.',
           toastKind: geminiResult.toastKind,
           toastMessage: geminiResult.toastMessage,
           inJobs: geminiResult.inJobs === true,
           inBids: geminiResult.inBids === true,
           updatedAt: Date.now(),
         });
-        await showGetJdDone(tabId, url, 'Already saved for every candidate.', 'info');
+        await showGetJdDone(tabId, url, 'Every candidate already had this job. Nothing new was saved.', 'info', { forceClose: true });
         return;
       }
       const matchingIds = new Set(geminiResult.classification.matchingProfileIds || []);
@@ -1968,17 +2193,13 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
         ...initialResult,
         pageTitle: tab.title || '',
         status: 'complete',
-        message: autoSavedProfileIds.length || geminiResult.skippedEvaluation
-          ? geminiResult.message
-          : geminiResult.autoSaveFailureCount > 0
-            ? geminiResult.message
-          : matchingAvailableProfiles.length
-            ? `Recommended ${matchingAvailableProfiles.length} candidate${matchingAvailableProfiles.length === 1 ? '' : 's'}. Recommended available candidates are checked; review the list before saving.`
-          : 'Did not recommend any available candidates from their profiles. All available profiles are listed unchecked so you can review and select manually.',
+        message: resultMessage,
+        // The alert and summary say what this check did, not which candidates "already have" the job
+        // (those just saved would count as having it).
         hasDuplicates: geminiResult.exists === true,
-        toastKind: geminiResult.toastKind,
-        toastMessage: geminiResult.toastMessage,
-        summaryText: geminiResult.summary?.text || '',
+        toastKind: savedNow ? 'saved' : 'none',
+        toastMessage: resultMessage,
+        summaryText: resultMessage,
         updatedAt: Date.now(),
         // Gemini is skipped when every account already has the job; the page details stand in.
         classification: {
@@ -2005,16 +2226,15 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
         ])],
       });
       // Gemini's picks are final: no manual review. The job is saved for the candidates it matched
-      // (or for none) and the tab closes after the countdown. Only a failed save stays open, so the
-      // Manager can retry it.
+      // (or for none); the panel shows the result and the tab closes 5 seconds later. Only a failed
+      // save stays open, so the Manager can retry it.
       if (!(geminiResult.autoSaveFailureCount > 0)) {
         await showGetJdDone(
           tabId,
           url,
-          autoSavedProfileIds.length > 0
-            ? `Saved for ${autoSavedProfileIds.length} candidate${autoSavedProfileIds.length === 1 ? '' : 's'}.`
-            : 'No candidate matched; nothing was saved.',
-          autoSavedProfileIds.length > 0 ? 'success' : 'info',
+          resultMessage,
+          savedNow ? 'success' : 'info',
+          { forceClose: true },
         );
       }
       return;
@@ -2139,7 +2359,7 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
     });
     await showGetJdNotice(tabId, url, `Get JD couldn't finish: ${message}`, ['try_again'], { tone: 'error' });
   } finally {
-    if (!waitingForRetry) await finishAbandonedGetJdResult(tabId, initialResult).catch((error) => console.warn('[QTS Get JD] Could not finalize stopped result:', error));
+    if (!waitingForRetry) await finishAbandonedGetJdResult(tabId, initialResult, !quietRead).catch((error) => console.warn('[QTS Get JD] Could not finalize stopped result:', error));
     getJdInFlightTabs.delete(tabId);
     if (claimedJobKey) getJdInFlightJobKeys.delete(claimedJobKey);
     // Only the navigation monitor admits subsequent pages; never scan a tab as a side effect.
@@ -6099,6 +6319,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }));
     return true;
   }
+  // The Gemini-mode draft panel: Check (send to Gemini), Close, Re-read, Never on this site.
+  if (['QTS_GET_JD_SEND_DRAFT', 'QTS_GET_JD_DISMISS_DRAFT', 'QTS_GET_JD_REREAD_DRAFT', 'QTS_GET_JD_NEVER_ON_SITE', 'QTS_GET_JD_RESTORE_DRAFT', 'QTS_GET_JD_CLOSE_JOB_TAB'].includes(msg.type)) {
+    const tabId = sender.tab?.id;
+    if (tabId == null || sender.frameId !== 0) {
+      sendResponse({ ok: false, error: 'This must come from the job page.' });
+      return false;
+    }
+    handleGetJdDraftAction(tabId, msg)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Get JD could not do that.' }));
+    return true;
+  }
   if (msg.type === 'SAVE_GET_JD_SELECTION') {
     const tabId = sender.tab?.id;
     if (tabId == null) {
@@ -7519,6 +7751,8 @@ chrome.tabs.onAttached.addListener(() => launcherFocus.sync().catch(() => {}));
 chrome.tabs.onDetached.addListener(() => launcherFocus.sync().catch(() => {}));
 chrome.windows.onRemoved.addListener((windowId) => launcherFocus.removeWindow(windowId).catch(() => {}));
 chrome.tabs.onRemoved.addListener((tabId) => {
+  // The page's Get JD panel (its draft, progress and result) lives only while the tab is open.
+  forgetGetJdResult(tabId).catch(() => {});
   getJdNavigation.remove(tabId).catch(() => {});
   cancelGetJdClose(tabId).catch(() => {});
   getJdLastPageByTab.delete(tabId);

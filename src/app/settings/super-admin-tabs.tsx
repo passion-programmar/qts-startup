@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
-import { Archive, ChevronDown, Clock, Info, ListChecks, MessageSquareText, type LucideIcon } from "lucide-react";
+import { Archive, Ban, ChevronDown, Clock, Info, ListChecks, MessageSquareText, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { ActionRow } from "@/app/settings/action-row";
 import { Badge as UiBadge } from "@/app/ui/badge";
@@ -31,6 +31,8 @@ import {
 } from "@/app/settings/reusable-answers";
 import { SettingsCard } from "@/app/settings/settings-card";
 import { getJobRecordTimeZone } from "@/server/jobs/job-record-time-zone";
+import { getGetJdSkipSites } from "@/server/get-jd/skip-sites";
+import { GetJdSkipSitesForm } from "@/app/settings/get-jd-skip-sites-form";
 import { listQuestionSuggestions } from "@/server/apply/question-memory";
 import { answerWarnings, describeWarning, SOURCE_LABELS, VERSION_REASON_LABELS } from "@/server/apply/reusable-answer-values";
 import { type AnswerVersion, listLibrary, listVersions } from "@/server/apply/reusable-answers";
@@ -405,7 +407,7 @@ export async function PromptsTab() {
 }
 
 export async function GeneralTab() {
-  const jobRecordTimeZone = await getJobRecordTimeZone();
+  const [jobRecordTimeZone, skipSites] = await Promise.all([getJobRecordTimeZone(), getGetJdSkipSites()]);
   const zoneLabel = jobRecordTimeZoneOptions.find((option) => option.value === jobRecordTimeZone)?.label;
   return (
     <section>
@@ -418,6 +420,19 @@ export async function GeneralTab() {
             <p>The date saved on new jobs follows this time zone. Existing jobs keep their dates.</p>
             <p className="mt-2">
               <Badge tone="indigo">{zoneLabel ? `${zoneLabel} · ${jobRecordTimeZone}` : jobRecordTimeZone}</Badge>
+            </p>
+          </CardTitle>
+        </ActionRow>
+      </Card>
+      <Card className="mt-4">
+        <ActionRow
+          actions={[{ id: "change", label: "Change", icon: "change", content: <GetJdSkipSitesForm sites={skipSites.sites} /> }]}
+        >
+          <CardTitle icon={Ban} title="Sites Get JD skips">
+            <p>Get JD never reads these sites for any Manager: no panel, no duplicate check, no AI request. Each Manager can still block more sites of their own.</p>
+            <p className="mt-2">
+              <Badge tone="indigo">{`${skipSites.sites.length} site${skipSites.sites.length === 1 ? "" : "s"}`}</Badge>
+              {!skipSites.saved && <span className="ml-2 text-xs text-fg-muted">The starting list; not changed yet.</span>}
             </p>
           </CardTitle>
         </ActionRow>

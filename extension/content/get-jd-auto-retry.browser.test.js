@@ -76,8 +76,18 @@ test('a busy AI provider never needs Try again: the job waits and retries by its
     const toggled = await worker.evaluate(async (id) => (await chrome.scripting.executeScript({ target: { tabId: id }, func: () => chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: 'get_jd' }) }))[0].result, controlId);
     assert.equal(toggled.ok, true);
 
-    const open = (pathname) => worker.evaluate(async (url) => chrome.tabs.create({ url, active: true }), base + pathname);
     const result = (id) => worker.evaluate(async (tabId) => (await chrome.storage.local.get('qtsGetJdResults')).qtsGetJdResults?.[tabId], id);
+    // Gemini mode reads the page for the Manager to check; the Manager then sends it to Gemini.
+    const open = async (pathname) => {
+      const tab = await worker.evaluate(async (url) => chrome.tabs.create({ url, active: true }), base + pathname);
+      await until('draft for ' + pathname, async () => (await result(tab.id))?.status === 'draft');
+      const { draftJob } = await result(tab.id);
+      const sent = await worker.evaluate(async (tabId, job) => (await chrome.scripting.executeScript({
+        target: { tabId }, func: (message) => chrome.runtime.sendMessage(message), args: [{ type: 'QTS_GET_JD_SEND_DRAFT', job }],
+      }))[0].result, tab.id, draftJob);
+      assert.equal(sent.ok, true);
+      return tab;
+    };
     const alarm = (id) => worker.evaluate(async (tabId) => (await chrome.alarms.get(`qtsGetJdRetry:${tabId}`)) || null, id);
     const asks = (pathname) => requests.filter((entry) => entry.path === '/api/extension/get-jd' && new URL(entry.body.pageUrl).pathname === pathname).length;
     const fireRetry = (id) => worker.evaluate(async (tabId) => { await chrome.tabs.update(tabId, { active: true }); await chrome.alarms.clear(`qtsGetJdRetry:${tabId}`); await runGetJdAutoRetry(tabId); }, id);

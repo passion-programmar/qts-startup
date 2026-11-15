@@ -25,3 +25,22 @@ test('blocked URL rules use case-insensitive substring matching', () => {
   assert.equal(rules.jobDetectionUrlRuleMatches('https://example.com/jobs-old', '/JOBS-'), true);
   assert.equal(rules.jobDetectionUrlRuleMatches('https://notexample.com/jobs', 'jobs.example.com'), false);
 });
+
+test('Get JD skip sites match the exact host (www ignored) and an optional path start', () => {
+  const rules = loadRules();
+  const skips = (url, site) => rules.skipSiteMatches(url, site);
+  assert.equal(skips('https://www.youtube.com/watch?v=1', 'youtube.com'), true);
+  assert.equal(skips('https://YOUTUBE.com/', 'youtube.com'), true);
+  assert.equal(skips('https://www.linkedin.com/feed/', 'linkedin.com/feed'), true);
+  assert.equal(skips('https://www.linkedin.com/in/someone', 'linkedin.com/in/'), true);
+  // A job on the same site is not skipped when only part of the site is listed.
+  assert.equal(skips('https://www.linkedin.com/jobs/view/123', 'linkedin.com/feed'), false);
+  assert.equal(skips('https://www.linkedin.com/jobs/view/123', 'linkedin.com/in/'), false);
+  // Other subdomains are separate sites: a careers subdomain is never caught.
+  assert.equal(skips('https://careers.x.com/job/1', 'x.com'), false);
+  assert.equal(skips('https://jobs.netflix.com/jobs/1', 'netflix.com/browse'), false);
+  assert.equal(skips('https://notyoutube.com/', 'youtube.com'), false);
+  assert.equal(skips('chrome://settings', 'settings'), false);
+  assert.equal(skips('not a url', 'youtube.com'), false);
+  assert.equal(skips('https://youtube.com/', ''), false);
+});
