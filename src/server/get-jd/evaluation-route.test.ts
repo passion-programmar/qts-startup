@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 
 const original = "Build Python services using FastAPI.\nPreserve PostgreSQL, requirements, benefits and Unicode: São Paulo.";
-const fixture: { calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
+const fixture: { sent?: unknown; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
 (globalThis as Record<string, unknown>).__qtsEvaluationFixture = fixture;
 let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
@@ -14,7 +14,7 @@ test.before(async () => {
     "@/lib/extension-auth": `export const getExtensionManager=async()=>({id:'local-manager'});`,
     "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',location:null,start:'2021-03',end:null,isCurrent:true,description:'Built APIs.'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}];const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:()=>{throw Error('No duplicate lookup allowed after precheck')}};`,
     "@/server/get-jd/precheck-ticket": `export const getPrecheckTickets=()=>({verify:async(token)=>token==='valid'?{jobUrl:'https://example.test/jobs/1',jobTitle:'Engineer',company:'Example'}:null});`,
-    "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>evaluate();`,
+    "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>{globalThis.__qtsEvaluationFixture.sent=c;return evaluate()};`,
     "@/server/database/database-usage": `export const scheduleDailyCleanup=()=>{};`,
     "@/server/jobs/get-jd-mode": `export const getGetJdMatchingMode=async()=> 'gemini';`,
     "@/server/gemini/ai-job": `export class AiJobError extends Error{constructor(code,message,retryAt=null){super(message);this.code=code;this.retryAt=retryAt}};export const aiRequestBudgetMs=55000;globalThis.__AiJobError=AiJobError;`,
@@ -47,6 +47,19 @@ test("Gemini matching keeps the saved prompt, sends the career timeline, and sav
   assert.match(fixture.prompts.at(-1) || "", /"employmentTimeline":\[\{"jobTitle":"Python Backend Engineer","companyName":"Acme","location":null,"start":"2021-03","end":null,"isCurrent":true,"description":"Built APIs\."\}\],"education":\[\{"institution":"State University","degree":"BSc","fieldOfStudy":"Computer Science","start":"2015-09","end":"2019-06","isCurrent":false\}\]/);
   assert.doesNotMatch(fixture.prompts.at(-1) || "", /"jdMatching"/);
   assert.match(fixture.prompts.at(-1) || "", /São Paulo/);
+});
+test("the page check is keyed on the checked title, company and JD, so an edited job is checked again", async () => {
+  fixture.sent = undefined;
+  await POST(request());
+  assert.deepEqual(fixture.sent, ["Engineer", "Example", original]);
+});
+test("an answer without a job description is accepted and the original JD is saved", async () => {
+  fixture.saves = []; fixture.job = { description: undefined as unknown as string };
+  const response = await POST(request()); const body = await response.json();
+  fixture.job = {};
+  assert.equal(response.status, 200);
+  assert.equal(body.autoSavedProfileIds.length, 1);
+  assert.equal(fixture.saves[0].description, original);
 });
 test("an answer without jobUrl is accepted and the result keeps the real page URL", async () => {
   fixture.saves = [];

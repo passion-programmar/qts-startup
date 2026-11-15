@@ -6,9 +6,9 @@ import { getJdPageChecks } from "@/db/schema";
 import { db } from "@/lib/db";
 import { pageCheckKey } from "./page-check-key";
 
-// Get JD's "being checked" mark. When several Chromes open the same job link, the first one asks
-// Gemini and the others wait for its verdict, which is replayed for 10 minutes instead of calling
-// Gemini again. Try again and Send anyway bypass it.
+// Get JD's "being checked" mark. When several Chromes send the same job (same link, title, company
+// and JD), the first one asks Gemini and the others wait for its verdict, which is replayed for 10
+// minutes instead of calling Gemini again. A job whose text was edited is a new check.
 
 const CHECKING_TTL_MS = 90_000;
 const VERDICT_TTL_MS = 10 * 60_000;
@@ -58,15 +58,14 @@ async function abandonPageCheck(managerId: string, pageKey: string): Promise<voi
     .where(and(eq(getJdPageChecks.managerId, managerId), eq(getJdPageChecks.pageKey, pageKey)));
 }
 
-/** Runs the Gemini evaluation once per job link across Chromes; others get its verdict. */
+/** Runs the Gemini evaluation once per job link and text across Chromes; others get its verdict. */
 export async function withPageCheck(
   managerId: string,
   pageUrl: string,
-  bypass: boolean,
+  sent: readonly string[],
   evaluate: () => Promise<NextResponse>,
 ): Promise<NextResponse> {
-  if (bypass) return evaluate();
-  const pageKey = pageCheckKey(pageUrl);
+  const pageKey = pageCheckKey(pageUrl, sent);
   const claim = await claimPageCheck(managerId, pageKey);
   if (claim.role === "replay") {
     return NextResponse.json(

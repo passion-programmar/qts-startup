@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   geminiJobEvaluationResponseSchema,
+  groqJobEvaluationJsonHint,
   isGetJdEvaluationAccepted,
 } from "./job-evaluation-config";
 
@@ -17,10 +18,12 @@ test("Get JD response schema requires remote eligibility, page validation, job d
   assert.equal("country" in geminiJobEvaluationResponseSchema.properties.job.properties, false);
   assert.equal("jobUrl" in geminiJobEvaluationResponseSchema.properties.job.properties, false);
   assert.equal("reason" in geminiJobEvaluationResponseSchema.properties.job.properties, true);
+  // QTS saves the JD it sent, so the AI is not asked to write it back.
+  assert.equal("description" in geminiJobEvaluationResponseSchema.properties.job.properties, false);
+  assert.doesNotMatch(groqJobEvaluationJsonHint, /"description":\{"type"/);
   assert.deepEqual(geminiJobEvaluationResponseSchema.properties.job.required, [
     "title",
     "company",
-    "description",
     "location",
     "employmentType",
     "workplaceType",

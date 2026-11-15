@@ -1,3 +1,5 @@
+// The answer has no job description: QTS saves the JD it sent, so the AI writing it back would only
+// cost output tokens and time (and long JDs could cut the answer off).
 export const geminiJobEvaluationResponseSchema = {
   type: "OBJECT",
   properties: {
@@ -8,7 +10,6 @@ export const geminiJobEvaluationResponseSchema = {
       properties: {
         title: { type: "STRING" },
         company: { type: "STRING" },
-        description: { type: "STRING" },
         location: { type: "STRING", description: "City, region and country as written in the posting" },
         employmentType: { type: "STRING" },
         workplaceType: { type: "STRING" },
@@ -18,7 +19,6 @@ export const geminiJobEvaluationResponseSchema = {
       required: [
         "title",
         "company",
-        "description",
         "location",
         "employmentType",
         "workplaceType",
@@ -48,7 +48,7 @@ export const geminiJobEvaluationGenerationConfig = {
 /** Groq can't be given a response schema, so it gets the same shape in words. */
 export const groqJobEvaluationJsonHint =
   `Use exactly this JSON shape, with every required field: ${JSON.stringify(geminiJobEvaluationResponseSchema)}. ` +
-  "Keep job.description to one short sentence.";
+  "Leave out job.description: QTS already has the job text.";
 
 export function isGetJdEvaluationAccepted(decision: {
   isJobPage: boolean;

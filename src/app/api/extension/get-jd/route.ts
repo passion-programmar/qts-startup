@@ -110,8 +110,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   const token = readString(body, "precheckToken", 10000);
   const identity = await getPrecheckTickets().verify(token, manager.id, requestedUrl);
   if (!identity) return jsonResponse({ success: false, message: "The Jobs/Bids precheck is missing or expired. Refresh the job page to retry." }, 409);
-  // The existing in-progress claim/replay avoids repeated Gemini calls. It does not query Jobs/Bids.
-  return withPageCheck(manager.id, requestedUrl, false, () => evaluateGetJdPage(manager, body, identity, deadlineAt));
+  // The in-progress claim/replay avoids repeated Gemini calls for the same job text; an edited job
+  // ("Edit and check again") is a new check. It does not query Jobs/Bids.
+  const sent = [identity.jobTitle, identity.company, readString(body, "originalDescription", maxPageTextLength)];
+  return withPageCheck(manager.id, requestedUrl, sent, () => evaluateGetJdPage(manager, body, identity, deadlineAt));
 }
 
 /** What the extension needs to know to wait and retry by itself, or to show the reason. */
@@ -433,10 +435,10 @@ function validateClassification(
     );
   }
   const job = value.job;
+  // No description: the AI is not asked for one (a model that sends one anyway is not wrong).
   const stringFields = [
     "title",
     "company",
-    "description",
     "location",
     "employmentType",
     "workplaceType",
