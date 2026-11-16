@@ -179,13 +179,12 @@ export function parsePdfPackage(
   }
   const coverRole = optional(coverLetter.targetRole, 300) ?? targetRole;
   const recipient = parseRecipient(coverLetter.recipient);
+  // An unknown company stays "" in both documents (the letter then goes to the Hiring Manager).
   const coverCompany =
     optional(coverLetter.targetCompany, 500)
     ?? recipient?.company
-    ?? resumeCompany;
-  if (!coverCompany) {
-    throw new Error("coverLetter.targetCompany or coverLetter.recipient.company is required.");
-  }
+    ?? resumeCompany
+    ?? "";
   if (resumeCompany && normalize(resumeCompany) !== normalize(coverCompany)) {
     throw new Error("Resume and cover-letter target companies must match.");
   }
@@ -299,7 +298,8 @@ function parseVersion2Resume(resume: Record<string, unknown>, requireCoreSection
     linkedinUrl: textField(contact.linkedin, "resume.contact.linkedin", 2048),
   }, "resume");
   const targetRole = required(resume.applyJobTitle, "resume.applyJobTitle", 300);
-  const targetCompany = required(resume.targetCompany, "resume.targetCompany", 500);
+  // May be "": Get JD leaves the company empty when neither the JD nor the page names a real one.
+  const targetCompany = textField(resume.targetCompany, "resume.targetCompany", 500);
   const summary = optional(resume.summary, 5000);
   if (requireCoreSections && !summary) throw new Error("resume.summary is required.");
 

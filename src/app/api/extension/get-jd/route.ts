@@ -33,6 +33,7 @@ import { getPrecheckTickets } from "@/server/get-jd/precheck-ticket";
 import { type GetJdIdentity, globalJobPrecheckQuery } from "@/server/get-jd/global-precheck";
 import type { GetJdDuplicate } from "@/server/jobs/get-jd-account-states";
 import { sourceSiteUrl } from "@/server/jobs/source-site";
+import { hasEligibleExperienceCount } from "@/server/work/work-eligibility";
 
 // The AI tries can take up to 55 s in total (see ai-job.ts). Without this, a Vercel project
 // with Fluid compute turned off would stop the function after 10 s.
@@ -159,7 +160,7 @@ async function evaluateGetJdPage(manager: ExtensionManager, body: unknown, ident
       return jsonResponse(
         {
           success: false,
-          message: "Add an active candidate before evaluating jobs.",
+          message: "No active candidate is ready for Get JD: each needs a name, an email and at least three experience records.",
         },
         409,
       );
@@ -411,6 +412,11 @@ async function loadManagerCandidateProfiles(
         eq(users.parentUserId, managerId),
         eq(users.role, "account"),
         isNull(users.blockedAt),
+        // Only candidates Generation can use (the same rules as its claim and start), so no job is
+        // saved for one whose résumé could never be generated.
+        hasEligibleExperienceCount(),
+        sql`btrim(coalesce(${profiles.candidateEmail}, '')) <> ''`,
+        sql`btrim(concat_ws(' ', ${profiles.firstName}, ${profiles.lastName})) <> ''`,
       ),
     )
     .orderBy(asc(profiles.firstName), asc(profiles.lastName))

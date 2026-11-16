@@ -3,16 +3,18 @@ import test from "node:test";
 import { build } from "esbuild";
 import { resolve } from "node:path";
 import { createRequire } from "node:module";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 
 const original = "Build Python services using FastAPI.\nPreserve PostgreSQL, requirements, benefits and Unicode: São Paulo.";
-const fixture: { promptTemplate?: string; sent?: unknown; candidateFields?: string[]; duplicate?: boolean; afterChecks: Array<Record<string, string>>; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { afterChecks: [], calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
+const fixture: { wheres?: unknown[]; promptTemplate?: string; sent?: unknown; candidateFields?: string[]; duplicate?: boolean; afterChecks: Array<Record<string, string>>; calls: number; saves: Array<{ description: string }>; prompts: string[]; remote: boolean; jobPage: boolean; job: Record<string, string>; failure: null | (() => Error) } = { afterChecks: [], calls: 0, saves: [], prompts: [], remote: true, jobPage: true, job: {}, failure: null };
 (globalThis as Record<string, unknown>).__qtsEvaluationFixture = fixture;
 let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
   const mocks: Record<string, string> = {
     "server-only": "",
     "@/lib/extension-auth": `export const getExtensionManager=async()=>({id:'local-manager'});`,
-    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:globalThis.__qtsEvaluationFixture.promptTemplate||'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,country:'Romania',employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',start:'2021-03',isCurrent:true},{jobTitle:'Python Developer',companyName:'Fabrikam',start:'2018-01',end:'2021-02'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}].map((row)=>{globalThis.__qtsEvaluationFixture.candidateFields=Object.keys(fields);return row;});const q={};for(const key of ['from','innerJoin','leftJoin','where','orderBy'])q[key]=()=>q;q.limit=async()=>rows;return q;},execute:async()=>({rows:[{skip:globalThis.__qtsEvaluationFixture.duplicate===true}]})};`,
+    "@/lib/db": `export const db={select:(fields)=>{const rows=fields.promptTemplate?[{promptTemplate:globalThis.__qtsEvaluationFixture.promptTemplate||'KEEP MANAGER MATCHING INSTRUCTIONS'}]:[{id:'candidate',firstName:'Test',lastName:'Candidate',category:null,country:'Romania',employmentTimeline:[{jobTitle:'Python Backend Engineer',companyName:'Acme',start:'2021-03',isCurrent:true},{jobTitle:'Python Developer',companyName:'Fabrikam',start:'2018-01',end:'2021-02'}],education:[{institution:'State University',degree:'BSc',fieldOfStudy:'Computer Science',start:'2015-09',end:'2019-06',isCurrent:false}],currentEmployer:'Different Employer'}].map((row)=>{globalThis.__qtsEvaluationFixture.candidateFields=Object.keys(fields);return row;});const q={};for(const key of ['from','innerJoin','leftJoin','orderBy'])q[key]=()=>q;q.where=(condition)=>{(globalThis.__qtsEvaluationFixture.wheres??=[]).push(condition);return q;};q.limit=async()=>rows;return q;},execute:async()=>({rows:[{skip:globalThis.__qtsEvaluationFixture.duplicate===true}]})};`,
     "@/server/get-jd/global-precheck": `export const globalJobPrecheckQuery=(identity)=>{globalThis.__qtsEvaluationFixture.afterChecks.push(identity);return 'SQL'};`,
     "@/server/get-jd/precheck-ticket": `export const getPrecheckTickets=()=>({verify:async(token)=>token==='valid'?{jobUrl:'https://example.test/jobs/1',jobTitle:'Engineer',company:'Example'}:null});`,
     "@/server/get-jd/get-jd-page-checks": `export const withPageCheck=async(a,b,c,evaluate)=>{globalThis.__qtsEvaluationFixture.sent=c;return evaluate()};`,
@@ -186,4 +188,16 @@ test("a page too long or a refused request gets a reason and no automatic retry"
     assert.equal(body.autoRetry, undefined);
     assert.equal(body.message, "Reason.");
   }
+});
+
+test("Get JD matches only candidates Generation can use: a name, an email and at least three experience records", async () => {
+  fixture.wheres = [];
+  await POST(request());
+  const dialect = new PgDialect();
+  const candidateQuery = fixture.wheres.map((condition) => dialect.sqlToQuery(condition as SQL).sql)
+    .find((text) => text.includes("blocked_at"));
+  assert.ok(candidateQuery, "the candidate query was made");
+  assert.ok(candidateQuery.includes("having count(*) >= 3"));
+  assert.ok(candidateQuery.includes(`btrim(coalesce("profiles"."candidate_email", '')) <> ''`));
+  assert.ok(candidateQuery.includes(`btrim(concat_ws(' ', "profiles"."first_name", "profiles"."last_name")) <> ''`));
 });

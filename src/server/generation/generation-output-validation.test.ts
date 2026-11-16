@@ -154,3 +154,28 @@ test("V2 schema, email format and cover-letter validation still reject invalid d
   valid.coverLetter.bodyParagraphs = ["a".repeat(900)];
   assert.equal(generationOutputIssue(parsedPackage(valid), facts), null);
 });
+
+test("a job with no company: documents with no company pass, a made-up company does not", () => {
+  const noCompanyFacts = structuredClone(facts);
+  noCompanyFacts.job.company = "";
+  const noCompany = structuredClone(response);
+  noCompany.resume.targetCompany = "";
+  noCompany.coverLetter.targetCompany = "";
+  noCompany.coverLetter.recipient.company = "";
+  const parsed = parsedPackage(noCompany);
+  assert.equal(parsed.resume.targetCompany, "");
+  assert.equal(parsed.coverLetter.targetCompany, "");
+  assert.equal(generationOutputIssue(parsed, noCompanyFacts), null);
+
+  const invented = structuredClone(noCompany);
+  invented.resume.targetCompany = "Invented Ltd";
+  invented.coverLetter.targetCompany = "Invented Ltd";
+  assert.match(generationOutputIssue(parsedPackage(invented), noCompanyFacts) ?? "", /company name/);
+});
+
+test("a résumé and cover letter that name different companies are still rejected", () => {
+  const mismatch = structuredClone(response);
+  mismatch.coverLetter.targetCompany = "Other Corp";
+  mismatch.coverLetter.recipient.company = "Other Corp";
+  assert.throws(() => parsedPackage(mismatch), /target companies must match/);
+});

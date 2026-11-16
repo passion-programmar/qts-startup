@@ -61,3 +61,8 @@ test("new generation contract is V2 with dynamic skills and no legacy content re
   assert.match(rules, /Preserve original employer names, original job titles and employment chronology/);
   assert.doesNotMatch(rules, /only source of candidate facts|flat verified skill list|heading-free|verified skills|resume\.candidate|resume\.sections|Projects and Education|projects holds at least/);
 });
+
+test("the format rules say what to do when the job has no company", () => {
+  const rules = DOCUMENT_FORMAT_RULES.join("\n\n");
+  assert.match(rules, /When the job data's company is empty, set all three to "", name no company anywhere in the documents, and address the cover letter to the Hiring Manager\./);
+});
