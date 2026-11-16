@@ -71,7 +71,7 @@ test('authorized Managers configure one persistent read-only folder and both App
         <button type="submit">Submit application</button></form>`);
       return;
     }
-    let reply = { success: true, rules: [], exclusions: [], features: { canUseApply, autoApplyParallelLimit: 1 }, leaseSeconds: 120 };
+    let reply = { success: true, rules: [], exclusions: [], features: { canUseApply, canUseAutoApply: canUseApply, autoApplyParallelLimit: 1 }, leaseSeconds: 120 };
     if (pathname === '/api/extension/apply/claim') reply = { success: true, application: queue.shift() || null };
     if (pathname === '/api/extension/apply/documents') reply = { success: true, documents: paths };
     res.setHeader('Content-Type', 'application/json');
@@ -221,8 +221,10 @@ test('authorized Managers configure one persistent read-only folder and both App
     for (const [index, mode] of ['apply', 'auto_apply'].entries()) {
       queue.push({
         attemptId: `11111111-1111-4111-8111-11111111111${index}`, aiMode: 'chatgpt', autoSubmit: false, reviewMode: 'every_step',
+        // Auto Apply runs only with Super Admin's Auto Apply with APIs (PDF names checked against the candidate's).
+        autoApplyApi: mode === 'auto_apply',
         job: { id: `22222222-2222-4222-8222-22222222222${index}`, url: `${base}/form?mode=${mode}`, title: 'Engineer', company: 'Fixture', resumeFolder: 'QTS_Resume/Manager/Candidate/Run', resumeText: 'Saved resume', coverLetterText: 'Saved letter' },
-        candidate: { firstName: 'Casey', lastName: 'Example', email: 'casey@example.test' },
+        candidate: mode === 'auto_apply' ? { firstName: 'Candidate', email: 'casey@example.test' } : { firstName: 'Casey', lastName: 'Example', email: 'casey@example.test' },
         profileDetails: { experiences: [], educations: [] }, savedAnswers: [], rememberedChoices: [], exchangeRates: null, answerPrompt: null, siteAccountPassword: null,
       });
       await worker.evaluate(() => chrome.storage.local.set({ qtsAutoApplyAi: 'off' }));

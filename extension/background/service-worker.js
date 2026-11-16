@@ -6377,6 +6377,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: features.message || 'Apply is not turned on for your account. Ask your Super Admin.' });
           return;
         }
+        // Auto Apply answers only with Gemini and Groq: Super Admin's "Auto Apply with APIs" must be on.
+        if (features.features?.canUseAutoApply !== true) {
+          sendResponse({ ok: false, error: 'Auto Apply is not turned on for you. Ask your Super Admin to turn on Auto Apply with APIs.' });
+          return;
+        }
         if (!(await hasSavedResumeFolder())) {
           sendResponse(resumeFolderRequired('Auto Apply'));
           return;
@@ -7035,6 +7040,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((result) => sendResponse({
         ok: result.success === true,
         canUseApply: result.success === true && result.features?.canUseApply === true,
+        canUseAutoApply: result.success === true && result.features?.canUseAutoApply === true,
         canManageTextHighlights: result.features?.canManageTextHighlights === true,
         canManagePageExclusions: result.features?.canManagePageExclusions === true,
         canManageJobDetectionUrlRules: result.features?.canManageJobDetectionUrlRules === true,

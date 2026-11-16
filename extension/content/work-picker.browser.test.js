@@ -23,7 +23,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         if(message.type === 'QTS_GET_LAUNCHER_STATE') return { active: true };
         if(message.type === 'CHECK_EXTENSION_PAGE_ALLOWED') return { ok: true, excluded: false };
         // A Manager with Apply on; with it off the launcher hides Auto Apply.
-        if(message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, canUseApply: true, features: {} };
+        if(message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, canUseApply: true, canUseAutoApply: true, features: {} };
         if(message.type === 'QTS_DAILY_COUNTS' && window.failDailyCounts) return { ok: false, error: 'Synthetic count refresh failure.' };
         if(message.type === 'QTS_DAILY_COUNTS') return { ok: true, urls: 1, jobs: 2, applied: 3 };
         if(message.action === 'cancel_status' && window.failCancellation) return { ok: false, error: 'Local cancellation failure. Retry.' };

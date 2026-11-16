@@ -11,7 +11,7 @@ test('real worker passes exact account/job scope to Generation, Apply and Auto A
   const server=http.createServer(async(req,res)=>{
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     const body=chunks.length?JSON.parse(Buffer.concat(chunks)):null;calls.push({url:req.url,body});
-    let reply={success:true,features:{canUseApply:true,autoApplyParallelLimit:2},rules:[],exclusions:[]};
+    let reply={success:true,features:{canUseApply:true,canUseAutoApply:true,autoApplyParallelLimit:2},rules:[],exclusions:[]};
     if(req.url.startsWith('/api/extension/work-items')){
       if(holdWorkItems)return;
       reply={success:true,accounts:[{id:scope.candidateId,name:'Jordan Taylor'}]};

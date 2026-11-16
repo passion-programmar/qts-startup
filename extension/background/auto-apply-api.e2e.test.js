@@ -194,6 +194,7 @@ function resetMock(options = {}) {
     aiMode: options.aiMode || 'rules',
     wrongEmail: options.wrongEmail === true,
     longAnswer: options.longAnswer === true,
+    canUseAutoApply: options.canUseAutoApply ?? true,
   });
 }
 resetMock();
@@ -254,7 +255,7 @@ const server = http.createServer((req, res) => {
     }
     if (url.pathname === '/blank') return html('<!doctype html><title>Blank</title><h1>Blank</h1>');
     if (url.pathname === '/page-submitted') { mock.pageSubmitted += 1; return json({}); }
-    if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { canUseApply: true, autoApplyParallelLimit: mock.autoApplyParallelLimit } });
+    if (url.pathname === '/api/extension/features/me') return json({ success: true, features: { canUseApply: true, canUseAutoApply: mock.canUseAutoApply, autoApplyParallelLimit: mock.autoApplyParallelLimit } });
     if (url.pathname === '/api/extension/apply/claim') {
       mock.claims += 1;
       mock.claimBodies.push(data);
@@ -433,53 +434,149 @@ const pressPanel = (page, label) => until(async () => {
   return clickPanelButton(page, label).catch(() => false);
 }, 20000, `the panel's ${label}`);
 const valueOf = (page, id) => page.evaluate((box) => document.getElementById(box).value, id);
+// The AI is asked only when the Manager clicks the panel's Ask AI. Like a Manager, the test then waits
+// until the panel is back in review (QTS has finished typing and checking the answers).
+const askAi = async (page, { wait = true } = {}) => {
+  const before = mock.answers;
+  await pressPanel(page, 'Ask AI');
+  if (!wait) return;
+  await until(() => mock.answers > before, 30000, 'the AI request');
+  await until(async () => (await globalThis.__diag()).some((review) => review.waiting && review.mode === 'review'), 60000, 'the review after Ask AI');
+};
+// A box emptied the way a page script would (not the Manager's typing, which QTS never touches).
+const emptyBox = (page, id) => page.evaluate((box) => { document.getElementById(box).value = ''; }, id);
 
 test.before(() => new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve)));
 test.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
 
-test('the form is emptied, the AI is asked once, then documents go in and everything is filled; QTS never submits', { skip, timeout: 180000 }, async () => {
-  resetMock({ queue: [application(1, 'form')], answerDelay: 2500 });
+test('the form is emptied and filled from the profile and documents without AI; Ask AI answers what is left; QTS never submits', { skip, timeout: 180000 }, async () => {
+  resetMock({ queue: [application(1, 'form')] });
   const { browser, action, storage } = await launch();
   try {
     assert.equal((await action('auto_apply')).ok, true);
-    await until(() => mock.answers === 1, 60000, 'the AI request');
-    const form = await formPage(browser, '/form');
-    // While the AI is answering, nothing is in the form and nothing has been filled.
-    const during = await form.evaluate(() => ({
-      name: document.getElementById('fn').value, email: document.getElementById('em').value, hear: document.getElementById('hear').value,
-      motivation: document.getElementById('mot').value, privacy: document.getElementById('privacy').checked,
-      oldFile: Boolean(document.getElementById('old-file')), files: document.getElementById('cv').files.length, referral: document.getElementById('ref').value,
-    }));
-    assert.deepEqual(during, { name: '', email: '', hear: '', motivation: '', privacy: false, oldFile: false, files: 0, referral: 'KEEP-123' });
-
     await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    // Old values gone; the profile and the documents in; no AI request by itself.
     assert.equal(await valueOf(form, 'fn'), 'Ana');
     assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
     assert.equal(await valueOf(form, 'ph'), '+40264484948');
-    assert.equal(await valueOf(form, 'hear'), 'LinkedIn');
-    assert.equal(await valueOf(form, 'mot'), 'Building reliable services.');
+    assert.equal(await valueOf(form, 'hear'), '', 'the old choice was emptied and nothing guessed');
+    assert.equal(await valueOf(form, 'mot'), '', 'the old answer was emptied and nothing invented');
     assert.equal(await valueOf(form, 'ref'), 'KEEP-123', 'a referral code the site put there stays');
     assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true);
     assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
-
-    // Documents first, answers after, so a site's résumé parser cannot overwrite them.
+    assert.equal(await form.evaluate(() => Boolean(document.getElementById('old-file'))), false);
     const events = await form.evaluate(() => window.events);
     const uploadedAt = events.findIndex((event) => event.id === 'cv' && event.value === 'Ana_Test_CV.pdf');
     const filledAt = events.findIndex((event) => event.id === 'fn' && event.value === 'Ana');
     assert.ok(uploadedAt >= 0 && filledAt > uploadedAt, `upload ${uploadedAt} before fill ${filledAt}`);
+    await sleep(2000);
+    assert.equal(mock.answers, 0, 'the AI is never asked by itself');
 
-    assert.equal(mock.answers, 1, 'one AI request for the whole page');
-    assert.equal(mock.asked[0].length, 5, 'consent and the upload are not sent to the AI');
+    // Ask AI: one request, only about the boxes still empty.
+    await askAi(form);
+    await until(() => mock.answers === 1, 30000, 'the AI request');
+    await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the AI answers to be filled');
+    assert.equal(await valueOf(form, 'hear'), 'LinkedIn');
+    assert.deepEqual([...mock.asked[0]].sort(), ['How did you hear about us?', 'What motivates you in your work?']);
     assert.match(mock.prompts[0], /ana\.test@example\.com/);
     assert.doesNotMatch(mock.prompts[0], /diversityAnswers/);
-    assert.doesNotMatch(mock.prompts[0], /Answer every question id/);
-    assert.equal(mock.pageSubmitted, 0);
-    assert.equal(mock.submitted.length, 0);
-    await sleep(2000);
-    assert.equal(mock.pageSubmitted, 0, 'QTS never submits by itself');
+    assert.equal(await valueOf(form, 'fn'), 'Ana', 'what was filled stays');
 
+    // The site's Submit is neither held nor taken as the bid; nothing is submitted by QTS.
+    await sleep(1500);
+    assert.equal(mock.pageSubmitted, 0, 'QTS never submits by itself');
     await form.click('#submit');
     await until(() => mock.pageSubmitted === 1, 15000, 'the Manager\'s own Submit');
+    await sleep(1500);
+    assert.equal(mock.submitted.length, 0, 'the site\'s Submit is not recorded as the bid');
+  } finally { await browser.close(); }
+});
+
+test('Submitted saves the bid at once, on any step, and the tab closes', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(60, 'steps')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/steps');
+    // Step 1 of 2, with things still to do: Submitted is there and works.
+    await until_panel(form, /Submitted saves the bid at any time/);
+    await pressPanel(form, 'Submitted');
+    await until(() => mock.results.length === 1, 20000, 'the bid');
+    assert.equal(mock.submitted.length, 1);
+    assert.equal(mock.results[0].submitted, true);
+    assert.equal(mock.results[0].removeJob, true, 'the job leaves the Jobs list');
+    assert.ok((mock.results[0].appliedAnswers || []).some((entry) => entry.answer === 'Ana'), 'the form\'s answers go with the bid');
+    await until(async () => !(await formPage(browser, '/steps')), 20000, 'the tab to close');
+    assert.equal(mock.released.length, 0, 'nothing given back');
+    assert.equal(mock.pageSubmitted, 0);
+  } finally { await browser.close(); }
+});
+
+test('Submitted while the AI is answering stops it and saves the bid', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(61, 'form')], answerDelay: 15000 });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    await askAi(form, { wait: false });
+    await until(() => mock.answers === 1, 30000, 'the AI request');
+    await until_panel(form, /Asking the AI/);
+    assert.equal(await clickPanelButton(form, 'Submitted'), true, 'Submitted is there while QTS works');
+    await until(() => mock.results.length === 1, 20000, 'the bid');
+    assert.equal(mock.results[0].removeJob, true);
+    await until(async () => !(await formPage(browser, '/form')), 20000, 'the tab to close');
+    await sleep(16000);
+    assert.equal(mock.released.length, 0, 'nothing given back');
+    assert.equal(mock.results.length, 1, 'one bid');
+  } finally { await browser.close(); }
+});
+
+test('the panel is on the job page while QTS looks for the form, with Submitted', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(62, 'job-late')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    const page = await until(() => formPage(browser, '/job-late'), 30000, 'the job page');
+    const text = await until_panel(page, /Finding the application form|Opening the job page/);
+    assert.match(text, /Ana Test/);
+    assert.match(text, /Backend Engineer — Globex/);
+    assert.match(text, /Submitted/);
+    await waitForStep(storage, 1);
+    assert.ok(await formPage(browser, '/small'), 'and QTS still reached the form');
+  } finally { await browser.close(); }
+});
+
+test('without Super Admin\'s "Auto Apply with APIs" Auto Apply does not start', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(63, 'small')], canUseAutoApply: false });
+  const { browser, action } = await launch();
+  try {
+    const reply = await action('auto_apply');
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /Auto Apply with APIs/);
+    await sleep(1500);
+    assert.equal(mock.claims, 0, 'no job is taken');
+  } finally { await browser.close(); }
+});
+
+test('the panel lists the page\'s required questions with the profile\'s answers; Fill puts one in', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(64, 'small')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/small');
+    const text = await until_panel(form, /Required on this page \(3\)/);
+    assert.match(text, /First name \* Ana/);
+    assert.match(text, /Email \* ana\.test@example\.com/);
+    assert.match(text, /Copy Resume/);
+    assert.match(text, /Copy Cover Letter/);
+    await emptyBox(form, 'fn');
+    assert.equal(await clickPanelButton(form, 'Fill'), true);
+    await until(async () => await valueOf(form, 'fn') === 'Ana', 15000, 'First name filled from the panel');
+    assert.equal(mock.answers, 0);
   } finally { await browser.close(); }
 });
 
@@ -491,38 +588,45 @@ test('an AI answer that changes a profile fact is replaced by the profile, and t
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/small');
     assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
+    await emptyBox(form, 'em');
+    await askAi(form);
+    await until(() => mock.answers === 1, 30000, 'the AI request');
     await until_panel(form, /someone\.else@example\.com.*QTS used the profile/);
+    assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
   } finally { await browser.close(); }
 });
 
-test('when the AI has no answers nothing is filled, and Ask AI again finishes the page', { skip, timeout: 150000 }, async () => {
-  resetMock({ queue: [application(3, 'small')], aiMode: 'quota' });
+test('when the AI has no answers nothing is filled from it, and Ask AI again finishes the page', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(3, 'form')], aiMode: 'quota' });
   const { browser, action, storage } = await launch();
   try {
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
-    const form = await formPage(browser, '/small');
+    const form = await formPage(browser, '/form');
+    await askAi(form);
+    await until_panel(form, /The AI did not answer/);
     assert.equal(mock.answers, 1, 'a day\'s limit is not retried');
-    assert.equal(await valueOf(form, 'fn'), '');
-    assert.equal(await valueOf(form, 'em'), '');
-    await until_panel(form, /filled nothing on this page/);
+    assert.equal(await valueOf(form, 'mot'), '');
+    assert.equal(await valueOf(form, 'fn'), 'Ana', 'the profile\'s answers stay');
     mock.aiMode = 'rules';
-    await pressPanel(form, 'Ask AI again');
-    await waitForStep(storage, 1);
-    await until(async () => await valueOf(form, 'em') === 'ana.test@example.com', 30000, 'the page to be filled');
-    assert.equal(await valueOf(form, 'fn'), 'Ana');
+    await askAi(form);
+    await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the page to be filled');
+    assert.equal(mock.answers, 2);
   } finally { await browser.close(); }
 });
 
-test('a question that appears after an answer is asked alone', { skip, timeout: 120000 }, async () => {
+test('a question that appears after an AI answer is asked alone', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(4, 'dyn')] });
   const { browser, action, storage } = await launch();
   try {
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/dyn');
-    assert.equal(await valueOf(form, 'model'), 'Dacia Logan');
+    assert.equal(await valueOf(form, 'car'), '');
+    await askAi(form);
+    await until(async () => await valueOf(form, 'model') === 'Dacia Logan', 30000, 'the new question to be answered');
     assert.equal(mock.answers, 2);
+    assert.deepEqual(mock.asked[0], ['Do you own a car?']);
     assert.deepEqual(mock.asked[1], ['Which car model do you drive?']);
   } finally { await browser.close(); }
 });
@@ -537,7 +641,7 @@ test('the Manager moves the form on; each step is filled once and their edits ar
     assert.equal(await valueOf(form, 'fn'), 'Ana');
     await sleep(3000);
     assert.equal(await form.evaluate(() => document.getElementById('step2').style.display), 'none', 'QTS does not press Next');
-    assert.equal(mock.answers, 1);
+    assert.equal(mock.answers, 0);
 
     // The Manager changes an answer and presses the site's own Next.
     await form.focus('#ph');
@@ -547,10 +651,13 @@ test('the Manager moves the form on; each step is filled once and their edits ar
     await form.keyboard.type('+40 700 000 111');
     await form.click('#next1');
     await waitForStep(storage, 2);
+    assert.equal(await valueOf(form, 'mot'), '');
+    assert.equal(mock.answers, 0, 'no AI by itself on the new step either');
+    await askAi(form);
+    await until(async () => await valueOf(form, 'note') === 'Blue', 30000, 'the step 2 AI answers');
     assert.equal(await valueOf(form, 'mot'), 'Building reliable services.');
-    assert.equal(await valueOf(form, 'note'), 'Blue');
-    assert.equal(mock.answers, 2, 'one more request, for the new step');
-    assert.deepEqual(mock.asked[1].sort(), ['What is your favourite colour?', 'What motivates you in your work?']);
+    assert.equal(mock.answers, 1);
+    assert.deepEqual([...mock.asked[0]].sort(), ['What is your favourite colour?', 'What motivates you in your work?']);
 
     // Back on step 1: nothing is emptied or filled again.
     await form.click('#back2');
@@ -558,7 +665,7 @@ test('the Manager moves the form on; each step is filled once and their edits ar
     await sleep(2000);
     assert.equal(await valueOf(form, 'ph'), '+40 700 000 111', 'the Manager\'s edit stays');
     assert.equal(await valueOf(form, 'fn'), 'Ana');
-    assert.equal(mock.answers, 2, 'no AI request for a step already filled');
+    assert.equal(mock.answers, 1);
     assert.equal(mock.pageSubmitted, 0);
   } finally { await browser.close(); }
 });
@@ -632,7 +739,7 @@ test('a page signed in as someone else is signed out before anything is filled',
   } finally { await browser.close(); }
 });
 
-test('an account QTS cannot name waits for the Manager, and no AI request goes out before', { skip, timeout: 120000 }, async () => {
+test('an account QTS cannot name waits for the Manager before anything is filled', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(12, 'unknown-account')] });
   const { browser, action, storage } = await launch();
   try {
@@ -643,8 +750,8 @@ test('an account QTS cannot name waits for the Manager, and no AI request goes o
     assert.equal(await valueOf(form, 'fn'), '');
     await pressPanel(form, 'Continue →');
     await waitForStep(storage, 1);
-    assert.equal(mock.answers, 1);
-    assert.equal(await valueOf(form, 'fn'), 'Ana');
+    await until(async () => await valueOf(form, 'fn') === 'Ana', 15000, 'the form to be filled');
+    assert.equal(mock.answers, 0, 'and still no AI by itself');
   } finally { await browser.close(); }
 });
 
@@ -675,7 +782,7 @@ test('an application form that is itself on such a site still waits for the Mana
   } finally { await browser.close(); }
 });
 
-test('another account showing at the end holds the site\'s Submit', { skip, timeout: 120000 }, async () => {
+test('another account showing at the end is shown to the Manager; the site\'s Submit is theirs', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(13, 'late-account')] });
   const { browser, action, storage } = await launch();
   try {
@@ -683,25 +790,28 @@ test('another account showing at the end holds the site\'s Submit', { skip, time
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/late-account');
     await until_panel(form, /Candidate check.*signed in as ben\.stone@example\.com/);
+    // QTS no longer holds the site's Submit: the Manager decides, and records it with Submitted.
     await form.click('#submit');
-    await until_panel(form, /Submit was held/);
+    await until(() => mock.pageSubmitted === 1, 15000, 'the site\'s Submit');
     await sleep(800);
-    assert.equal(mock.pageSubmitted, 0);
+    assert.equal(mock.submitted.length, 0);
   } finally { await browser.close(); }
 });
 
 test('a cancelled job starts fresh: nothing is kept, and the AI is asked again', { skip, timeout: 150000 }, async () => {
-  const job = application(15, 'small');
+  const job = application(15, 'form');
   resetMock({ queue: [job] });
   const { browser, action, storage } = await launch();
   try {
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
-    assert.equal(mock.answers, 1);
+    await askAi(await formPage(browser, '/form'));
+    await until(() => mock.answers === 1, 30000, 'the AI request');
+    await waitForStep(storage, 1);
     await action('cancel_status');
     await until(() => mock.released.length === 1, 20000, 'the application to be given back');
     await until(async () => (await storage(['qtsExtensionStatus'])).qtsExtensionStatus !== 'apply', 20000, 'the run to stop');
-    await until(async () => !(await formPage(browser, '/small')), 20000, 'the old tab to close');
+    await until(async () => !(await formPage(browser, '/form')), 20000, 'the old tab to close');
     assert.equal(mock.released[0].mode, 'drop', 'nothing is recorded on the job');
     assert.deepEqual(mock.released[0].appliedAnswers, [], 'no answers go back with the job');
     assert.ok(mock.reviews.every((entry) => (entry.appliedAnswers || []).length === 0), 'no answers are recorded while it runs');
@@ -709,10 +819,12 @@ test('a cancelled job starts fresh: nothing is kept, and the AI is asked again',
 
     mock.queue.push(job);
     assert.equal((await action('auto_apply')).ok, true);
-    const form = await until(() => formPage(browser, '/small'), 30000, 'the form again');
+    const form = await until(() => formPage(browser, '/form'), 30000, 'the form again');
     await waitForStep(storage, 1);
     await until(async () => await valueOf(form, 'em') === 'ana.test@example.com', 30000, 'the page to be filled');
-    assert.equal(await valueOf(form, 'fn'), 'Ana');
+    assert.equal(await valueOf(form, 'mot'), '', 'the earlier AI answers were not kept');
+    await askAi(form);
+    await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the new AI answers');
     assert.equal(mock.answers, 2, 'a new AI request');
     assert.ok(mock.claimBodies.every((body) => !(body.skipJobIds || []).includes(job.job.id)), 'a stopped run leaves the job free for the next one');
   } finally { await browser.close(); }
@@ -766,6 +878,9 @@ test('saved answers play no part; what the prompt covers is filled, and what it 
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/facts');
+    assert.equal(await valueOf(form, 'spon'), '', 'no saved answer fills it');
+    await askAi(form);
+    await until(async () => await valueOf(form, 'spon') === 'No', 30000, 'the AI answers');
     assert.equal(await valueOf(form, 'spon'), 'No', 'the prompt, not the saved Yes');
     assert.equal(await valueOf(form, 'pay'), '5500');
     assert.equal(await valueOf(form, 'relo'), '', 'nothing in the prompt about relocating: not filled');
@@ -925,7 +1040,7 @@ test('two pages sending QTS back and forth do not loop', { skip, timeout: 120000
   } finally { await browser.close(); }
 });
 
-test('a long answer goes into the form whole, and Fill again asks the AI again', { skip, timeout: 120000 }, async () => {
+test('a long answer goes into the form whole, and Fill again never asks the AI', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(46, 'steps')], longAnswer: true });
   const { browser, action, storage } = await launch();
   try {
@@ -934,23 +1049,28 @@ test('a long answer goes into the form whole, and Fill again asks the AI again',
     const form = await formPage(browser, '/steps');
     await form.click('#next1');
     await waitForStep(storage, 2);
-    assert.equal(await valueOf(form, 'mot'), 'Reliable services. '.repeat(50).trim());
-    assert.equal(mock.answers, 2);
-    assert.ok(mock.prompts[1].includes('Tell us in detail. '.repeat(20).trim()), 'the whole help text goes to the AI');
+    await askAi(form);
+    await until(async () => await valueOf(form, 'mot') === 'Reliable services. '.repeat(50).trim(), 30000, 'the long answer');
+    assert.equal(mock.answers, 1);
+    assert.ok(mock.prompts[0].includes('Tell us in detail. '.repeat(20).trim()), 'the whole help text goes to the AI');
     await pressPanel(form, 'Fill again');
-    await until(() => mock.answers === 3, 30000, 'a new AI request');
+    await sleep(1000);
     await waitForStep(storage, 2);
+    await sleep(2000);
+    assert.equal(mock.answers, 1, 'Fill again uses no AI');
     assert.equal(await valueOf(form, 'mot'), 'Reliable services. '.repeat(50).trim());
   } finally { await browser.close(); }
 });
 
-test('Fill again asks the AI again, keeps the documents attached, and leaves the Manager\'s own answers', { skip, timeout: 150000 }, async () => {
+test('Ask AI again answers only the boxes still empty, keeps the documents attached, and leaves the Manager\'s own answers', { skip, timeout: 150000 }, async () => {
   resetMock({ queue: [application(52, 'form')] });
   const { browser, action, storage } = await launch();
   try {
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
+    await askAi(form);
+    await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the AI answers');
     assert.equal(mock.answers, 1);
     const attachments = () => form.evaluate(() => window.events.filter((event) => event.id === 'cv' && event.type === 'change' && event.value).length);
     const attached = await attachments();
@@ -960,12 +1080,14 @@ test('Fill again asks the AI again, keeps the documents attached, and leaves the
     await form.keyboard.press('KeyA');
     await form.keyboard.up('Control');
     await form.keyboard.type('+40 700 000 111');
-    await pressPanel(form, 'Fill again');
-    await until(() => mock.answers === 2, 30000, 'a new AI request');
+    await emptyBox(form, 'mot');
     await waitForStep(storage, 1);
-    assert.equal(await valueOf(form, 'mot'), 'Building reliable services.');
+    await askAi(form);
+    await until(() => mock.answers === 2, 30000, 'a new AI request');
+    await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the empty box answered');
+    assert.deepEqual(mock.asked[1], ['What motivates you in your work?'], 'only the empty box is asked about');
     assert.equal(await valueOf(form, 'ph'), '+40 700 000 111', 'the Manager\'s edit stays');
-    assert.ok(!mock.asked[1].some((question) => /phone/i.test(question)), 'and is not asked about');
+    assert.equal(await valueOf(form, 'hear'), 'LinkedIn', 'what was filled stays');
     assert.equal(await attachments(), attached, 'the document is not attached twice');
     assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
   } finally { await browser.close(); }
@@ -987,21 +1109,24 @@ test('Check saves nothing to the saved answers', { skip, timeout: 120000 }, asyn
 });
 
 test('choosing another candidate stops what was under way for the first', { skip, timeout: 120000 }, async () => {
-  const job = application(14, 'small');
+  const job = application(14, 'form');
   resetMock({ queue: [job], answerDelay: 15000 });
-  const { browser, action, worker } = await launch();
+  const { browser, action, worker, storage } = await launch();
   try {
     const selection = { candidateId: ANA.id, jobIds: [jobId(14)] };
     assert.equal((await action('auto_apply', selection)).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    await askAi(form, { wait: false });
     await until(() => mock.answers === 1, 60000, 'the AI request');
-    const form = await formPage(browser, '/small');
     await worker.evaluate((candidateId) => chrome.storage.local.set({ qtsWorkSelection: { mode: 'auto_apply', candidateId, jobIds: [] } }), BEN.id);
     await until(() => mock.released.length === 1, 20000, 'the application to be given back');
     assert.equal(mock.released[0].attemptId, attempt(14));
     assert.match(mock.released[0].reason, /Another candidate was chosen/);
     assert.equal(mock.released[0].mode, 'drop', 'nothing is recorded on the job');
     await sleep(500);
-    const left = await form.evaluate(() => document.getElementById('fn')?.value).catch(() => '');
-    assert.ok(!left, 'nothing was filled for the old candidate');
+    // The AI's answers for the old candidate never went in (the tab closes with the job).
+    const left = await form.evaluate(() => document.getElementById('mot')?.value).catch(() => '');
+    assert.ok(!left, 'nothing the AI said was filled for the old candidate');
   } finally { await browser.close(); }
 });

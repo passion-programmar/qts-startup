@@ -41,8 +41,11 @@ async function fixture(run) {
 
 for (const mode of ['sync', 'async', 'missing', 'getter']) {
   test(`review panel disposes safely on ${mode} context invalidation and can be injected again`, { skip: !CHROME, timeout: 60000 }, () => fixture(async (page, errors) => {
+    // Auto Apply neither holds nor watches the site's Submit (its bid comes from the panel's Submitted).
     await page.click('#submit');
-    assert.equal(await page.evaluate(() => window.siteSubmits), 0, 'live provisional-answer safeguard remains active');
+    assert.equal(await page.evaluate(() => window.siteSubmits), 1, "the site's Submit goes through");
+    assert.equal(await page.evaluate(() => window.messages.filter(m => m.action === 'submitted').length), 0, "the site's Submit is not taken as Submitted");
+    await page.evaluate(() => { window.messages = []; });
     await page.evaluate(mode => {
       window.mode = mode;
       if (mode === 'missing' || mode === 'getter') document.getElementById('submit').click();
@@ -58,7 +61,7 @@ for (const mode of ['sync', 'async', 'missing', 'getter']) {
     assert.equal(await page.evaluate(state => window.oldPanel.render(state), STATE), false, 'disposed instance cannot revive');
     const before = await page.evaluate(() => window.siteSubmits);
     await page.click('#submit');
-    assert.equal(await page.evaluate(() => window.siteSubmits), before + 1, 'dead panel cannot keep intercepting the Manager on the synthetic form');
+    assert.equal(await page.evaluate(() => window.siteSubmits), before + 1, 'a dead panel never intercepts the Manager on the synthetic form');
     await page.evaluate(() => { window.mode = 'valid'; window.siteSubmits = 0; });
     await page.addScriptTag({ path: FILE });
     await page.evaluate(state => window.__qtsApplyReview.render(state), STATE);
@@ -66,18 +69,19 @@ for (const mode of ['sync', 'async', 'missing', 'getter']) {
     assert.equal(await page.evaluate(() => Boolean(window.__qtsApplyReview)), true, 'old cleanup cannot delete the new panel');
     assert.equal(await page.evaluate(() => window.intervals.size), 1, 'reinjection creates one heartbeat');
     await page.click('#submit');
-    assert.equal(await page.evaluate(() => window.siteSubmits), 0, 'new live panel keeps normal Submit checks');
+    assert.equal(await page.evaluate(() => window.siteSubmits), 1, "the new live panel lets the site's Submit through too");
     await page.evaluate(() => window.__qtsApplyReview.remove());
     assert.equal(await page.evaluate(() => window.intervals.size), 0, 'normal removal also cleans up');
     assert.deepEqual(errors, []);
   }));
 }
 
-test('a transient worker messaging failure does not remove a live review or its Submit safeguards', { skip: !CHROME, timeout: 60000 }, () => fixture(async (page, errors) => {
+test('a transient worker messaging failure does not remove a live review', { skip: !CHROME, timeout: 60000 }, () => fixture(async (page, errors) => {
   await page.evaluate(async () => { window.mode = 'transient'; [...window.intervals.values()][0](); await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.equal(await page.evaluate(() => Boolean(window.__qtsApplyReview)), true);
   assert.equal(await page.evaluate(() => window.intervals.size), 1);
   await page.click('#submit');
-  assert.equal(await page.evaluate(() => window.siteSubmits), 0);
+  assert.equal(await page.evaluate(() => window.siteSubmits), 1);
+  assert.equal(await page.evaluate(() => Boolean(window.__qtsApplyReview)), true);
   assert.deepEqual(errors, []);
 }));

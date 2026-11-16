@@ -14,7 +14,7 @@ test('Chrome relaunch automatically releases interrupted work and continues only
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : null;
     calls.push({ url: req.url, body });
     const release = /\/(release|cancel|cancel-all)$/.test(req.url);
-    let reply = { success: true, features: { canUseApply: true }, rules: [], exclusions: [] };
+    let reply = { success: true, features: { canUseApply: true, canUseAutoApply: true }, rules: [], exclusions: [] };
     if (req.url.endsWith('/generation/claim')) reply = { success: true, job: null };
     if (req.url.endsWith('/apply/claim')) reply = { success: true, application: null };
     if (release && offline) { res.statusCode = 503; reply = { success: false, message: 'Temporary local test outage' }; }

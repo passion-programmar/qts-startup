@@ -2,8 +2,11 @@
 // It shows the job, the résumé folder, and every answer with where it came from (ChatGPT answers
 // flagged), marks what needs the Manager, and carries the Manager's choices back to the worker:
 // Continue / Skip / Later / Fill again / Ask ChatGPT (or Gemini) again / I submitted it, then Yes / No / Not
-// submitted. On the last step it notices the Manager's own click on the site's Submit; with Auto Apply it
-// holds that Submit back while a provisional AI answer is neither accepted nor edited.
+// submitted. On the last step it notices the Manager's own click on the site's Submit.
+// Auto Apply: the panel stays on the job's page the whole time; Submitted is always there and saves the
+// bid at once; Ask AI is the only way the AI is asked; the résumé and cover letter text copy in one
+// click; the page's required questions show with the candidate's answer (Copy, Fill). The site's
+// Submit is neither held nor watched.
 (function initApplyReview(global) {
   if (global.__qtsApplyReview) return;
   // A prior extension context may have left its host in this page after an update.
@@ -64,6 +67,9 @@
     .body { overflow-y: auto; padding: 10px 12px; scrollbar-color: #34425a transparent; }
     .job { margin-bottom: 8px; padding: 9px 10px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; }
     .job-title { color: #f1f5f9; font-weight: 750; font-size: 13px; }
+    .who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+    .who-name { color: #f8fafc; font-size: 17px; font-weight: 800; }
+    .who-label { padding: 2px 9px; border: 1px solid #34425a; border-radius: 999px; background: #111a2e; color: #93c5fd; font-size: 14px; font-weight: 750; }
     .muted { color: #94a3b8; }
     .row { margin-top: 2px; color: #94a3b8; font-size: 11px; }
     .folder { display: block; width: 100%; margin-top: 6px; padding: 6px 8px; border: 1px dashed #34425a; border-radius: 9px; background: #111a2e; color: #93c5fd; cursor: pointer; text-align: left; font: inherit; word-break: break-all; }
@@ -100,6 +106,21 @@
     .reference-label { display: block; color: #94a3b8; font-size: 10px; }
     .reference-value { display: block; white-space: pre-wrap; }
     .reference-note, .copy-status { padding: 0 10px 8px; color: #94a3b8; font-size: 11px; }
+    .copy-row { display: flex; gap: 6px; margin-top: 6px; }
+    .copy-button, .row-button { padding: 5px 10px; border: 1px solid #34425a; border-radius: 9px; background: #111a2e; color: #e2e8f0; font: 650 11.5px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
+    .copy-button { flex: 1 1 0; }
+    .copy-button:hover:not(:disabled), .row-button:hover:not(:disabled) { border-color: #818cf8; color: #c7d2fe; }
+    .copy-button:disabled, .row-button:disabled { opacity: .45; cursor: not-allowed; }
+    .job-status { margin-top: 6px; color: #a5b4fc; font-size: 11px; }
+    .job-status:empty { display: none; }
+    .required { margin-bottom: 8px; padding: 9px 10px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; }
+    .required strong { display: block; margin-bottom: 4px; color: #e2e8f0; font-weight: 750; }
+    .required-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-top: 1px solid #1a2438; }
+    .required-text { flex: 1 1 auto; min-width: 0; cursor: pointer; }
+    .required-label { display: block; color: #94a3b8; font-size: 11px; overflow-wrap: anywhere; }
+    .required-label.done { color: #6ee7b7; }
+    .required-value { display: block; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .required-value.none { color: #66758c; font-style: italic; }
     .copy-status { color: #a5b4fc; }
     .foot { padding: 10px 12px; border-top: 1px solid #243047; background: #0d1526; }
     .note { margin-bottom: 8px; color: #cbd5e1; font-weight: 600; }
@@ -132,8 +153,6 @@
   let disposed = false;
   let heartbeatTimer = null;
   let editRender = null;
-  // The site's Submit was held back because provisional answers were still waiting.
-  let submitHeld = false;
 
   const element = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -141,6 +160,73 @@
     if (text !== undefined) node.textContent = text;
     return node;
   };
+
+  // Auto Apply: a short message under the job (copied, filled, the folder), kept across redraws.
+  const jobStatus = element('div', 'job-status');
+  jobStatus.setAttribute('role', 'status');
+  let statusTimer = null;
+  function say(text) {
+    jobStatus.textContent = text;
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => { jobStatus.textContent = ''; }, 8000);
+  }
+
+  // The job's PDF folder in Windows Explorer. When this Chrome did not download the PDFs, Chrome
+  // opens Downloads and the folder's address is copied for Explorer's address bar.
+  async function openFolder() {
+    const result = await send('open_folder');
+    if (result?.ok) { say('The folder opened in Windows Explorer.'); return; }
+    if (result?.notHere && state?.resumeFolder) {
+      const address = /^[a-z]:\\/i.test(state.resumeFolderPath || '')
+        ? state.resumeFolderPath
+        : `%USERPROFILE%\\Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
+      say(await copyReference(address)
+        ? 'This Chrome did not download these PDFs, so Downloads opened. The folder\'s address is copied: paste it into Explorer\'s address bar.'
+        : 'This Chrome did not download these PDFs, so Downloads opened.');
+      return;
+    }
+    say(result?.error || 'The folder could not be opened.');
+  }
+
+  // A required question answered on the form now (read live, so the Manager's typing counts).
+  function answeredLive(row) {
+    try {
+      return Boolean(row.fieldId && global.__qtsApplyForm?.isUnanswered && !global.__qtsApplyForm.isUnanswered({ id: row.fieldId, kind: row.kind }));
+    } catch {
+      return false;
+    }
+  }
+
+  /** The page's required questions, each with the candidate's answer: Copy, or Fill it into its box. */
+  function requiredBox() {
+    const rows = state.requiredRows;
+    const box = element('div', 'required');
+    box.append(element('strong', '', `Required on this page (${rows.length})`));
+    for (const row of rows) {
+      const line = element('div', 'required-row');
+      const text = element('div', 'required-text');
+      text.title = 'Show this question on the form';
+      const answered = answeredLive(row);
+      text.append(
+        element('span', `required-label${answered ? ' done' : ''}`, `${answered ? '✓ ' : ''}${row.label}`),
+        element('span', `required-value${row.value ? '' : ' none'}`, row.value || 'Not in the profile'),
+      );
+      text.addEventListener('click', () => global.__qtsApplyForm?.focusField?.(row.fieldId));
+      const copy = element('button', 'row-button', 'Copy');
+      const fill = element('button', 'row-button', 'Fill');
+      for (const node of [copy, fill]) { node.type = 'button'; node.disabled = !row.value; }
+      copy.addEventListener('click', async () => say(await copyReference(row.value) ? `Copied: ${row.label}` : 'Could not copy. Try again.'));
+      fill.addEventListener('click', async () => {
+        fill.disabled = true;
+        const result = await send('fill_field', { fieldId: row.fieldId });
+        say(result?.ok ? `Filled: ${row.label}` : `Not filled: ${result?.error || 'try again'}`);
+        render();
+      });
+      line.append(text, copy, fill);
+      box.append(line);
+    }
+    return box;
+  }
 
   function contextAvailable() {
     try { return !disposed && Boolean(global.chrome?.runtime?.id); } catch { return false; }
@@ -164,6 +250,7 @@
     state = null;
     clearInterval(heartbeatTimer);
     clearTimeout(editRender);
+    clearTimeout(statusTimer);
     document.removeEventListener('click', onDocumentClick, true);
     document.removeEventListener('submit', onDocumentSubmit, true);
     document.removeEventListener('input', onEdit, true);
@@ -315,23 +402,47 @@
     panel.append(auto ? brandHeader() : head);
 
     const body = element('div', 'body');
-    if (auto) body.append(head);
+    // Auto Apply: only the candidate (name and label, larger), the job, and the PDF folder's full path.
     const job = element('div', 'job');
+    if (auto) {
+      const who = element('div', 'who');
+      who.append(element('span', 'who-name', state.candidateName || state.candidate));
+      if (state.candidateLabel) who.append(element('span', 'who-label', state.candidateLabel));
+      job.append(who);
+    }
     job.append(element('div', 'job-title', `${state.job.title} — ${state.job.company}`));
-    const facts = [state.job.location, state.job.workType, state.job.salary ? `Salary: ${state.job.salary}` : ''].filter(Boolean).join(' · ');
-    if (facts) job.append(element('div', 'row muted', facts));
-    job.append(element('div', 'row muted', state.job.url));
+    if (!auto) {
+      const facts = [state.job.location, state.job.workType, state.job.salary ? `Salary: ${state.job.salary}` : ''].filter(Boolean).join(' · ');
+      if (facts) job.append(element('div', 'row muted', facts));
+      job.append(element('div', 'row muted', state.job.url));
+    }
     if (state.resumeFolder) {
-      const folder = element('button', 'folder', `📁 Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`);
+      const shortPath = `Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
+      const folder = element('button', 'folder', `📁 ${auto && state.resumeFolderPath ? state.resumeFolderPath : shortPath}`);
       folder.type = 'button';
       folder.title = 'Open the résumé folder in Windows Explorer';
-      folder.addEventListener('click', () => send('open_folder'));
+      folder.addEventListener('click', () => openFolder());
       job.append(folder);
     }
-    if (state.promptName || state.templateName) {
+    if (!auto && (state.promptName || state.templateName)) {
       job.append(element('div', 'row muted', [state.promptName && `Prompt: ${state.promptName}`, state.templateName && `Template: ${state.templateName}`].filter(Boolean).join(' · ')));
     }
+    // Auto Apply: the résumé and the cover letter as text, one click each.
+    if (auto && state.references) {
+      const copies = element('div', 'copy-row');
+      for (const [label, text] of [['Resume', state.references.resumeText], ['Cover Letter', state.references.coverLetterText]]) {
+        const copy = element('button', 'copy-button', `Copy ${label}`);
+        copy.type = 'button';
+        copy.disabled = !String(text || '').trim();
+        copy.title = copy.disabled ? `This job has no ${label.toLowerCase()} text.` : `Copy the ${label.toLowerCase()} text`;
+        copy.addEventListener('click', async () => say(await copyReference(text) ? `Copied: ${label}` : 'Could not copy. Try again.'));
+        copies.append(copy);
+      }
+      job.append(copies);
+    }
+    if (auto) job.append(jobStatus);
     body.append(job);
+    if (auto && state.requiredRows?.length) body.append(requiredBox());
 
     // Auto Apply: one checklist of every question met on every step, checked on the page itself; it
     // takes the place of the separate lists below.
@@ -404,7 +515,6 @@
         list.append(item);
       }
       box.append(list);
-      if (submitHeld && waiting) box.append(element('div', 'held', 'Submit was held: accept or edit each provisional answer first.'));
       body.append(box);
     }
 
@@ -419,10 +529,18 @@
 
     const foot = element('div', 'foot');
     const buttons = element('div', 'buttons');
+    // Auto Apply: Submitted is always there and always works, at any step, also while QTS is working:
+    // one click saves the bid (the job leaves the list and this tab closes).
+    const submittedNow = () => button('Submitted', 'yes', 'submitted', () => ({ answers: currentAnswers() }));
     if (state.mode === 'working') {
       const working = element('div', 'working');
       working.append(element('span', 'spinner'), element('span', '', state.workingText || 'Filling the form…'));
       foot.append(working);
+      if (auto) {
+        buttons.style.marginTop = '8px';
+        buttons.append(submittedNow());
+        foot.append(buttons);
+      }
     } else if (state.mode === 'confirm') {
       foot.append(element('div', 'note', 'Did the site take the application? Check the page or the email, then answer — any time.'));
       buttons.append(
@@ -435,6 +553,13 @@
       const blocking = blockingNow();
       foot.append(element('div', 'note', state.blocked
         ? 'This candidate is blocked: skip this job.'
+        : auto
+          ? [
+            state.final ? 'Check the answers, click the site\'s Submit, then Submitted here.' : 'Check this step, then click the site\'s own Next (or Continue). QTS fills the next step when it shows.',
+            blocking ? `${blocking} thing${blocking === 1 ? '' : 's'} on the checklist still need${blocking === 1 ? 's' : ''} you.` : '',
+            state.aiOn ? `Ask ${state.aiName || 'AI'} answers the boxes still empty.` : '',
+            'Submitted saves the bid at any time.',
+          ].filter(Boolean).join(' ')
         : listed && state.final
           ? blocking
             ? `${blocking} thing${blocking === 1 ? '' : 's'} on the checklist still need${blocking === 1 ? 's' : ''} you. Fix ${blocking === 1 ? 'it' : 'them'} on the form, click Check, then the site's Submit.`
@@ -448,7 +573,9 @@
               ? 'Check this step and fix what is marked, then click the site\'s own Next (or Continue). QTS fills the next step when it shows.'
               : 'Check this step, fix what is marked, then Continue.'));
       if (!state.blocked && !state.final && !listed) buttons.append(button('Continue →', 'primary', 'continue'));
-      if (!state.blocked && state.final) {
+      if (auto) buttons.append(submittedNow());
+      if (auto && !state.blocked && state.aiOn) buttons.append(button(`Ask ${state.aiName || 'AI'}`, 'primary', 'ask_ai'));
+      if (!auto && !state.blocked && state.final) {
         const submittedButton = button('I submitted it', '', 'submitted', () => ({ answers: currentAnswers() }));
         if (blocking) {
           submittedButton.disabled = true;
@@ -457,12 +584,12 @@
         buttons.append(submittedButton);
       }
       // Auto Apply: the page read again after the Manager's changes (nothing is filled).
-      if (listed) buttons.append(button('Check', 'primary', 'recheck', () => ({ manualCheck: true, answers: currentAnswers() })));
+      if (listed) buttons.append(button('Check', auto ? '' : 'primary', 'recheck', () => ({ manualCheck: true, answers: currentAnswers() })));
       buttons.append(button('Skip', '', 'skip'));
       if (!state.blocked) {
         buttons.append(button('Later', '', 'later'));
         buttons.append(button('Fill again', '', 'fill_again'));
-        if (state.canAskAgain && (!state.auto || state.aiOn)) buttons.append(button(`Ask ${state.aiName || 'ChatGPT'} again`, '', 'ask_again'));
+        if (!auto && state.canAskAgain) buttons.append(button(`Ask ${state.aiName || 'ChatGPT'} again`, '', 'ask_again'));
         // Auto Apply: the answers the Manager changed go to Super Admin as drafts (never approved by this).
       }
       foot.append(buttons);
@@ -489,7 +616,7 @@
     return state?.auto ? provisionalStatus().filter((entry) => !entry.accepted && !entry.edited) : [];
   }
 
-  // What on the checklist stops "I submitted it" and holds the site's Submit: provisional answers
+  // What on the checklist still needs the Manager (shown, never blocking Submitted): provisional answers
   // still waiting (read live, so an edit counts at once), and items that need the Manager, did not
   // take (required), or are blocked. Not-verified items are shown, never blocking.
   const BLOCKING = new Set(['needs_input', 'failed', 'blocked']);
@@ -526,7 +653,7 @@
     const box = element('div', blocking ? 'problems' : 'ok');
     box.append(element('strong', '', blocking
       ? `⚠ Needs you (${blocking}) · ${totals.verified} verified · ${totals.optional_empty} optional left empty`
-      : `✓ Nothing blocks Submit · ${totals.verified} verified · ${totals.optional_empty} optional left empty`));
+      : `✓ Nothing needs you · ${totals.verified} verified · ${totals.optional_empty} optional left empty`));
     // The whole application at a glance: questions found, what is open, uploads, and barriers.
     const questions = items.filter((item) => item.kind !== 'page');
     const uploads = questions.filter((item) => item.kind === 'file');
@@ -551,14 +678,6 @@
       }
       box.append(list);
     }
-    if (submitHeld && blocking) box.append(element('div', 'held', 'Submit was held: deal with what is marked (then Check), or use "Submit anyway".'));
-    if (submitHeld && blocking) {
-      // The Manager's own decision: the next click on the site's Submit goes through.
-      const anyway = element('button', '', 'Submit anyway');
-      anyway.type = 'button';
-      anyway.addEventListener('click', () => { submitAnyway = true; submitHeld = false; render(); });
-      box.append(anyway);
-    }
     // The rest, folded: verified answers and optional questions left empty.
     for (const category of ['verified', 'optional_empty']) {
       const rest = items.filter((item) => item.category === category);
@@ -577,27 +696,12 @@
     return box;
   }
 
-  // Auto Apply's last step: the site's Submit is held back while anything blocks (a provisional answer
-  // waits, a required answer is missing or did not take); the first one is shown on the form, and
-  // "Submit anyway" lets the Manager's next Submit through. True when held.
-  let submitAnyway = false;
-  function holdSubmit(event) {
-    if (!state || !state.auto || state.mode !== 'review' || !state.final || submitAnyway) return false;
-    if (!blockingNow()) return false;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    submitHeld = true;
-    render();
-    const first = pendingProvisional()[0]?.id || state.checklist?.items.find((item) => BLOCKING.has(item.category) && item.fieldId)?.fieldId;
-    if (first) global.__qtsApplyForm?.focusField?.(first);
-    return true;
-  }
-
   // On the last step, the Manager's own click on the site's Submit moves the panel to Yes/No. The
   // form's values are read at that moment, before the page changes.
   let submitNoticedAt = 0;
   function noticeSubmit() {
-    if (!state || state.mode !== 'review' || !state.final || state.blocked) return;
+    // Auto Apply does not watch the site's Submit: its bid comes only from the panel's Submitted.
+    if (!state || state.auto || state.mode !== 'review' || !state.final || state.blocked) return;
     if (Date.now() - submitNoticedAt < 3000) return;
     submitNoticedAt = Date.now();
     send('submitted', { answers: currentAnswers(), noticed: true });
@@ -621,11 +725,11 @@
     // Before the last step a submit-type button is the site's Next.
     if (!submitLike || !state?.final) noticeStepButton(event.target);
     if (!submitLike) return;
-    if (!holdSubmit(event)) noticeSubmit();
+    noticeSubmit();
   };
   const onDocumentSubmit = (event) => {
     if (!contextAvailable()) { dispose(); return; }
-    if (!holdSubmit(event)) noticeSubmit();
+    noticeSubmit();
   };
   document.addEventListener('click', onDocumentClick, true);
   document.addEventListener('submit', onDocumentSubmit, true);

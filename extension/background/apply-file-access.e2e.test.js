@@ -37,7 +37,7 @@ test('direct local PDFs survive closed settings/restart, upload original bytes i
       res.end(pathname === '/job' ? '<h1>Synthetic job</h1>' : '<h1>Apply</h1><form onsubmit="event.preventDefault()"><label>First name<input id="first" required></label><label>Last name<input id="last" required></label><label>Email<input id="email" type="email" required></label><label>Resume<input id="resume" type="file" required></label><label>Cover letter<input id="cover" type="file"></label><button type="submit">Submit application</button></form>');
       return;
     }
-    let reply = { success: true, rules: [], exclusions: [], features: { canUseApply: true, autoApplyParallelLimit: 1 }, leaseSeconds: 120 };
+    let reply = { success: true, rules: [], exclusions: [], features: { canUseApply: true, canUseAutoApply: true, autoApplyParallelLimit: 1 }, leaseSeconds: 120 };
     if (pathname === '/api/extension/apply/claim') reply = { success: true, application: queue.shift() || null };
     if (pathname === '/api/extension/apply/documents') {
       if (!documentsAllowed) { res.statusCode = 403; reply = { success: false, message: 'Application access denied.' }; }
@@ -96,9 +96,11 @@ test('direct local PDFs survive closed settings/restart, upload original bytes i
       return reply.result;
     }, { url: `${base}/job`, name });
     for (const [i, mode] of ['apply', 'auto_apply'].entries()) {
-      queue.push({ attemptId: `11111111-1111-4111-8111-11111111111${i}`, aiMode: 'chatgpt', autoSubmit: false, reviewMode: 'every_step',
+      // Auto Apply runs only with Super Admin's Auto Apply with APIs; its PDF names are checked against the
+      // candidate's name, so that round's candidate has none (these PDFs keep their odd test names).
+      queue.push({ attemptId: `11111111-1111-4111-8111-11111111111${i}`, aiMode: 'chatgpt', autoSubmit: false, reviewMode: 'every_step', autoApplyApi: mode === 'auto_apply',
         job: { id: `22222222-2222-4222-8222-22222222222${i}`, url: `${base}/form?mode=${mode}`, title: 'Engineer', company: 'Fixture', resumeFolder: 'QTS_Resume/Manager/Run', resumeText: 'Saved resume', coverLetterText: 'Saved letter' },
-        candidate: { firstName: 'Casey', lastName: 'Example', email: 'casey@example.test' }, profileDetails: { experiences: [], educations: [] }, savedAnswers: [], rememberedChoices: [], exchangeRates: null, answerPrompt: null, siteAccountPassword: null });
+        candidate: mode === 'auto_apply' ? { email: 'casey@example.test' } : { firstName: 'Casey', lastName: 'Example', email: 'casey@example.test' }, profileDetails: { experiences: [], educations: [] }, savedAnswers: [], rememberedChoices: [], exchangeRates: null, answerPrompt: null, siteAccountPassword: null });
       await worker.evaluate(() => chrome.storage.local.set({ qtsAutoApplyAi: 'off' }));
       assert.equal((await action(mode)).ok, true);
       const form = await until(`${mode} form`, async () => (await browser.pages()).find((p) => p.url().startsWith(`${base}/form?mode=${mode}`)));

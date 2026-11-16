@@ -26,6 +26,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         applyAiMode: users.applyAiMode,
         chatGptUrl: users.chatGptUrl,
         autoApplyParallelLimit: users.autoApplyParallelLimit,
+        autoApplyApi: users.autoApplyApi,
       })
         .from(users).where(eq(users.id, manager.id)).limit(1),
     ]);
@@ -38,6 +39,8 @@ export async function GET(request: Request): Promise<NextResponse> {
           canManageJobDetectionUrlRules,
           canUseScanner: false,
           canUseApply: applySettings?.canUseApply === true,
+          // Auto Apply answers only with Gemini and Groq: Apply on and Super Admin's "Auto Apply with APIs".
+          canUseAutoApply: applySettings?.canUseApply === true && applySettings?.autoApplyApi === true,
           applyAiMode: applySettings?.applyAiMode === "gemini" ? "gemini" : "chatgpt",
           chatGptUrl: applySettings?.chatGptUrl || "https://chatgpt.com/",
           autoApplyParallelLimit: applySettings?.autoApplyParallelLimit ?? 2,

@@ -75,7 +75,7 @@ test('a work row refused for a missing QTS_Resume folder says so and opens the f
               if (message.type === 'QTS_GET_LAUNCHER_STATE') return { active: true };
               if (message.type === 'CHECK_EXTENSION_PAGE_ALLOWED') return { ok: true };
               // A Manager with Apply off still gets the folder setting.
-              if (message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, canUseApply: mode !== 'generation', tabId: 1 };
+              if (message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, canUseApply: mode !== 'generation', canUseAutoApply: mode !== 'generation', tabId: 1 };
               if (message.type === 'QTS_PAGE_ACTION' && message.action === mode) {
                 return { ok: false, resumeFolderRequired: true, error: 'Save the QTS_Resume folder first (Downloads › QTS_Resume), then click it again.' };
               }

@@ -1135,11 +1135,12 @@ async function initializeQtsPageLauncher() {
       applyPdfFolderButton.hidden = response?.ok !== true;
     }
     if (autoApplyRow) {
-      // Apply set to Off in Settings hides Auto Apply. A run already going stays visible so the
-      // Manager can still stop it, and an unknown answer (offline) changes nothing.
+      // Apply set to Off in Settings, or no "Auto Apply with APIs" (Auto Apply answers only with Gemini
+      // and Groq), hides Auto Apply. A run already going stays visible so the Manager can still stop it,
+      // and an unknown answer (offline) changes nothing.
       const stored = await chrome.storage.local.get(['qtsExtensionStatus', 'qtsApplyKind']);
       const running = stored.qtsExtensionStatus === 'apply' && stored.qtsApplyKind === 'auto';
-      autoApplyRow.hidden = response?.ok === true && response.canUseApply !== true && !running;
+      autoApplyRow.hidden = response?.ok === true && (response.canUseApply !== true || response.canUseAutoApply !== true) && !running;
     }
     toolsHeading.hidden = Boolean(
       highlightButton?.hidden !== false

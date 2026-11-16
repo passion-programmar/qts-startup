@@ -2,10 +2,10 @@
 // Auto Apply, in its own order, so a Manager without the switch is not touched by any of this.
 //
 //   clear a site last used for another candidate -> open -> whoever is signed in must be this candidate
-//   -> empty the form -> read every question -> ask the AI once -> upload -> fill everything -> check
-//   -> ask only about questions that appeared -> check the page against the candidate -> Manager submits
+//   -> empty the form -> read every question -> upload -> fill what the profile states -> check
+//   -> the Manager reviews; Ask AI (their click only) answers the boxes still empty -> Manager submits
 //
-// Nothing is filled until the AI has answered. Loaded by the service worker after apply-runner.js,
+// The AI is never asked by itself. Loaded by the service worker after apply-runner.js,
 // whose helpers it uses (inForm, fillAndCheck, readComboboxOptions, ...).
 
 const siteHolds = self.__qtsSiteSessions.createSiteHolds();
@@ -377,7 +377,8 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     return finish({ checks: false });
   }
   for (const key of cleaned.keys || []) application.cleanedBoxes.add(key);
-  const reviewed = new Set(options.again ? [] : (cleaned.boxKeys || []).filter(([, key]) => metBefore.has(key)).map(([id]) => id));
+  // (Ask AI goes over every box still empty, reviewed or not.)
+  const reviewed = new Set(options.again || options.onlyEmpty ? [] : (cleaned.boxKeys || []).filter(([, key]) => metBefore.has(key)).map(([id]) => id));
   for (const box of cleaned.stuck || []) application.stuckBoxes.set(box.id ?? box.label, box);
   emptiedCount = (cleaned.emptied || []).length;
   await settle(300, 1500);
@@ -387,7 +388,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     await throwIfStopped();
     // 2. Read every question the page shows now.
     const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist({ fullNotes: true })) || [];
-    const fresh = [];
+    let fresh = [];
     for (const field of fields) {
       if (field.hidden || field.disabled || field.unrelated || field.account || field.managerChanged || field.trackingValue || reviewed.has(field.id) || seen.has(field.id)) continue;
       if (await stillAnswered(field)) {
@@ -397,6 +398,8 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       }
       fresh.push(field);
     }
+    // Ask AI: only boxes still empty (required or not); whatever holds a value stays.
+    if (options.onlyEmpty) fresh = await onlyEmptyFields(tabId, fresh, seen);
     if (!fresh.length) {
       // Complete before review: a required question still empty gets one more round, as if new.
       if (rechecked) break;
@@ -472,8 +475,15 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       }
       toAsk.push(entry);
     }
-    if (toAsk.length) {
-      let failure = options.noAi ? 'AI answers are turned off in this Chrome' : null;
+    if (toAsk.length && options.noAi) {
+      // The AI is asked only when the Manager clicks Ask AI. Until then a question the profile states
+      // takes the profile's value; the rest stay empty, listed for the Manager.
+      for (const { field, check } of toAsk) {
+        if (check) answers[field.id] = { ...check };
+        else leave(field, 'not asked yet: click Ask AI, or fill it yourself');
+      }
+    } else if (toAsk.length) {
+      let failure = null;
       let replied = {};
       let reviewed = [];
       if (!failure) {
@@ -497,7 +507,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
         application.aiUnanswered = [];
         application.aiReview = [];
         canAskAgain = true;
-        problem(`The AI did not answer (${failure}), so QTS filled nothing on this page. Use "Ask AI again", or fill the form yourself.`, null, 'field', true);
+        problem(`The AI did not answer (${failure}), so it filled nothing. Click Ask AI again, or fill the form yourself.`, null, 'field', true);
         for (const entry of toAsk) leave(entry.field, failure);
         return finish();
       }

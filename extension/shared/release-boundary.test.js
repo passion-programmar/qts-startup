@@ -1046,15 +1046,18 @@ test('raw shared-job save SQL types every value Postgres cannot infer', () => {
   assert.ok(helper.includes('$15::text, $16::boolean, $7::uuid, $6::uuid, $17::date'));
 });
 
-test('Apply set to Off in Settings hides the Auto Apply button, except while a run can still be stopped', () => {
+test('Apply set to Off in Settings, or no Auto Apply with APIs, hides the Auto Apply button, except while a run can still be stopped', () => {
   const launcher = fs.readFileSync(path.join(extensionRoot, 'content', 'page-launcher.js'), 'utf8');
   assert.ok(launcher.includes(".row[hidden] { display: none; }"));
   assert.ok(launcher.includes(`const autoApplyRow = menu.querySelector('[data-action="auto_apply"]')?.closest('.row');`));
   assert.ok(launcher.includes("const running = stored.qtsExtensionStatus === 'apply' && stored.qtsApplyKind === 'auto';"));
-  assert.ok(launcher.includes('autoApplyRow.hidden = response?.ok === true && response.canUseApply !== true && !running;'));
+  assert.ok(launcher.includes('autoApplyRow.hidden = response?.ok === true && (response.canUseApply !== true || response.canUseAutoApply !== true) && !running;'));
   // The server still refuses Apply and Auto Apply for a Manager with Apply off.
   const worker = fs.readFileSync(path.join(extensionRoot, 'background', 'service-worker.js'), 'utf8');
   assert.ok(worker.includes('canUseApply: result.success === true && result.features?.canUseApply === true'));
+  // Auto Apply answers only with Gemini and Groq: Super Admin's Auto Apply with APIs must be on.
+  assert.ok(worker.includes('canUseAutoApply: result.success === true && result.features?.canUseAutoApply === true'));
+  assert.ok(worker.includes("if (features.features?.canUseAutoApply !== true) {"));
 });
 
 test('a loaded page is read, injected into or saved for the old capture path only while the old account Auto Apply is armed', () => {

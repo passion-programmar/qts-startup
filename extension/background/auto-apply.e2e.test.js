@@ -20,7 +20,10 @@ const CHROME = [
 ].find((candidate) => candidate && fs.existsSync(candidate));
 const HEADFUL = process.env.QTS_E2E_HEADFUL === '1';
 const SHOTS = process.env.QTS_E2E_SHOTS || null;
-const skip = CHROME ? false : 'Chrome is not installed (set QTS_CHROME to run this test).';
+// Auto Apply answers only with Gemini and Groq since 2026-11-16 (Super Admin's "Auto Apply with APIs");
+// this suite covers the old ChatGPT flow, which no claim reaches any more. Its tests are kept for
+// reference and skipped; extension/background/auto-apply-api.e2e.test.js covers Auto Apply.
+const skip = 'ChatGPT Auto Apply is not used: Auto Apply runs only with Gemini and Groq (auto-apply-api.e2e.test.js).';
 
 const PORT = 47131;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -666,7 +669,7 @@ test('Stage B: Auto Apply fills a three-step form from the profile, documents an
     assert.equal(step1.office, 'Yes', 'an approved answer for the same question');
     assert.deepEqual([step1.mot, step1.extra], ['', ''], 'nothing invents an answer');
     assert.deepEqual([run.step, run.unresolved >= 2], [2, true]);
-    const panel2 = await until(async () => { const text = await panelText(form); return /Needs you \(|Nothing blocks Submit/.test(text) ? text : null; }, 20000, 'the step 2 checklist').catch(() => panelText(form));
+    const panel2 = await until(async () => { const text = await panelText(form); return /Needs you \(|Nothing needs you/.test(text) ? text : null; }, 20000, 'the step 2 checklist').catch(() => panelText(form));
     // The checklist: the required question nothing answers needs the Manager; the optional one is folded away.
     assert.match(panel2, /Needs you \(\d+\)/);
     assert.match(panel2, /Needs your answer: "What motivates you in your work\? \*"/);
@@ -822,7 +825,7 @@ test('Stage C: approved answers first, one ChatGPT batch for the step, then the 
     await shot(form, 'c-2-saved');
 
     // Required consent is already checked; the Manager reviews the form and submits it.
-    await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing left blocking');
+    await until(async () => /Nothing needs you/.test(await panelText(form)), 20000, 'nothing left blocking');
     await shot(form, 'c-3-provisional-settled');
     // Submit stays the Manager's; Yes records the answers with their sources.
     await form.click('#submit');
@@ -1064,7 +1067,7 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
     assert.match(first, /Needs your answer: "Portfolio URL \*" — Still empty: "Portfolio URL \*"\./);
     assert.match(first, /Did not take: check it: "How many years of professional experience do you have\? \*" — The site shows: Enter a number from 0 to 3/);
     assert.match(first, /Verified \(\d+\)/);
-    assert.doesNotMatch(first, /Nothing blocks Submit/);
+    assert.doesNotMatch(first, /Nothing needs you/);
     await shot(form, 'k-1-step1-checklist');
 
     // The Manager fixes both on the form; Check reads the page again (nothing filled).
@@ -1073,7 +1076,7 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
     await form.type('#yrs', '3');
     const answersBefore = mock.answers;
     assert.equal(await clickPanelButton(form, 'Check'), true);
-    const second = await until(async () => { const text = await panelText(form); return /Nothing blocks Submit/.test(text) ? text : null; }, 20000, 'step 1 settled after Check');
+    const second = await until(async () => { const text = await panelText(form); return /Nothing needs you/.test(text) ? text : null; }, 20000, 'step 1 settled after Check');
     assert.doesNotMatch(second, /Did not take/);
     assert.equal(mock.answers, answersBefore, 'Check asks no AI');
     assert.equal(await form.evaluate(() => document.getElementById('yrs').value), '3', 'nothing the Manager wrote was refilled');
@@ -1099,7 +1102,7 @@ test('the checklist: a revealed question, a section drawn on scroll, a refused a
 
     // The Manager answers the right to work: it counts at once (read live), and the Manager's Submit goes through.
     await form.click('input[name=auth][value=Yes]');
-    await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing left blocking');
+    await until(async () => /Nothing needs you/.test(await panelText(form)), 20000, 'nothing left blocking');
     await form.click('#submit');
     await until(() => mock.submitted.length === 1, 20000, 'the Submit record');
     assert.equal(mock.pageSubmitted, 1, 'one Submit: the Manager\'s');
@@ -1209,7 +1212,7 @@ test('manual steps: QTS fills each step and waits; the Manager\'s Next starts th
     assert.equal(mock.pageSubmitted, 0);
     // Required consent is filled before review (ASSIST_SOURCES 'consent'); clicking it would untick it.
     assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true, 'the required consent is filled before review');
-    await until(async () => /Nothing blocks Submit/.test(await panelText(form)), 20000, 'nothing blocking');
+    await until(async () => /Nothing needs you/.test(await panelText(form)), 20000, 'nothing blocking');
     await form.click('#submit');
     await until(() => mock.submitted.length === 1, 20000, 'the Submit record');
     await until(async () => /Submitted successfully\?/.test(await panelText(form)), 20000, 'Yes/No');
@@ -1401,7 +1404,7 @@ test('Mocked ChatGPT failures: invalid JSON, quota exhausted, no answer in time,
     await waitForAutoStep(ctx.storage, 2, ['final', 'needs_you'], 180000);
     const values = await form.evaluate(() => ({ mot: document.getElementById('mot').value, dj: document.getElementById('dj').value, cloud: document.getElementById('cloud').value }));
     // The review as drawn (after its checklist is checked on the page).
-    const panel = await until(async () => { const text = await panelText(form); return /Needs you \(|Nothing blocks Submit/.test(text) ? text : null; }, 20000, `${name}: the checklist`).catch(() => panelText(form));
+    const panel = await until(async () => { const text = await panelText(form); return /Needs you \(|Nothing needs you/.test(text) ? text : null; }, 20000, `${name}: the checklist`).catch(() => panelText(form));
     cases[name] = { ms: Date.now() - started, requests: mock.answers - before, values, panel: (panel.match(/(ChatGPT did not answer[^.]*|Gemini did not answer[^.]*|Fill by hand: "[^"]+"[^.]*)/g) || []).slice(0, 2) };
     if (process.env.QTS_E2E_TRACE) console.log(`[trace] case ${name}: ${JSON.stringify(cases[name])}${cases[name].panel.length ? '' : ` panel: ${panel.replace(/^.*?Review/s, 'Review').slice(0, 700)}`}`);
     await shot(form, `e-${name}`);

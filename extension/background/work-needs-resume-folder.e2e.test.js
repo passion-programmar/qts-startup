@@ -12,7 +12,7 @@ test('Generation, Apply and Auto Apply ask for the QTS_Resume folder before star
   const server = http.createServer(async (req, res) => {
     for await (const _chunk of req) { /* drain */ }
     calls.push(req.url);
-    let reply = { success: true, features: { canUseApply: true, autoApplyParallelLimit: 2 }, rules: [], exclusions: [] };
+    let reply = { success: true, features: { canUseApply: true, canUseAutoApply: true, autoApplyParallelLimit: 2 }, rules: [], exclusions: [] };
     if (req.url === '/api/extension/generation/claim') reply = { success: true, job: null };
     if (req.url === '/api/extension/apply/claim') reply = { success: true, application: null };
     res.setHeader('Content-Type', 'application/json');

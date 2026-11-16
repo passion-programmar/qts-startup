@@ -1244,6 +1244,38 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
  * says was met on an earlier pass, and never a box outside the application. The résumé and cover
  * letter are prepared once per application and reused on every page.
  */
+/**
+ * The fields of a list that are still empty on the page (uploads left out). The others are marked
+ * seen, so a pass that answers only empty boxes does not read them again.
+ */
+async function onlyEmptyFields(tabId, fields, seen) {
+  if (!fields.length) return fields;
+  const empty = new Set(await inForm(tabId, (list) => list
+    .filter((field) => field.kind !== 'file' && globalThis.__qtsApplyForm.isUnanswered(field))
+    .map((field) => field.id), [fields]).catch(() => []));
+  for (const field of fields) if (!empty.has(field.id)) seen.add(field.id);
+  return fields.filter((field) => empty.has(field.id));
+}
+
+/**
+ * A job's PDF folder (relative to Downloads) as its full Windows path: from a file this Chrome saved
+ * there, else from any file saved in Downloads; "Downloads\..." when this Chrome saved nothing yet.
+ */
+async function fullDownloadsPath(folder) {
+  const relative = String(folder || '').replace(/\//g, '\\').replace(/\\+$/, '');
+  if (!relative) return '';
+  const pattern = relative.split('\\').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]');
+  try {
+    const [saved] = await chrome.downloads.search({ filenameRegex: `${pattern}[\\\\/]`, orderBy: ['-startTime'], limit: 1 });
+    const at = saved?.filename ? saved.filename.replace(/\//g, '\\').toLowerCase().indexOf(relative.toLowerCase()) : -1;
+    if (at >= 0) return saved.filename.replace(/\//g, '\\').slice(0, at + relative.length);
+    const [any] = await chrome.downloads.search({ filenameRegex: '[\\\\/]Downloads[\\\\/]', orderBy: ['-startTime'], limit: 1 });
+    const downloads = String(any?.filename || '').replace(/\//g, '\\').match(/^(.*?\\Downloads)\\/i);
+    if (downloads) return `${downloads[1]}\\${relative}`;
+  } catch { /* Downloads cannot be read: the short form below. */ }
+  return `Downloads\\${relative}`;
+}
+
 async function fillFormPage(tabId, application, keepAlive, step, options = {}) {
   const attempts = [];
   stepAttemptsByTab.set(tabId, attempts);
@@ -1446,7 +1478,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         });
       }
     }
-    const fresh = [];
+    let fresh = [];
     for (const field of fields || []) {
       if (field.hidden || field.disabled || seen.has(field.id)) continue;
       // The Manager's or the site's own text stays; a question met before is the Manager's now.
@@ -1464,6 +1496,8 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       }
       fresh.push(field);
     }
+    // Auto Apply's Ask AI: only boxes still empty (required or not); whatever holds a value stays.
+    if (options.onlyEmpty) fresh = await onlyEmptyFields(tabId, fresh, seen);
     if (!fresh.length) {
       // Complete before review: a required question still empty (an answer the site dropped, or
       // one asked before it was ready) gets one more round, as if new.
@@ -1971,13 +2005,18 @@ function waitForManager(attemptId) {
 }
 
 function answerManager(attemptId, decision) {
+  // Auto Apply: Submitted counts at any moment, also while QTS fills or the AI answers: that work stops.
+  // (A review waiting for the Manager takes it as its answer instead.)
+  if (decision.action === 'submitted' && !reviewWaiters.has(attemptId)) activeReviews.get(attemptId)?.onSubmitted?.(decision);
   const resolve = reviewWaiters.get(attemptId);
   if (!resolve) {
     const waiting = activeReviews.get(attemptId);
     // The assistant keeps any choice for its next wait; Auto Apply only one that ends the application.
-    if (!waiting?.assist && !(waiting?.auto && ENDING_ACTIONS.has(decision.action))) return false;
+    if (!waiting?.assist && !(waiting?.auto && (ENDING_ACTIONS.has(decision.action) || decision.action === 'submitted'))) return false;
     const kept = earlyDecisions.get(attemptId);
-    if (!kept || (ENDING_ACTIONS.has(decision.action) && !ENDING_ACTIONS.has(kept.action))) earlyDecisions.set(attemptId, decision);
+    // Submitted wins over any other choice, and nothing replaces it.
+    if (kept?.action === 'submitted') return true;
+    if (!kept || decision.action === 'submitted' || (ENDING_ACTIONS.has(decision.action) && !ENDING_ACTIONS.has(kept.action))) earlyDecisions.set(attemptId, decision);
     return true;
   }
   reviewWaiters.delete(attemptId);
@@ -2119,7 +2158,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       await chrome.tabs.create({ url: chrome.runtime.getURL(`settings/apply-pdfs.html?attemptId=${encodeURIComponent(msg.attemptId)}`) });
       return { ok: true };
     }
-    if (['recheck', 'reuse_answer'].includes(msg.action)) {
+    // Auto Apply panel: the job's PDF folder in Windows Explorer. When this Chrome did not download
+    // the PDFs, Downloads opens and the panel copies the folder's address instead.
+    if (msg.action === 'open_folder') {
+      const held = activeReviews.get(msg.attemptId);
+      if (!held?.resumeFolder) return { ok: false, error: 'This job has no PDF folder.' };
+      const opened = await openDownloadedFolder(held.resumeFolder).catch(() => ({ ok: false }));
+      if (opened.ok) return { ok: true };
+      await chrome.downloads.showDefaultFolder();
+      return { ok: false, notHere: true };
+    }
+    // Auto Apply panel: a required question filled with the profile's answer shown beside it.
+    if (msg.action === 'fill_field') {
+      const held = activeReviews.get(msg.attemptId);
+      if (!held?.auto || held.tabId !== sender.tab?.id || !held.fillRow) return { ok: false, error: 'This page does not own the application review.' };
+      return held.fillRow(String(msg.fieldId || ''));
+    }
+    if (['recheck', 'reuse_answer', 'ask_ai'].includes(msg.action)) {
       const held = activeReviews.get(msg.attemptId);
       if (!held || held.tabId !== sender.tab?.id) return { ok: false, error: 'This page does not own the application review.' };
     }
@@ -2424,9 +2479,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, change) => {
   adoptAssistContinuation(updated);
   for (const review of activeReviews.values()) {
     if (!tabsOf(review).has(tabId) || !review.panel) continue;
-    if (change.status === 'complete' && review.panel.mode === 'review') {
-      // The page changed under a review: the Manager clicked the site's Next (go on to the next
-      // step) or Submit (ask Yes/No) themselves.
+    // The page changed under a review: the Manager clicked the site's Next (go on to the next
+    // step) or Submit (ask Yes/No) themselves. Auto Apply never takes the site's Submit as one:
+    // its bid comes only from the panel's Submitted, so after the last step the panel just stays.
+    if (change.status === 'complete' && review.panel.mode === 'review' && !(review.auto && review.panel.final)) {
       answerManager(review.attemptId, { action: review.panel.final ? 'submitted' : 'continue_manual', noticed: true });
     }
     // Inject at document start when possible; the complete event retries if the page was not ready.
@@ -2678,6 +2734,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   };
   let notice = null;
   let currentStep = resume?.step || 1;
+  // Auto Apply: the Manager's Submitted, when it came while QTS was working (see review.onSubmitted).
+  let submitRequest = null;
   // Auto Apply: the panel and the launcher say while the AI is answering (and whether its tab is shown).
   if (auto) {
     application.onAi = ({ state, provider, focused }) => {
@@ -2698,6 +2756,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     candidate: ([application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate') + (application.candidate.managerCategory ? ` (${application.candidate.managerCategory})` : ''),
     job: application.job,
     resumeFolder: application.job.resumeFolder,
+    // Auto Apply's panel shows the folder's full path.
+    resumeFolderPath: auto ? await fullDownloadsPath(application.job.resumeFolder) : '',
     panel: null,
     followChildTabs: false,
     // Auto Apply: Cancel or Stop all before its review waits (panel and notice still being shown) is kept.
@@ -2705,6 +2765,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       tabClosed = true;
       aiAbortController?.abort();
       signalStop(application.apiFlow ? 'The application tab was closed. The job went back to the list, unchanged.' : 'The application tab was closed. QTS will retry it automatically.');
+    }, onSubmitted: (decision) => {
+      // The panel's Submitted, at any moment: whatever QTS is doing stops, and the bid is saved.
+      if (submitRequest) return;
+      submitRequest = decision;
+      aiAbortController?.abort();
+      signalStop('Submitted by the Manager.');
     } } : {}),
   };
   review.onTab = (opened) => {
@@ -2727,6 +2793,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       url: application.job.url,
     },
     resumeFolder: application.job.resumeFolder,
+    ...(auto ? { resumeFolderPath: review.resumeFolderPath, candidateName: [application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate', candidateLabel: application.candidate.managerCategory || '' } : {}),
     aiName: aiName(application),
     ...(auto ? { references: {
       profile: panelProfile(application.candidate),
@@ -2773,6 +2840,61 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   };
   let tab = null;
   let submitted = false;
+  /**
+   * Auto Apply: the panel's Submitted saves the bid at once (no Yes/No), at any step: the form's
+   * answers as they are, the job leaves the Jobs list, and the tab closes. When the application's
+   * hold ran out, the bid is saved from the job itself. Returns true when the bid is saved.
+   */
+  let submitting = null;
+  const finishSubmitted = (decision = {}) => (submitting ||= (async () => {
+    const current = Array.isArray(decision.answers) && decision.answers.length
+      ? decision.answers
+      : tab?.id != null ? await inForm(tab.id, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) : [];
+    const appliedNow = submittedAnswers(answersUsed, current || []);
+    const marked = await report('submitted', { appliedAnswers: appliedNow, learned: application.apiFlow ? [] : learnedAnswers(answersUsed, current || []) });
+    let saved = marked.success ? await report('result', { submitted: true, appliedAnswers: appliedNow }) : marked;
+    if (!saved.success && saved._httpStatus === 409) {
+      saved = await workerApiRequest('POST', '/api/extension/apply/save-bid', { jobId: application.job.id, appliedAnswers: appliedNow });
+    }
+    if (!saved.success) {
+      submitting = null;
+      return { ok: false, message: saved.message || 'QTS could not save the bid. Click Submitted again.' };
+    }
+    submitted = true;
+    await onProgress({ step: currentStep, phase: 'submitted' });
+    await onProgress({ step: currentStep, phase: 'ended', reason: 'yes' });
+    await clearManagerNotice(application.attemptId).catch(() => {});
+    if (tab?.id != null) await chrome.tabs.remove(tab.id).catch(() => {});
+    return { ok: true };
+  })());
+  // Auto Apply: the required questions the page shows now, each with the candidate's own answer
+  // (profile, documents, reusable answer) when QTS has one, for the panel's Copy and Fill.
+  const rowAnswers = new Map();
+  const requiredRows = async (tabId) => {
+    if (!auto || tabId == null) return [];
+    const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist()).catch(() => null);
+    const shown = (fields || []).filter((field) => field.required && !field.hidden && !field.disabled
+      && field.kind !== 'file' && !field.account && !field.unrelated).slice(0, 60);
+    rowAnswers.clear();
+    if (!shown.length) return [];
+    const resolved = self.__qtsApplyAnswers.resolveFields(shown, application.candidate, application.savedAnswers, {
+      exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job.coverLetterText,
+      experiences: application.profileDetails?.experiences || [], jobCompany: application.job.company || '', jobLocation: application.job.location || '',
+      normalApply: false, autoApply: Boolean(application.factSources),
+    });
+    return shown.map((field) => {
+      const answer = resolved.answers[field.id];
+      const usable = answer && !answer.file && ASSIST_SOURCES.has(answer.source);
+      if (usable) rowAnswers.set(field.id, { field, answer });
+      return { fieldId: field.id, label: field.label, kind: field.kind, value: usable ? answerText(answer.value) : '' };
+    });
+  };
+  review.fillRow = async (fieldId) => {
+    const row = rowAnswers.get(fieldId);
+    if (!row || tab?.id == null) return { ok: false, error: 'QTS has no answer for this question.' };
+    const outcome = await fillAndCheck(tab.id, row.field, row.answer, null, new Set()).catch((error) => ({ ok: false, error: error?.message }));
+    return outcome.ok ? { ok: true } : { ok: false, error: outcome.error || 'The site did not take it. Fill it by hand.' };
+  };
   const manualAccountStep = async (stepNumber, message, notice) => {
     return askManager(review, reviewState('review', {
       step: stepNumber, final: false, problems: [{ message, fieldId: null }],
@@ -2857,7 +2979,17 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     if (application.apiFlow && !resumedTab) await interruptible(self.__qtsAutoApplyApi.prepareSite(recipe.formUrl, application, siteOptions));
     tab = resumedTab || await openApplyTab(recipe.formUrl);
     review.tabId = tab.id;
+    // Auto Apply: the panel is on the job's page from the start (each page load shows it again), with
+    // Submitted at hand while QTS opens the page and finds the form.
+    if (auto) {
+      review.panel = reviewState('working', { step: currentStep, workingText: resumedTab ? 'Going on with this application…' : 'Opening the job page…' });
+      showReviewPanel(tab.id, review.panel).catch(() => {});
+    }
     if (!resumedTab) await interruptible(waitForTabComplete(tab.id, 45 * 1000));
+    if (auto && !resumedTab) {
+      review.panel = reviewState('working', { step: currentStep, workingText: 'Finding the application form…' });
+      await showReviewPanel(tab.id, review.panel).catch(() => {});
+    }
     if (application.apiFlow && !resumedTab) {
       const site = await confirmSiteAccount(1);
       if (site.decision) return await finishBeforeSubmit(site.decision);
@@ -2870,6 +3002,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
 
     let step = resume && resumedTab ? resume.step || 1 : 1;
     let fillAgain = false;
+    // Auto Apply: the Manager clicked Ask AI; the step's empty boxes go to the AI on the next fill.
+    let askAi = false;
     // A restart while the last step waited for the Manager: the page may already be past the form
     // (the Manager clicked Submit). Then nothing is filled or given back; the Manager says what happened.
     let checkResumedPage = Boolean(resume && resumedTab) && ['final', 'needs_you'].includes(resume.phase);
@@ -2877,6 +3011,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     // never filled again (what the Manager changed there stays).
     let revisitStep = false;
     for (;;) {
+      if (submitRequest) throw new ApplyStop('Submitted by the Manager.', { skip: false, keepTab: false });
       if (!(await isApplyOn())) throw new ApplyStop('Apply was cancelled.', { skip: false, keepTab: false });
       if (lostClaim) throw new ApplyStop('This Chrome lost the application to another one.', { skip: false, keepTab: false });
       // Auto Apply with APIs: the form may be on another site than the job page, and a sign-in may have
@@ -2916,7 +3051,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         const shown = await inForm(tab.id, () => globalThis.__qtsApplyForm.scanForm()).catch(() => []);
         if (!(shown || []).some((field) => !field.hidden && !field.disabled)) {
           filled = { used: {}, unresolved: [], pageGone: true, problems: [{ fieldId: null,
-            message: 'QTS restarted, and this page no longer shows the form. If you clicked the site\'s Submit, click "I submitted it". If not, go back to the form and click Fill again.' }] };
+            message: `QTS restarted, and this page no longer shows the form. If you clicked the site's Submit, click "${auto ? 'Submitted' : 'I submitted it'}". If not, go back to the form and click Fill again.` }] };
         } else {
           // The step was waiting for the Manager: nothing is filled again (what the Manager changed
           // stays); the review comes back with what is still empty.
@@ -2924,18 +3059,23 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
           filled = { used: {}, unresolved: [], problems: (empty || []).map((entry) => ({ message: `Still empty: "${entry.label}".`, fieldId: entry.id })) };
         }
       }
+      // Auto Apply asks the AI only when the Manager clicks Ask AI, and then only about the boxes
+      // still empty on this step (optional ones too); every other fill uses no AI.
+      const aiNow = askAi && application.autoAi !== false;
+      askAi = false;
       try {
         filled ||= application.apiFlow ? await interruptible(self.__qtsAutoApplyApi.fillPage(tab.id, application, keepAlive, step, {
-          noAi: application.autoAi === false,
-          // Only the Manager's own Fill again or Ask AI again touches questions already reviewed.
-          again: fillAgain,
-          stop: async () => lostClaim || !(await isApplyOn()),
+          noAi: !aiNow,
+          onlyEmpty: aiNow,
+          // Only the Manager's own Fill again touches questions already reviewed.
+          again: fillAgain && !aiNow,
+          stop: async () => lostClaim || submitRequest != null || !(await isApplyOn()),
           onPhase: async (workingText) => {
             review.panel = reviewState('working', { step, workingText });
             await showReviewPanel(tab.id, review.panel).catch(() => {});
           },
         })) : await interruptible(fillFormPage(tab.id, application, keepAlive, step, auto
-          ? { sources: ASSIST_SOURCES, noAi: application.autoAi === false, listUnresolved: true, stop: async () => lostClaim || !(await isApplyOn()) }
+          ? { sources: ASSIST_SOURCES, noAi: !aiNow, onlyEmpty: aiNow, listUnresolved: true, stop: async () => lostClaim || submitRequest != null || !(await isApplyOn()) }
           : undefined));
       } catch (error) {
         if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application') throw error;
@@ -3047,10 +3187,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       for (;;) {
         const listed = checklist?.summary(step);
         const needing = listed ? listed.needsYou : problems.length;
+        const required = auto ? await requiredRows(tab.id) : [];
         decision = await askManager(
           review,
           reviewState('review', {
             step, final, problems, problemFieldIds, reviewAll: reviewBeforeSubmit(), notice, savedChanges,
+            ...(auto ? { requiredRows: required } : {}),
             canAskAgain: (!auto || application.autoAi !== false) && filled.canAskAgain, aiOn: auto && application.autoAi !== false,
             ...(listed ? { checklist: listed } : {}),
           }),
@@ -3164,15 +3306,31 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         step += 1;
         continue;
       }
+      // Auto Apply: Ask AI fills the step's empty boxes with new AI answers; what is filled stays.
+      if (auto && (decision.action === 'ask_ai' || decision.action === 'ask_again')) {
+        checkBaselines.delete(step);
+        application.answerCache.clear();
+        application.aiRefused?.clear();
+        askAi = true;
+        continue;
+      }
       if (decision.action === 'fill_again' || decision.action === 'ask_again') {
         checkBaselines.delete(step);
         // Fill again reuses the answers (no ChatGPT for known questions); Ask again forgets ChatGPT's failures.
-        // Auto Apply with APIs keeps no answers: either one is a new AI request.
+        // Auto Apply with APIs keeps no answers.
         if (decision.action === 'ask_again' || application.apiFlow) {
           application.answerCache.clear();
           application.aiRefused?.clear();
         }
         fillAgain = true;
+        continue;
+      }
+      if (auto && decision.action === 'submitted') {
+        const saved = await finishSubmitted(decision);
+        if (saved.ok) return;
+        // Not saved: the review comes back with why, and Submitted can be clicked again.
+        notice = `Not saved: ${saved.message}`;
+        revisitStep = true;
         continue;
       }
       if (decision.action === 'submitted') {
@@ -3193,12 +3351,21 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       return await finishBeforeSubmit(decision.action);
     }
   } catch (error) {
+    // Auto Apply: the Manager clicked Submitted while QTS was working; that work stopped here.
+    if (auto && submitRequest && !submitted) {
+      const saved = await finishSubmitted(submitRequest);
+      if (saved.ok) return;
+      await notifyApply(`${application.job.company}: ${saved.message}`);
+    }
+    if (submitted && auto) return;
     if (submitted) {
       // After Submit the application waits for the Manager's Yes/No on the Jobs page.
       await notifyApply(`${application.job.company}: answer "Submitted successfully?" on the Jobs page.`);
       return;
     }
     const stop = error instanceof ApplyStop ? error : new ApplyStop(error instanceof Error ? error.message : 'Apply failed.', { skip: false });
+    // A Submitted QTS could not save: the page stays open, so the Manager can save it on the Jobs page.
+    if (auto && submitRequest) stop.keepTab = true;
     // Stopped while ChatGPT answered with its tab selected: the application's tab first (its own
     // closing below then shows the Manager's tab it was opened from).
     if (auto) await giveBackChatTab(application.attemptId).catch(() => {});
@@ -3243,6 +3410,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
 
   // Skip, Later, a closed tab, a lost claim, or Apply turned off during review: the job is given back.
   async function finishBeforeSubmit(action) {
+    // Auto Apply: Submitted while QTS was still reaching the form (a sign-in, a check): the bid.
+    if (auto && (action === 'submitted' || submitRequest)) {
+      const saved = await finishSubmitted(submitRequest || {});
+      if (saved.ok) return;
+      await notifyApply(`${application.job.company}: ${saved.message}`);
+    }
     // Auto Apply with APIs: whatever ended it here, the job goes back exactly as it was, with nothing recorded.
     const mode = application.apiFlow ? 'drop' : action === 'skip' && !auto ? 'skip' : 'later';
     const resumePending = auto && !application.apiFlow && (stopRequested || tabClosed || ['closed', 'cancel', 'lost'].includes(action));
@@ -4332,6 +4505,14 @@ async function processApplyQueue() {
         });
         if (autoApply) await noteCancelledJob(application.job.id);
         continue;
+      }
+      // Auto Apply answers only with Gemini and Groq (Super Admin's "Auto Apply with APIs"); the server
+      // refuses the claim otherwise, and an older server's job is given back untouched.
+      if (autoApply && application.autoApplyApi !== true) {
+        await self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id, apiFlow: true, releaseMode: 'drop' }, 'Auto Apply with APIs is not turned on for this Manager.');
+        await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
+        await notifyApply('Auto Apply is not turned on for you. Ask your Super Admin to turn on Auto Apply with APIs.');
+        break;
       }
       const resume = autoApply ? await self.__qtsAutoApply.resumeForClaimedJob(application) : null;
       track(testMode ? runApplication(application, recipe)
