@@ -43,29 +43,16 @@
   const SKILL_MAX_LENGTH = 40;
   const FONT_SCALE_MIN = 0.95;
   const FONT_SCALE_MAX = 1.15;
-  // A résumé that runs onto a partly used page is shrunk to one page fewer, text no smaller
-  // than MIN_TEXT_PT; otherwise it prints at normal size, within MAX_PAGES (fitToPages).
+  // Automatic fitting aims for two pages, then retains the reduced layout on any extra pages.
   const MIN_TEXT_PT = 10.5;
-  // The denser layout tried before any text shrinks (shrinkToFit). Spacing and sizes only: the
-  // text and its order, which ATS parsers read, stay the same. Each value only ever lowers.
-  const DENSE_LAYOUT = Object.freeze({
-    "--leading-body": "1.25",
-    "--text-name": "22pt",
-    "--space-item": "6pt",
-    "--space-title": "3pt",
-    "--summary-pad-block": "4pt",
-    "--summary-pad-inline": "8pt",
-  });
   // Page margins live on the page itself (the page view measures with them) and in @page,
   // which cannot read custom properties.
   const BASE_MARGINS_MM = Object.freeze({ top: 15, inline: 16, bottom: 10 });
-  const DENSE_MARGINS_MM = Object.freeze({ top: 12, inline: 14, bottom: 10 });
+  const FIT_SIDE_MARGIN_MM = 14;
   // The compact density's spacing (base.css section 12), kept no larger than a Manager's own values.
   const COMPACT_TOKENS = ["--leading-body", "--space-header", "--space-section", "--space-title", "--space-item", "--space-bullet"];
   // font-size too: body text takes its size from <body> (base.css), so the résumé needs its own.
-  const SHRINK_PROPERTIES = [...new Set([
-    "--text-bullet", "--text-body", "--text-item", "font-size", ...Object.keys(DENSE_LAYOUT), ...COMPACT_TOKENS,
-  ])];
+  const SHRINK_PROPERTIES = ["--text-bullet", "--text-body", "font-size", ...COMPACT_TOKENS];
 
   // One-time layout settings from the Resume page (src/app/pdf/layout-settings.ts), in the
   // document's theme: [token, unit, min, max]. They replace the template's values for this render.
@@ -103,7 +90,7 @@
   };
 
   let DOCUMENT = document.body.dataset.document === "cover-letter" ? "cover-letter" : "resume";
-  let MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
+  const COVER_LETTER_PAGE_LIMIT = 1;
 
   const FALLBACK_SETTINGS = {
     headerAlign: "start",
@@ -986,18 +973,14 @@
     warnings.push(`The contact line is very long: printed at ${points}pt to stay on one line.`);
   }
 
-  /* density "auto" (default), résumé: a page that is only partly used is pulled back.
+  /* density "auto" (default), résumé: aim for two pages unless a target was selected.
        1. Measure at normal size: N pages.
-       2. If N > 1, try to fit one page fewer (N − 1, at most MAX_PAGES) with a
-          controlled shrink, measuring after each step: compact spacing; the
-          denser layout (DENSE_LAYOUT, DENSE_MARGINS_MM: line height, margins,
-          name, gaps, summary box); bullets to 10.5pt; then body and role text
-          down by 0.5pt steps. Text never goes below minTextPt (default MIN_TEXT_PT;
-          the Resume page can set it, and its page target, once per render).
-       3. If it still does not fit, undo it all: normal sizes on N pages.
-       So 1.1 pages of content print on 1 page, 2.1 on 2, and 2.6 on 3 at normal size.
-       Over MAX_PAGES even fully reduced: it prints reduced, on as many pages as
-       it needs, with a warning; it is not rejected. Content is never cut.
+       2. If N exceeds the target, first reduce body and bullets to 10.5pt
+          (or the Manager's higher fitting minimum). Then try 6pt section gaps,
+          then 1.25 line height, keeping 1pt bullet gaps; then 14mm side margins.
+       3. If it still does not fit, retain those reductions and print all pages.
+          No further shrinking, rewriting, or content removal.
+       Resumes already within two pages keep their normal sizes with the auto target.
      A cover letter only tightens its spacing when it runs past its one page. */
   function fitToPages(article, density, warnings) {
     // The app's own preview (direct render) has no page view to measure with.
@@ -1006,26 +989,21 @@
     if (density === "compact") keepManagerValues(article);
     let pages = countPages(article);
     if (density === "auto" && DOCUMENT === "resume" && pages > 1) {
-      // The page target: "auto" pulls a partly used last page back (one page fewer); a number
-      // (Resume page setting) aims for that many pages.
-      const target = fitTarget === "auto" ? Math.min(pages - 1, MAX_PAGES) : Number(fitTarget);
+      // A numeric Manager setting overrides the default two-page goal.
+      const target = fitTarget === "auto" ? 2 : Number(fitTarget);
       if (pages > target) {
-        const fitted = shrinkToFit(article, countPages, target);
-        // Over MAX_PAGES even fully reduced: it prints reduced, on as many pages as it needs
-        // (not rejected). Otherwise a résumé that did not reach the target keeps normal sizes.
-        if (fitted != null) pages = fitted;
-        else if (pages > MAX_PAGES) pages = countPages(article);
-        else pages = normalSize(article, countPages);
+        pages = shrinkToFit(article, countPages, target);
+        if (pages > target) {
+          warnings.push(`The resume needs about ${pages} pages after fitting to the ${target}-page target. All content is kept on ${pages} pages with the reduced settings.`);
+        }
       }
-    } else if (density === "auto" && pages > MAX_PAGES) {
+    } else if (density === "auto" && DOCUMENT === "cover-letter" && pages > COVER_LETTER_PAGE_LIMIT) {
       article.classList.add("doc--compact");
       keepManagerValues(article);
       pages = countPages(article);
     }
-    if (pages > MAX_PAGES) {
-      warnings.push(DOCUMENT === "resume"
-        ? `The resume needs about ${pages} pages even with reduced spacing and text; it prints on ${pages} pages.`
-        : `The cover letter needs about ${pages} pages and exceeds the ${MAX_PAGES}-page limit.`);
+    if (DOCUMENT === "cover-letter" && pages > COVER_LETTER_PAGE_LIMIT) {
+      warnings.push(`The cover letter needs about ${pages} pages and exceeds the ${COVER_LETTER_PAGE_LIMIT}-page limit.`);
     }
     return pages;
   }
@@ -1033,7 +1011,7 @@
   // Back to the template's normal sizes and spacing (and the Manager's own values); returns the
   // page count.
   function normalSize(article, countPages) {
-    article.classList.remove("doc--compact", "doc--small-bullets");
+    article.classList.remove("doc--compact");
     SHRINK_PROPERTIES.forEach((name) => article.style.removeProperty(name));
     setDenseMargins(false);
     return countPages(article);
@@ -1059,13 +1037,14 @@
     }
   }
 
-  // The denser page margins (never wider than the current ones): the page tokens (what the page
+  // Narrower side margins (never wider than saved ones), preserving top and bottom:
+  // the page tokens (what the page
   // view measures) and a matching @page rule (what Chrome prints), added after the runtime style
   // so it has the last word. Off: back to this render's margins.
   function setDenseMargins(on) {
     styleRoot.querySelector("#resume-dense-margins")?.remove();
     const margins = on
-      ? Object.fromEntries(Object.entries(marginsMm).map(([side, mm]) => [side, Math.min(mm, DENSE_MARGINS_MM[side])]))
+      ? { ...marginsMm, inline: Math.min(marginsMm.inline, FIT_SIDE_MARGIN_MM) }
       : marginsMm;
     for (const side of ["top", "inline", "bottom"]) {
       if (on || customMargins) root.style.setProperty(`--page-margin-${side}`, `${margins[side]}mm`);
@@ -1078,9 +1057,10 @@
     styleRoot.append(style);
   }
 
-  // The controlled shrink, one step at a time; the page count once it fits within
-  // `limit` pages, or null (sizes left shrunk) when even the smallest step does not.
-  // Every step only lowers values, so a Manager's own smaller settings are kept.
+  // The controlled shrink, one step at a time; returns the resulting page count,
+  // including extra pages when the approved reductions cannot reach `limit`.
+  // Text, section gaps and line height only decrease; automatic fitting keeps
+  // the extra gap between bullets at 1pt for readability.
   function shrinkToFit(article, countPages, limit) {
     normalSize(article, countPages);
     const tokenPt = (name) => tokenNumber(article, name) || 0;
@@ -1088,40 +1068,32 @@
       const pages = countPages(article);
       return pages <= limit ? pages : null;
     };
-    // Sizes are multiplied by --font-scale (a few templates lower it in compact
-    // density), so the floor is set on the token that prints at minTextPt.
-    const floorToken = () => minTextPt / (tokenPt("--font-scale") || 1);
-
-    article.classList.add("doc--compact");
-    keepManagerValues(article);
+    // First try smaller body and bullet text with normal spacing and margins.
+    // Respect a higher saved minimum and never enlarge already smaller text.
+    const initialScale = tokenPt("--font-scale") || 1;
+    const firstTextSize = Math.max(MIN_TEXT_PT, minTextPt) / initialScale;
+    lowerTo(article, { "--text-body": `${firstTextSize}pt`, "--text-bullet": `${firstTextSize}pt` });
+    article.style.setProperty("font-size", `calc(${tokenPt("--text-body")}pt * var(--font-scale))`);
     let pages = fits();
     if (pages != null) return pages;
 
-    // Denser layout, text sizes unchanged: line height, page margins, name, gaps, summary box.
-    lowerTo(article, DENSE_LAYOUT);
+    // Tighten sections first, without changing line height or page margins.
+    // Keep the selected values on the article for the remaining fitting steps.
+    article.style.setProperty("--space-section", `${Math.min(tokenPt("--space-section"), 6)}pt`);
+    article.style.setProperty("--space-bullet", "1pt");
+    pages = fits();
+    if (pages != null) return pages;
+
+    // Only tighten the lines if the smaller section gaps were not enough.
+    article.style.setProperty("--leading-body", String(Math.min(tokenPt("--leading-body"), 1.25)));
+    pages = fits();
+    if (pages != null) return pages;
+
+    // Widen the content area only after font and spacing reductions were insufficient.
+    // Keep the page tokens and print rule in sync, then measure before any further changes.
     setDenseMargins(true);
-    pages = fits();
-    if (pages != null) return pages;
-
-    article.classList.add("doc--small-bullets");
-    lowerTo(article, { "--text-bullet": `${Math.max(floorToken(), minTextPt)}pt` });
-    pages = fits();
-    if (pages != null) return pages;
-
-    const body = tokenPt("--text-body");
-    const item = tokenPt("--text-item");
-    for (let step = 1; ; step += 1) {
-      const floor = floorToken();
-      const nextBody = Math.min(body, Math.max(floor, body - 0.5 * step));
-      const nextItem = Math.min(item, Math.max(floor, item - 0.5 * step));
-      article.style.setProperty("--text-body", `${nextBody}pt`);
-      article.style.setProperty("font-size", `calc(${nextBody}pt * var(--font-scale))`);
-      article.style.setProperty("--text-item", `${nextItem}pt`);
-      pages = fits();
-      if (pages != null) return pages;
-      if (nextBody <= floor && nextItem <= floor) return null;
-      if (nextBody === body && nextItem === item) return null; // already at or under the floor
-    }
+    // This is the last reduction. Preserve every page and stop even when still over target.
+    return countPages(article);
   }
 
   /* ---------- Filling pages ----------
@@ -1239,7 +1211,6 @@
     if (context?.mount && context?.root && context?.styleRoot) {
       directRenderMode = true;
       DOCUMENT = context.documentType === "cover-letter" ? "cover-letter" : "resume";
-      MAX_PAGES = DOCUMENT === "resume" ? 3 : 1;
       root = context.root;
       mount = context.mount;
       styleRoot = context.styleRoot;
@@ -1247,6 +1218,8 @@
     }
     const run = ++renderCount;
     root.dataset.renderState = "rendering";
+    // Apply document-specific defaults before measuring text or fitting pages.
+    root.dataset.document = DOCUMENT;
     currentData = rawData;
 
     const data = normalise(rawData);

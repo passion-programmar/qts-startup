@@ -297,6 +297,7 @@ export function PdfWorkspace({
               </select>
             </label>
             <LayoutSettingsPanel
+              documentType={activeDocument}
               form={layoutForm}
               message={styleMessage}
               onChange={(next) => {

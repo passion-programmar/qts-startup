@@ -3,11 +3,13 @@ import path from "node:path";
 import type {
   CoverLetterDocument,
   DocumentBullet,
+  DocumentTheme,
   PdfPackage,
   ResumeDocument,
 } from "@/app/pdf/document-data";
 import { DocumentPageLimitError } from "@/app/pdf/document-page-limit-error";
 import { orderResumeSections } from "@/app/pdf/resume-sections";
+import { resumePdfLayouts, type ResumePdfLayout } from "@/app/pdf/resume-pdf-layout";
 import {
   pdfTemplateDesigns,
   type PdfTemplate,
@@ -33,6 +35,7 @@ type PdfWriter = {
   ): void;
   contactLine(text: string, size?: number): void;
   space(amount: number): void;
+  pageCount(): number;
   save(): Promise<Uint8Array>;
 };
 
@@ -122,7 +125,7 @@ export async function renderPdfPackage(
     sections: orderResumeSections(data.resume.sections, template),
   };
   const [resume, coverLetter] = await Promise.all([
-    renderResumePdf(resumeForTemplate, template),
+    renderResumePdf(resumeForTemplate, template, data.theme),
     renderCoverLetterPdf(data.coverLetter, template),
   ]);
   return { resume, coverLetter };
@@ -131,9 +134,20 @@ export async function renderPdfPackage(
 async function renderResumePdf(
   document: ResumeDocument,
   template: PdfTemplate | LegacyPdfTemplate,
+  theme?: DocumentTheme,
 ): Promise<Uint8Array> {
-  // No page limit for the résumé (as in the templates): it uses as many pages as it needs.
-  const pdf = await createWriter(template, Infinity, containsRomanianCharacters(document));
+  const { target, layouts } = resumePdfLayouts(theme, template);
+  for (const [index, layout] of layouts.entries()) {
+    const pdf = await createWriter(template, Infinity, containsRomanianCharacters(document), layout);
+    drawResume(document, template, pdf);
+    // Count actual rendered pages after each stage. The last stage always prints
+    // in full, even if the target cannot be reached without removing content.
+    if (pdf.pageCount() <= target || index === layouts.length - 1) return pdf.save();
+  }
+  throw new Error("No resume layout was available.");
+}
+
+function drawResume(document: ResumeDocument, template: PdfTemplate | LegacyPdfTemplate, pdf: PdfWriter): void {
   const headline = document.candidate.headline ?? document.targetRole;
   const contactParts = template === "flowcv" ? [
     document.candidate.location,
@@ -184,7 +198,6 @@ async function renderResumePdf(
       );
     });
   }
-  return pdf.save();
 }
 
 async function renderCoverLetterPdf(
@@ -225,6 +238,7 @@ async function createWriter(
   template: PdfTemplate | LegacyPdfTemplate,
   maxPages: number,
   needsRomanianFallback: boolean,
+  layout?: ResumePdfLayout,
 ): Promise<PdfWriter> {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const document = await PDFDocument.create();
@@ -271,21 +285,27 @@ async function createWriter(
       italic: romanianItalic,
     };
   }
-  const width = 595.28;
-  const height = 841.89;
+  const width = layout?.paper === "letter" ? 612 : 595.28;
+  const height = layout?.paper === "letter" ? 792 : 841.89;
   const accent = rgb(...design.accent);
   const ink = rgb(...design.ink);
   const muted = rgb(...design.muted);
-  const margin = design.margin;
-  const bodyLeading = isFlowCv ? 13.5 : 13.8;
-  const bulletLeading = isFlowCv ? 13.5 : 13;
+  const mmToPt = 72 / 25.4;
+  const margin = layout ? layout.marginSide * mmToPt : design.margin;
+  const marginTop = layout ? layout.marginTop * mmToPt : design.margin;
+  const marginBottom = layout ? layout.marginBottom * mmToPt : design.margin;
+  const contentHeight = height - marginTop - marginBottom;
+  const bodyLeading = layout ? layout.bodySize * layout.lineHeight : isFlowCv ? 13.5 : 13.8;
+  const bulletLeading = layout ? layout.bulletSize * layout.lineHeight : isFlowCv ? 13.5 : 13;
+  const skillHeadingLeading = layout ? layout.itemSize * layout.lineHeight : 13.5;
   const isLedgerResume = template === "ledger" && maxPages > 1;
-  const bulletGap = isFlowCv ? 0 : isLedgerResume ? 1.5 : 2.5;
-  const entryGap = isFlowCv ? 7 : isLedgerResume ? 9 : design.compact ? 10 : 12;
-  const sectionBefore = isFlowCv ? 14.25 : isLedgerResume ? 8 : design.compact ? 8 : 10;
-  const sectionAfter = isFlowCv ? 8.5 : isLedgerResume ? 7 : design.compact ? 8 : 9;
+  const bulletGap = layout?.bulletGap ?? (isFlowCv ? 0 : isLedgerResume ? 1.5 : 2.5);
+  const entryGap = layout?.itemGap ?? (isFlowCv ? 7 : isLedgerResume ? 9 : design.compact ? 10 : 12);
+  const sectionBefore = layout?.sectionGap ?? (isFlowCv ? 14.25 : isLedgerResume ? 8 : design.compact ? 8 : 10);
+  const sectionAfter = layout?.titleGap ?? (isFlowCv ? 8.5 : isLedgerResume ? 7 : design.compact ? 8 : 9);
   let page = document.addPage([width, height]);
-  let y = height - margin;
+  // PDF text positions are baselines, whereas CSS margins start above the glyphs.
+  let y = height - marginTop - (layout ? layout.nameSize : 0);
   const clean = (text: string) => isFlowCv
     ? text.normalize("NFC")
       .replaceAll("â€“", "–")
@@ -344,14 +364,14 @@ async function createWriter(
     }
   };
   const ensure = (needed = 18) => {
-    if (y < margin + needed) {
+    if (y < marginBottom + Math.min(needed, contentHeight)) {
       if (document.getPageCount() >= maxPages) {
         throw new DocumentPageLimitError(maxPages === 1
           ? "The cover letter exceeds one A4 page. Shorten its paragraphs."
           : `The résumé exceeds ${maxPages} A4 pages. Its content was not truncated.`);
       }
       page = document.addPage([width, height]);
-      y = height - margin;
+      y = height - marginTop - (layout ? Math.max(layout.itemSize, layout.bodySize, layout.bulletSize) : 0);
     }
   };
   const wrap = (
@@ -415,7 +435,7 @@ async function createWriter(
         font: regular,
         color: color === "gray" ? muted : ink,
       });
-      y -= isFlowCv ? bodyLeading : size === 10 ? bodyLeading : Math.max(size * 1.35, size + 3);
+      y -= layout ? size * layout.lineHeight : isFlowCv ? bodyLeading : size === 10 ? bodyLeading : Math.max(size * 1.35, size + 3);
     }
   };
   const line = (text: string, size = 10, color: "black" | "gray" = "black") => {
@@ -540,6 +560,7 @@ async function createWriter(
     });
   };
   const header = (title: string, detail: string, size = 19, contact = "") => {
+    size = layout?.nameSize ?? size;
     if (template === "flowcv") {
       const nameSize = 22;
       const headlineSize = 16;
@@ -629,8 +650,11 @@ async function createWriter(
       y -= 16;
       return;
     }
-    const headerTop = y + 16;
-    const blockHeight = detail || contact ? 68 : 48;
+    const headerTop = y + (layout ? size : 16);
+    const blockHeight = layout
+      ? size * 2 + 9 + wrap(detail, layout.headlineSize, width - margin * 2).length * layout.headlineSize * layout.lineHeight
+        + (contact ? layout.contactSize * layout.lineHeight : 0) + 4
+      : detail || contact ? 68 : 48;
     const darkHeader = design.header === "band" || design.header === "card";
     const headerFill = template === "amber-crest"
         ? rgb(.07, .12, .22)
@@ -664,21 +688,22 @@ async function createWriter(
       maxWidth: width - margin * 2,
     });
     y -= size + 9;
-    for (const part of wrap(detail, 9, width - margin * 2)) {
-      const detailWidth = measureText(part, 9);
+    const headlineSize = layout?.headlineSize ?? 9;
+    for (const part of wrap(detail, headlineSize, width - margin * 2)) {
+      const detailWidth = measureText(part, headlineSize);
       drawText(part, {
         x: centered ? Math.max(margin, (width - detailWidth) / 2) : margin,
         y,
-        size: 9,
+        size: headlineSize,
         font: regular,
         color: darkHeader ? rgb(.92, .94, .97) : muted,
       });
-      y -= 12;
+      y -= layout ? headlineSize * layout.lineHeight : 12;
     }
     if (contact) {
       // A card stops 10pt into the margin; the line stays 4pt inside it.
-      drawContact(contact, 9, darkHeader ? rgb(.92, .94, .97) : muted);
-      y -= 12;
+      drawContact(contact, layout?.contactSize ?? 9, darkHeader ? rgb(.92, .94, .97) : muted);
+      y -= layout ? layout.contactSize * layout.lineHeight : 12;
     }
     if (design.header === "rule" || design.header === "double-rule") {
       const ruleCount = design.header === "double-rule" ? 2 : 1;
@@ -687,18 +712,19 @@ async function createWriter(
       }
       y -= ruleCount === 2 ? 8 : 5;
     }
-    y -= design.compact ? 5 : 9;
+    y -= layout?.headerGap ?? (design.compact ? 5 : 9);
     if (design.header === "band" || design.header === "soft" || design.header === "card") {
       y = Math.min(y, headerTop - blockHeight - 8);
     }
   };
-  const paragraph = (text: string, size = isFlowCv ? 11 : 10) => line(text, size);
+  const paragraph = (text: string, size = layout?.bodySize ?? (isFlowCv ? 11 : 10)) => line(text, size);
   const section = (text: string, minimumContentHeight = 42) => {
     y -= sectionBefore;
-    ensure(24 + minimumContentHeight);
-    const layout = design.sectionHeadingLayout;
+    ensure((layout ? layout.sectionSize + sectionAfter + 4 : 24) + minimumContentHeight);
+    const sectionLayout = design.sectionHeadingLayout;
     const label = clean(text.toUpperCase());
-    const labelSize = isFlowCv ? 14 : 10.5;
+    const labelSize = layout?.sectionSize ?? (isFlowCv ? 14 : 10.5);
+    const nextTextSize = layout ? Math.max(layout.bodySize, layout.bulletSize, layout.itemSize) : 0;
     const labelWidth = measureText(label, labelSize, bold);
     if (isFlowCv) {
       drawText(label, {
@@ -717,7 +743,7 @@ async function createWriter(
       y -= 22.5;
       return;
     }
-    if (layout === "centered-rules") {
+    if (sectionLayout === "centered-rules") {
       const center = width / 2;
       const gap = 8;
       const labelLeft = center - labelWidth / 2;
@@ -741,24 +767,24 @@ async function createWriter(
         font: bold,
         color: ink,
       });
-      y -= 10.5 + sectionAfter;
+      y -= labelSize + sectionAfter;
       return;
     }
-    if (layout === "band" || layout === "card") {
-      page.drawRectangle({ x: margin, y: y - 4, width: width - margin * 2, height: 18, color: layout === "card" ? rgb(.94, .95, .97) : accent });
-    } else if (layout === "pill") {
-      page.drawRectangle({ x: margin, y: y - 4, width: labelWidth + 22, height: 18, color: rgb(.91, .94, .97) });
-    } else if (layout === "marker") {
+    if (sectionLayout === "band" || sectionLayout === "card") {
+      page.drawRectangle({ x: margin, y: y - 4, width: width - margin * 2, height: Math.max(18, labelSize + 5), color: sectionLayout === "card" ? rgb(.94, .95, .97) : accent });
+    } else if (sectionLayout === "pill") {
+      page.drawRectangle({ x: margin, y: y - 4, width: labelWidth + 22, height: Math.max(18, labelSize + 5), color: rgb(.91, .94, .97) });
+    } else if (sectionLayout === "marker") {
       page.drawRectangle({ x: margin, y: y - 2, width: 5, height: 14, color: accent });
     }
     drawText(label, {
-      x: margin + (layout === "marker" ? 12 : layout === "pill" ? 10 : 0),
+      x: margin + (sectionLayout === "marker" ? 12 : sectionLayout === "pill" ? 10 : 0),
       y,
       size: labelSize,
       font: bold,
-      color: layout === "band" ? rgb(1, 1, 1) : accent,
+      color: sectionLayout === "band" ? rgb(1, 1, 1) : accent,
     });
-    if (layout === "left-full-rule") {
+    if (sectionLayout === "left-full-rule") {
       page.drawLine({
         start: { x: Math.min(width - margin, margin + labelWidth + 12), y: y + 3 },
         end: { x: width - margin, y: y + 3 },
@@ -768,21 +794,24 @@ async function createWriter(
       y -= labelSize + sectionAfter;
       return;
     }
-    if (layout === "compact-underline") {
+    if (sectionLayout === "compact-underline") {
       page.drawLine({
         start: { x: margin, y: y - 4 },
         end: { x: Math.min(width - margin, margin + labelWidth + 16), y: y - 4 },
         thickness: 1.1,
         color: accent,
       });
-      y -= labelSize + sectionAfter;
+      y -= layout ? 4 + sectionAfter + nextTextSize : labelSize + sectionAfter;
       return;
     }
-    y -= 14;
-    if (layout === "rule" || layout === "double-rule") {
-      page.drawLine({ start: { x: margin, y: y + 3 }, end: { x: width - margin, y: y + 3 }, thickness: isFlowCv ? 1.5 : 1, color: accent });
-      if (layout === "double-rule") page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: .4, color: accent });
-      y -= layout === "double-rule" ? sectionAfter + 3 : sectionAfter;
+    const titleBaseline = y;
+    y -= layout ? labelSize + 3.5 : 14;
+    if (sectionLayout === "rule" || sectionLayout === "double-rule") {
+      const ruleY = layout ? titleBaseline - 4 : y + 3;
+      page.drawLine({ start: { x: margin, y: ruleY }, end: { x: width - margin, y: ruleY }, thickness: isFlowCv ? 1.5 : 1, color: accent });
+      if (sectionLayout === "double-rule") page.drawLine({ start: { x: margin, y: ruleY - 3 }, end: { x: width - margin, y: ruleY - 3 }, thickness: .4, color: accent });
+      if (layout) y = ruleY - (sectionLayout === "double-rule" ? 3 : 0) - sectionAfter - nextTextSize;
+      else y -= sectionLayout === "double-rule" ? sectionAfter + 3 : sectionAfter;
     } else {
       y -= sectionAfter;
     }
@@ -794,10 +823,10 @@ async function createWriter(
     bullets: string[] = [],
     hasFollowingEntry = false,
   ) => {
-    const titleSize = isFlowCv ? 11 : 10.5;
-    const detailSize = isFlowCv ? 11 : 9;
-    const titleLeading = isFlowCv ? 13.5 : 14.2;
-    const bulletSize = isFlowCv ? 11 : 9.5;
+    const titleSize = layout?.itemSize ?? (isFlowCv ? 11 : 10.5);
+    const detailSize = layout?.metaSize ?? (isFlowCv ? 11 : 9);
+    const titleLeading = layout ? titleSize * layout.lineHeight : isFlowCv ? 13.5 : 14.2;
+    const bulletSize = layout?.bulletSize ?? (isFlowCv ? 11 : 9.5);
     const cleanedDate = dateRange
       ? clean(dateRange).replace(/\s+(?:\?|-)\s+/g, " – ")
       : "";
@@ -821,16 +850,21 @@ async function createWriter(
     if (titleLines.length || cleanedDate) {
       const rowY = y;
       titleLines.forEach((part, index) => {
+        if (layout) ensure(titleLeading);
         drawText(part, {
           x: margin,
-          y: rowY - index * titleLeading,
+          y: layout ? y : rowY - index * titleLeading,
           size: titleSize,
           font: template === "vellum" ? regular : bold,
           color: ink,
           maxWidth: index === 0 ? titleWidth : width - margin * 2,
         });
+        if (layout && index === 0 && cleanedDate) {
+          drawText(cleanedDate, { x: width - margin - dateWidth, y, size: detailSize, font: regular, color: muted });
+        }
+        if (layout) y -= titleLeading;
       });
-      if (cleanedDate) {
+      if (cleanedDate && (!layout || !titleLines.length)) {
         drawText(cleanedDate, {
           x: width - margin - dateWidth,
           y: rowY,
@@ -839,10 +873,11 @@ async function createWriter(
           color: template === "flowcv" ? ink : muted,
         });
       }
-      y -= Math.max(1, titleLines.length) * titleLeading;
+      if (!layout || !titleLines.length) y -= Math.max(1, titleLines.length) * titleLeading;
     }
     if (subheading) {
       for (const part of wrap(subheading, detailSize, width - margin * 2)) {
+        if (layout) ensure(detailSize * layout.lineHeight);
         drawText(part, {
           x: margin,
           y,
@@ -850,7 +885,7 @@ async function createWriter(
           font: template === "flowcv" ? italic : regular,
           color: template === "flowcv" ? ink : muted,
         });
-        y -= isFlowCv ? 13.5 : 12.2;
+        y -= layout ? detailSize * layout.lineHeight : isFlowCv ? 13.5 : 12.2;
       }
       if (!isFlowCv) y -= 3.5;
     } else if (titleLines.length || cleanedDate) {
@@ -888,7 +923,7 @@ async function createWriter(
     if (hasFollowingEntry) y -= entryGap;
   };
   const drawFlatSkills = (items: string[]) => {
-    const size = 9.5;
+    const size = layout?.bulletSize ?? 9.5;
     const maxX = width - margin;
     const startX = margin;
     let x = startX;
@@ -906,8 +941,8 @@ async function createWriter(
     y -= bulletLeading;
   };
   const skillsHeight = (items: ResumeSectionItem[]) => {
-    const measuredSkillSize = isFlowCv ? 11 : 9.5;
-    const measuredHeadingSize = isFlowCv ? 11 : 10;
+    const measuredSkillSize = layout?.bulletSize ?? (isFlowCv ? 11 : 9.5);
+    const measuredHeadingSize = layout?.itemSize ?? (isFlowCv ? 11 : 10);
     const measuredGroupGap = isFlowCv ? 0 : 4;
     const groups = items.map((item) => ({
       heading: item.heading?.replaceAll("**", "").trim() ?? "",
@@ -931,7 +966,7 @@ async function createWriter(
       }
       return rows * (bulletLeading + bulletGap);
     }
-    const layout = design.skillsLayout === "flat-inline"
+    const skillsLayout = design.skillsLayout === "flat-inline"
       ? "grouped-inline"
       : design.skillsLayout;
     const measureStackedGroup = (group: (typeof groups)[number], availableWidth: number) => {
@@ -940,10 +975,10 @@ async function createWriter(
         : 0;
       const body = group.skills.join(", ");
       const bodyLines = body ? wrap(body, measuredSkillSize, availableWidth).length : 0;
-      return headingLines * 13.5 + (headingLines && bodyLines ? 4 : 0) + bodyLines * bulletLeading + 10;
+      return headingLines * skillHeadingLeading + (headingLines && bodyLines ? 4 : 0) + bodyLines * bulletLeading + 10;
     };
     let measured: number;
-    if (layout === "grouped-columns" && groups.length > 1) {
+    if (skillsLayout === "grouped-columns" && groups.length > 1) {
       const columnWidth = (contentWidth - 24) / 2;
       const heights = groups.map((group) => measureStackedGroup(group, columnWidth));
       measured = Number.POSITIVE_INFINITY;
@@ -953,7 +988,7 @@ async function createWriter(
           heights.slice(index).reduce((sum, value) => sum + value, 0),
         ));
       }
-    } else if (layout === "grouped-stacked") {
+    } else if (skillsLayout === "grouped-stacked") {
       measured = groups.reduce(
         (sum, group) => sum + measureStackedGroup(group, contentWidth),
         0,
@@ -974,12 +1009,12 @@ async function createWriter(
             contentWidth - continuationInset,
           ).length) * bulletLeading + measuredGroupGap;
         }
-        return sum + wrap(group.heading, measuredHeadingSize, contentWidth, bold).length * 13.5
+        return sum + wrap(group.heading, measuredHeadingSize, contentWidth, bold).length * skillHeadingLeading
           + (body ? 4 + wrap(body, measuredSkillSize, contentWidth).length * bulletLeading : 0)
           + measuredGroupGap;
       }, 0);
     }
-    return Math.min(measured, height - margin * 2 - 60);
+    return Math.min(measured, contentHeight - 60);
   };
   const skills = (items: ResumeSectionItem[]) => {
     const groups = items.map((item) => ({
@@ -998,12 +1033,12 @@ async function createWriter(
       return;
     }
 
-    const layout = design.skillsLayout === "flat-inline"
+    const skillsLayout = design.skillsLayout === "flat-inline"
       ? "grouped-inline"
       : design.skillsLayout;
     const contentWidth = width - margin * 2;
-    const skillSize = isFlowCv ? 11 : 9.5;
-    const groupHeadingSize = isFlowCv ? 11 : 10;
+    const skillSize = layout?.bulletSize ?? (isFlowCv ? 11 : 9.5);
+    const groupHeadingSize = layout?.itemSize ?? (isFlowCv ? 11 : 10);
     const groupGap = isFlowCv ? 0 : 10;
     const contentGap = isFlowCv ? 0 : 4;
 
@@ -1015,7 +1050,7 @@ async function createWriter(
       const bodyLines = groupBody(group)
         ? wrap(groupBody(group), skillSize, availableWidth).length
         : 0;
-      return headingLines * 13.5
+      return headingLines * skillHeadingLeading
         + (headingLines && bodyLines ? contentGap : 0)
         + bodyLines * bulletLeading
         + groupGap;
@@ -1026,16 +1061,16 @@ async function createWriter(
           ? wrap(group.heading, groupHeadingSize, contentWidth, bold)
           : [];
         const bodyParts = wrap(groupBody(group), skillSize, contentWidth);
-        const needed = headingParts.length * 13.5
+        const needed = headingParts.length * skillHeadingLeading
           + (headingParts.length && bodyParts.length ? contentGap : 0)
           + bodyParts.length * bulletLeading
           + groupGap;
-        ensure(Math.min(needed, height - margin * 2));
+        ensure(Math.min(needed, contentHeight));
         if (group.heading) {
           for (const part of headingParts) {
-            ensure(13.5);
+            ensure(skillHeadingLeading);
             drawText(part, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
-            y -= 13.5;
+            y -= skillHeadingLeading;
           }
         }
         if (bodyParts.length && group.heading) y -= contentGap;
@@ -1070,14 +1105,14 @@ async function createWriter(
         const needed = (
           labelFitsInline
             ? parts.length * bulletLeading
-            : (label ? 13.5 + (body ? contentGap : 0) : 0) + parts.length * bulletLeading
+            : (label ? skillHeadingLeading + (body ? contentGap : 0) : 0) + parts.length * bulletLeading
         ) + (groupIndex < groups.length - 1 && !isFlowCv ? 4 : 0);
-        ensure(Math.min(needed, height - margin * 2));
+        ensure(Math.min(needed, contentHeight));
         if (!labelFitsInline) {
           if (label) {
-            ensure(13.5);
+            ensure(skillHeadingLeading);
             drawText(label, { x: margin, y, size: groupHeadingSize, font: bold, color: ink });
-            y -= 13.5 + (body ? contentGap : 0);
+            y -= skillHeadingLeading + (body ? contentGap : 0);
           }
           for (const part of parts) {
             ensure(bulletLeading);
@@ -1127,7 +1162,7 @@ async function createWriter(
         heights.slice(splitIndex).reduce((sum, value) => sum + value, 0),
       ];
       const totalHeight = Math.max(...columnHeights);
-      if (totalHeight > y - margin || columnWidth < 210) {
+      if (totalHeight > y - marginBottom || columnWidth < 210) {
         drawStacked();
         return;
       }
@@ -1140,7 +1175,7 @@ async function createWriter(
           if (group.heading) {
             for (const part of wrap(group.heading, groupHeadingSize, columnWidth, bold)) {
               drawText(part, { x, y: columnY, size: groupHeadingSize, font: bold, color: ink });
-              columnY -= 13.5;
+              columnY -= skillHeadingLeading;
             }
           }
           const body = groupBody(group);
@@ -1158,8 +1193,8 @@ async function createWriter(
       y = lowestY + groupGap;
     };
 
-    if (layout === "grouped-columns") drawColumns();
-    else if (layout === "grouped-stacked") drawStacked();
+    if (skillsLayout === "grouped-columns") drawColumns();
+    else if (skillsLayout === "grouped-stacked") drawStacked();
     else drawInline();
   };
   return {
@@ -1175,6 +1210,7 @@ async function createWriter(
     space(amount) {
       y -= amount;
     },
+    pageCount: () => document.getPageCount(),
     async save() {
       return new Uint8Array(await document.save());
     },

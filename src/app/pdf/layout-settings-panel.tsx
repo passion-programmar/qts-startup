@@ -28,15 +28,16 @@ const settingToken: Record<string, string> = {
 };
 const fixedDefaults: Record<string, string> = { minTextSize: "10.5", fontScale: "1" };
 
-function readTokens(css: string): Map<string, string> {
+function readTokens(css: string, selector = ":root"): Map<string, string> {
   const tokens = new Map<string, string>();
-  // Only the first :root block: later blocks (compact density etc.) are not the template's normal values.
-  const root = /:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  // Read the requested root block only, excluding compact-density rules.
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const root = new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
   for (const match of root.matchAll(/(--[\w-]+)\s*:\s*([\d.]+)(pt|mm)?\s*;/g)) tokens.set(match[1], match[2]);
   return tokens;
 }
 
-function useTemplateDefaults(template: PdfTemplate): Record<string, string> {
+function useTemplateDefaults(template: PdfTemplate, documentType: "resume" | "cover-letter"): Record<string, string> {
   const [defaults, setDefaults] = useState<Record<string, string>>({});
   useEffect(() => {
     let cancelled = false;
@@ -45,7 +46,11 @@ function useTemplateDefaults(template: PdfTemplate): Record<string, string> {
       fetch(`/resume-templates/templates/${template}.css`).then((response) => response.text()),
     ]).then(([base, own]) => {
       if (cancelled) return;
-      const tokens = new Map([...readTokens(base), ...readTokens(own)]);
+      const tokens = new Map([
+        ...readTokens(base),
+        ...readTokens(own),
+        ...readTokens(base, `:root[data-document="${documentType}"]`),
+      ]);
       setDefaults(Object.fromEntries(Object.entries(settingToken)
         .map(([key, token]) => [key, tokens.get(token) ?? ""])
         .filter(([, value]) => value)));
@@ -55,7 +60,7 @@ function useTemplateDefaults(template: PdfTemplate): Record<string, string> {
     return () => {
       cancelled = true;
     };
-  }, [template]);
+  }, [template, documentType]);
   return { ...fixedDefaults, ...defaults };
 }
 
@@ -94,6 +99,7 @@ function numberProblem(setting: LayoutNumberSetting, raw: string | undefined): {
 const filled = (form: LayoutForm) => Object.fromEntries(Object.entries(form).filter(([, value]) => value !== "" && value !== undefined).sort());
 
 export function LayoutSettingsPanel({
+  documentType,
   form,
   message,
   onChange,
@@ -103,6 +109,7 @@ export function LayoutSettingsPanel({
   template,
   templateLabel,
 }: {
+  documentType: "resume" | "cover-letter";
   form: LayoutForm;
   message: string | null;
   onChange: (next: LayoutForm) => void;
@@ -112,7 +119,7 @@ export function LayoutSettingsPanel({
   template: PdfTemplate;
   templateLabel: string;
 }) {
-  const defaults = useTemplateDefaults(template);
+  const defaults = useTemplateDefaults(template, documentType);
   const changed = Object.keys(filled(form)).length;
   const hasSaved = Object.keys(filled(savedForm)).length > 0;
   const unsaved = JSON.stringify(filled(form)) !== JSON.stringify(filled(savedForm));
@@ -145,7 +152,7 @@ export function LayoutSettingsPanel({
                       <option value="">Template (auto)</option>
                       {setting.values.map((value) => (
                         <option key={value} value={value}>
-                          {setting.key === "fitPages" ? (value === "auto" ? "Auto: one page fewer" : `${value} page${value === "1" ? "" : "s"}`) : value}
+                          {setting.key === "fitPages" ? (value === "auto" ? "Auto: aim for 2 pages" : `${value} page${value === "1" ? "" : "s"}`) : value}
                         </option>
                       ))}
                     </select>

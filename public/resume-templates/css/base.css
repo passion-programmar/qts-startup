@@ -84,7 +84,7 @@
   --text-section: 12.5pt;
   --text-item: 11.5pt;
   --text-body: 11.5pt;
-  /* Bullets in every template, whatever its body size; 11pt when a résumé runs long (section 12). */
+  /* Shared fallback; normal resumes override this below. */
   --text-bullet: 11.5pt;
   --text-meta: 10.5pt;
   --leading-body: 1.32;
@@ -141,6 +141,18 @@
   --indent-bullet: 10pt;
 }
 
+
+/* Normal resume defaults shared by all designs. The document selector wins over
+   template :root tokens; explicit layout settings still win through inline tokens.
+   Cover letters retain their existing template values. */
+:root[data-document="resume"] {
+  --text-body: 11pt;
+  --text-bullet: 11pt;
+  --space-section: 8pt;
+  --space-bullet: 1pt;
+  --leading-body: 1.30;
+  --page-margin-inline: 16mm;
+}
 
 /* 2. Page setup ---------------------------------------------------------------
    @page cannot read custom properties. A template that changes the margins
@@ -878,13 +890,11 @@ li {
 
 
 /* 12. Density ---------------------------------------------------------------------
-   render.js (fitToPages) adds .doc--compact when asked ("compact") or, in
-   density "auto", while pulling a résumé back to one page fewer: spacing first,
-   then a denser layout (line height, page margins, name, gaps, summary box),
-   then .doc--small-bullets with --text-bullet 10.5pt, then --text-body and
-   --text-item in 0.5pt steps, never below 10.5pt. If that page count is not
-   reachable, the résumé prints at normal size (up to 3 pages). A cover letter
-   only gets the spacing step. */
+   .doc--compact is used for explicit compact density and oversized cover letters.
+   Automatic resume fitting instead applies inline reductions in order: body and
+   bullets to 10.5pt, section gaps to 6pt, line height to 1.25, side margins to 14mm.
+   Bullet gaps stay at 1pt during spacing reduction. If the target is unreachable,
+   the resume retains those settings and prints every page without further shrinking. */
 
 .doc--compact {
   --leading-body: 1.27;
