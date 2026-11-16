@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Metadata } from "next";
 import { asc } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
@@ -42,7 +43,14 @@ export default async function EditCandidatePage({
           : "Update the candidate's contact information and profile details."}
         title={deleted ? `${name} (deleted, read-only)` : `Edit ${name}`}
       />
-      <CandidateEditForm candidate={candidate} categories={candidateCategories} readOnly={deleted} />
+      {/* Next keeps a left page alive with its typed values (Activity). Keyed by the saved data, the
+          form starts over from the database after a save instead of showing the old values. */}
+      <CandidateEditForm
+        candidate={candidate}
+        categories={candidateCategories}
+        key={createHash("sha1").update(JSON.stringify(loaded)).digest("hex")}
+        readOnly={deleted}
+      />
     </main>
   );
 }

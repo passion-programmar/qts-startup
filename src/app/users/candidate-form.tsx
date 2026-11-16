@@ -153,7 +153,13 @@ function CandidatePageActions({
 }
 
 // The Add candidate page's form. A saved candidate goes back to the list, where the new row appears.
+// Next keeps a left page alive (Activity), so each save gives the next visit a fresh, empty form.
 export function CandidateCreateForm({ categories = [] }: { categories?: CategoryOption[] }) {
+  const [formKey, setFormKey] = useState(0);
+  return <CandidateCreateFormFields categories={categories} key={formKey} onCreated={() => setFormKey((key) => key + 1)} />;
+}
+
+function CandidateCreateFormFields({ categories, onCreated }: { categories: CategoryOption[]; onCreated: () => void }) {
   const router = useRouter();
   const [educationRows, setEducationRows] = useState([0]);
   const [experienceRows, setExperienceRows] = useState([0]);
@@ -165,6 +171,7 @@ export function CandidateCreateForm({ categories = [] }: { categories?: Category
       if (result.success) {
         changedRef.current = false;
         router.push("/users");
+        onCreated();
       }
       return result;
     },
