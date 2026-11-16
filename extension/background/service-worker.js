@@ -131,8 +131,56 @@ const GENERATION_NO_START_MS = 60 * 1000;
 const GENERATION_STOPPED_EMPTY_MS = 15 * 1000;
 // Without ChatGPT's copy button, an answer that stopped changing this long counts as finished.
 const GENERATION_ANSWER_QUIET_MS = 3000;
-// One pinned ChatGPT conversation serves this many jobs, then a fresh tab takes over.
-const GENERATION_JOBS_PER_CHATGPT_TAB = 10;
+// Every job gets a fresh ChatGPT chat (a new pinned tab at the Manager's ChatGPT address, so its
+// project or GPT stays): no earlier candidate's résumé is ever in the conversation.
+const GENERATION_JOBS_PER_CHATGPT_TAB = 1;
+// A job that fails waits, then is tried again by itself while Generation is on: 10 min, 30 min,
+// 1 h, then every 2 h. Meanwhile the queue moves on to other jobs (the claim skips waiting jobs),
+// so one job that keeps failing never holds up the rest. Kept in this Chrome's storage only.
+const GENERATION_RETRIES_KEY = 'qtsGenerationRetries';
+const GENERATION_RETRY_DELAYS_MS = [10 * 60_000, 30 * 60_000, 60 * 60_000];
+const GENERATION_RETRY_REPEAT_MS = 2 * 60 * 60_000;
+// Entries for jobs not seen again within this time (deleted, generated elsewhere) are dropped.
+const GENERATION_RETRY_FORGET_MS = 7 * 24 * 60 * 60_000;
+
+async function readGenerationRetries() {
+  const stored = (await chrome.storage.local.get(GENERATION_RETRIES_KEY))[GENERATION_RETRIES_KEY];
+  return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+}
+
+/** The jobs still waiting for their next try: the claim skips them. */
+async function waitingGenerationJobIds(now = Date.now()) {
+  const retries = await readGenerationRetries();
+  return Object.entries(retries)
+    .filter(([id, entry]) => /^[0-9a-f-]{36}$/i.test(id) && Number(entry?.nextAt) > now)
+    .map(([id]) => id)
+    .slice(0, 1000);
+}
+
+/** Records a failure; returns when the job is tried again. */
+async function scheduleGenerationRetry(jobId, reason, now = Date.now()) {
+  const retries = await readGenerationRetries();
+  for (const [id, entry] of Object.entries(retries)) {
+    if (now - Number(entry?.lastFailedAt || 0) > GENERATION_RETRY_FORGET_MS) delete retries[id];
+  }
+  const attempts = Number(retries[jobId]?.attempts || 0) + 1;
+  const delay = GENERATION_RETRY_DELAYS_MS[attempts - 1] ?? GENERATION_RETRY_REPEAT_MS;
+  retries[jobId] = { attempts, nextAt: now + delay, lastFailedAt: now, reason: String(reason || '').slice(0, 300) };
+  await chrome.storage.local.set({ [GENERATION_RETRIES_KEY]: retries });
+  return retries[jobId].nextAt;
+}
+
+/** A delivered job needs no more tries (written only when it had a failure). */
+async function clearGenerationRetry(jobId) {
+  const retries = await readGenerationRetries();
+  if (!retries[jobId]) return;
+  delete retries[jobId];
+  await chrome.storage.local.set({ [GENERATION_RETRIES_KEY]: retries });
+}
+
+function generationRetryTime(at) {
+  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 const GENERATION_QUEUE_ALARM = 'qts-generation-queue';
 let lastSourceTabId = null;
 const lastAutoDetectKeyByTab = new Map();
@@ -4351,13 +4399,14 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       });
       await ensureQueuedGenerationIsActive(queuedJob.id);
       await showGenerationPageStatus(jobTabId, 'Preparing the prompt from the saved job and candidate profile...');
+      // The company may be empty (Get JD leaves an unknown company empty): the letter then goes
+      // to the Hiring Manager. A job needs its URL, title and description.
       if (
         !queuedJob.jobTitle?.trim() ||
-        !queuedJob.company?.trim() ||
         !jobDescription ||
         !queuedJob.jobUrl?.trim()
       ) {
-        throw new Error('The saved job is missing its URL, title, company, or description.');
+        throw new Error('The saved job is missing its URL, title, or description.');
       }
       ensureGenerationIsActive(cancellationKey, cancellationToken);
       await ensureQueuedGenerationIsActive(queuedJob.id);
@@ -4838,10 +4887,15 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           runSaved = true;
         }
         const scope = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
+        // Jobs that failed wait for their next try; the claim takes the next ready job instead.
+        const waitingJobIds = await waitingGenerationJobIds();
         const claim = await workerApiRequest(
           'POST',
           '/api/extension/generation/claim',
-          scope?.mode === 'generation' ? { selection: scope } : {},
+          {
+            ...(scope?.mode === 'generation' ? { selection: scope } : {}),
+            ...(waitingJobIds.length ? { excludedJobIds: waitingJobIds } : {}),
+          },
         );
         if (claim.success !== true) {
           const current = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
@@ -4871,9 +4925,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             const idle = await chrome.storage.local.get(GENERATION_IDLE_NOTICE_KEY);
             if (!idle[GENERATION_IDLE_NOTICE_KEY]) {
               await chrome.storage.local.set({ [GENERATION_IDLE_NOTICE_KEY]: true });
-              await notifyGenerationManager(
-                'Generation is on and waiting: no job is ready yet. Jobs need a description, an active candidate with at least three experience records, and no saved resume path.',
-              );
+              await notifyGenerationManager(waitingJobIds.length
+                ? `Generation is on and waiting: ${waitingJobIds.length} job(s) that failed will be tried again automatically.`
+                : 'Generation is on and waiting: no job is ready yet. Jobs need a description, an active candidate with at least three experience records, and no saved resume path.');
             }
           }
           return;
@@ -4943,6 +4997,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             throw new Error(finalized.message || 'QTS could not finish the queued job.');
           }
           await reportQueuedGenerationDelivered(jobTabId);
+          await clearGenerationRetry(queuedJob.id);
           chatTab.jobs += 1;
           completedCount += 1;
         } catch (error) {
@@ -4951,6 +5006,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (serverStatus === 'completed') {
             // Finalize committed even though its response was lost; keep the delivered files.
             await reportQueuedGenerationDelivered(jobTabId);
+            await clearGenerationRetry(queuedJob.id);
             if (answerSaved && chatTab) chatTab.jobs += 1;
             completedCount += 1;
             continue;
@@ -4991,8 +5047,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
               console.error('[QTS Generation] Could not mark the queued job failed:', failed.message);
             }
             console.error('[QTS Generation] Queued job failed:', queuedJob.id, reason);
+            // The job waits for its next try; the next claim moves on to the other jobs.
+            const retryAt = await scheduleGenerationRetry(queuedJob.id, reason);
             await updateGenerationBrowserState({
-              message: `Generation failed for ${queuedJob.jobTitle || 'a job'}: ${reason} Retrying while Generation is on.`,
+              message: `Generation could not finish ${queuedJob.jobTitle || 'a job'}: ${reason} It will retry automatically at ${generationRetryTime(retryAt)}; other jobs continue meanwhile.`,
               messageType: 'warn',
             });
             await sleep(3000);

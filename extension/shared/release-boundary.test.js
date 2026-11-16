@@ -380,11 +380,13 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.equal(askSource.includes('chrome.tabs.reload'), false);
   assert.ok(serviceWorker.includes('await runGenerationForTab(jobTabId, queuedJob, chatTab);'));
   assert.ok(serviceWorker.includes('if (!unusable || followUps > 0)'));
-  assert.ok(serviceWorker.includes('Retrying while Generation is on.'));
+  // A failed job is retried by itself later (10 min, 30 min, 1 h, then every 2 h) while the queue
+  // moves on: nothing is recorded on the server.
+  assert.ok(serviceWorker.includes('It will retry automatically at'));
   assert.equal(serviceWorker.includes('failuresThisRun'), false);
-  // One pinned ChatGPT conversation serves up to ten jobs, and a slow or blocked ChatGPT page
-  // gets up to two reloads. No job page is opened: the prompt uses the saved job.
-  assert.ok(serviceWorker.includes('const GENERATION_JOBS_PER_CHATGPT_TAB = 10;'));
+  // Every job gets a fresh ChatGPT chat, and a slow or blocked ChatGPT page gets up to two
+  // reloads. No job page is opened: the prompt uses the saved job.
+  assert.ok(serviceWorker.includes('const GENERATION_JOBS_PER_CHATGPT_TAB = 1;'));
   assert.ok(serviceWorker.includes('const CHATGPT_LOAD_TIMEOUT_MS = 30 * 1000;'));
   assert.ok(serviceWorker.includes('const CHATGPT_RELOADS = 2;'));
   assert.ok(serviceWorker.includes('async function getManagerChatGptUrl()'));
@@ -395,9 +397,11 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(queueSource.includes('await ensureChatGptReady(chatTab.id);'));
   assert.equal(queueSource.includes('url: queuedJob.jobUrl,'), false);
   assert.equal(queueSource.includes('await waitForTabSettled(jobTabId);'), false);
-  assert.equal(serviceWorker.includes('excludedJobIds: [...excludedJobIds]'), false);
+  // The claim skips only the jobs waiting for their next try.
+  assert.ok(queueSource.includes('excludedJobIds: waitingJobIds'));
+  assert.ok(queueSource.includes('const retryAt = await scheduleGenerationRetry(queuedJob.id, reason);'));
+  assert.ok(queueSource.includes('await clearGenerationRetry(queuedJob.id);'));
   assert.equal(serviceWorker.includes('failuresThisRun'), false);
-  assert.ok(serviceWorker.includes('Retrying while Generation is on.'));
   assert.ok(serviceWorker.includes('notifyGenerationManager'));
   assert.ok(serviceWorker.includes('ACTIVE_GENERATION_JOB_KEY'));
   assert.ok(serviceWorker.includes('removeQueuedGenerationDownloads(downloadIds)'));

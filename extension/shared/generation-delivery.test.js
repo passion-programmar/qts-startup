@@ -66,6 +66,7 @@ function pipeline({ printError = false, technicalFailure = false, interrupted = 
     updateGenerationBrowserState: async () => {},
     getTab: async () => ({ windowId: 1 }),
     reportQueuedGenerationDelivered: async () => events.push('delivered'),
+    clearGenerationRetry: async (id) => events.push(`retry-cleared:${id}`),
     jobTabId: null, queuedJob: { id: 'job-id' }, chatTab: { id: 1, jobs: 1 },
     downloadIds: [], generationId: '', finalizeAttempted: false, completedCount: 0,
   };
@@ -84,10 +85,11 @@ test('Generation accepts all three downloads before finalizing and reporting del
     await run();
     assert.equal(events.filter((event) => event.startsWith('download:')).length, 3);
     assert.equal(events.filter((event) => event === 'download-complete').length, 3);
-    assert.equal(context.chatTab.jobs, 2, 'successful delivery counts toward the ten-job conversation limit');
+    assert.equal(context.chatTab.jobs, 2, 'a successful delivery is counted on its chat (a fresh chat per job)');
     assert.ok(events.some((event) => event.includes('Downloading files')));
     assert.ok(events.lastIndexOf('download-complete') < events.indexOf('finalize'));
-    assert.equal(events.at(-1), 'delivered');
+    // Delivered, then the job's retry schedule (if it had failed before) is forgotten.
+    assert.deepEqual(events.slice(-2), ['delivered', 'retry-cleared:job-id']);
     assert.match(context.finalizedBody.downloadedPdfPaths.resume, /Radu \(1\)\.pdf$/);
     assert.match(context.finalizedBody.downloadedPdfPaths.coverLetter, /Radu_Cover_Letter \(2\)\.pdf$/);
     assert.equal(events.includes('server-print'), technicalFailure);
