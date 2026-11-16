@@ -2158,16 +2158,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       await chrome.tabs.create({ url: chrome.runtime.getURL(`settings/apply-pdfs.html?attemptId=${encodeURIComponent(msg.attemptId)}`) });
       return { ok: true };
     }
-    // Auto Apply panel: the job's PDF folder in Windows Explorer. When this Chrome did not download
-    // the PDFs, Downloads opens and the panel copies the folder's address instead.
-    if (msg.action === 'open_folder') {
-      const held = activeReviews.get(msg.attemptId);
-      if (!held?.resumeFolder) return { ok: false, error: 'This job has no PDF folder.' };
-      const opened = await openDownloadedFolder(held.resumeFolder).catch(() => ({ ok: false }));
-      if (opened.ok) return { ok: true };
-      await chrome.downloads.showDefaultFolder();
-      return { ok: false, notHere: true };
-    }
     // Auto Apply panel: a required question filled with the profile's answer shown beside it.
     if (msg.action === 'fill_field') {
       const held = activeReviews.get(msg.attemptId);

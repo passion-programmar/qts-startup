@@ -171,21 +171,15 @@
     statusTimer = setTimeout(() => { jobStatus.textContent = ''; }, 8000);
   }
 
-  // The job's PDF folder in Windows Explorer. When this Chrome did not download the PDFs, Chrome
-  // opens Downloads and the folder's address is copied for Explorer's address bar.
-  async function openFolder() {
-    const result = await send('open_folder');
-    if (result?.ok) { say('The folder opened in Windows Explorer.'); return; }
-    if (result?.notHere && state?.resumeFolder) {
-      const address = /^[a-z]:\\/i.test(state.resumeFolderPath || '')
-        ? state.resumeFolderPath
-        : `%USERPROFILE%\\Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
-      say(await copyReference(address)
-        ? 'This Chrome did not download these PDFs, so Downloads opened. The folder\'s address is copied: paste it into Explorer\'s address bar.'
-        : 'This Chrome did not download these PDFs, so Downloads opened.');
-      return;
-    }
-    say(result?.error || 'The folder could not be opened.');
+  // The job's PDF folder: a click copies its full path (nothing opens). When this Chrome does not
+  // know where Downloads is, the path starts with %USERPROFILE%\Downloads, which Explorer and a
+  // file picker's address bar both understand.
+  async function copyFolderPath() {
+    if (!state?.resumeFolder) return;
+    const path = /^[a-z]:\\/i.test(state.resumeFolderPath || '')
+      ? state.resumeFolderPath
+      : `%USERPROFILE%\\Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
+    say(await copyReference(path) ? 'Copied: the folder\'s full path' : 'Could not copy. Try again.');
   }
 
   // A required question answered on the form now (read live, so the Manager's typing counts).
@@ -420,8 +414,8 @@
       const shortPath = `Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
       const folder = element('button', 'folder', `📁 ${auto && state.resumeFolderPath ? state.resumeFolderPath : shortPath}`);
       folder.type = 'button';
-      folder.title = 'Open the résumé folder in Windows Explorer';
-      folder.addEventListener('click', () => openFolder());
+      folder.title = 'Copy the folder\'s full path';
+      folder.addEventListener('click', () => copyFolderPath());
       job.append(folder);
     }
     if (!auto && (state.promptName || state.templateName)) {

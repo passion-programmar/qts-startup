@@ -136,7 +136,10 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     assert.deepEqual(await page.evaluate(() => window.clipboard), ['Complete saved résumé.', 'Complete saved letter.', '+40 700 000 000']);
     await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.required-row')][1].querySelectorAll('button')[1].click());
     await page.evaluate(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.folder').click());
-    await page.waitForFunction(() => window.sent.some(m => m.action === 'fill_field') && window.sent.some(m => m.action === 'open_folder'));
+    await page.waitForFunction(() => window.sent.some(m => m.action === 'fill_field') && window.clipboard.length === 4);
+    // The folder button copies its full path; nothing opens.
+    assert.equal(await page.evaluate(() => window.clipboard[3]), String.raw`C:\Users\sample\Downloads\QTS_Resume\Sample Candidate`);
+    assert.equal(await page.evaluate(() => window.sent.some(m => m.action === 'open_folder')), false);
     assert.equal(await page.evaluate(() => window.sent.find(m => m.action === 'fill_field').fieldId), 'phone');
     await click('.foot button', 'Ask Gemini');
     await page.waitForFunction(() => window.sent.some(m => m.action === 'ask_ai'));
