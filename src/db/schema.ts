@@ -643,11 +643,12 @@ export const bids = pgTable(
       .notNull(),
   },
   (table) => [
-    // One bid per candidate and job address.
+    // One bid per candidate and job address. Bids from Resume page downloads have no address
+    // (empty job_url); they are kept once per candidate, title and company by the code instead.
     uniqueIndex("bids_candidate_job_url_unique").on(
       table.candidateId,
       sql`regexp_replace(split_part(btrim(${table.jobUrl}), '#', 1), '/+$', '')`,
-    ),
+    ).where(sql`btrim(${table.jobUrl}) <> ''`),
     index("bids_manager_title_company_key_index").on(table.managerId, table.titleCompanyKey),
     index("bids_manager_applied_at_index").on(table.managerId, table.appliedAt),
     index("bids_candidate_applied_at_index").on(

@@ -112,7 +112,9 @@ export default async function BidsPage({
                 </a>
               ) : "—",
               <div key="job">
-                <a className="font-medium text-blue-700 hover:underline" href={row.url} rel="noreferrer" target="_blank" title={row.url}>{row.title}</a>
+                {row.url
+                  ? <a className="font-medium text-blue-700 hover:underline" href={row.url} rel="noreferrer" target="_blank" title={row.url}>{row.title}</a>
+                  : <span className="font-medium text-slate-900" title="No job URL (downloaded on the Resume page)">{row.title}</span>}
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {row.interviewRounds && <InterviewTrack value={row.interviewRounds} />}
                   <Link className="text-[11px] font-semibold text-indigo-600 hover:underline" href={`/interviews?add=${row.id}`}>+ Interview</Link>

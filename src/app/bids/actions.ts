@@ -26,8 +26,9 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   const salary = text(formData, "salary", 500);
   const resumeFolder = text(formData, "resumeFolder", 2048);
   const googleDrivePath = text(formData, "googleDrivePath", 2048);
-  if (!uuid(id) || !uuid(candidateId) || !jobTitle || !company || !resumeFolder || !isHttpUrl(jobUrl)) {
-    return { error: "Enter valid candidate, job, URL, and résumé folder values.", success: null };
+  // A bid from a Resume page download has no job URL, and no folder when the browser saved its PDFs.
+  if (!uuid(id) || !uuid(candidateId) || !jobTitle || !company || (jobUrl && !isHttpUrl(jobUrl))) {
+    return { error: "Enter a valid candidate, job title, company, and URL (or leave the URL empty).", success: null };
   }
   // Blocked candidates are read-only, so a bid cannot be moved to one.
   const [candidate] = await db.select({ id: profiles.userId }).from(profiles)
@@ -42,7 +43,7 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   try {
     const updated = await db.update(bids).set({
       candidateId,
-      jobUrl: normalizeJobUrl(jobUrl),
+      jobUrl: jobUrl ? normalizeJobUrl(jobUrl) : "",
       jobTitle,
       company,
       titleCompanyKey: computeTitleCompanyKey(jobTitle, company) || null,

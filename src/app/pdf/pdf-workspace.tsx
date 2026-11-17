@@ -8,7 +8,7 @@ import type { PdfPackage } from "@/app/pdf/document-data";
 import { parsePdfPackage, toResumeTemplateData } from "@/app/pdf/document-data";
 // The JSON box starts with a Generation V2 sample, as ChatGPT returns it (no real person).
 import defaultResume from "@/app/pdf/default-resume.json";
-import { saveTemplateStyleAction } from "@/app/pdf/actions";
+import { recordResumeDownloadBidAction, saveTemplateStyleAction } from "@/app/pdf/actions";
 import { layoutFormFromTheme, type LayoutTheme, layoutThemeFromForm } from "@/app/pdf/layout-settings";
 import { type LayoutForm, LayoutSettingsPanel } from "@/app/pdf/layout-settings-panel";
 import { TemplatePagesPreview } from "@/app/pdf/template-pages-preview";
@@ -72,6 +72,8 @@ export function PdfWorkspace({
   );
   const [downloadStep, setDownloadStep] = useState<"printing" | "saving" | null>(null);
   const [fallbackUsed, setFallbackUsed] = useState(false);
+  // What the last Download did on the Bids page (added, already there, or why not).
+  const [bidMessage, setBidMessage] = useState<string | null>(null);
   const [downloadDirectoryName, setDownloadDirectoryName] = useState<string | null>(null);
   const [downloadDirectoryReady, setDownloadDirectoryReady] = useState(false);
   const downloadDirectoryRef = useRef<ResumeDownloadDirectory | null>(null);
@@ -197,6 +199,7 @@ export function PdfWorkspace({
       }
       setDownloadStep("printing");
       setFallbackUsed(false);
+      setBidMessage(null);
       setError(null);
       // The folder comes first, while the click still allows the browser to ask for it; printing
       // can take a few seconds.
@@ -231,6 +234,16 @@ export function PdfWorkspace({
         downloadPdfPairInBrowser(files);
       }
       setFallbackUsed(printed.renderer === "fallback");
+      // Every Download is an application: it goes on the Bids page, without a job URL.
+      const bid = await recordResumeDownloadBidAction({
+        candidateEmail: parsed.resume.candidate.email,
+        candidateName: parsed.resume.candidate.fullName,
+        jobTitle: parsed.resume.targetRole,
+        company: parsed.resume.targetCompany ?? parsed.coverLetter.targetCompany,
+        template: selectedTemplate,
+        resumeFolder: directory ? `${folder}/` : "",
+      }).catch(() => ({ message: "The PDFs were saved, but the bid could not be added. Check the connection." }));
+      if (!cancel.signal.aborted) setBidMessage(bid.message);
     } catch (reason) {
       if (cancel.signal.aborted) return;
       const message = reason instanceof DOMException && reason.name === "AbortError"
@@ -354,6 +367,9 @@ export function PdfWorkspace({
                 {busy ? <LoadingIcon className="size-4" /> : <Download className="size-4" />}
                 {downloadStep === "printing" ? "Preparing PDFs..." : downloadStep === "saving" ? "Saving PDFs..." : "Download resume and cover letter"}
               </button>
+              {bidMessage && (
+                <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700" role="status">{bidMessage}</p>
+              )}
               {fallbackUsed && (
                 <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">
                   The template printer was unavailable, so these PDFs use the simplified built-in layout and differ from the preview.
