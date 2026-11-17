@@ -655,12 +655,12 @@ async function initializeQtsPageLauncher() {
     const picker = workPickers.get(mode), version = ++picker.version;
     const candidateId = candidate.select.value;
     picker.jobs = []; picker.selected.clear(); picker.error = ''; picker.hasMore = false; picker.search = '';
-    picker.loading = Boolean(candidateId);
+    picker.loading = true;
     picker.loaded = false;
     renderWorkPicker(mode);
-    if (!candidateId) return;
     try {
-      const reply = await chrome.runtime.sendMessage({ type: 'QTS_WORK_ITEMS', mode, candidateId });
+      // No candidate chosen: every candidate's ready jobs, each with its name.
+      const reply = await chrome.runtime.sendMessage(candidateId ? { type: 'QTS_WORK_ITEMS', mode, candidateId } : { type: 'QTS_WORK_ITEMS', mode, allCandidates: true });
       if (picker.version !== version) return;
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load jobs.');
       picker.jobs = reply.jobs;
@@ -710,17 +710,18 @@ async function initializeQtsPageLauncher() {
   function renderWorkPicker(action) {
     const picker = workPickers.get(action), panel = picker.panel;
     const account = chosenAccount();
-    // "Choose jobs" shows for a chosen candidate with something ready (or a list already open).
-    const count = readyCount(account, action);
-    picker.toggle.hidden = !account || (!count && !picker.open);
+    // "Choose jobs" shows with something ready (or a list already open): for the chosen candidate, or
+    // with no candidate chosen, every candidate's jobs.
+    const count = account ? readyCount(account, action) : candidate.accounts.reduce((sum, each) => sum + readyCount(each, action), 0);
+    picker.toggle.hidden = !count && !picker.open;
     const checked = picker.loaded ? `${picker.selected.size} of ${picker.jobs.length}` : `all ${count}`;
     picker.toggle.textContent = `${picker.open ? '▾' : '▸'} Choose jobs (${checked})`;
     picker.toggle.setAttribute('aria-expanded', String(picker.open));
-    panel.replaceChildren(); panel.hidden = !account || !picker.open;
+    panel.replaceChildren(); panel.hidden = !picker.open;
     if (panel.hidden) return;
     const toolbar = Object.assign(document.createElement('div'), { className: 'work-toolbar' });
     const query = String(picker.search || '').trim().toLowerCase();
-    const visible = picker.jobs.filter(job => !query || [job.title, job.company, job.url].some(value => String(value || '').toLowerCase().includes(query)));
+    const visible = picker.jobs.filter(job => !query || [job.title, job.company, job.url, job.candidateName].some(value => String(value || '').toLowerCase().includes(query)));
     const allLabel = document.createElement('label');
     const selectedVisible = visible.filter(job => picker.selected.has(job.id)).length;
     const all = Object.assign(document.createElement('input'), { type: 'checkbox', checked: visible.length > 0 && selectedVisible === visible.length });
@@ -754,7 +755,7 @@ async function initializeQtsPageLauncher() {
       const link = Object.assign(document.createElement(url ? 'a' : 'span'), { className: 'work-link', title: job.url });
       if (url) { link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
       const title = Object.assign(document.createElement('span'), { className: 'work-title', textContent: job.title, title: job.url });
-      const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company, job.customUrl ? 'Custom URL · off by default' : '', job.busy ? 'In progress · unavailable' : ''].filter(Boolean).join(' · '), title: job.url });
+      const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company, job.candidateName, job.customUrl ? 'Custom URL · off by default' : '', job.busy ? 'In progress · unavailable' : ''].filter(Boolean).join(' · '), title: job.url });
       link.append(title, domain); row.append(check, link); list.append(row);
     }
     panel.append(list);
@@ -762,7 +763,7 @@ async function initializeQtsPageLauncher() {
     const hiddenSelected = picker.selected.size - selectedVisible;
     if (query && hiddenSelected > 0) panel.append(Object.assign(document.createElement('div'), { className: 'work-note', textContent: `${hiddenSelected} selected job${hiddenSelected === 1 ? ' is' : 's are'} hidden by this filter.` }));
     if (picker.loading || picker.error || !picker.jobs.length || picker.hasMore) {
-      panel.append(Object.assign(document.createElement('div'), { className: `work-note${picker.error ? ' error' : ''}`, textContent: picker.loading ? 'Loading jobs…' : picker.error || (picker.hasMore ? 'Showing the first 200 eligible jobs. Refresh after this batch.' : 'No eligible jobs for this account.') }));
+      panel.append(Object.assign(document.createElement('div'), { className: `work-note${picker.error ? ' error' : ''}`, textContent: picker.loading ? 'Loading jobs…' : picker.error || (picker.hasMore ? 'Showing the first 200 eligible jobs. Refresh after this batch.' : (candidate.select.value ? 'No eligible jobs for this account.' : 'No eligible jobs.')) }));
     }
     const footer = Object.assign(document.createElement('div'), { className: 'work-footer' });
     const start = Object.assign(document.createElement('button'), { type: 'button', className: 'work-start', textContent: { generation: 'Generate selected', apply: 'Apply to selected', auto_apply: 'Auto Apply selected' }[action] });
@@ -1780,14 +1781,15 @@ async function initializeQtsPageLauncher() {
       // "All accounts" sends no selection, so the mode works through every account.
       const picker = workPickers.get(resolvedAction);
       let selection;
-      if (picker && candidate.select.value) {
+      // No candidate chosen: the checked jobs of every candidate once the list was opened (else all jobs).
+      if (picker && (candidate.select.value || picker.loaded || picker.loading)) {
         if (!picker.loaded && !picker.loading) await loadWorkJobs(resolvedAction);
         if (picker.loading) throw new Error('The jobs are still loading. Try again in a moment.');
         if (picker.error) throw new Error(picker.error);
         if (!picker.selected.size) {
-          throw new Error(picker.jobs.length ? 'Select at least one job before starting.' : `Nothing is ready for ${picker.label} for this candidate.`);
+          throw new Error(picker.jobs.length ? 'Select at least one job before starting.' : `Nothing is ready for ${picker.label}${candidate.select.value ? ' for this candidate' : ''}.`);
         }
-        selection = { candidateId: candidate.select.value, jobIds: [...picker.selected] };
+        selection = { candidateId: candidate.select.value || null, jobIds: [...picker.selected] };
       }
       const response = await chrome.runtime.sendMessage({
         type: 'QTS_PAGE_ACTION',

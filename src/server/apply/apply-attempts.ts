@@ -182,7 +182,7 @@ export async function claimNextApplication(
   // Exclude all rows outside the explicit selection; an empty/stale selection never falls back.
   const skips = selection ? sql`ARRAY(
     select j.id from jobs j where j.manager_id = ${managerId}
-      and (j.candidate_id <> ${selection.candidateId}::uuid
+      and ((${selection.candidateId}::uuid is not null and j.candidate_id <> ${selection.candidateId}::uuid)
         or not (j.id = any(${`{${selection.jobIds.join(",")}}`}::uuid[])))
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
   )` : skipCustomUrlJobs ? sql`ARRAY(
@@ -206,7 +206,7 @@ export async function claimNextApplication(
       .innerJoin(jobs, eq(jobs.id, applyAttempts.jobId))
       .innerJoin(profiles, eq(profiles.userId, applyAttempts.candidateId))
       .where(and(eq(applyAttempts.id, attemptId), eq(applyAttempts.managerId, managerId),
-        eq(applyAttempts.browserId, browser.id), eq(applyAttempts.candidateId, selection.candidateId),
+        eq(applyAttempts.browserId, browser.id), selection.candidateId ? eq(applyAttempts.candidateId, selection.candidateId) : sql`true`,
         inArray(applyAttempts.jobId, selection.jobIds),
         options.autoApply ? hasEligibleExperienceCount() : sql`true`)).limit(1);
     if (!scoped) {

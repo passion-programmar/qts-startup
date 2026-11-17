@@ -29,6 +29,11 @@ test('account job pickers show compact links, full URL tooltips, independent sel
         if(message.action === 'cancel_status' && window.failCancellation) return { ok: false, error: 'Local cancellation failure. Retry.' };
         if(message.action === 'cancel_status') { window.store.qtsExtensionStatus = 'cancel'; return { ok: true }; }
         if(message.type === 'QTS_WORK_ITEMS') {
+          // No candidate chosen: every candidate's ready jobs, each with its name.
+          if(message.allCandidates === true) return { ok: true, jobs: [
+            {id:'55555555-5555-4555-8555-555555555555',title:'Platform Engineer',company:'Acme',url:'https://example.test/acme',candidateName:'Jordan Taylor',busy:false,selectable:true},
+            {id:'66666666-6666-4666-8666-666666666666',title:'SRE',company:'Globex',url:'https://example.test/globex',candidateName:'Casey Smith',busy:false,selectable:true},
+          ] };
           if(!message.candidateId) return new Promise(resolve => {
             window.accountFetchCounts[message.mode] = (window.accountFetchCounts[message.mode] || 0) + 1;
             window.accountResolvers[message.mode] = () => resolve({ ok: true, accounts: [
@@ -84,7 +89,18 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     assert.equal(await page.evaluate(() => window.calls.filter(m => m.type === 'QTS_WORK_ITEMS').map(m => m.mode).join()), 'all', 'one account request for all three modes');
     assert.deepEqual(await readyTexts(), ['11 ready', '2 ready', '3 ready'], 'All accounts shows the totals');
     assert.match(await page.evaluate(() => window.testRoot.querySelector('.candidate-summary').textContent), /Every account: 11 to generate · 2 to apply · 3 for Auto Apply/);
-    assert.equal(await page.evaluate(() => [...window.testRoot.querySelectorAll('.work-jobs-toggle')].every(n => n.hidden)), true, 'no job lists for All accounts');
+    // All accounts: "Choose jobs" too, with every candidate's ready jobs (each with its name); Start
+    // sends the checked ones with no candidate.
+    assert.equal(await page.evaluate(() => [...window.testRoot.querySelectorAll('.work-jobs-toggle')].every(n => !n.hidden)), true, 'job lists for All accounts too');
+    await openJobs('auto_apply');
+    await page.waitForFunction(() => window.testRoot.querySelectorAll('[data-work-picker="auto_apply"] .work-job').length === 2);
+    assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-domain').textContent), /Acme · Jordan Taylor/);
+    assert.equal(await page.evaluate(() => window.calls.filter(m => m.type === 'QTS_WORK_ITEMS' && m.allCandidates === true && m.mode === 'auto_apply').length), 1);
+    await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="auto_apply"] .work-start').click());
+    await page.waitForFunction(() => window.calls.some(m => m.type === 'QTS_PAGE_ACTION' && m.action === 'auto_apply'));
+    assert.deepEqual(await page.evaluate(() => window.calls.find(m => m.type === 'QTS_PAGE_ACTION' && m.action === 'auto_apply').selection),
+      { candidateId: null, jobIds: ['55555555-5555-4555-8555-555555555555', '66666666-6666-4666-8666-666666666666'] }, 'the checked jobs of every candidate');
+    await page.evaluate(() => { window.calls = window.calls.filter(m => !(m.type === 'QTS_PAGE_ACTION' && m.action === 'auto_apply')); delete window.store.qtsExtensionStatus; });
     await choose(1);
     assert.deepEqual(await page.evaluate(C => {
       const select = window.testRoot.querySelector(C);
