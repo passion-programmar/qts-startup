@@ -30,7 +30,7 @@ test('Answer copies the résumé, the empty questions and the Manager\'s text; P
       job: { id: 'job-1', title: 'Engineer', company: 'Example' }, resumeFolder: 'QTS_Resume/Ana/', answers: [], unresolved: [], provisional: [],
       references: { profile: { firstName: 'Ana', lastName: 'Test', email: 'ana@example.com', city: 'Cluj-Napoca', country: 'Romania', linkedinUrl: 'linkedin.com/in/ana-test' },
         experiences: [], educations: [], reusable: [{ question: 'Notice period?', answer: 'Immediately' }],
-        resumeText: 'Ana Test\nPython engineer', coverLetterText: 'Dear Manager,\nComplete letter.' } };
+        sitePassword: 'S3cret!pass', resumeText: 'Ana Test\nPython engineer', coverLetterText: 'Dear Manager,\nComplete letter.' } };
     const render = next => page.evaluate(s => window.__qtsApplyReview.render(s), next);
     const shadow = (fn, ...args) => page.evaluate(fn, ...args);
     const click = (selector, text) => page.evaluate((s, t) => {
@@ -85,6 +85,11 @@ test('Answer copies the résumé, the empty questions and the Manager\'s text; P
     assert.equal(await shadow(() => window.copied[4]), '6500 EUR per month');
     await page.waitForFunction(() => window.stored.qtsPanelTexts?.salaryMonth === '6500 EUR per month');
 
+    // Account: the job-site password, masked on screen; a click copies it in full.
+    const shown = await shadow(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.password-row').textContent);
+    assert.ok(shown.startsWith('Password••••') && !shown.includes('S3cret'), shown);
+    await click('.password-row');
+    await page.waitForFunction(() => window.copied.at(-1) === 'S3cret!pass');
     // Path closes Profile; Letter copies the letter.
     await click('.copy-button', '📁 Path');
     assert.deepEqual([await has('.profile-box'), await has('.career')], [false, true]);

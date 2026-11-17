@@ -3274,6 +3274,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       reusable: (application.savedAnswers || []).map((entry) => ({ question: entry.questionText, answer: entry.answer, note: entry.note || null })),
       resumeText: application.job.resumeText || '',
       coverLetterText: application.job.coverLetterText || '',
+      // The Manager's password for job sites (Settings), for the Profile box: shown masked, copied in full.
+      sitePassword: application.siteAccountPassword || '',
       jobDescription: application.job.description || '',
     } } : {}),
     promptName: application.job.promptName,

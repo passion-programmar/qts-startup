@@ -410,7 +410,7 @@
     return node;
   }
   // The profile box (opened by Profile): every saved profile item as "label value"; a click copies the value.
-  function profileBox(profile) {
+  function profileBox(profile, sitePassword = '') {
     const box = element('div', 'career profile-box');
     const head = element('div', 'career-head', 'Profile');
     const hide = element('button', '', 'Hide ✕');
@@ -447,6 +447,22 @@
       }
     }
     if (!groups.length) box.append(element('div', 'reference-note', 'No profile details saved.'));
+    // Account: the Manager's password for job sites (Settings), masked; a click copies it in full.
+    if (String(sitePassword || '').trim()) {
+      box.append(element('div', 'profile-group', 'Account'));
+      const row = element('button', 'profile-row password-row');
+      row.type = 'button';
+      row.title = 'Copy the password for job sites';
+      row.append(element('span', 'profile-label', 'Password'), element('span', 'profile-value', '•'.repeat(Math.min(12, Math.max(8, sitePassword.length)))), element('span', 'profile-copy-mark', '⧉'));
+      row.addEventListener('click', async () => {
+        const ok = await copyReference(sitePassword);
+        say(ok ? 'Copied: Password' : 'Could not copy. Try again.');
+        if (!ok) return;
+        row.classList.add('copied');
+        setTimeout(() => row.classList.remove('copied'), 1200);
+      });
+      box.append(row);
+    }
     // Salary: the same two lines for every candidate; the Manager edits them here (remembered).
     box.append(element('div', 'profile-group', 'Salary'));
     for (const [key, label] of [['salaryMonth', 'Per month'], ['salaryYear', 'Per year']]) {
@@ -888,7 +904,7 @@
       if (state.references) copies.append(textButton('Letter', state.references.coverLetterText));
       job.append(copies);
       if (openBox === 'answer' && state.references) job.append(answerBox());
-      if (openBox === 'profile' && state.references) job.append(profileBox(state.references.profile || {}));
+      if (openBox === 'profile' && state.references) job.append(profileBox(state.references.profile || {}, state.references.sitePassword || ''));
       if (openBox === 'career' && state.references) job.append(careerBox(state.references));
     }
     if (auto) job.append(jobStatus);
