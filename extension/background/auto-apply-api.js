@@ -338,21 +338,25 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     return documents;
   };
 
+  // A quick Ask AI (the page and step just filled, options.quick): straight to the questions still
+  // empty. The page, its sign-in and its old values were seen to by that fill; what the Manager has
+  // typed since is marked on each box as they type, so nothing needs looking at again.
+  const quick = options.quick === true;
   // 0. The page: a sign-in or human check is the Manager's, and nothing is sent or filled for it.
   await inForm(tabId, (context) => globalThis.__qtsApplyForm.setUploadContext(context), [{ attemptId: application.attemptId, step }]);
-  await waitForFormFields(tabId, { minFields: step > 1 || application.tabMoved ? 1 : 3, pollMs: 300, steadyPolls: 2 });
-  await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
-  const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+  if (!quick) await waitForFormFields(tabId, { minFields: step > 1 || application.tabMoved ? 1 : 3, pollMs: 300, steadyPolls: 2 });
+  if (!quick) await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
+  const page = quick ? null : await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
   if (['authentication_required', 'registration_required', 'verification_required'].includes(page?.type)) {
     problem('This page needs account or verification details. Enter passwords and one-time codes yourself, then use the site’s sign-in or continue control; QTS will go on at the next application page.', null, 'field', true);
     return finish({ checks: false });
   }
-  const gate = await inForm(tabId, () => globalThis.__qtsApplyForm.pageGate()).catch(() => null);
+  const gate = quick ? null : await inForm(tabId, () => globalThis.__qtsApplyForm.pageGate()).catch(() => null);
   if (gate?.kind === 'bot_check') {
     problem(`Solve the human check ("${String(gate.text).slice(0, 60)}") yourself. QTS does not get around it.`, null, 'field', true);
     return finish({ checks: false });
   }
-  await inForm(tabId, () => globalThis.__qtsApplyForm.revealLazySections()).catch(() => null);
+  if (!quick) await inForm(tabId, () => globalThis.__qtsApplyForm.revealLazySections()).catch(() => null);
 
   // Boxes met on an earlier pass are the Manager's now: never emptied or filled again (only their
   // own Fill again or Ask AI again goes back over them).
@@ -360,11 +364,14 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
 
   // 1. Clean, once per page: nothing left from anyone before.
   await throwIfStopped();
-  await say('Removing anything already in the form…');
+  // (Nothing typed or chosen is emptied, the Manager's choice of 2026-11-17; only another person's
+  // uploaded files go, so the candidate's own PDFs can be attached. QTS notes the boxes it has met, so
+  // a box met on an earlier pass is never filled over again.)
   const cleanStarted = Date.now();
-  const cleaned = await inForm(tabId, (given) => globalThis.__qtsApplyForm.emptyOldAnswers(given), [{
+  const cleaned = quick ? { keys: [], boxKeys: [], stuck: [], emptied: [] } : await inForm(tabId, (given) => globalThis.__qtsApplyForm.emptyOldAnswers(given), [{
     known: [...application.cleanedBoxes],
     seedOnly: application.seedCleanOnce === true,
+    values: false,
     keepValues: [application.job?.title, application.job?.company].filter(Boolean),
     uploads: true,
     keepFiles: [application.applyDocuments?.resume?.filename, application.applyDocuments?.coverLetter?.filename].filter(Boolean),
@@ -381,7 +388,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   const reviewed = new Set(options.again || options.onlyEmpty ? [] : (cleaned.boxKeys || []).filter(([, key]) => metBefore.has(key)).map(([id]) => id));
   for (const box of cleaned.stuck || []) application.stuckBoxes.set(box.id ?? box.label, box);
   emptiedCount = (cleaned.emptied || []).length;
-  await settle(300, 1500);
+  if (!quick) await settle(300, 1500);
 
   // Rounds: a question that appears after an earlier answer goes through the same steps, alone.
   for (let round = 0; round <= APPLY_FILL_ROUNDS; round += 1) {
@@ -391,7 +398,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     let fresh = [];
     for (const field of fields) {
       if (field.hidden || field.disabled || field.unrelated || field.account || field.managerChanged || field.trackingValue || reviewed.has(field.id) || seen.has(field.id)) continue;
-      if (await stillAnswered(field)) {
+      if (!options.onlyEmpty && await stillAnswered(field)) {
         seen.add(field.id);
         used[field.label].fieldId = field.id;
         continue;
@@ -500,7 +507,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
           failure = error instanceof Error ? error.message : 'the AI did not answer';
         }
         timings.ai += Date.now() - aiStarted;
-        application.onAi?.({ state: 'done', provider: 'AI', focused: false });
+        application.onAi?.({ state: 'done', provider: 'AI', focused: false, ok: !failure });
       }
       if (failure) {
         // No answers, no filling: the form stays clean for "Ask AI again" or for the Manager.

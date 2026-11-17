@@ -2505,6 +2505,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     // Auto Apply: the Manager clicked a start / continue control in the application's tab; a tab it
     // opens is the next step (see judgeAutoContinuation).
+    // Auto Apply: Alt+S, QTS stops filling this step at once (an AI request under way too).
+    if (msg.action === 'stop_filling') {
+      const held = activeReviews.get(msg.attemptId);
+      if (!held?.auto || held.tabId !== sender.tab?.id) return { ok: false };
+      return { ok: held.onStopFill?.() === true };
+    }
     if (msg.action === 'page_click') {
       const review = activeReviews.get(msg.attemptId);
       if (review?.auto && sender.tab?.id === review.tabId && ['start', 'unclear', 'side'].includes(msg.kind)) noteTabClick(sender.tab.id, msg.kind, 'manager');
@@ -3003,6 +3009,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   // the page, and why the application ended (for the local stop log).
   let cancelRequested = false;
   let removeRequested = false;
+  // Auto Apply: the Manager's Alt+S while QTS fills a step (the step stops; the application goes on).
+  let stopFillRequested = false;
   let keptStopped = false;
   let endReason = 'ended';
   // Auto Apply: Cancel, Stop all, or a lost claim interrupts the work at once (the step being filled,
@@ -3066,6 +3074,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   // Auto Apply with APIs records answers only with a real Submit: anything else starts fresh next time.
   const keptAnswers = () => (application.apiFlow ? [] : appliedAnswers(answersUsed));
   const checkBaselines = new Map(resume?.checkBaselines || []);
+  // Auto Apply: each step is filled only when the Manager presses Alt+F (or Fill again); the
+  // setting qtsAutoApplyFillOnKey = false fills each step by itself, as before.
+  if (auto) application.fillOnKey = (await chrome.storage.local.get('qtsAutoApplyFillOnKey').catch(() => ({}))).qtsAutoApplyFillOnKey !== false;
   let savedChanges = resume?.savedChanges || [];
   application.answerCache = new Map(resume?.cache || []);
   // Auto Apply: questions whose AI answer was refused (or that the AI could not answer), with why.
@@ -3169,8 +3180,17 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   let submitRequest = null;
   // Auto Apply: the panel and the launcher say while the AI is answering (and whether its tab is shown).
   if (auto) {
-    application.onAi = ({ state, provider, focused }) => {
+    application.onAi = ({ state, provider, focused, ok }) => {
       if (tab?.id == null) return;
+      const signals = (activeReviews.get(application.attemptId)?.signals) || null;
+      if (signals) {
+        if (state === 'asking') signals.ai = 'busy';
+        else if (state === 'done') {
+          signals.ai = ok === false ? 'failed' : 'done';
+          if (ok !== false) signals.fill = 'busy';
+        }
+        if (state === 'done') showReviewPanel(tab.id, activeReviews.get(application.attemptId).panel).catch(() => {});
+      }
       if (state === 'asking') {
         review.panel = reviewState('working', { step: currentStep, workingText: `Asking ${provider} about the questions left${focused ? ' (its tab is shown while it answers)' : ' (it answers in the background)'}…` });
         showReviewPanel(tab.id, review.panel).catch(() => {});
@@ -3200,6 +3220,13 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       stopRequested = true;
       aiAbortController?.abort();
       signalStop('Cancelled by the Manager. The job went back to the list, unchanged.');
+    }, onStopFill: () => {
+      // Only while QTS fills (a step's fill or its AI answers): nothing else is stopped.
+      if (!review.onFillStop) return false;
+      stopFillRequested = true;
+      review.stepAbort?.abort();
+      review.onFillStop();
+      return true;
     }, onRemoveRequested: () => {
       // The panel's Remove while QTS works (filling, Ask AI): that stops at once, then the row goes.
       removeRequested = true;
@@ -3607,7 +3634,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       if (lostClaim) throw new ApplyStop('This Chrome lost the application to another one.', { skip: false, keepTab: false });
       // Auto Apply with APIs: the form may be on another site than the job page, and a sign-in may have
       // just happened. Checked before anything is filled.
-      if (application.apiFlow) {
+      const quickAsk = auto && askAi && application.apiFlow && application.lastFill?.step === step
+        && application.lastFill?.tabId === tab.id && application.lastFill?.url === ((await getTab(tab.id))?.url || '');
+      if (application.apiFlow && !quickAsk) {
         const site = await confirmSiteAccount(step);
         if (site.decision) return await finishBeforeSubmit(site.decision);
         if (site.reloaded && recipe.findStart) {
@@ -3615,7 +3644,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
           if (decision) return await finishBeforeSubmit(decision);
         }
       }
-      const currentPage = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+      const currentPage = quickAsk ? null : await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
       if (['email_first_application', 'authentication_required', 'registration_required',
         'verification_required', 'captcha_required'].includes(currentPage?.type)) {
         const decision = await navigateToApplication(step);
@@ -3629,6 +3658,15 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       application.formTabId = tab.id;
       currentStep = step;
       await report('review', { review: false, appliedAnswers: keptAnswers() });
+      if (auto) {
+        review.signals ||= {};
+        if (review.signalsStep !== step && !askAi) review.signals.ai = 'idle';
+        review.signalsStep = step;
+        // (Ask AI: A spins first, then F while its answers go in.)
+        // (Waiting for Alt+F: F stays dim until the Manager presses it.)
+        const waitsForKey = application.apiFlow && application.fillOnKey && !fillAgain && !askAi && !revisitStep && !checkResumedPage;
+        if (!askAi) review.signals.fill = waitsForKey ? 'idle' : 'busy';
+      }
       review.panel = reviewState('working', { step, workingText: fillAgain ? 'Filling again…' : `Filling step ${step}…` });
       await showReviewPanel(tab.id, review.panel).catch(() => {});
       await onProgress({ step, phase: 'filling', ...(auto ? { memory: memory() } : {}) });
@@ -3653,6 +3691,11 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       // Auto Apply asks the AI only when the Manager clicks Ask AI, and then only about the boxes
       // still empty on this step (optional ones too); every other fill uses no AI.
       const aiNow = askAi && application.autoAi !== false;
+      // Auto Apply: not filled until the Manager presses Alt+F (or Fill again); Alt+A asks the AI.
+      if (auto && application.apiFlow && application.fillOnKey && !filled && !fillAgain && !aiNow) {
+        notice = 'Press Alt+F to fill this step (or Fill again). Alt+A asks the AI for the boxes still empty.';
+        filled = { used: {}, unresolved: [], problems: [], provisional: [], waitingForKey: true };
+      }
       askAi = false;
       // Auto Apply: this step's own stop for the AI, so a move stops Ask AI in the old tab only.
       if (auto && aiAbortController && typeof AbortSignal.any === 'function') {
@@ -3661,26 +3704,32 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       }
       const MOVED = { moved: true };
       const movedAway = auto ? new Promise((resolve) => { review.onMoveSignal = () => resolve(MOVED); }) : null;
+      // Alt+S: the fill (and its AI request) stops at once; what is filled stays.
+      const STOPPED = { stopped: true };
+      stopFillRequested = false;
+      const stoppedByManager = auto ? new Promise((resolve) => { review.onFillStop = () => resolve(STOPPED); }) : null;
       if (auto && (review.moveRequested || review.orphaned)) review.onMoveSignal();
       try {
         const filling = filled ? null : application.apiFlow ? interruptible(self.__qtsAutoApplyApi.fillPage(tab.id, application, keepAlive, step, {
           noAi: !aiNow,
           onlyEmpty: aiNow,
+          quick: aiNow && quickAsk,
           // Only the Manager's own Fill again touches questions already reviewed.
           again: fillAgain && !aiNow,
-          stop: async () => lostClaim || submitRequest != null || review.moveRequested === true || review.orphaned === true || !(await isApplyOn()),
+          stop: async () => lostClaim || submitRequest != null || review.moveRequested === true || review.orphaned === true || stopFillRequested || !(await isApplyOn()),
           onPhase: async (workingText) => {
             review.panel = reviewState('working', { step, workingText });
             await showReviewPanel(tab.id, review.panel).catch(() => {});
           },
         })) : interruptible(fillFormPage(tab.id, application, keepAlive, step, auto
-          ? { sources: ASSIST_SOURCES, noAi: !aiNow, onlyEmpty: aiNow, listUnresolved: true, stop: async () => lostClaim || submitRequest != null || review.moveRequested === true || review.orphaned === true || !(await isApplyOn()) }
+          ? { sources: ASSIST_SOURCES, noAi: !aiNow, onlyEmpty: aiNow, listUnresolved: true, stop: async () => lostClaim || submitRequest != null || review.moveRequested === true || review.orphaned === true || stopFillRequested || !(await isApplyOn()) }
           : undefined));
         filling?.catch(() => {});
-        if (filling) filled = movedAway ? await Promise.race([filling, movedAway]) : await filling;
+        if (filling) filled = movedAway ? await Promise.race([filling, movedAway, stoppedByManager]) : await filling;
       } catch (error) {
         // The application moved (or its tab closed with a next step on the way) while QTS filled: it goes on there.
         if (auto && (review.moveRequested || review.orphaned) && !(await stoppedForGood())) filled = MOVED;
+        else if (auto && stopFillRequested && !(await stoppedForGood())) filled = STOPPED;
         else if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application') throw error;
         if (filled !== MOVED) {
           const decision = await navigateToApplication(step);
@@ -3689,6 +3738,17 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         }
       }
       if (auto) review.onMoveSignal = null;
+      if (auto) review.onFillStop = null;
+      if (filled === STOPPED) {
+        stopFillRequested = false;
+        if (review.signals) {
+          review.signals.fill = 'idle';
+          if (review.signals.ai === 'busy') review.signals.ai = 'idle';
+        }
+        // (Said in the panel's notice: the checklist keeps the step's questions as they are.)
+        notice = 'You stopped the filling (Alt+S). What is already filled stays; Fill again (or Alt+A) goes on.';
+        filled = { used: {}, unresolved: [], provisional: [], problems: [], canAskAgain: true, stoppedByManager: true };
+      }
       if (filled === MOVED) {
         const ended = await goOnInMovedTab();
         if (ended) {
@@ -3704,6 +3764,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         continue;
       }
       Object.assign(answersUsed, filled.used);
+      // F green: the step is filled; this page and step are known for a quick Ask AI.
+      if (auto && review.signals && !filled.stoppedByManager && !filled.waitingForKey) review.signals.fill = 'done';
+      if (auto && !filled.waitingForKey) application.lastFill = { step, tabId: tab.id, url: (await getTab(tab.id))?.url || '' };
       if (filled.notice) notice = filled.notice;
       // Auto Apply with APIs: questions filled while this step was open are QTS's, not the Manager's changes.
       if (application.apiFlow && checkBaselines.has(step)) {
@@ -5416,7 +5479,7 @@ function autoPanelExtras(state) {
   const review = state?.auto ? activeReviews.get(state.attemptId) : null;
   if (!review) return state;
   const notice = review.tabNotice && review.tabNotice.until > Date.now() ? review.tabNotice.text : '';
-  return { ...state, tabNotice: notice, askTabs: [...(review.askTabs?.values() || [])], ui: review.panelUi || null, revealAt: review.revealAt || 0 };
+  return { ...state, tabNotice: notice, askTabs: [...(review.askTabs?.values() || [])], ui: review.panelUi || null, revealAt: review.revealAt || 0, signals: { ...(review.signals || {}) } };
 }
 
 const leaveAutoTab = (review, tabId) => {
@@ -5589,7 +5652,7 @@ async function closeMovedFromTabs(review) {
   }
 }
 
-/** Alt+A: the application's tab in front with its panel open (this tab's, else the latest one). */
+/** "Bring to front" (a shortcut the Manager may set): the application's tab in front with its panel open (this tab's, else the latest one). */
 async function focusAutoApplication() {
   const reviews = [...activeReviews.values()].filter((review) => review.auto && review.tabId != null && !review.orphaned);
   if (!reviews.length) return false;
@@ -5600,10 +5663,35 @@ async function focusAutoApplication() {
   refreshAutoPanel(review);
   return true;
 }
+/**
+ * Alt+A: Ask AI on the job page in front, as the panel's Ask AI button: when QTS waits for the
+ * Manager there, the step's empty boxes go to the AI; while QTS still works, the panel says to wait; on
+ * a stopped panel the job is taken up again. Any other tab: nothing. Returns what happened.
+ */
+async function askAiFromShortcut() {
+  const [current] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+  if (current?.id == null) return 'no tab';
+  const review = [...activeReviews.values()].find((entry) => entry.auto && entry.tabId === current.id && !entry.orphaned);
+  if (review) {
+    if (reviewWaiters.has(review.attemptId) && review.panel?.mode === 'review') {
+      answerManager(review.attemptId, { action: 'ask_ai', tabId: current.id });
+      return 'asked';
+    }
+    setTabNotice(review, 'Ask AI when QTS waits for you on this step (Alt+A).', 8000);
+    return 'busy';
+  }
+  const stopped = (await chrome.storage.local.get('qtsAutoApplyStopped').catch(() => ({}))).qtsAutoApplyStopped?.[current.id];
+  if (stopped) {
+    await answerStoppedAutoTab({ attemptId: stopped.attemptId, action: 'ask_ai' }, { tab: { id: current.id } });
+    return 'taken up again';
+  }
+  return 'not a job tab';
+}
 chrome.commands?.onCommand?.addListener((command) => {
   if (command === 'focus-auto-apply') focusAutoApplication().catch(() => {});
+  if (command === 'auto-apply-ask-ai') askAiFromShortcut().catch(() => {});
 });
-globalThis.__qtsAutoApplyTabs = { focus: focusAutoApplication };
+globalThis.__qtsAutoApplyTabs = { focus: focusAutoApplication, askAi: askAiFromShortcut };
 
 // ---- Auto Apply: a stopped application keeps its tab; the local stop log; Remove ----
 // Only the Manager ends an application with its tab (Submitted, Cancel, Skip, Later, Remove, closing

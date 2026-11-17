@@ -294,6 +294,21 @@ const ACCT_SPLIT = `<!doctype html><html><head><title>Sign In</title></head><bod
     <button type="submit">Sign In</button>
   </form>
 </body></html>`;
+// A phone section as Workday shows it: the device type, the country phone code as its own question
+// (already on "Romania (+40)"), the number, and an optional extension.
+const PHONE_SECTION = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Globex - Apply</title></head><body>
+<form id="app">
+  <div><label for="fn">First name *</label><input id="fn" required></div>
+  <div><label for="ln">Last name *</label><input id="ln" required></div>
+  <div><label for="em">Email *</label><input id="em" type="email" required></div>
+  <section><h3>Phone</h3>
+    <div><label for="ptype">Phone Device Type *</label><select id="ptype" required><option value="">Select One</option><option>Home</option><option>Mobile</option><option>Work</option></select></div>
+    <div class="code-field"><label for="pcode">Country Phone Code *</label><span class="chip">Romania (+40)</span><input id="pcode" aria-label="Country Phone Code" readonly></div>
+    <div><label for="pnum">Phone Number *</label><input id="pnum" type="tel" required></div>
+    <div><label for="pext">Phone Extension</label><input id="pext"></div>
+  </section>
+  <button type="submit" id="submit">Submit application</button>
+</form>${FORM_END}</body></html>`;
 // A site that rebuilds its page and throws QTS's panel out, once.
 const PANEL_THIEF = SMALL_FORM(`<script>setTimeout(() => { const panel = document.querySelector('[data-qts-apply-review]'); if (panel) { panel.remove(); window.panelThrownOut = true; } }, 4000);</script>`);
 const ACCOUNT_LOGIN = `<!doctype html><html><body>
@@ -438,6 +453,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/guest-create') return html(GUEST_CREATE);
     if (url.pathname === '/job-noopener') return html(JOB_NOOPENER);
     if (url.pathname === '/acct-split') return html(ACCT_SPLIT);
+    if (url.pathname === '/phone-section') return html(PHONE_SECTION);
     const goTo = (where) => { res.writeHead(302, { Location: where }); res.end(); };
     if (url.pathname === '/acct-signin-submit') {
       const email = url.searchParams.get('email');
@@ -564,7 +580,7 @@ async function launch() {
   const browser = await puppeteer.launch({
     executablePath: CHROME, headless: !HEADFUL, pipe: true, protocolTimeout: 600000, defaultViewport: HEADFUL ? null : { width: 1280, height: 900 },
     // indeed.com stands in for a site nobody is signed out of; it is mapped here, so nothing reaches it.
-    enableExtensions: [path.join(root, 'extension')], args: ['--no-first-run', '--disable-popup-blocking', '--window-size=1300,950', '--host-resolver-rules=MAP www.indeed.com 127.0.0.1, MAP smartapply.indeed.com 127.0.0.1, MAP jobs.ats-example.com 127.0.0.1, MAP accounts.google.com 127.0.0.1, MAP www.dropbox.com 127.0.0.1'],
+    enableExtensions: [path.join(root, 'extension')], args: ['--no-first-run', '--disable-popup-blocking', '--window-size=1300,950', '--host-resolver-rules=MAP www.indeed.com 127.0.0.1, MAP smartapply.indeed.com 127.0.0.1, MAP jobs.ats-example.com 127.0.0.1, MAP accounts.google.com 127.0.0.1, MAP www.dropbox.com 127.0.0.1, MAP globex.wd3.myworkdayjobs.com 127.0.0.1'],
   });
   const target = await browser.waitForTarget((entry) => entry.type() === 'service_worker' && entry.url().includes('service-worker.js'), { timeout: 30000 });
   const extensionId = new URL(target.url()).host;
@@ -577,6 +593,7 @@ async function launch() {
     await chrome.storage.local.set({
       qtsServerUrl: base, authToken: 'e2e-test-token', authExpiresAt: Date.now() + 3600 * 1000,
       qtsSessionUser: { id: 'e2e', role: 'manager', displayName: 'E2E' }, qtsApplyDebug: true, qtsBrowserName: 'E2E Chrome',
+      qtsAutoApplyFillOnKey: false,
     });
   }, BASE);
   const installWorkerMocks = () => worker.evaluate((documentPdf) => {
@@ -596,6 +613,8 @@ async function launch() {
   await control.goto(`chrome-extension://${extensionId}/popup/popup.html`).catch(() => {});
   const action = (name, selection) => control.evaluate(({ act, workSelection }) => chrome.runtime.sendMessage({ type: 'QTS_PAGE_ACTION', action: act, ...(workSelection ? { selection: workSelection } : {}) }), { act: name, workSelection: selection });
   const storage = (keys) => worker.evaluate((k) => chrome.storage.local.get(k), keys);
+  globalThis.__askAi = () => worker.evaluate(() => self.__qtsAutoApplyTabs.askAi());
+  globalThis.__worker = () => worker;
   globalThis.__diag = () => worker.evaluate(() => [...activeReviews.values()].map((review) => ({ mode: review.panel?.mode, text: review.panel?.workingText, problems: review.panel?.problems, waiting: reviewWaiters.has(review.attemptId) })));
   // The worker stops (restarted, updated, asleep) and a new one wakes (here: the popup opened).
   const restartWorker = async () => {
@@ -705,7 +724,10 @@ const valueOf = (page, id) => page.evaluate((box) => document.getElementById(box
 // until the panel is back in review (QTS has finished typing and checking the answers).
 const askAi = async (page, { wait = true } = {}) => {
   const before = mock.answers;
-  await pressPanel(page, 'Ask AI');
+  // Alt+A (the panel has no Ask AI button): Chrome's shortcut, run by the worker on the page in front.
+  await until(async () => (await globalThis.__diag()).some((review) => review.waiting && review.mode === 'review'), 20000, 'the review to wait');
+  await page.bringToFront();
+  await until(async () => (await globalThis.__askAi()) === 'asked', 20000, 'Alt+A to ask');
   if (!wait) return;
   await until(() => mock.answers > before, 30000, 'the AI request');
   await until(async () => (await globalThis.__diag()).some((review) => review.waiting && review.mode === 'review'), 60000, 'the review after Ask AI');
@@ -716,23 +738,22 @@ const emptyBox = (page, id) => page.evaluate((box) => { document.getElementById(
 test.before(() => new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve)));
 test.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
 
-test('the form is emptied and filled from the profile and documents without AI; Ask AI answers what is left; QTS never submits', { skip, timeout: 180000 }, async () => {
+test('the form is filled from the profile and documents without AI (what the site put in boxes QTS has no answer for stays); Ask AI answers what is left; QTS never submits', { skip, timeout: 180000 }, async () => {
   resetMock({ queue: [application(1, 'form')] });
   const { browser, action, storage } = await launch();
   try {
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
-    // Old values gone; the profile and the documents in; no AI request by itself.
+    // The profile and the documents in (over what was there); nothing emptied; no AI request by itself.
     assert.equal(await valueOf(form, 'fn'), 'Ana');
     assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
     assert.equal(await valueOf(form, 'ph'), '+40264484948');
-    assert.equal(await valueOf(form, 'hear'), '', 'the old choice was emptied and nothing guessed');
-    assert.equal(await valueOf(form, 'mot'), '', 'the old answer was emptied and nothing invented');
+    assert.equal(await valueOf(form, 'hear'), 'Indeed', 'a choice QTS has no answer for stays as the site had it');
+    assert.equal(await valueOf(form, 'mot'), "Someone else's answer", 'nothing emptied, nothing invented');
     assert.equal(await valueOf(form, 'ref'), 'KEEP-123', 'a referral code the site put there stays');
     assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true);
     assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
-    assert.equal(await form.evaluate(() => Boolean(document.getElementById('old-file'))), false);
     const events = await form.evaluate(() => window.events);
     const uploadedAt = events.findIndex((event) => event.id === 'cv' && event.value === 'Ana_Test_CV.pdf');
     const filledAt = events.findIndex((event) => event.id === 'fn' && event.value === 'Ana');
@@ -740,7 +761,9 @@ test('the form is emptied and filled from the profile and documents without AI; 
     await sleep(2000);
     assert.equal(mock.answers, 0, 'the AI is never asked by itself');
 
-    // Ask AI: one request, only about the boxes still empty.
+    // The Manager empties two boxes; Ask AI: one request, only about the boxes now empty.
+    await emptyBox(form, 'hear');
+    await emptyBox(form, 'mot');
     await askAi(form);
     await until(() => mock.answers === 1, 30000, 'the AI request');
     await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the AI answers to be filled');
@@ -768,7 +791,7 @@ test('Submitted saves the bid at once, on any step, and the tab closes', { skip,
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/steps');
     // Step 1 of 2, with things still to do: Submitted is there and works.
-    await until_panel(form, /Submitted saves the bid at any time/);
+    await until_panel(form, /Submitted/);
     await pressPanel(form, 'Submitted');
     await until(() => mock.results.length === 1, 20000, 'the bid');
     assert.equal(mock.submitted.length, 1);
@@ -788,6 +811,7 @@ test('Submitted while the AI is answering stops it and saves the bid', { skip, t
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
+    await emptyBox(form, 'mot');
     await askAi(form, { wait: false });
     await until(() => mock.answers === 1, 30000, 'the AI request');
     await until_panel(form, /Asking the AI/);
@@ -828,21 +852,24 @@ test('without Super Admin\'s "Auto Apply with APIs" Auto Apply does not start', 
   } finally { await browser.close(); }
 });
 
-test('the panel lists the page\'s required questions with the profile\'s answers; Fill puts one in', { skip, timeout: 120000 }, async () => {
+test('the panel lists only the required questions still empty, with the profile\'s answers; Fill puts one in and it leaves the list', { skip, timeout: 120000 }, async () => {
   resetMock({ queue: [application(64, 'small')] });
   const { browser, action, storage } = await launch();
   try {
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/small');
-    const text = await until_panel(form, /Required on this page \(3\)/);
+    const filled = await until_panel(form, /✉ Letter/);
+    assert.match(filled, /💬 Answer/);
+    assert.doesNotMatch(filled, /Still empty on this page/, 'all filled: no list');
+    // The Manager clears First name (a real edit: the panel reads the form again).
+    await form.evaluate(() => { const box = document.getElementById('fn'); box.value = ''; box.dispatchEvent(new Event('input', { bubbles: true })); });
+    const text = await until_panel(form, /Still empty on this page \(1\)/);
     assert.match(text, /First name \* Ana/);
-    assert.match(text, /Email \* ana\.test@example\.com/);
-    assert.match(text, /Copy Resume/);
-    assert.match(text, /Copy Cover Letter/);
-    await emptyBox(form, 'fn');
+    // ("(1)": the filled boxes, Email among them, are not listed.)
     assert.equal(await clickPanelButton(form, 'Fill'), true);
     await until(async () => await valueOf(form, 'fn') === 'Ana', 15000, 'First name filled from the panel');
+    await until(async () => !/Still empty on this page/.test(await panelText(form)), 15000, 'the list is gone once filled');
     assert.equal(mock.answers, 0);
   } finally { await browser.close(); }
 });
@@ -870,6 +897,7 @@ test('when the AI has no answers nothing is filled from it, and Ask AI again fin
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
+    await emptyBox(form, 'mot');
     await askAi(form);
     await until_panel(form, /The AI did not answer/);
     assert.equal(mock.answers, 1, 'a day\'s limit is not retried');
@@ -1102,7 +1130,7 @@ test('a stopped panel keeps all its buttons; Fill again takes the job up again i
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
     await worker.evaluate(() => chrome.storage.local.set({ qtsExtensionStatus: null }));
-    const panel = await until_panel(form, /Auto Apply stopped/, 30000);
+    const panel = await until_panel(form, /Give back/, 30000);
     for (const label of ['Submitted', 'Check', 'Skip', 'Later', 'Fill again', 'Give back']) assert.match(panel, new RegExp(label));
     // Auto Apply on again; Fill again goes on in this tab (not a new one).
     await worker.evaluate(() => chrome.storage.local.set({ qtsApplyKind: 'auto', qtsExtensionStatus: 'apply' }));
@@ -1130,6 +1158,73 @@ test('a kept (stopped) tab counts toward the limit: no new job opens beside it u
     await clickStopped(form, 'Give back');
     await until(() => mock.claims >= 2, 30000, 'the next job once the kept tab is let go');
     await until(() => formPage(browser, '/small'), 30000, 'the next job page');
+  } finally { await browser.close(); }
+});
+
+/** The A and F signals as the page shows them: their classes ('sig', 'sig busy', 'sig done', 'sig failed'), read inside the panel's closed shadow root. */
+async function signalClasses(page) {
+  const worker = globalThis.__worker();
+  const url = page.url();
+  return worker.evaluate(async (pageUrl) => {
+    const [tab] = (await chrome.tabs.query({})).filter((entry) => entry.url === pageUrl);
+    if (!tab) return { a: '', f: '' };
+    const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+      const host = document.querySelector('[data-qts-apply-review]');
+      const root = host && chrome.dom.openOrClosedShadowRoot(host);
+      const found = root ? [...root.querySelectorAll('.sig')].map((node) => node.className) : [];
+      return { a: found[0] || '', f: found[1] || '' };
+    } });
+    return result?.result || { a: '', f: '' };
+  }, url);
+}
+
+test('the A and F signals: F spins while filling and turns green; A spins while the AI answers, then green (red when it does not)', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(170, 'form')], answerDelay: 4000 });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    let lastSeen = null;
+    await until(async () => { const seen = lastSeen = await signalClasses(form); return seen.f === 'sig done' && seen.a === 'sig' ? seen : null; }, 15000, 'F green, A idle after the fill').catch((error) => { throw new Error(error.message + ' ' + JSON.stringify(lastSeen)); });
+    // (Nothing is emptied by QTS: the Manager empties the box the site had filled.)
+    await emptyBox(form, 'mot');
+    await askAi(form, { wait: false });
+    await until(async () => (await signalClasses(form)).a === 'sig busy', 10000, 'A spinning while the AI answers');
+    await until(async () => { const seen = await signalClasses(form); return seen.a === 'sig done' && seen.f === 'sig done' ? seen : null; }, 40000, 'A and F green after the AI answers are in');
+    // An AI that does not answer: A red.
+    mock.aiMode = 'quota';
+    await emptyBox(form, 'mot');
+    await askAi(form, { wait: false });
+    await until(async () => (await signalClasses(form)).a === 'sig failed', 40000, 'A red when the AI did not answer');
+  } finally { await browser.close(); }
+});
+
+test('a Workday phone section: device type Mobile, the number without the +40 the code question shows, the extension left empty', { skip, timeout: 120000 }, async () => {
+  const job = application(171, 'phone-section');
+  job.job.url = `http://globex.wd3.myworkdayjobs.com:${PORT}/phone-section?job=171`;
+  resetMock({ queue: [job] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = (await browser.pages()).find((page) => page.url().includes('myworkdayjobs.com'));
+    assert.equal(await valueOf(form, 'ptype'), 'Mobile');
+    assert.equal(await valueOf(form, 'pnum'), '264484948', 'no +40: the code question already says it');
+    assert.equal(await valueOf(form, 'pext'), '', 'an extension is not the phone number');
+  } finally { await browser.close(); }
+});
+
+test('the same phone section on another site: the whole number (the +40 rule is Workday only)', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(172, 'phone-section')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/phone-section');
+    assert.equal(await valueOf(form, 'pnum'), '+40264484948');
+    assert.equal(await valueOf(form, 'ptype'), 'Mobile');
+    assert.equal(await valueOf(form, 'pext'), '');
   } finally { await browser.close(); }
 });
 
@@ -1260,6 +1355,7 @@ test('a cancelled job starts fresh: nothing is kept, and the AI is asked again',
   try {
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
+    await emptyBox(await formPage(browser, '/form'), 'mot');
     await askAi(await formPage(browser, '/form'));
     await until(() => mock.answers === 1, 30000, 'the AI request');
     await waitForStep(storage, 1);
@@ -1269,7 +1365,7 @@ test('a cancelled job starts fresh: nothing is kept, and the AI is asked again',
     // Auto Apply switched off is not the Manager ending the application: the tab stays, with the
     // stopped panel. The Manager's Give back closes it.
     const stoppedForm = await formPage(browser, '/form');
-    await until_panel(stoppedForm, /Auto Apply stopped/, 20000);
+    await until_panel(stoppedForm, /Give back/, 20000);
     await clickStopped(stoppedForm, 'Give back');
     await until(async () => !(await formPage(browser, '/form')), 20000, 'the old tab to close after Give back');
     assert.equal(mock.released[0].mode, 'drop', 'nothing is recorded on the job');
@@ -1282,7 +1378,8 @@ test('a cancelled job starts fresh: nothing is kept, and the AI is asked again',
     const form = await until(() => formPage(browser, '/form'), 30000, 'the form again');
     await waitForStep(storage, 1);
     await until(async () => await valueOf(form, 'em') === 'ana.test@example.com', 30000, 'the page to be filled');
-    assert.equal(await valueOf(form, 'mot'), '', 'the earlier AI answers were not kept');
+    assert.notEqual(await valueOf(form, 'mot'), 'Building reliable services.', 'the earlier AI answers were not kept');
+    await emptyBox(form, 'mot');
     await askAi(form);
     await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the new AI answers');
     assert.equal(mock.answers, 2, 'a new AI request');
@@ -1557,6 +1654,7 @@ test('Ask AI again answers only the boxes still empty, keeps the documents attac
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
+    await emptyBox(form, 'mot');
     await askAi(form);
     await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the AI answers');
     assert.equal(mock.answers, 1);
@@ -1575,7 +1673,7 @@ test('Ask AI again answers only the boxes still empty, keeps the documents attac
     await until(async () => await valueOf(form, 'mot') === 'Building reliable services.', 30000, 'the empty box answered');
     assert.deepEqual(mock.asked[1], ['What motivates you in your work?'], 'only the empty box is asked about');
     assert.equal(await valueOf(form, 'ph'), '+40 700 000 111', 'the Manager\'s edit stays');
-    assert.equal(await valueOf(form, 'hear'), 'LinkedIn', 'what was filled stays');
+    assert.equal(await valueOf(form, 'hear'), 'Indeed', 'what the site had chosen stays (QTS empties nothing)');
     assert.equal(await attachments(), attached, 'the document is not attached twice');
     assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
   } finally { await browser.close(); }
@@ -1961,7 +2059,7 @@ test('an extension restart right after a move goes on in the new tab', { skip, t
   } finally { await browser.close(); }
 });
 
-test('Alt+S opens the actions; Cancel after a move gives the job back unchanged and leaves side tabs open', { skip, timeout: 150000 }, async () => {
+test('after a move, Later gives the job back unchanged and leaves side tabs open', { skip, timeout: 150000 }, async () => {
   const { browser, storage, first } = await startOn(115, 'tab-step1');
   try {
     await first.click('#privacy-link');
@@ -1970,13 +2068,7 @@ test('Alt+S opens the actions; Cancel after a move gives the job back unchanged 
     await waitForStep(storage, 2, 60000);
     const step2 = await formPage(browser, '/tab-step2');
     await step2.bringToFront();
-    await step2.click('#city');
-    await step2.keyboard.down('Alt');
-    await step2.keyboard.press('KeyS');
-    await step2.keyboard.up('Alt');
-    const menu = await until_panel(step2, /Actions · Alt\+S/, 10000);
-    for (const label of ['Fill again', 'Submitted', 'Cancel']) assert.match(menu, new RegExp(label));
-    await pressPanel(step2, 'Cancel');
+    await pressPanel(step2, 'Later');
     await until(() => mock.released.length === 1, 20000, 'the job given back');
     assert.equal(mock.released[0].mode, 'drop', 'nothing recorded on the job');
     assert.equal(mock.results.length, 0, 'no bid');
@@ -1985,11 +2077,76 @@ test('Alt+S opens the actions; Cancel after a move gives the job back unchanged 
   } finally { await browser.close(); }
 });
 
-test('Alt+A brings the application tab to the front with its panel', { skip, timeout: 120000 }, async () => {
+test('Alt+S stops the filling at once (here the AI under way): nothing more goes in, the job stays open, the panel says so', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(173, 'form')], answerDelay: 12000 });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    await emptyBox(form, 'mot');
+    await askAi(form, { wait: false });
+    await until(() => mock.answers === 1, 30000, 'the AI request');
+    await form.bringToFront();
+    await form.keyboard.down('Alt');
+    await form.keyboard.press('KeyS');
+    await form.keyboard.up('Alt');
+    await until_panel(form, /You stopped the filling \(Alt\+S\)/, 15000);
+    await sleep(14000);
+    assert.equal(await valueOf(form, 'mot'), '', 'the AI answer never went in');
+    assert.equal(mock.released.length, 0, 'the job stays open');
+    const seen = await signalClasses(form);
+    assert.notEqual(seen.a, 'sig busy');
+    assert.notEqual(seen.f, 'sig busy');
+  } finally { await browser.close(); }
+});
+
+test('Alt+F: nothing is filled until the Manager presses it; each new step waits for it again', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(174, 'steps')] });
+  const { browser, action, worker, storage } = await launch();
+  try {
+    await worker.evaluate(() => chrome.storage.local.set({ qtsAutoApplyFillOnKey: true }));
+    assert.equal((await action('auto_apply')).ok, true);
+    const form = await until(() => formPage(browser, '/steps'), 30000, 'the form');
+    await until_panel(form, /Press Alt\+F to fill this step/, 40000);
+    await sleep(2000);
+    assert.equal(await valueOf(form, 'fn'), '', 'not filled without Alt+F');
+    assert.equal((await signalClasses(form)).f, 'sig', 'F dim');
+    await until(async () => (await globalThis.__diag()).some((review) => review.waiting && review.mode === 'review'), 20000, 'the review');
+    await form.bringToFront();
+    await form.keyboard.down('Alt');
+    await form.keyboard.press('KeyF');
+    await form.keyboard.up('Alt');
+    await until(async () => (await valueOf(form, 'fn')) === 'Ana', 30000, 'filled after Alt+F');
+    await until(async () => (await signalClasses(form)).f === 'sig done', 15000, 'F green');
+    // The Manager's own Next: the next step waits for Alt+F again.
+    await form.click('#next1');
+    await until_panel(form, /Press Alt\+F to fill this step/, 40000);
+    await sleep(1500);
+    assert.equal(await valueOf(form, 'note'), '', 'step 2 not filled without Alt+F');
+    assert.equal(mock.answers, 0);
+  } finally { await browser.close(); }
+});
+
+test("Alt+A asks the AI on the job page in front, as the panel's Ask AI button", { skip, timeout: 120000 }, async () => {
+  const { browser, worker, first } = await startOn(117, 'form');
+  try {
+    const commands = await worker.evaluate(() => chrome.commands.getAll());
+    assert.ok(commands.some((command) => command.name === 'auto-apply-ask-ai'), 'the Alt+A shortcut is there');
+    assert.equal(await valueOf(first, 'mot'), "Someone else's answer", 'nothing asked by itself (and nothing emptied)');
+    await until(async () => (await globalThis.__diag()).some((review) => review.waiting && review.mode === 'review'), 20000, 'the review to wait');
+    await emptyBox(first, 'mot');
+    assert.equal(await worker.evaluate(() => self.__qtsAutoApplyTabs.askAi()), 'asked');
+    await until(() => mock.answers === 1, 30000, 'the AI request');
+    await until(async () => (await valueOf(first, 'mot')) === 'Building reliable services.', 30000, 'the AI answer filled');
+  } finally { await browser.close(); }
+});
+
+test('"bring to front" still brings the application tab to the front with its panel (no key unless set)', { skip, timeout: 120000 }, async () => {
   const { browser, worker, first } = await startOn(116, 'tab-step1');
   try {
     const commands = await worker.evaluate(() => chrome.commands.getAll());
-    assert.ok(commands.some((command) => command.name === 'focus-auto-apply'), 'the shortcut is there');
+    assert.ok(commands.some((command) => command.name === 'focus-auto-apply'), 'the command is there');
     const other = await browser.newPage();
     await other.goto(`${BASE}/blank`);
     await other.bringToFront();
@@ -2132,7 +2289,7 @@ test('a hold really lost keeps the tab, the form and the panel (why, Submitted, 
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
-    const panel = await until_panel(form, /Auto Apply stopped/, 45000);
+    const panel = await until_panel(form, /Give back/, 45000);
     assert.match(panel, /Why QTS stopped: .*no longer holds/);
     assert.match(panel, /Give back/);
     assert.match(panel, /Submitted/);
@@ -2158,7 +2315,7 @@ test('Auto Apply switched off keeps the tab with the panel; Give back closes it 
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
     await worker.evaluate(() => chrome.storage.local.set({ qtsExtensionStatus: null }));
-    const panel = await until_panel(form, /Auto Apply stopped/, 30000);
+    const panel = await until_panel(form, /Give back/, 30000);
     assert.match(panel, /switched off|stopped/i);
     await sleep(1500);
     assert.ok(await formPage(browser, '/form'), 'the tab stays');
@@ -2204,6 +2361,7 @@ test('Remove while Ask AI answers stops it at once; with the hold gone the job i
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
+    await emptyBox(form, 'mot');
     await askAi(form, { wait: false });
     await until(() => mock.answers === 1, 30000, 'the AI request');
     const asked = answerConfirm(form, true);
@@ -2242,6 +2400,7 @@ test('choosing another candidate stops what was under way for the first', { skip
     assert.equal((await action('auto_apply', selection)).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
+    await emptyBox(form, 'mot');
     await askAi(form, { wait: false });
     await until(() => mock.answers === 1, 60000, 'the AI request');
     await worker.evaluate((candidateId) => chrome.storage.local.set({ qtsWorkSelection: { mode: 'auto_apply', candidateId, jobIds: [] } }), BEN.id);

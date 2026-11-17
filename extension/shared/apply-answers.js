@@ -353,6 +353,10 @@
     { test: /\b(first|given|preferred) name\b|preferred first|^(first|given)$|^fore ?names?$|^imi[eę]$|^vorname$|^pr[ée]nom$|^nombre$/, fact: (c) => c.firstName, name: 'first name', personal: true },
     { test: /\b(last|family) name\b|\bsurname\b|^(last|family)$|^nazwisko$|^nachname$|^nom( de famille)?$|^apellidos?$/, fact: (c) => c.lastName, name: 'last name', personal: true },
     { test: /e-?mail|^correo( electr[oó]nico)?$|^courriel$/, fact: (c) => c.email, name: 'email', personal: true },
+    // A phone extension is not the phone number: left empty (the profile has none).
+    { test: /\b(phone|telephone|tel|mobile)\b.*\bext(ension)?\b|^ext(ension)?\.?( number)?$|\bextension number\b/, skipWith: 'A phone extension: left empty (the profile has none).', name: 'phone extension' },
+    // The kind of phone ("Phone Device Type", "Type of phone"): the candidate's number is a mobile.
+    { test: /\b(phone|telephone)( device)? type\b|\btype of (phone|telephone|number|device)\b|^device type$/, fact: () => 'Mobile', choose: /\b(mobile|cell(ular)?)\b/i, name: 'phone type' },
     { test: /\b(phone|mobile|telephone|cell)\b|^(your )?contact (phone )?number$|^whats ?app( number)?$|^tel\.?$|^telefon(nummer| kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone', personal: true },
     { test: /linkedin/, fact: (c) => linkedinProfileUrl(c.linkedinUrl), name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
@@ -893,6 +897,7 @@
   }
 
   function ruleAnswer(rule, field, label, candidate, context) {
+    if (rule.skipWith) return { skip: rule.skipWith };
     {
       if (rule.yesNo) {
         const fact = rule.yesNo(candidate);
@@ -923,6 +928,9 @@
         return { missing: rule.name };
       }
       if (hasOptions(field)) {
+        // A rule that knows its choice's words ("Mobile", "Mobile phone", "Cell").
+        const chosen = rule.choose ? field.options.find((entry) => rule.choose.test(String(entry))) : null;
+        if (chosen) return { value: chosen, source: 'profile' };
         const option = field.options.find((entry) => String(entry).toLowerCase() === String(fact).toLowerCase());
         if (option) return { value: option, source: 'profile' };
         // The same fact in the list's words: "Romania" is "Rumunia", "Roumanie", or "RO".

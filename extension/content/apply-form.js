@@ -1572,6 +1572,26 @@
   const afterCode = (number, code) => number.replace(/^\+\s*/, '').slice(code.length).replace(/^[\s.()-]+/, '');
 
   /**
+   * A country phone code asked as its own question in the number's section (Workday's "Country Phone
+   * Code" showing "Romania (+40)"): its code, or null. Only a question labelled as a calling code,
+   * and only one showing a "+code".
+   */
+  const CALLING_CODE_LABEL = /\b(country (phone |dial(l)?ing |calling )?code|phone (country )?code|calling code|dial(l)?ing code)\b/i;
+  function separateCallingCode(element) {
+    const up = (node) => node.parentElement || node.parentNode?.host || null;
+    for (let box = up(element), depth = 0; box && depth < 7; box = up(box), depth += 1) {
+      const coded = deepQuery(box, 'input:not([type="hidden"]), select, button, [role="combobox"], [role="button"]')
+        .find((node) => node !== element && !node.contains(element) && isShown(node)
+          && CALLING_CODE_LABEL.test(cleanText(`${labelFor(node)} ${node.getAttribute('aria-label') || ''}`)));
+      if (!coded) continue;
+      const block = blockQuestion(coded).block || coded.parentElement;
+      const chosen = coded.tagName === 'SELECT' ? optionText(coded.selectedOptions?.[0] || { textContent: '' }) : '';
+      return String(`${chosen} ${textOf(block)}`).match(/\+\s?(\d{1,4})\b/)?.[1] || null;
+    }
+    return null;
+  }
+
+  /**
    * A phone number for a box beside a country-code picker, with the picker on the number's own
    * country: "+40 264 484 948" types "264 484 948" with the picker on +40. A picker on another code
    * is first switched to the number's (a choice showing "+40"); when it cannot be, or there is no
@@ -1582,7 +1602,14 @@
     if (!/^\+\d[\d\s().-]{5,}$/.test(number)) return value;
     const digits = number.replace(/\D/g, '');
     const picker = dialPicker(element);
-    if (!picker) return value;
+    if (!picker) {
+      // Workday only (*.myworkdayjobs.com, *.myworkdaysite.com): the code asked as its own question in
+      // this section ("Country Phone Code: Romania (+40)"): the number without it, when it is the
+      // number's own code. Every other site keeps the whole number.
+      if (!/(^|\.)myworkday(jobs|site)\.com$/i.test(location.hostname)) return value;
+      const code = separateCallingCode(element);
+      return code && digits.startsWith(code) ? afterCode(number, code) || value : value;
+    }
     if (digits.startsWith(picker.code)) return afterCode(number, picker.code) || value;
     // Another country's code: the picker's choice with the number's code, the longest that fits (+420 before +4).
     const codeOf = (text) => String(text).match(/\+\s?(\d{1,4})\b/)?.[1] || '';
@@ -3092,7 +3119,9 @@
    * attached are removed as well.
    * { keys, newPage, emptied: [label], stuck: [{ id, label }] }
    */
-  async function emptyOldAnswers({ known = [], seedOnly = false, keepValues = [], uploads = false, keepFiles = [] } = {}) {
+  // values: false (Auto Apply, 2026-11-17): typed and chosen values stay; only another person's
+  // uploaded files go (never the candidate's own), so the right résumé can be attached.
+  async function emptyOldAnswers({ known = [], seedOnly = false, keepValues = [], uploads = false, keepFiles = [], values = true } = {}) {
     const seen = new Set(known);
     const page = `${location.origin}${location.pathname}${location.hash}`;
     const count = new Map();
@@ -3117,6 +3146,7 @@
         attached.push(field);
         continue;
       }
+      if (!values) continue;
       if (!element || ['file', 'range'].includes(field.kind) || isUnanswered(field) || managerChanged(element, field)
         || (uploads ? STRICT_TRACKING_BOX : TRACKING_BOX).test(field.label) || job.includes(cleanText(element.value || '').toLowerCase())) continue;
       await emptyBox(element, field).catch(() => {});
