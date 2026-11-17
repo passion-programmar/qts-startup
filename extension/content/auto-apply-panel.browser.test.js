@@ -114,10 +114,10 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     const extra = await page.evaluate(() => {
       const root = document.querySelector('[data-qts-apply-review]').shadowRoot;
       const job = root.querySelector('.job');
-      const copies = [...job.querySelectorAll('.copy-row .copy-button')];
+      const copies = [...root.querySelectorAll('.copy-row .copy-button')];
       return {
         copies: copies.map(n => n.textContent), oneLine: copies.length === 4 && copies.every(n => n.getBoundingClientRect().top === copies[0].getBoundingClientRect().top),
-        noPathLine: !job.querySelector('.folder'), pathTitle: job.querySelector('.folder-copy').title,
+        noPathLine: !job.querySelector('.folder'), pathTitle: root.querySelector('.folder-copy').title,
         rows: [...root.querySelectorAll('.required-row')].map(row => [row.querySelector('.required-label').textContent, row.querySelector('.required-value').textContent, ...[...row.querySelectorAll('button')].map(b => b.disabled ? b.textContent + ' (off)' : b.textContent)]),
         buttons: [...root.querySelectorAll('.foot button')].map(n => n.textContent),
       };
@@ -193,6 +193,16 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     await click('.copy-button', '📁 Path');
     const rows = await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.career-item').querySelectorAll('.career-line')].map(line => [...line.querySelectorAll('.chip')].map(n => n.textContent).join(' | ')));
     assert.deepEqual(rows, ['Acme | SRE Lead', '03/2021 – Present | Bucharest, Romania | Bullets']);
+    // The button line is sticky: scrolled to the bottom, it is still at the top of the panel.
+    const pinned = await page.evaluate(() => {
+      const root = document.querySelector('[data-qts-apply-review]').shadowRoot;
+      const body = root.querySelector('.body'), bar = root.querySelector('.copy-row');
+      body.scrollTop = body.scrollHeight;
+      return { scrolled: body.scrollTop > 50, gap: Math.round(bar.getBoundingClientRect().top - body.getBoundingClientRect().top) };
+    });
+    assert.ok(pinned.scrolled, 'the panel scrolled');
+    assert.ok(pinned.gap >= 0 && pinned.gap <= 2, `the button line stays at the top (${pinned.gap}px)`);
+    await page.evaluate(() => { document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.body').scrollTop = 0; });
     await click('.copy-button', '📁 Path');
     // Profile: a toggle; saved items in groups, one row each (label, value); a row copies only the
     // value and turns green for a moment.

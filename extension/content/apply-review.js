@@ -108,6 +108,7 @@
     .reference-value { display: block; white-space: pre-wrap; }
     .reference-note, .copy-status { padding: 0 10px 8px; color: #94a3b8; font-size: 11px; }
     .copy-row { display: flex; gap: 6px; margin-top: 6px; }
+    .copy-row.sticky { position: sticky; top: -16px; z-index: 3; margin: 0 -16px 8px; padding: 10px 16px; background: #0a0f1c; border-bottom: 1px solid #1a2438; box-shadow: 0 6px 12px -8px rgb(0 0 0 / 60%); }
     .copy-button, .row-button { padding: 5px 10px; border: 1px solid #34425a; border-radius: 9px; background: #111a2e; color: #e2e8f0; font: 650 11.5px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
     .copy-button { flex: 1 1 0; padding-left: 6px; padding-right: 6px; }
     .copy-button.folder-copy { flex: 0 0 auto; color: #93c5fd; }
@@ -827,6 +828,7 @@
     panel.append(auto ? brandHeader() : head);
 
     const body = element('div', 'body');
+    let copyBar = [];
     // Auto Apply: only the candidate (name and label, larger), the job, and the PDF folder's full path.
     const job = element('div', 'job');
     if (auto) {
@@ -904,10 +906,12 @@
         copies.append(folder);
       }
       if (state.references) copies.append(textButton('Letter', state.references.coverLetterText));
-      job.append(copies);
-      if (openBox === 'answer' && state.references) job.append(answerBox());
-      if (openBox === 'profile' && state.references) job.append(profileBox(state.references.profile || {}, state.references.sitePassword || ''));
-      if (openBox === 'career' && state.references) job.append(careerBox(state.references));
+      // The button line stays pinned at the top of the panel while it scrolls (its box right under it).
+      copies.classList.add('sticky');
+      copyBar = [copies];
+      if (openBox === 'answer' && state.references) copyBar.push(answerBox());
+      if (openBox === 'profile' && state.references) copyBar.push(profileBox(state.references.profile || {}, state.references.sitePassword || ''));
+      if (openBox === 'career' && state.references) copyBar.push(careerBox(state.references));
     }
     if (auto) job.append(jobStatus);
     // Auto Apply: the application and its tabs (waiting for a new one, moved, a tab that did not open).
@@ -930,6 +934,7 @@
       body.append(ask);
     }
     body.append(job);
+    if (copyBar.length) body.append(...copyBar);
     const stillEmpty = auto && state.requiredRows?.length ? requiredBox() : null;
     if (stillEmpty) body.append(stillEmpty);
 
