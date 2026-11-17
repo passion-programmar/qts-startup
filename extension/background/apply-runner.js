@@ -325,12 +325,13 @@ async function autoAccountSteps(tabId, application) {
     }
     const seen = await inForm(tabId, () => globalThis.__qtsApplyForm.accountMessage()).catch(() => null);
     if (['verification_required', 'captcha_required'].includes(type)) {
-      // A code or a link sent by email: read from the Manager's verification mailbox when there is one.
-      if (type === 'verification_required' && await self.__qtsVerificationMail.complete(tabId, application)) continue;
+      // A code or a link sent by email: read from the Manager's verification mailbox when there is one
+      // (only where that feature is in the extension).
+      if (type === 'verification_required' && await self.__qtsVerificationMail?.complete?.(tabId, application)) continue;
       return { manager: type === 'captcha_required' ? yourself('The site shows a human check (CAPTCHA).') : verifyMessage(accountSaid(seen, ACCOUNT_VERIFY)) };
     }
     if (ACCOUNT_VERIFY.test([...(seen?.alerts || []), seen?.text || ''].join(' ')) && (tries.created || tries.signedIn)) {
-      if (await self.__qtsVerificationMail.complete(tabId, application)) continue;
+      if (await self.__qtsVerificationMail?.complete?.(tabId, application)) continue;
       return { manager: verifyMessage(accountSaid(seen, ACCOUNT_VERIFY)) };
     }
     let kind = type === 'registration_required' ? 'create' : ['authentication_required', 'email_first_application'].includes(type) ? 'sign_in' : '';
@@ -391,7 +392,7 @@ async function autoAccountSteps(tabId, application) {
       continue;
     }
     if (ACCOUNT_VERIFY.test(words) && !['application_form', 'partial_application_form'].includes(after.page?.type)) {
-      if (await self.__qtsVerificationMail.complete(tabId, application)) continue;
+      if (await self.__qtsVerificationMail?.complete?.(tabId, application)) continue;
       return { manager: verifyMessage(accountSaid(after.seen, ACCOUNT_VERIFY)) };
     }
     if (ACCOUNT_REFUSED.test((after.seen?.alerts || []).join(' ')) && after.page?.type === type) {
