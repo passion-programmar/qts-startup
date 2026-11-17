@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { eq } from "drizzle-orm";
-import { KeyRound, LockKeyhole, MessageSquareText } from "lucide-react";
+import { KeyRound, LockKeyhole, MailCheck, MessageSquareText } from "lucide-react";
 import { redirect } from "next/navigation";
 import { ManagerAnswers } from "@/app/profile/manager-answers";
 import { listManagerAnswers } from "@/server/apply/manager-answers";
 import { listUnanswered } from "@/server/apply/unanswered-questions";
 import { ProfileForm } from "@/app/profile/profile-form";
 import { SiteAccountPasswordForm } from "@/app/profile/site-account-password-form";
+import { VerificationMailboxForm } from "@/app/profile/verification-mailbox-form";
 import { users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
@@ -27,7 +28,7 @@ export default async function ProfilePage() {
   if (!user) redirect("/login");
   const [[siteAccount], managerAnswers, unanswered] = user.role === "manager"
     ? await Promise.all([
-      db.select({ password: users.siteAccountPassword }).from(users).where(eq(users.id, user.id)).limit(1),
+      db.select({ password: users.siteAccountPassword, mailAddress: users.verificationMailAddress, mailHost: users.verificationMailHost }).from(users).where(eq(users.id, user.id)).limit(1),
       listManagerAnswers(user.id),
       listUnanswered(user.id),
     ])
@@ -63,6 +64,18 @@ export default async function ProfilePage() {
             title="Site account password"
           />
           <SiteAccountPasswordForm saved={Boolean(siteAccount?.password)} />
+        </Card>
+      )}
+
+      {user.role === "manager" && (
+        <Card>
+          <CardHeader
+            className="mb-6 border-b border-line-soft pb-4"
+            description={<>A Gmail made only for QTS (not your everyday mail). Your candidates&apos; mailboxes forward code mails to it; when a job site asks for a code or a link sent by email, Apply reads it from here, types the code or opens the link. QTS keeps no mail.</>}
+            icon={<MailCheck />}
+            title="Verification mailbox"
+          />
+          <VerificationMailboxForm address={siteAccount?.mailAddress ?? null} host={siteAccount?.mailHost ?? null} />
         </Card>
       )}
 

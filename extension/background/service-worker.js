@@ -45,7 +45,8 @@ importScripts(
   'apply-runner.js',
   'auto-apply-api.js',
   'auto-apply-runner.js',
-  'auto-apply-checklist.js'
+  'auto-apply-checklist.js',
+  'verification-mail.js'
 );
 
 function isExtractablePageUrl(url) {

@@ -15,6 +15,14 @@ import {
   SITE_ACCOUNT_PASSWORD_MAX,
   encryptSiteAccountPassword,
 } from "@/server/apply/site-account-password";
+import {
+  VERIFICATION_MAIL_PASSWORD_MAX,
+  checkMailbox,
+  cleanAppPassword,
+  defaultImapHost,
+  isValidImapHost,
+  sealMailboxPassword,
+} from "@/server/apply/verification-mailbox";
 
 export type ProfileState = {
   error: string | null;
@@ -170,4 +178,55 @@ function logCredentialFailure(stage: string, error: unknown): void {
         ? error.name
         : "unknown";
   console.error(`Credential update failed while ${stage} (code: ${code}).`);
+}
+
+/**
+ * A Manager's verification mailbox (a Gmail made only for QTS): the candidates' mailboxes forward
+ * code mails to it, and Apply reads codes and links from it. Saved only after a working login;
+ * the app password is encrypted and never shown again. Remove clears all three.
+ */
+export async function saveVerificationMailboxAction(
+  _previousState: ProfileState,
+  formData: FormData,
+): Promise<ProfileState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") return { error: "Only Managers keep a verification mailbox.", success: null };
+  if (formData.get("intent") === "remove") {
+    try {
+      await db
+        .update(users)
+        .set({ verificationMailAddress: null, verificationMailHost: null, verificationMailPassword: null, updatedAt: new Date() })
+        .where(eq(users.id, actor.id));
+    } catch (error) {
+      logCredentialFailure("removing the verification mailbox", error);
+      return { error: "The mailbox could not be removed. Please try again.", success: null };
+    }
+    revalidatePath("/profile");
+    return { error: null, success: "The verification mailbox was removed. Apply asks you for codes again." };
+  }
+  const address = readText(formData, "verificationMailAddress", 254).toLowerCase();
+  const password = cleanAppPassword(readSecret(formData, "verificationMailPassword"));
+  const host = (readText(formData, "verificationMailHost", 253).toLowerCase() || defaultImapHost(address));
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return { error: "Type the mailbox's email address.", success: null };
+  if (!password) return { error: "Type the mailbox's app password.", success: null };
+  if (password.length > VERIFICATION_MAIL_PASSWORD_MAX) return { error: "That app password is too long.", success: null };
+  if (!isValidImapHost(host)) return { error: "Type a valid IMAP server (for Gmail: imap.gmail.com).", success: null };
+  const checked = await checkMailbox({ address, host, password });
+  if (!checked.ok) return { error: checked.reason, success: null };
+  try {
+    await db
+      .update(users)
+      .set({
+        verificationMailAddress: address,
+        verificationMailHost: host,
+        verificationMailPassword: sealMailboxPassword(password),
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, actor.id));
+  } catch (error) {
+    logCredentialFailure("saving the verification mailbox", error);
+    return { error: "The mailbox could not be saved. Please try again.", success: null };
+  }
+  revalidatePath("/profile");
+  return { error: null, success: "Connected and saved. Apply now reads codes and links sent to your candidates from this mailbox." };
 }

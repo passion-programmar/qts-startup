@@ -118,6 +118,12 @@ export const users = pgTable(
     // The Manager's one password for the candidates' accounts on job sites, encrypted
     // (src/server/apply/site-account-password.ts); Apply fills it on sign-in and registration pages.
     siteAccountPassword: text("site_account_password"),
+    // The Manager's verification mailbox (a Gmail made only for QTS, or another IMAP mailbox) that the
+    // candidates' mailboxes forward code mails to. Apply reads codes and links from it; the app
+    // password is encrypted (src/server/apply/verification-mailbox.ts) and never sent to a browser.
+    verificationMailAddress: text("verification_mail_address"),
+    verificationMailHost: text("verification_mail_host"),
+    verificationMailPassword: text("verification_mail_password"),
     // The Romania-time day the "Clear applied jobs?" question was last asked: once a day across all Chromes.
     appliedCleanupAskedOn: date("applied_cleanup_asked_on", { mode: "string" }),
     // "Stop all" on the Jobs page bumps a counter; every Chrome stops that mode when it sees a new value.

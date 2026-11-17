@@ -246,6 +246,9 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       await sleep(tick);
     }
     page ||= await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+    // A code or a link sent by email: read from the Manager's verification mailbox when there is one.
+    if (page?.type === 'verification_required'
+      && await self.__qtsVerificationMail.complete(tab.id, application, { stop: stop ? async () => stop() : null })) continue;
     if (['captcha_required', 'verification_required'].includes(page?.type)) {
       throw await pageStop(tab.id, page.reason || 'The site needs a manual security or verification step.');
     }
@@ -4589,4 +4592,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // An application being filled or waiting for the Manager: never paced down or turned off.
 const isBusy = () => activeReviews.size > 0;
 
-self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY };
+self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
+  // The tabs of the applications under way (verification-mail.js watches them for code pages).
+  applicationTabs: () => [...activeReviews.values()].flatMap((review) => [...tabsOf(review)].map((tabId) => ({ tabId, attemptId: review.attemptId }))) };
