@@ -529,6 +529,8 @@
       if (entry.jobTitle) line.append(chip('title', entry.jobTitle));
       const second = element('div', 'career-line');
       if (fromTo(entry)) second.append(chip('dates', fromTo(entry)));
+      // Each job's place (the profile's), copied by itself.
+      if (String(entry.location || '').trim()) second.append(chip('location', String(entry.location).trim()));
       const bullets = bulletsFor(entry);
       if (bullets) second.append(bulletsButton(bullets, `${entry.companyName || 'job'} bullets`, copyItem));
       item.append(line);
