@@ -340,7 +340,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
 
   // 0. The page: a sign-in or human check is the Manager's, and nothing is sent or filled for it.
   await inForm(tabId, (context) => globalThis.__qtsApplyForm.setUploadContext(context), [{ attemptId: application.attemptId, step }]);
-  await waitForFormFields(tabId, { minFields: step > 1 ? 1 : 3, pollMs: 300, steadyPolls: 2 });
+  await waitForFormFields(tabId, { minFields: step > 1 || application.tabMoved ? 1 : 3, pollMs: 300, steadyPolls: 2 });
   await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
   const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
   if (['authentication_required', 'registration_required', 'verification_required'].includes(page?.type)) {

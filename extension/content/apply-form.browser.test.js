@@ -440,12 +440,29 @@ test('account steps use saved email and password, but stop for unrecognized regi
     <label for="email">Email</label><input id="email" type="email" required>
     <label for="password">Password</label><input id="password" type="password" required>
     <label for="confirm">Confirm password</label><input id="confirm" type="password" required>
-    <label><input type="checkbox" required>Accept terms</label>
+    <label><input type="checkbox" id="terms" required>Accept terms</label>
+    <label><input type="checkbox" id="alerts">Send me job alerts</label>
+    <button type="submit">Create account</button>
+  </form>`,
+  `const filled = api.fillAccountForm({ email: 'candidate@example.test', firstName: 'Ada', lastName: 'Lovelace', password: 'stored-password' });
+   return { filled, terms: document.getElementById('terms').checked, alerts: document.getElementById('alerts').checked };`);
+  // The account's agreement is ticked (decision 2026-11-17); a job-alerts opt-in never.
+  assert.equal(registration.filled.ok, true);
+  assert.deepEqual(registration.filled.agreed, ['Accept terms']);
+  assert.equal(registration.terms, true);
+  assert.equal(registration.alerts, false);
+
+  // A field QTS does not know (here a company) still stops it for the Manager.
+  const unknown = await onPage(`<form>
+    <label for="email">Email</label><input id="email" type="email" required>
+    <label for="password">Password</label><input id="password" type="password" required>
+    <label for="confirm">Confirm password</label><input id="confirm" type="password" required>
+    <label for="company">Company</label><input id="company" required>
     <button type="submit">Create account</button>
   </form>`,
   `return api.fillAccountForm({ email: 'candidate@example.test', firstName: 'Ada', lastName: 'Lovelace', password: 'stored-password' });`);
-  assert.equal(registration.ok, false);
-  assert.match(registration.reason, /additional information/);
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.reason, /additional information/);
 });
 
 test('a list that says it is loading is waited for, within a limit', { skip }, async () => {

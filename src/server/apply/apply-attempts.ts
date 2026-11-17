@@ -46,6 +46,9 @@ import { matchesManagerCustomUrl } from "@/server/work/custom-urls";
 
 export type ClaimedApplication = {
   attemptId: string;
+  // The Manager's Stop all count when the job was taken: a missed check-in is renewed only while it
+  // is the same (Stop all raises it); see renewApplyAttempt.
+  applyStopVersion: number;
   aiMode: "chatgpt" | "gemini";
   autoApplyCustomUrlGemini: boolean;
   // Super Admin's "Auto Apply with APIs" switch for this Manager: Auto Apply answers through the
@@ -167,14 +170,12 @@ export async function claimNextApplication(
   selection?: WorkSelection,
   options: { autoApply?: boolean } = {},
 ): Promise<ClaimedApplication | null> {
-  // Apply and Auto Apply both follow the Manager's "Maximum open applications" (per Chrome);
-  // an Auto Apply run on chosen jobs works one at a time.
+  // Apply and Auto Apply both follow the Manager's "Maximum open applications" (per Chrome),
+  // chosen jobs included.
   const [managerSettings] = await db.select({ parallelLimit: users.autoApplyParallelLimit })
     .from(users).where(and(eq(users.id, managerId), eq(users.role, "manager"))).limit(1);
   if (!managerSettings) throw new Error("Manager Apply settings are unavailable.");
-  const parallelLimit = options.autoApply && selection
-    ? 1
-    : Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
+  const parallelLimit = Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
   // Unscoped Apply and Auto Apply skip these domains; a submitted selection opts jobs in explicitly.
   const skipCustomUrlJobs = !selection;
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
@@ -277,6 +278,7 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
       autoSubmit: users.autoSubmit,
       reviewMode: users.applyReviewMode,
       siteAccountPassword: users.siteAccountPassword,
+      applyStopVersion: users.applyStopVersion,
     })
     .from(applyAttempts)
     .innerJoin(jobs, eq(jobs.id, applyAttempts.jobId))
@@ -289,7 +291,7 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
   const {
     managerId, jobId, url, title, company, location, employmentType, workplaceType, salary, description,
     resumeLocalPath, resumeSavedOn, promptName, pdfTemplate, savedResumeText, savedCoverLetterText,
-    deliveredResume, deliveredCoverLetter, aiMode, autoApplyApi, autoSubmit, reviewMode, siteAccountPassword, ...candidate
+    deliveredResume, deliveredCoverLetter, aiMode, autoApplyApi, autoSubmit, reviewMode, siteAccountPassword, applyStopVersion, ...candidate
   } = row;
   const savedAnswers = await loadApplicationAnswers(managerId, candidate.candidateId, jobId);
   const effectiveAiMode = autoApplyCustomUrlGemini ? "gemini" : aiMode === "gemini" ? "gemini" : "chatgpt";
@@ -325,6 +327,7 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
     // With the switch on, Auto Apply answers with Super Admin's Gemini prompt, whichever AI the keys reach.
     answerPrompt: await defaultAnswerPrompt(autoApplyApi ? "gemini" : effectiveAiMode),
     siteAccountPassword: decryptSiteAccountPassword(siteAccountPassword),
+    applyStopVersion: applyStopVersion ?? 0,
   };
 }
 
@@ -445,8 +448,54 @@ export async function findPageApplications(managerId: string, pageUrl: string): 
  * Renews this Chrome's hold; false when the attempt is no longer its own (for example after a long
  * sleep). Filling is held for 2 minutes between heartbeats, waiting for the Manager for 10.
  */
-/** Renews this Chrome's hold; the seconds it now lasts (longer while the Manager reviews), or null when it is not its own. */
-export async function renewApplyAttempt(attemptId: string, managerId: string, browserId: string): Promise<number | null> {
+/**
+ * Renews this Chrome's hold; the seconds it now lasts (longer while the Manager reviews), or null when
+ * it is not its own. recover (Auto Apply's job, and the Stop all count it was taken with): a hold
+ * that ran out while this Chrome was away (a VPN drop, a PC asleep) is taken back instead of lost,
+ * when the Manager has not pressed Stop all since and no other Chrome holds the job: renewed when its
+ * attempt is still there, else made again with the same id (a claim clears run-out holds). Null when
+ * it is really gone: another Chrome holds the job, Stop all, or the job is gone (a bid, deleted).
+ */
+export async function renewApplyAttempt(
+  attemptId: string,
+  managerId: string,
+  browserId: string,
+  recover: { jobId: string; stopVersion: number } | null = null,
+): Promise<number | null> {
+  const renewed = await renewHeldAttempt(attemptId, managerId, browserId);
+  if (renewed !== null || !recover) return renewed;
+  const [manager] = await db.select({ stopVersion: users.applyStopVersion }).from(users).where(eq(users.id, managerId)).limit(1);
+  if (!manager || manager.stopVersion !== recover.stopVersion) return null;
+  // No other live hold on the job: a Chrome filling it, or a Submit waiting for its answer.
+  const noOtherHold = (jobColumn: ReturnType<typeof sql.raw>) => sql`not exists (
+    select 1 from apply_attempts other where other.job_id = ${jobColumn} and other.id <> ${attemptId}::uuid
+      and (other.status in ('waiting_confirmation', 'submitting')
+        or (other.status in ('claimed', 'waiting_review') and other.lease_expires_at > now())))`;
+  const revived = await db
+    .update(applyAttempts)
+    .set({ status: "waiting_review", leaseExpiresAt: leaseFor(APPLY_REVIEW_LEASE_SECONDS), updatedAt: new Date() })
+    .where(and(
+      ownedBy(attemptId, managerId, browserId),
+      eq(applyAttempts.jobId, recover.jobId),
+      inArray(applyAttempts.status, ["claimed", "waiting_review"]),
+      noOtherHold(sql.raw('"apply_attempts"."job_id"')),
+    ))
+    .returning({ id: applyAttempts.id });
+  if (revived.length) return APPLY_REVIEW_LEASE_SECONDS;
+  const remade = await db.execute<{ id: string }>(sql`
+    insert into apply_attempts (id, job_id, manager_id, candidate_id, browser_id, status, lease_expires_at)
+    select ${attemptId}::uuid, j.id, j.manager_id, j.candidate_id, ${browserId}::uuid, 'waiting_review', ${leaseFor(APPLY_REVIEW_LEASE_SECONDS)}::timestamptz
+    from jobs j
+    where j.id = ${recover.jobId}::uuid and j.manager_id = ${managerId}::uuid
+      and not exists (select 1 from apply_attempts same where same.id = ${attemptId}::uuid)
+      and ${noOtherHold(sql.raw("j.id"))}
+    on conflict do nothing
+    returning id
+  `);
+  return remade.rows.length ? APPLY_REVIEW_LEASE_SECONDS : null;
+}
+
+async function renewHeldAttempt(attemptId: string, managerId: string, browserId: string): Promise<number | null> {
   const updated = await db
     .update(applyAttempts)
     .set({

@@ -165,14 +165,15 @@ test("Apply job lists use manual Apply eligibility without the experience gate",
   assert.match(customUrlQuery.sql, /url_prefix/);
   assert.equal((await GET(new Request("http://localhost/api/extension/work-items?mode=apply"))).status, 400, "Apply has no per-mode account list");
 });
-test("selected Auto Apply runs one job at a time without a matching-note gate", async () => {
+test("selected Auto Apply opens the Manager's configured number of jobs at once, without a matching-note gate", async () => {
   fixture.rows = [[{ parallelLimit: 4 }]];
   assert.equal(await scopedApply(managerId, { id: "browser" }, [], { candidateId, jobIds: [jobId] }, { autoApply: true }), null);
   const query = fixture.queries[1];
   assert.match(query.sql, /claim_apply_attempt/); assert.match(query.sql, /j.candidate_id <>/);
   assert.match(query.sql, /not \(j.id = any/); assert.doesNotMatch(query.sql, /jd_matching/);
   assert.ok(query.params.includes(true));
-  assert.ok(query.params.includes(1), "an explicit profile selection forces the claim limit to one");
+  assert.ok(query.params.includes(4), "chosen jobs follow the Manager's limit in Settings, not just 1");
+  assert.ok(!query.params.includes(1), "no fixed limit of one");
   assert.ok(query.params.includes(candidateId)); assert.ok(query.params.includes(`{${jobId}}`));
 });
 test("unselected Auto Apply uses the Manager's configured open-job limit", async () => {
@@ -207,7 +208,7 @@ test("Normal Apply uses the Manager's configured open-job limit, chosen jobs inc
   fixture.queries = [];
   fixture.rows = [[{ parallelLimit: 5 }]];
   assert.equal(await scopedApply(managerId, { id: "browser" }, [], { candidateId, jobIds: [jobId] }, { autoApply: false }), null);
-  assert.ok(fixture.queries[1].params.includes(5), "only an Auto Apply selection runs one at a time");
+  assert.ok(fixture.queries[1].params.includes(5), "chosen jobs follow the limit too");
 });
 test("selected Auto Apply includes the Custom URL domain check for its Gemini override", async () => {
   const attemptId = "33333333-3333-4333-8333-333333333333";

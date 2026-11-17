@@ -41,7 +41,8 @@ test('Auto Apply reference cards copy complete saved values without filling, pro
     await page.waitForFunction(() => window.copied.length === 1);
     assert.deepEqual(await page.evaluate(() => window.copied), ['Immediately']);
     assert.equal(await page.$eval('#notice', n => n.value), '', 'copy never overwrites the site');
-    assert.deepEqual(await page.evaluate(() => window.sent), [], 'copy never proposes or submits');
+    // (Only the panel's own view goes to QTS, for the application's next tab: which sections are open.)
+    assert.deepEqual(await page.evaluate(() => window.sent.filter((message) => message.action !== 'ui_state')), [], 'copy never proposes or submits');
     await render({ ...state, step: 2 });
     assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('[data-reference="reusable"]').open), true, 'rechecks preserve expanded references');
     for (const [section, label, expected] of [['profile', 'City', 'Cluj-Napoca'], ['experience', 'Engineer', 'Built Python services.'], ['education', 'Example University', 'Computer Science'], ['documents', 'Résumé', resume], ['documents', 'Cover letter', 'Complete letter.']]) {

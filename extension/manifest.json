@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QTS_Startup",
-  "version": "1.59.0",
+  "version": "1.60.0",
   "description": "Capture job postings with QTS_Startup.",
   "permissions": ["activeTab", "storage", "tabs", "scripting", "webNavigation", "alarms", "downloads", "notifications", "debugger", "browsingData"],
   "host_permissions": [
@@ -69,6 +69,12 @@
         "default": "Alt+H"
       },
       "description": "Show or hide the Highlight panel"
+    },
+    "focus-auto-apply": {
+      "suggested_key": {
+        "default": "Alt+A"
+      },
+      "description": "Auto Apply: bring the application’s tab to the front with its panel"
     }
   },
   "icons": {

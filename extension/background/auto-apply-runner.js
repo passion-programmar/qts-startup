@@ -212,6 +212,21 @@ async function resumeForClaimedJob(application) {
  * checkpoint is retained and the claim is released so a later claim can replay saved answers.
  * Returns the runs started.
  */
+/** After a restart, an application QTS could not take up again: its tab keeps a stopped panel. */
+async function keepStoppedAfterRestart(tabId, record) {
+  const why = 'QTS restarted, and this job is no longer held in this Chrome (its hold ran out, Stop all, or another Chrome took it).';
+  // "Ana Test (DevOps)": the name, and the label in its brackets.
+  const named = String(record.candidate || '').match(/^(.*?)\s*(?:\((.*)\))?\s*$/) || [];
+  const state = {
+    attemptId: record.attemptId, mode: 'stopped', auto: true, ...(record.apiFlow ? { apiFlow: true } : {}),
+    chromeName: '', candidate: record.candidate || 'Candidate', candidateName: named[1] || 'Candidate', candidateLabel: named[2] || '',
+    job: { title: record.title || '', company: record.company || '', url: record.url || '' },
+    step: record.step || 1, final: false, problems: [{ message: `Why QTS stopped: ${why}`, fieldId: null }], unresolved: [], provisional: [], answers: [], requiredRows: [],
+  };
+  await self.__qtsAutoApplyStopped?.keep?.(tabId, { attemptId: record.attemptId, jobId: record.jobId, title: record.title, company: record.company, reason: why, state, closedAnswers: record.closedAnswers || [], childTabs: [] });
+  await self.__qtsAutoApplyStopped?.log?.({ attemptId: record.attemptId, jobId: record.jobId, title: record.title, company: record.company, reason: why, tabClosed: false });
+}
+
 async function resumeAutoApplyRuns(selection, limit = 2) {
   // A ChatGPT tab the worker selected before it restarted: the application's tab is shown again.
   await giveBackChatTab().catch(() => {});
@@ -249,6 +264,8 @@ async function resumeAutoApplyRuns(selection, limit = 2) {
       }
       if (![404, 409].includes(reply?._httpStatus)) throw new Error('QTS could not resume the application yet. It will retry automatically.');
       await changeStoredRuns((all) => { delete all[record.attemptId]; });
+      // The tab stays with its form: its panel says why QTS stopped, with Submitted and Give back.
+      await keepStoppedAfterRestart(tab.id, record).catch(() => {});
       continue;
     }
     // A hold that ran out meanwhile comes back as a new attempt on the same job: the record follows it.
@@ -327,6 +344,7 @@ self.__qtsAutoApply = {
   retryPendingReleases: retryPendingAutoReleases,
   browserSession: autoApplyBrowserSession,
   isRunning: () => autoRuns.size > 0,
+  runningCount: () => autoRuns.size,
   KIND_KEY: AUTO_APPLY_KIND_KEY,
   STATE_KEY: AUTO_APPLY_STATE_KEY,
   RUNS_KEY: AUTO_APPLY_RUNS_KEY,

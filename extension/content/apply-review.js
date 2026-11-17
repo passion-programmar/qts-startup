@@ -134,6 +134,24 @@
     .working { display: flex; align-items: center; gap: 8px; color: #a5b4fc; font-weight: 650; }
     .spinner { width: 14px; height: 14px; border: 2px solid #243047; border-top-color: #6366f1; border-radius: 50%; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    /* Auto Apply: dragged by its title bar it floats; [▴] makes it small (the title bar only). */
+    .panel.auto.floating { inset: auto; height: min(86vh, 900px); height: min(86dvh, 900px); border: 1px solid #243047; border-radius: 14px; box-shadow: 0 18px 48px rgb(0 0 0 / 45%); }
+    .panel.auto.small { bottom: auto; height: auto; max-height: none; }
+    .panel.auto.small .body, .panel.auto.small .foot { display: none; }
+    .brand.drag { cursor: grab; user-select: none; touch-action: none; }
+    .brand.dragging { cursor: grabbing; }
+    .brand-buttons { display: flex; gap: 6px; }
+    .tab-notice { margin-bottom: 8px; padding: 8px 10px; border: 1px solid rgb(99 102 241 / .55); border-radius: 12px; background: #111a2e; color: #c7d2fe; font-weight: 650; }
+    .tab-notice.bad { border-color: rgb(249 115 22 / .55); color: #fdba74; }
+    .ask-tab { margin-bottom: 8px; padding: 9px 10px; border: 1px solid rgb(250 204 21 / .45); border-radius: 12px; background: #0d1526; color: #e2e8f0; }
+    .ask-tab strong { display: block; color: #fcd34d; }
+    .ask-tab .row { margin: 2px 0 6px; }
+    .job-link { display: inline-block; margin-top: 4px; color: #93c5fd; font-size: 11px; font-weight: 700; text-decoration: none; }
+    .job-link:hover { text-decoration: underline; }
+    .menu { position: absolute; right: 16px; bottom: 16px; z-index: 2; min-width: 200px; padding: 6px; border: 1px solid #34425a; border-radius: 12px; background: #0d1526; box-shadow: 0 12px 32px rgb(0 0 0 / 50%); }
+    .menu strong { display: block; padding: 4px 8px 6px; color: #94a3b8; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .menu button { display: block; width: 100%; margin: 2px 0; padding: 7px 10px; border: 1px solid transparent; border-radius: 8px; background: none; color: #e2e8f0; font: 650 12.5px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; }
+    .menu button:hover, .menu button:focus-visible { border-color: #475569; background: #1a2438; outline: none; }
   `;
   const panel = document.createElement('div');
   panel.className = 'panel';
@@ -143,13 +161,52 @@
   for (const letter of ['q', 't', 's']) {
     const span = document.createElement('span'); span.className = letter; span.textContent = letter.toUpperCase(); tab.append(span);
   }
-  tab.addEventListener('click', () => { collapsed = false; render(); });
+  tab.addEventListener('click', () => { collapsed = false; render(); saveUi(); });
+  host.addEventListener('keydown', (event) => { if (event.key === 'Escape' && menuOpen) { menuOpen = false; render(); } });
   root.append(style, panel, tab);
   (document.documentElement || document.body).appendChild(host);
+  // Auto Apply: the panel in the browser's top layer (above any site pop-up, cookie banner or chat),
+  // raised again whenever the site puts something of its own there.
+  function raise() {
+    try {
+      if (!host.isConnected || !host.showPopover) return;
+      if (!host.hasAttribute('popover')) host.setAttribute('popover', 'manual');
+      if (host.matches(':popover-open')) host.hidePopover();
+      host.showPopover();
+    } catch { /* Not in the top layer on an old browser: the highest z-index still holds. */ }
+  }
+  let raiseTimer = null;
+  const raiseSoon = () => { clearTimeout(raiseTimer); raiseTimer = setTimeout(raise, 50); };
+  // A site that rebuilds its page (a framework redrawing <html> or <body>) can throw the panel out:
+  // it goes straight back, so the panel never goes missing while QTS works or waits.
+  function reattach() {
+    if (disposed || !state) return false;
+    // A panel left by an updated extension (or one whose extension is briefly unreachable) is not put
+    // back: the new one takes its place.
+    if (!contextAvailable()) return false;
+    if (host.isConnected) return false;
+    (document.documentElement || document.body).appendChild(host);
+    return true;
+  }
+  const topLayerWatch = new MutationObserver((records) => {
+    if (reattach()) { render(); return; }
+    for (const record of records) {
+      if (record.target === host || host.contains(record.target)) continue;
+      if (record.type === 'attributes' || [...record.addedNodes].some((node) => node.nodeType === 1)) { raiseSoon(); return; }
+    }
+  });
+  const onPageToggle = (event) => { if (event.target !== host && event.newState === 'open') raiseSoon(); };
 
   let state = null;
   let busy = false;
   let collapsed = false;
+  // Auto Apply: the panel's own view, carried to the next tab of the application.
+  let small = false;
+  let floating = null;
+  let menuOpen = false;
+  let uiApplied = false;
+  let lastReveal = 0;
+  let uiTimer = null;
   let disposed = false;
   let heartbeatTimer = null;
   let editRender = null;
@@ -246,7 +303,14 @@
     clearTimeout(editRender);
     clearTimeout(statusTimer);
     document.removeEventListener('click', onDocumentClick, true);
+    document.removeEventListener('auxclick', onAuxClick, true);
     document.removeEventListener('submit', onDocumentSubmit, true);
+    document.removeEventListener('keydown', onShortcut, true);
+    document.removeEventListener('toggle', onPageToggle, true);
+    topLayerWatch.disconnect();
+    documentWatch.disconnect();
+    clearTimeout(raiseTimer);
+    clearTimeout(uiTimer);
     document.removeEventListener('input', onEdit, true);
     document.removeEventListener('change', onEdit, true);
     for (const type of ['input', 'change', 'click']) document.removeEventListener(type, markManagerChange, true);
@@ -273,8 +337,47 @@
     center.append(pills, element('span', 'subline', 'Built for precision bidding'));
     const hide = element('button', 'hide', '›'); hide.type = 'button'; hide.title = 'Hide the panel';
     hide.setAttribute('aria-label', 'Hide Auto Apply review');
-    hide.addEventListener('click', () => { collapsed = true; render(); });
-    brand.append(logo, center, hide);
+    hide.addEventListener('click', () => { collapsed = true; render(); saveUi(); });
+    const shrink = element('button', 'hide shrink', small ? '▾' : '▴'); shrink.type = 'button';
+    shrink.title = small ? 'Show the whole panel' : 'Make the panel small';
+    shrink.setAttribute('aria-label', shrink.title);
+    shrink.addEventListener('click', () => { small = !small; render(); saveUi(); });
+    const tools = element('div', 'brand-buttons');
+    tools.append(hide, shrink);
+    // Remove (🗑): the job row leaves the Jobs table (asked first); not once the site's Submit was answered.
+    if (state?.mode !== 'confirm') tools.append(removeButton());
+    tools.style.flexDirection = 'row-reverse';
+    brand.append(logo, center, tools);
+    // Dragged by its title bar, the panel floats where it is put (the page is no longer pushed aside).
+    brand.classList.add('drag');
+    brand.title = 'Drag to move the panel';
+    brand.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target.closest('button')) return;
+      const box = panel.getBoundingClientRect();
+      const dx = event.clientX - box.left;
+      const dy = event.clientY - box.top;
+      brand.setPointerCapture?.(event.pointerId);
+      brand.classList.add('dragging');
+      const move = (next) => {
+        floating = {
+          x: Math.max(0, Math.min(window.innerWidth - 120, next.clientX - dx)),
+          y: Math.max(0, Math.min(window.innerHeight - 48, next.clientY - dy)),
+        };
+        placePanel();
+      };
+      const up = () => {
+        brand.classList.remove('dragging');
+        brand.removeEventListener('pointermove', move);
+        brand.removeEventListener('pointerup', up);
+        brand.removeEventListener('pointercancel', up);
+        render();
+        saveUi();
+      };
+      brand.addEventListener('pointermove', move);
+      brand.addEventListener('pointerup', up);
+      brand.addEventListener('pointercancel', up);
+      event.preventDefault();
+    });
     return brand;
   }
 
@@ -327,7 +430,7 @@
     const container = element('details', 'references');
     container.open = referenceOpen.has('all');
     container.append(element('summary', '', 'Profile, documents & reusable answers'));
-    container.addEventListener('toggle', () => { if (container.open) referenceOpen.add('all'); else referenceOpen.delete('all'); });
+    container.addEventListener('toggle', () => { if (container.open) referenceOpen.add('all'); else referenceOpen.delete('all'); saveUi(); });
     container.append(element('div', 'reference-note', 'Click an item to copy, then paste into the form. Approved reusable answers are shared across all candidates.'));
     const status = element('div', 'copy-status');
     status.setAttribute('role', 'status');
@@ -336,7 +439,7 @@
       section.dataset.reference = key;
       section.open = referenceOpen.has(key);
       section.append(element('summary', '', `${title} (${entries.length})`));
-      section.addEventListener('toggle', () => { if (section.open) referenceOpen.add(key); else referenceOpen.delete(key); });
+      section.addEventListener('toggle', () => { if (section.open) referenceOpen.add(key); else referenceOpen.delete(key); saveUi(); });
       for (const [label, value, note] of entries) {
         const item = element('button', 'reference-item');
         item.type = 'button'; item.title = 'Click to copy';
@@ -366,16 +469,31 @@
   }
 
   function render() {
+    reattach();
     const scrollTop = panel.querySelector('.body')?.scrollTop || 0;
     panel.replaceChildren();
     if (!state) return;
     const auto = state.auto === true;
     panel.classList.toggle('auto', auto);
     panel.classList.toggle('collapsed', collapsed && !auto);
+    if (auto) {
+      // The view the panel had in the application's previous tab (once), and Alt+A's "show it".
+      if (state.ui && !uiApplied) applyUi(state.ui);
+      uiApplied = true;
+      if (state.revealAt && state.revealAt !== lastReveal) {
+        lastReveal = state.revealAt;
+        collapsed = false;
+        small = false;
+      }
+      raise();
+    }
+    panel.classList.toggle('small', auto && small);
+    panel.classList.toggle('floating', auto && Boolean(floating));
+    placePanel();
     panel.hidden = auto && collapsed;
     tab.hidden = !(auto && collapsed);
     host.toggleAttribute('data-qts-auto-apply-review', auto);
-    if (auto && !collapsed) {
+    if (auto && !collapsed && !floating && !small) {
       global.__qtsPageLauncher?.setOpen?.(false);
       if (!dock.isConnected) (document.head || document.documentElement).append(dock);
       document.documentElement.setAttribute('data-qts-apply-docked', 'true');
@@ -384,7 +502,7 @@
     const head = element('div', 'head');
     const headText = element('div', 'head-text');
     headText.append(
-      element('div', 'head-title', state.mode === 'confirm' ? 'Submitted successfully?' : state.mode === 'working' ? `${state.auto ? 'Auto Apply' : 'Apply'} is working…` : state.final ? 'Review, then Submit' : `Review step ${state.step}`),
+      element('div', 'head-title', state.mode === 'confirm' ? 'Submitted successfully?' : state.mode === 'stopped' ? 'Auto Apply stopped' : state.mode === 'working' ? `${state.auto ? 'Auto Apply' : 'Apply'} is working…` : state.final ? 'Review, then Submit' : `Review step ${state.step}`),
       element('div', 'head-sub', `${state.chromeName} · ${state.candidate}`),
     );
     const toggle = element('button', 'icon-button', collapsed ? '▾' : '▴');
@@ -405,6 +523,15 @@
       job.append(who);
     }
     job.append(element('div', 'job-title', `${state.job.title} — ${state.job.company}`));
+    // Auto Apply: the job's own page, at hand after its tab has closed.
+    if (auto && /^https?:\/\//i.test(state.job.url || '')) {
+      const link = element('a', 'job-link', 'Job page ↗');
+      link.href = state.job.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.title = state.job.url;
+      job.append(link);
+    }
     if (!auto) {
       const facts = [state.job.location, state.job.workType, state.job.salary ? `Salary: ${state.job.salary}` : ''].filter(Boolean).join(' · ');
       if (facts) job.append(element('div', 'row muted', facts));
@@ -435,6 +562,25 @@
       job.append(copies);
     }
     if (auto) job.append(jobStatus);
+    // Auto Apply: the application and its tabs (waiting for a new one, moved, a tab that did not open).
+    if (auto && state.tabNotice) body.append(element('div', `tab-notice${/did not open/i.test(state.tabNotice) ? ' bad' : ''}`, state.tabNotice));
+    for (const entry of auto ? state.askTabs || [] : []) {
+      const ask = element('div', 'ask-tab');
+      ask.append(element('strong', '', 'Is this tab this application?'), element('div', 'row', `${entry.title}${entry.url ? ` · ${entry.url}` : ''}`));
+      const buttons = element('div', 'buttons');
+      for (const [label, action, className] of [['Use this tab', 'use_tab', 'primary'], ['Ignore', 'ignore_tab', '']]) {
+        const node = element('button', className, label);
+        node.type = 'button';
+        node.addEventListener('click', async () => {
+          node.disabled = true;
+          const result = await send(action, { tabId: entry.tabId });
+          if (result && result.ok === false) say(result.error || 'Try again.');
+        });
+        buttons.append(node);
+      }
+      ask.append(buttons);
+      body.append(ask);
+    }
     body.append(job);
     if (auto && state.requiredRows?.length) body.append(requiredBox());
 
@@ -526,7 +672,17 @@
     // Auto Apply: Submitted is always there and always works, at any step, also while QTS is working:
     // one click saves the bid (the job leaves the list and this tab closes).
     const submittedNow = () => button('Submitted', 'yes', 'submitted', () => ({ answers: currentAnswers() }));
-    if (state.mode === 'working') {
+    if (auto && state.mode === 'stopped') {
+      // Auto Apply stopped by itself (not the Manager): the tab, the form and this panel stay. The
+      // Manager saves the bid, or gives the job back unchanged (the tab closes).
+      // The whole panel stays: Fill again, Ask AI and Check take the job up again in this tab; Skip,
+      // Later and Give back return it unchanged.
+      foot.append(element('div', 'note', 'Auto Apply stopped on this page. Fill again (or Ask AI, Check) takes it up again here; Submitted saves the bid; Skip, Later or Give back returns the job unchanged.'));
+      buttons.append(submittedNow());
+      if (state.aiOn) buttons.append(button(`Ask ${state.aiName || 'AI'}`, 'primary', 'ask_ai'));
+      buttons.append(button('Check', '', 'recheck'), button('Skip', '', 'skip'), button('Later', '', 'later'), button('Fill again', '', 'fill_again'), button('Give back', 'no', 'give_back'));
+      foot.append(buttons);
+    } else if (state.mode === 'working') {
       const working = element('div', 'working');
       working.append(element('span', 'spinner'), element('span', '', state.workingText || 'Filling the form…'));
       foot.append(working);
@@ -589,8 +745,110 @@
       foot.append(buttons);
     }
     panel.append(foot);
-    if (auto) body.scrollTop = scrollTop;
+    if (auto && menuOpen) panel.append(actionsMenu());
+    if (auto) {
+      body.scrollTop = uiScroll ?? scrollTop;
+      uiScroll = null;
+      body.addEventListener('scroll', () => { clearTimeout(uiTimer); uiTimer = setTimeout(saveUi, 400); }, { passive: true });
+    }
   }
+
+  // Auto Apply: where a dragged panel stands (kept inside the window).
+  function placePanel() {
+    if (!state?.auto || !floating) { panel.style.left = ''; panel.style.top = ''; return; }
+    panel.style.left = `${Math.max(0, Math.min(window.innerWidth - 120, floating.x))}px`;
+    panel.style.top = `${Math.max(0, Math.min(window.innerHeight - 48, floating.y))}px`;
+  }
+  // Auto Apply: the panel's own view, sent to QTS so the application's next tab shows it the same way.
+  let uiScroll = null;
+  function currentUi() {
+    return { collapsed, small, floating, referenceOpen: [...referenceOpen], scrollTop: panel.querySelector('.body')?.scrollTop || 0 };
+  }
+  function saveUi() {
+    if (!state?.auto) return;
+    send('ui_state', { ui: currentUi() });
+  }
+  function applyUi(ui) {
+    collapsed = ui.collapsed === true;
+    small = ui.small === true;
+    floating = ui.floating && Number.isFinite(ui.floating.x) && Number.isFinite(ui.floating.y) ? { x: ui.floating.x, y: ui.floating.y } : null;
+    referenceOpen.clear();
+    for (const key of Array.isArray(ui.referenceOpen) ? ui.referenceOpen : []) referenceOpen.add(String(key));
+    uiScroll = Number(ui.scrollTop) || 0;
+  }
+
+  // Auto Apply: Remove, as Normal Apply's: asked first, then the job row leaves the Jobs table (the PDFs stay).
+  const confirmRemove = () => confirm(`Remove "${state.job.title}" at ${state.job.company} from the Jobs table?`);
+  function removeButton() {
+    const node = element('button', 'hide remove', '🗑');
+    node.type = 'button';
+    node.title = 'Remove this job from the Jobs table';
+    node.setAttribute('aria-label', 'Remove this job from the Jobs table');
+    node.disabled = busy;
+    node.addEventListener('click', async () => {
+      if (busy || !confirmRemove()) return;
+      busy = true;
+      render();
+      await send('remove');
+    });
+    return node;
+  }
+
+  // Auto Apply: Alt+S opens the panel's actions (Ask AI, Fill again, Submitted, Cancel, Remove) in this tab.
+  function actionsMenu() {
+    const menu = element('div', 'menu');
+    menu.setAttribute('role', 'menu');
+    menu.append(element('strong', '', 'Actions · Alt+S'));
+    const reviewing = state.mode === 'review';
+    const stopped = state.mode === 'stopped';
+    const items = [
+      reviewing && state.aiOn && !state.blocked ? [`Ask ${state.aiName || 'AI'}`, 'ask_ai'] : null,
+      reviewing && !state.blocked ? ['Fill again', 'fill_again'] : null,
+      ['Submitted', 'submitted'],
+      stopped ? ['Give back', 'give_back'] : ['Cancel', 'cancel'],
+      state.mode !== 'confirm' ? ['Remove', 'remove'] : null,
+    ].filter(Boolean);
+    for (const [label, action] of items) {
+      const node = element('button', '', label);
+      node.type = 'button';
+      node.setAttribute('role', 'menuitem');
+      node.addEventListener('click', async () => {
+        if (action === 'remove' && !confirmRemove()) return;
+        menuOpen = false;
+        busy = true;
+        render();
+        await send(action, action === 'submitted' ? { answers: currentAnswers() } : {});
+      });
+      menu.append(node);
+    }
+    setTimeout(() => menu.querySelector('button')?.focus(), 0);
+    return menu;
+  }
+  const onShortcut = (event) => {
+    if (!contextAvailable()) { dispose(); return; }
+    if (!state?.auto || !event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.code === 'KeyS') {
+      event.preventDefault();
+      event.stopPropagation();
+      menuOpen = !menuOpen;
+      if (menuOpen) { collapsed = false; small = false; }
+      render();
+    } else if (event.key === 'Escape' && menuOpen) {
+      menuOpen = false;
+      render();
+    }
+  };
+  document.addEventListener('keydown', onShortcut, true);
+  document.addEventListener('toggle', onPageToggle, true);
+  topLayerWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['open', 'popover'] });
+  // A page that replaces its whole <html> (the watcher above was on the old one): the panel goes into the new one.
+  const documentWatch = new MutationObserver(() => {
+    if (!document.documentElement) return;
+    topLayerWatch.disconnect();
+    topLayerWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['open', 'popover'] });
+    if (reattach()) render();
+  });
+  documentWatch.observe(document, { childList: true });
 
   function currentAnswers() {
     try {
@@ -713,9 +971,35 @@
     try { look = global.__qtsApplyForm?.auditForm?.() || null; } catch { look = null; }
     send('step_leaving', { look });
   }
+  // Auto Apply: which control the Manager clicked, so a tab it opens is judged by it. A start /
+  // continue control (Apply, Start application, I'm interested, Quick apply, Next, Continue, Save and
+  // Continue, Review…) opens the application's next step; a sign-in, policy, help, social or upload
+  // control, or any other link, opens a side tab; an unclear one (Learn more, View job, Details) is
+  // judged by what its tab shows.
+  const SIDE_CONTROL = /\b(sign ?in|log ?in|sign ?up|continue with|connect with|google|microsoft|apple id|linkedin|facebook|twitter|instagram|youtube|dropbox|google drive|one ?drive|box\.com|upload|terms|privacy|cookies?|legal|help|support|faq|about( us)?|contact|website|home ?page|blog|news|job page)\b/i;
+  const START_CONTROL = /^(apply|start|begin|i'?m interested|express interest|quick apply|easy apply|next|continue|save (and|&) (continue|next)|review|proceed|get started)\b/i;
+  const UNCLEAR_CONTROL = /^(learn more|view( the)? job|view( job)? details|details|more (info|information|details)|read more|see more|show more|see (the )?job|open|view|click here|here|more)\b/i;
+  function clickKind(control, submitLike) {
+    const text = String(control.innerText || control.value || control.getAttribute('aria-label') || control.title || '').replace(/\s+/g, ' ').trim();
+    if (SIDE_CONTROL.test(text)) return 'side';
+    if (START_CONTROL.test(text) || (submitLike && !state?.final)) return 'start';
+    if (UNCLEAR_CONTROL.test(text) || !text) return 'unclear';
+    return 'side';
+  }
+  function noticePageClick(event, submitLike) {
+    if (!state?.auto || !event.isTrusted) return;
+    const control = event.target?.closest?.('button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]');
+    if (!control || host.contains(control)) return;
+    send('page_click', { kind: clickKind(control, submitLike) });
+  }
+  const onAuxClick = (event) => {
+    if (!contextAvailable()) { dispose(); return; }
+    if (event.button === 1) noticePageClick(event, false);
+  };
   const onDocumentClick = (event) => {
     if (!contextAvailable()) { dispose(); return; }
     const submitLike = global.__qtsApplyForm?.isSubmitControl?.(event.target);
+    noticePageClick(event, submitLike);
     // Before the last step a submit-type button is the site's Next.
     if (!submitLike || !state?.final) noticeStepButton(event.target);
     if (!submitLike) return;
@@ -726,6 +1010,7 @@
     noticeSubmit();
   };
   document.addEventListener('click', onDocumentClick, true);
+  document.addEventListener('auxclick', onAuxClick, true);
   document.addEventListener('submit', onDocumentSubmit, true);
   // An edit on the form may settle a provisional answer: the panel shows it shortly after.
   const onEdit = () => {
