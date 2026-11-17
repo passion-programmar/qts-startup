@@ -23,9 +23,10 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
         window.sent.push(m); return { ok: true };
       } }, storage: { local: { get: async keys => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, stored[k]])) }, onChanged: { addListener() {}, removeListener() {} } } };
       window.headerSnapshot = root => {
-        const brand = root.querySelector('.brand'), img = brand.querySelector('img'), button = brand.querySelector('button');
+        // The Auto Apply panel's own [▴] (make it small) is beside the same hide button; the branding is compared without it.
+        const brand = root.querySelector('.brand'), img = brand.querySelector('img'), button = [...brand.querySelectorAll('button')].find(n => n.textContent === '›') || brand.querySelector('button');
         const style = getComputedStyle(brand);
-        return { text: brand.textContent, height: brand.getBoundingClientRect().height, background: style.backgroundColor, padding: style.padding,
+        return { text: brand.textContent.replace('▴', '').replace('🗑', ''), height: brand.getBoundingClientRect().height, background: style.backgroundColor, padding: style.padding,
           logo: [img.src, img.alt, img.width, img.height, getComputedStyle(img).borderRadius],
           pills: [...brand.querySelectorAll('.pill')].map(n => [n.textContent, getComputedStyle(n).color, getComputedStyle(n).fontSize]),
           subline: [brand.querySelector('.subline').textContent, getComputedStyle(brand.querySelector('.subline')).fontSize],
@@ -57,6 +58,7 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
         padding: getComputedStyle(document.body).paddingRight, buttons: [...root.querySelectorAll('.foot button')].map(n => n.textContent) };
     });
     assert.deepEqual(actual.header, expectedHeader, 'the red-rectangle branding stays identical');
+    assert.ok(await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.brand button')].some(n => n.textContent === '▴')), 'the panel has [▴] to make it small');
     assert.deepEqual(actual.rect, { top: 0, right: 1280, height: 900, width: 480 });
     assert.equal(actual.padding, '480px', 'the sidebar makes room rather than covering the form');
     assert.equal(actual.answer, longAnswer); assert.equal(actual.answerMaxHeight, 'none');

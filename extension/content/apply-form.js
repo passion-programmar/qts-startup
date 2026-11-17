@@ -19,7 +19,7 @@
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
   const START_TEXT = /^(apply|apply now|apply (for|to) (this |the |a )?[^|]{2,60}|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?|apply (directly )?(on|at|via|through) (the )?(employer|company|hiring company|recruiter)['’]?s? (site|website|page|career(s)? (site|page))|apply (on|at) (company|employer) (site|website)|apply externally|apply on website|(continue|go|proceed) to (the )?(application|apply|employer['’]?s? site))$/i;
-  const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|enter (your )?(details|information) manually|continue (manually|without .{1,30})|(continue|apply|proceed|check ?out) as (a )?guest|guest (application|apply|checkout)|skip( for now| this step| sign[ -]?in| login)?|i don['’]?t have an account)$/i;
+  const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|fill (it|this|everything) (in|out)( manually)?|fill in manually|enter (it )?manually|type (it )?in manually|enter (your )?(details|information) manually|continue (manually|without .{1,30})|(continue|apply|proceed|check ?out) as (a )?guest|guest (application|apply|checkout)|skip( for now| this step| sign[ -]?in| login)?|i don['’]?t have an account)$/i;
   const ACCOUNT_ACTION_TEXT = /^(sign ?in|log ?in|register|sign ?up|create (an |your )?account|candidate login|candidate portal|apply with an account)$/i;
   const NOT_START = /linkedin|indeed|seek|xing|glassdoor|easy apply|with (google|facebook|apple|github|resume|cv)|later|save|share|refer|alert|similar|sign ?in|log ?in|register|autofill/i;
   // Auto Apply with APIs: more ways of saying "start the application".
@@ -39,6 +39,9 @@
   const PLACEHOLDER_OPTION = new RegExp(String.raw`^(-+$|—|–|-+\s*none\s*-+|${PLACEHOLDER_WORDS})`, 'i');
   const answerable = (text) => Boolean(text) && !PLACEHOLDER_OPTION.test(text);
   const IMAGE_CAPTCHA = /\bcaptcha\b|type (the )?(below |above )?(image )?(text|characters|letters|code|word)s? (shown |in |from |below |above )*(the )?(image|picture)?|type (the )?below image|enter (the )?(code|characters|text|letters) (shown |in |from )+(the )?(image|picture)/i;
+
+  // QTS's own panels on a page (each in its own shadow root).
+  const QTS_UI_HOSTS = ['data-qts-apply-review', 'data-qts-apply-assist', 'data-qts-page-launcher', 'data-qts-page-toast', 'data-qts-get-jd-ui'];
 
   function shadowRootOf(element) {
     if (element.shadowRoot) return element.shadowRoot;
@@ -66,6 +69,9 @@
     const found = [];
     const visit = (node) => {
       for (const element of node.querySelectorAll('*')) {
+        // QTS's own panels (in closed shadow roots) are never part of the page: nothing in them is
+        // read, filled or clicked (a Start search once pressed the panel's own Skip).
+        if (QTS_UI_HOSTS.some((name) => element.hasAttribute(name))) continue;
         found.push(element);
         const shadow = shadowRootOf(element);
         if (shadow) visit(shadow);
@@ -1517,11 +1523,8 @@
     // No choices shown, or not this one among them: typed to search.
     setNativeValue(element, search);
     match = await findMatch(3000);
-    // Some suggestion boxes search only on key presses, or slowly: typed again letter by letter.
-    if (!match) {
-      await typeLetters(element, search);
-      match = await findMatch(6000);
-    }
+    // (A box that searches only on real key presses gets the service worker's real input instead:
+    // nothing is ever typed letter by letter.)
     if (!match) {
       setNativeValue(element, '');
       return { ok: false, error: `No option matching "${value}".`, choices: [...new Set(seen)].slice(0, 300) };
@@ -1826,19 +1829,6 @@
       .map((field) => ({ id: field.id, label: field.label }));
   }
 
-  /** Types a text letter by letter with key events, as a person does, after emptying the box. */
-  async function typeLetters(element, text) {
-    element.focus();
-    setNativeValue(element, '');
-    for (let index = 1; index <= text.length; index += 1) {
-      const key = text[index - 1];
-      element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, composed: true }));
-      setNativeValue(element, text.slice(0, index));
-      element.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, composed: true }));
-      await new Promise((resolve) => setTimeout(resolve, 80));
-    }
-  }
-
   async function pickMenuChoice(button, value) {
     const wanted = cleanText(value).toLowerCase();
     // Already showing this choice: left as it is, never opened again.
@@ -1884,6 +1874,53 @@
       || textOf(button).toLowerCase().includes(wanted.slice(0, 20));
     if (button.getAttribute('aria-expanded') === 'true') button.click();
     return { ok: picked, value: itemText(item) };
+  }
+
+  /**
+   * A search or suggestion box (city, school, country, skills…): a typed list (role="combobox",
+   * aria-autocomplete, a listbox popup), a box with a datalist, or one a site marks as an
+   * autocomplete. It gets the service worker's real input (Chrome's own), never simulated typing.
+   */
+  const SUGGEST_HINT = /(autocomplete|auto-complete|typeahead|type-ahead|suggest|places|pac-target|location-input|tag-?input|tagsinput|select2-search|chosen-search)/i;
+  function suggestionBox(id) {
+    const element = findField(id);
+    if (!element || element.tagName !== 'INPUT' || element.readOnly || element.disabled) return false;
+    const type = (element.getAttribute('type') || 'text').toLowerCase();
+    if (!['text', 'search', ''].includes(type)) return false;
+    if (isTypedList(element) || element.hasAttribute('list')) return true;
+    const hints = [element.className, element.id, element.name, element.getAttribute('data-role'), element.getAttribute('data-type'), element.parentElement?.className]
+      .map((value) => String(value || '')).join(' ');
+    return SUGGEST_HINT.test(hints);
+  }
+
+  /** The suggestions this box shows now (its own list, or ones that appeared since markShownChoices). */
+  function suggestionElements(id) {
+    const element = findField(id);
+    if (!element) return [];
+    const listId = element.getAttribute('aria-controls') || element.getAttribute('aria-owns');
+    const ownList = listId ? (element.getRootNode().getElementById?.(listId) || null) : null;
+    // Only this box's own list when it names one; else suggestions that appeared since typing began.
+    // Another box's list (even one a stray key opened again) is never used.
+    return allElements().filter((entry) => isShown(entry) && !entry.contains(element) && (
+      entry.getAttribute('role') === 'option'
+      || /(^|\s)(pac-item|dropdown-location|location-result|autocomplete-item|suggestion)/i.test(entry.className || '')
+    )).filter((entry) => (ownList ? ownList.contains(entry) : !entry.hasAttribute(SEEN_ATTRIBUTE)))
+      .filter((entry) => answerable(itemText(entry)));
+  }
+  function suggestionTexts(id) {
+    return suggestionElements(id).map(itemText).slice(0, 300);
+  }
+  /** The suggestion matching an answer, with where to click it: the same one, else the closest. */
+  function suggestionChoiceBox(id, value) {
+    const squash = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    const entries = suggestionElements(id);
+    const first = String(value).split(',')[0].trim();
+    const choice = entries.find((entry) => squash(itemText(entry)) === squash(value))
+      || entries.find((entry) => closeChoice(itemText(entry), value))
+      || entries.find((entry) => wordsOf(first).trim() && wordsOf(itemText(entry)).startsWith(wordsOf(first)))
+      || entries.find((entry) => closeChoice(itemText(entry), first));
+    const centre = choice && centreOf(choice);
+    return centre ? { ...centre, text: itemText(choice) } : null;
   }
 
   /** Empties a text box Apply does not answer, so nothing someone else typed there is sent. */
@@ -2548,13 +2585,52 @@
       const type = (element.getAttribute('type') || '').toLowerCase();
       return !['hidden', 'submit', 'button', 'image', 'reset'].includes(type) && !unrelatedBox(element);
     });
-    const anchor = visible.find((element) => element.type === 'password')
-      || visible.find((element) => element.type === 'email' || /e-?mail|user ?name|username|login/i.test(
-        `${labelFor(element)} ${element.placeholder || ''} ${element.name || ''} ${element.id || ''}`,
-      ));
+    const emailLike = (element) => element.type === 'email' || /e-?mail|user ?name|username|login/i.test(
+      `${labelFor(element)} ${element.getAttribute('aria-label') || ''} ${element.placeholder || ''} ${element.name || ''} ${element.id || ''} ${element.getAttribute('data-automation-id') || ''} ${element.autocomplete || ''}`,
+    );
+    const anchor = visible.find((element) => element.type === 'password') || visible.find(emailLike);
     if (!anchor) return [];
     const form = formOf(anchor);
-    return visible.filter((element) => (form ? formOf(element) === form : !element.closest(PAGE_FRAME)));
+    const controls = visible.filter((element) => (form ? formOf(element) === form : !element.closest(PAGE_FRAME)));
+    if (!controls.some(emailLike)) {
+      const emails = visible.filter((element) => element.type !== 'password' && emailLike(element) && !element.closest(PAGE_FRAME));
+      if (emails.length === 1) controls.unshift(emails[0]);
+    }
+    return controls;
+  }
+
+  // An account page's agreements ("I Agree", the terms, the privacy notice) are ticked as an
+  // application's are (decision 2026-11-06); marketing and future-contact opt-ins never; other boxes
+  // ("Remember me", "Show password") are left as they are.
+  const ACCOUNT_AGREEMENT = /\b(i agree|agree|accept|consent|acknowledge|terms|privacy|i have read|data processing|gdpr)\b/i;
+  const ACCOUNT_LEAVE = /\b(marketing|newsletters?|(future|other|new) (jobs?|roles?|opportunit\w*|vacanc\w*|positions?|openings?)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?|contact me|remember me|keep me (signed|logged) in|stay (signed|logged) in|show password)\b/i;
+  const tickBox = (element) => element.tagName === 'INPUT' ? element : null;
+  const boxTicked = (element) => (tickBox(element) ? element.checked : element.getAttribute('aria-checked') === 'true');
+  /** The account page's agreement boxes still unticked (in the account form, else on the page): [{ element, label }]. */
+  function accountAgreements(form) {
+    return allElements().filter((element) => ((element.tagName === 'INPUT' && element.type === 'checkbox') || element.getAttribute('role') === 'checkbox')
+      && !element.disabled && !insideQtsUi(element) && (form ? formOf(element) === form || !formOf(element) : !element.closest(PAGE_FRAME)))
+      .map((element) => {
+        const label = element.closest('label') || (element.id && element.getRootNode().querySelector?.(`label[for="${CSS.escape(element.id)}"]`)) || null;
+        const text = cleanText([labelFor(element), element.getAttribute('aria-label'), label ? textOf(label) : '', textOf(element.parentElement || element)].filter(Boolean).join(' ')).slice(0, 400);
+        return { element, label, text };
+      })
+      .filter((entry) => (isShown(entry.element) || (entry.label && isShown(entry.label)))
+        && ACCOUNT_AGREEMENT.test(entry.text) && !ACCOUNT_LEAVE.test(entry.text));
+  }
+  /** Ticks them; { ticked: [labels], left: [{ label, x, y }] } (left: for the worker's real click). */
+  function tickAccountAgreements(form = null) {
+    const ticked = [];
+    const left = [];
+    for (const entry of accountAgreements(form)) {
+      const name = cleanText(labelFor(entry.element) || entry.text).slice(0, 80);
+      if (!boxTicked(entry.element)) (entry.label && !entry.label.contains(entry.element) ? entry.label : entry.element).click();
+      if (!boxTicked(entry.element) && entry.label && entry.label.contains(entry.element)) entry.label.click();
+      if (boxTicked(entry.element)) { ticked.push(name); continue; }
+      const centre = centreOf(isShown(entry.element) ? entry.element : entry.label);
+      left.push({ label: name, ...(centre || {}) });
+    }
+    return { ticked, left };
   }
 
   /** Fill only identified account fields from Manager-approved candidate data; never returns values. */
@@ -2567,7 +2643,7 @@
     const assignments = new Map();
     const textOfControl = (element) => cleanText([
       labelFor(element), element.getAttribute('aria-label'), element.placeholder,
-      element.name, element.id, element.autocomplete,
+      element.name, element.id, element.autocomplete, element.getAttribute('data-automation-id'),
     ].filter(Boolean).join(' ')).toLowerCase();
     const passwords = controls.filter((element) => element.tagName === 'INPUT' && element.type === 'password');
     const registration = pageType === 'registration_required';
@@ -2578,6 +2654,8 @@
     const fullName = [firstName, lastName].filter(Boolean).join(' ');
 
     for (const control of controls) {
+      // Tick boxes are not account details: agreements are ticked below, the rest left as they are.
+      if (control.type === 'checkbox' || control.type === 'radio') continue;
       const label = textOfControl(control);
       if (control.type === 'password') {
         if (!password) return { ok: false, reason: 'No employer-site password is saved. Enter the account details manually.' };
@@ -2613,7 +2691,7 @@
     if (pageType !== 'email_first_application' && !passwords.length) {
       return { ok: false, reason: 'The account page has no recognized password field. Review it manually.' };
     }
-    const unrecognized = controls.filter((element) => !assignments.has(element));
+    const unrecognized = controls.filter((element) => !assignments.has(element) && element.type !== 'checkbox' && element.type !== 'radio');
     if (unrecognized.length) {
       return { ok: false, reason: 'The account page asks for additional information. Review it manually.' };
     }
@@ -2623,15 +2701,140 @@
       setNativeValue(control, value);
       if (control.value !== value) return { ok: false, reason: 'The site did not accept the account details. Review the page manually.' };
     }
-    return { ok: true, pageType, fieldsFilled: assignments.size };
+    const agreements = tickAccountAgreements(controls.map(formOf).find(Boolean) || null);
+    return { ok: true, pageType, fieldsFilled: assignments.size, agreed: agreements.ticked, agreeLeft: agreements.left };
+  }
+
+  /**
+   * Auto Apply: the sign-in page's email option ("Sign in with email", "Continue with email", "Use
+   * email") beside Apple, Google, LinkedIn and the like. It is the only sign-in way QTS opens itself:
+   * a social sign-in is never clicked.
+   */
+  const EMAIL_SIGN_IN = /^((sign ?in|log ?in|sign ?up|register|continue|apply|create (an )?account)\s+(with|using|via|by)\s+(your\s+|an?\s+)?e-?mail(\s+address)?|(use|with)\s+(your\s+)?e-?mail(\s+address)?(\s+instead)?|e-?mail)$/i;
+  function emailSignInControl() {
+    return allElements().find((element) => isShown(element) && clickable(element)
+      && (element.tagName === 'A' || element.tagName === 'BUTTON' || element.getAttribute('role') === 'button'
+        || (element.tagName === 'INPUT' && ['button', 'submit'].includes(element.type)))
+      && !insideQtsUi(element)
+      && EMAIL_SIGN_IN.test(startText(element))) || null;
+  }
+  function hasEmailSignIn() {
+    return Boolean(emailSignInControl());
+  }
+  function clickEmailSignIn() {
+    const control = emailSignInControl();
+    if (!control) return { ok: false };
+    control.scrollIntoView({ block: 'center' });
+    control.click();
+    return { ok: true, text: startText(control) };
+  }
+
+  /**
+   * Auto Apply: a way to apply without an account, which always comes before signing up or signing
+   * in: a button or link ("Continue as guest", "Apply without an account", "No account? Apply as
+   * guest", "Skip sign in", "Not now" on a sign-in pop-up), or a guest choice ("( ) Sign in  (•) Apply
+   * as guest") followed by the page's Continue. Never a social sign-in, never QTS's own panel.
+   */
+  const GUEST_WAY = /\b((apply|continue|proceed|check ?out|go on) as (a )?guest|as a guest|guest (application|apply|checkout|user|access)|apply as guest|(apply|continue|proceed)( now)? without (an? |creating (an? )?|having (an? )?)?(account|registering|registration|signing (in|up)|sign[- ]?(in|up)|log(ging)? ?in|profile)|no (account|sign[- ]?up|registration) (needed|required|necessary)|skip (sign[- ]?in|log ?in|registration|account( creation)?|creating an account)|continue without (an? )?(account|signing in|logging in|registering))\b/i;
+  const NOT_NOW = /^(not now|maybe later|no,? thanks|skip( for now)?|later|close)$/i;
+  function guestWayControl(skip = []) {
+    // (A guest way already taken once and still shown is not taken again: no loop on a page that does not change.)
+    const tried = new Set(skip);
+    const controls = allElements().filter((element) => isShown(element) && !insideQtsUi(element) && !SOCIAL_SIGN_IN.test(startText(element)) && !tried.has(startText(element)));
+    const button = controls.find((element) => clickable(element)
+      && (element.tagName === 'A' || element.tagName === 'BUTTON' || element.getAttribute('role') === 'button' || element.getAttribute('role') === 'link'
+        || (element.tagName === 'INPUT' && ['button', 'submit'].includes(element.type)))
+      && GUEST_WAY.test(startText(element)));
+    if (button) return { kind: 'button', element: button };
+    // A guest choice: a radio (or a role="radio" option) whose label says it.
+    const choice = allElements().find((element) => ((element.tagName === 'INPUT' && element.type === 'radio') || element.getAttribute('role') === 'radio')
+      && !insideQtsUi(element) && GUEST_WAY.test(cleanText(`${labelFor(element)} ${element.getAttribute('aria-label') || ''} ${textOf(element.closest('label') || element)}`)));
+    if (choice) return { kind: 'choice', element: choice };
+    // "Not now" on a sign-in pop-up (a dialog asking to sign in): closes it, the page behind goes on.
+    const dialog = allElements().find((element) => isShown(element) && !insideQtsUi(element)
+      && (element.getAttribute('role') === 'dialog' || element.tagName === 'DIALOG' || element.getAttribute('aria-modal') === 'true')
+      && /\b(sign ?in|log ?in|create (an )?account|sign ?up|register)\b/i.test(textOf(element)));
+    const notNow = dialog && [...dialog.querySelectorAll('button, a, [role="button"]')].find((element) => isShown(element) && NOT_NOW.test(startText(element)));
+    if (notNow) return { kind: 'button', element: notNow };
+    return null;
+  }
+  function hasGuestWay(skip = []) {
+    return Boolean(guestWayControl(skip));
+  }
+  /** Takes the guest way: clicks it, or picks the guest choice and then the page's Continue / Next. { ok, text }. */
+  function clickGuestWay(skip = []) {
+    const found = guestWayControl(skip);
+    if (!found) return { ok: false };
+    const text = startText(found.element) || cleanText(labelFor(found.element));
+    if (found.kind === 'button') {
+      found.element.scrollIntoView({ block: 'center' });
+      found.element.click();
+      return { ok: true, text };
+    }
+    (found.element.closest('label') || found.element).click();
+    const scope = formOf(found.element) || document;
+    const next = [...scope.querySelectorAll('button, input[type="submit"], input[type="button"], a, [role="button"]')]
+      .find((element) => isShown(element) && /^(continue|next|proceed|start|apply|go)\b/i.test(startText(element)));
+    if (next) next.click();
+    return { ok: true, text, ...(next ? { then: startText(next) } : {}) };
+  }
+
+  /**
+   * Auto Apply: the page's way to the other account step. "Sign up", "Register" and "Create account"
+   * are one ('create'); "Sign in", "Log in" and "Login" are one ('sign_in'). Social sign-ins never.
+   */
+  const ACCOUNT_SWITCH = {
+    create: /^((create|open) (an |your |a new |new )?account|sign ?up|register|join( now| us)?|new (user|account|candidate)|i'?m new( here)?)\b/i,
+    sign_in: /^(sign ?in|log ?in|login)\b/i,
+  };
+  const SOCIAL_SIGN_IN = /\b(with|using|via)\s+(google|apple|linkedin|microsoft|facebook|github|indeed|twitter|x|seek|xing)\b/i;
+  function accountSwitchControl(kind) {
+    const pattern = ACCOUNT_SWITCH[kind];
+    if (!pattern) return null;
+    return allElements().find((element) => isShown(element) && clickable(element) && !insideQtsUi(element)
+      && (element.tagName === 'A' || element.tagName === 'BUTTON' || element.getAttribute('role') === 'button' || element.getAttribute('role') === 'link'
+        || (element.tagName === 'INPUT' && ['button', 'submit'].includes(element.type)))
+      && pattern.test(startText(element)) && !SOCIAL_SIGN_IN.test(startText(element))) || null;
+  }
+  function hasAccountSwitch(kind) {
+    return Boolean(accountSwitchControl(kind));
+  }
+  function clickAccountSwitch(kind) {
+    const control = accountSwitchControl(kind);
+    if (!control) return { ok: false };
+    control.scrollIntoView({ block: 'center' });
+    control.click();
+    return { ok: true, text: startText(control) };
+  }
+  /** What the page says now (its alerts and errors first, then its text), for the account step's outcome. */
+  function accountMessage() {
+    const alerts = allElements().filter((element) => isShown(element) && !insideQtsUi(element)
+      && (/^(alert|status)$/i.test(element.getAttribute('role') || '') || /(^|[\s_-])(error|alert|invalid|warning|notice|message)([\s_-]|$)/i.test(element.className || '')))
+      .map((element) => cleanText(textOf(element))).filter((text) => text && text.length < 400);
+    return { alerts: [...new Set(alerts)].slice(0, 10), text: cleanText(document.body?.innerText || '').slice(0, 4000), url: location.href };
+  }
+
+  /**
+   * Auto Apply: one look at the page instead of several asks: its questions shown, its kind, a human
+   * check, a start / continue button (looked for, never clicked), and a "Sign in with email" option.
+   */
+  function pageLook() {
+    const fields = scanForm().filter((field) => !field.hidden && !field.disabled).length;
+    const page = classifyPage();
+    return { fields, page, gate: pageGate(), start: clickStart([], { assistant: true, probe: true }), emailSignIn: hasEmailSignIn() };
+  }
+  /** Auto Apply: an account page's kind and what it says now, in one look. */
+  function accountLook() {
+    return { type: classifyPage()?.type || '', ...accountMessage() };
   }
 
   /** Click only the account step's own Continue, Sign in, or Create account action. */
   function clickAccountAction(pageType) {
     const patterns = {
       email_first_application: /^(continue|next|next step|proceed)$/i,
+      // "Sign in", "Log in" and "Login" are one; "Sign up", "Register" and "Create account" are one.
       authentication_required: /^(sign ?in|log ?in|login|continue|next)$/i,
-      registration_required: /^(create (an )?account|register|sign ?up|continue|next)$/i,
+      registration_required: /^((create|open) (an |your |a new |new )?account|register|sign ?up|continue|next)$/i,
     };
     const pattern = patterns[pageType];
     if (!pattern) return { ok: false, error: 'This account step cannot be continued automatically.' };
@@ -3201,6 +3404,9 @@
     fieldIssue,
     boxOf,
     cursorInField,
+    suggestionBox,
+    suggestionTexts,
+    suggestionChoiceBox,
     markShownChoices,
     shownChoiceTexts,
     choiceBox,
@@ -3223,6 +3429,16 @@
     clickStart,
     fillAccountForm,
     clickAccountAction,
+    hasEmailSignIn,
+    clickEmailSignIn,
+    tickAccountAgreements,
+    hasAccountSwitch,
+    clickAccountSwitch,
+    accountMessage,
+    pageLook,
+    accountLook,
+    hasGuestWay,
+    clickGuestWay,
     declineCookies,
     jobClosed,
     pageOutcome,

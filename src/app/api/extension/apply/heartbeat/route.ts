@@ -8,12 +8,17 @@ import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
-  const body = await request.json().catch(() => null) as { attemptId?: unknown } | null;
+  const body = await request.json().catch(() => null) as { attemptId?: unknown; jobId?: unknown; stopVersion?: unknown } | null;
   if (!isUuid(body?.attemptId)) {
     return NextResponse.json({ success: false, message: "A valid attempt ID is required." }, { status: 400 });
   }
   try {
-    const leaseSeconds = await renewApplyAttempt(body.attemptId, auth.manager.id, auth.browser.id);
+    // Auto Apply sends its job and the Stop all count it was taken with: a hold that ran out while
+    // this Chrome was away is taken back when nothing else happened to the job meanwhile.
+    const recover = isUuid(body.jobId) && Number.isInteger(body.stopVersion)
+      ? { jobId: body.jobId, stopVersion: body.stopVersion as number }
+      : null;
+    const leaseSeconds = await renewApplyAttempt(body.attemptId, auth.manager.id, auth.browser.id, recover);
     return leaseSeconds !== null
       ? NextResponse.json({ success: true, leaseSeconds, ...(await applySubmitSettings(auth.manager.id)) })
       : NextResponse.json(

@@ -161,9 +161,35 @@ async function waitForTabComplete(tabId, timeoutMs) {
   return false;
 }
 
+// The form engine is sent to a page once: each tab's document that already has it (its id). An ask
+// goes only to that same document; a new page (a load, a reload) has another id, so Chrome refuses
+// the ask there and the engine is sent first. (Counted for speed checks: asks and engine sends.)
+const formEngineDocuments = new Map();
+const pageTrips = { asks: 0, engineSends: 0 };
+globalThis.__qtsPageTrips = pageTrips;
+chrome.tabs.onRemoved.addListener((tabId) => { formEngineDocuments.delete(tabId); });
+chrome.webNavigation?.onCommitted?.addListener(({ tabId, frameId }) => { if (frameId === 0) formEngineDocuments.delete(tabId); });
+const DOCUMENT_GONE = /no document|document with id|document .*(not found|no longer)|frame .*(removed|not found)|no frame|invalid document/i;
+
 async function inForm(tabId, func, args = []) {
-  await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/apply-form.js'] });
+  const known = formEngineDocuments.get(tabId);
+  if (known) {
+    try {
+      pageTrips.asks += 1;
+      const [result] = await chrome.scripting.executeScript({ target: { tabId, documentIds: [known] }, func, args });
+      return result?.result;
+    } catch (error) {
+      // Only a page that is no longer that document is asked again (with the engine sent first);
+      // anything else the ask itself did is passed on as it is.
+      if (!DOCUMENT_GONE.test(String(error?.message || error))) throw error;
+      formEngineDocuments.delete(tabId);
+    }
+  }
+  pageTrips.engineSends += 1;
+  const [sent] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/apply-form.js'] });
+  pageTrips.asks += 1;
   const [result] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func, args });
+  if (sent?.documentId && result?.documentId === sent.documentId) formEngineDocuments.set(tabId, sent.documentId);
   return result?.result;
 }
 
@@ -197,6 +223,185 @@ async function applicationFormShown(tabId) {
 }
 
 /**
+ * Auto Apply: the account page's details: its email option opened when the form is behind one
+ * ("Sign in with email"; never Google, Apple, LinkedIn or another social sign-in), the candidate's
+ * email, the saved site password (and name on a registration), and its agreements ticked (one the
+ * site ignores a simulated click on gets a real one). { ok, reason, pageType, agreed, notTicked }.
+ */
+async function fillAccountDetails(tabId, application) {
+  const values = {
+    email: application.candidate.email,
+    firstName: application.candidate.firstName,
+    lastName: application.candidate.lastName,
+    password: application.siteAccountPassword,
+  };
+  const fill = () => inForm(tabId, (given) => globalThis.__qtsApplyForm.fillAccountForm(given), [values]).catch(() => null);
+  let account = await fill();
+  if (!account?.ok) {
+    const opened = await inForm(tabId, () => globalThis.__qtsApplyForm.clickEmailSignIn()).catch(() => null);
+    if (opened?.ok) {
+      // The email form appears on the same page, or after a short load.
+      for (let waited = 0; waited < 10000; waited += 500) {
+        await sleep(500);
+        account = await fill();
+        if (account?.ok) break;
+      }
+    }
+  }
+  let agreed = account?.agreed || [];
+  let notTicked = [];
+  if (account?.ok && account.agreeLeft?.length) {
+    for (const box of account.agreeLeft) if (Number.isFinite(box.x)) await realClick(tabId, box).catch(() => {});
+    await sleep(300);
+    const again = await inForm(tabId, () => globalThis.__qtsApplyForm.tickAccountAgreements()).catch(() => null);
+    agreed = [...agreed, ...account.agreeLeft.map((box) => box.label).filter((label) => !(again?.left || []).some((left) => left.label === label))];
+    notTicked = (again?.left || []).map((box) => box.label);
+    await releaseDebugger(tabId).catch(() => {});
+  }
+  return { ok: Boolean(account?.ok), reason: account?.reason || 'QTS could not fill this account page.', pageType: account?.pageType || null, agreed, notTicked };
+}
+
+// What a site says after Create account or Sign in.
+// (Never a page's own words such as "Already have an account? Sign in" or the label "Verify New
+// Password": only what says the account exists, or asks for a code or a link.)
+const ACCOUNT_EXISTS = /already (exists|registered|in use|taken)|account (already )?exists|e-?mail (address )?(is )?already (registered|in use|taken|exists|used)|an account with (this|that|the) e-?mail|user already exists/i;
+const ACCOUNT_VERIFY = /verify your (e-?mail|account|identity|address)|verification (code|link|e-?mail)|confirm your (e-?mail|account|address)|check your (e-?mail|inbox)|we('ve| have)? (just )?sent (you )?(a |an |the )?(code|link|e-?mail|verification)|enter (the )?(\d+[- ]digit )?(code|verification)|one[- ]time (code|password|passcode)|activation (link|code|e-?mail)|activate your account/i;
+const ACCOUNT_REFUSED = /incorrect|invalid (e-?mail|password|credentials|username|login)|wrong (e-?mail|password)|(password|e-?mail|credentials).{0,30}(doesn't|does not|did not|don't|do not) match|not recogni[sz]ed|(account|user) (is )?(locked|disabled|blocked)|too many (attempts|tries|requests)|try again later|password (must|should|needs)|not (strong|long) enough/i;
+
+/** The line of the page that says it (its alert first), for the panel. */
+function accountSaid(seen, pattern) {
+  const line = [...(seen?.alerts || []), ...String(seen?.text || '').split(/(?<=[.!?])\s+|\n/)].find((text) => pattern.test(text));
+  return line ? String(line).trim().slice(0, 240) : '';
+}
+
+/** Waits (up to 20 s) until the page moves on after an account action: another address, another kind of page, or a message. */
+async function waitForAccountChange(tabId, before) {
+  for (let waited = 0; waited < 20000; waited += 500) {
+    await sleep(500);
+    const tab = await getTab(tabId);
+    if (!tab) return null;
+    if (tab.status !== 'complete') continue;
+    const look = await inForm(tabId, () => globalThis.__qtsApplyForm.accountLook()).catch(() => null);
+    const page = look ? { type: look.type } : null;
+    const seen = look;
+    if ((tab.url || '') !== before.url || page?.type !== before.type) return { page, seen };
+    if (seen && JSON.stringify(seen.alerts) !== JSON.stringify(before.alerts || [])) return { page, seen };
+  }
+  return { page: await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null), seen: await inForm(tabId, () => globalThis.__qtsApplyForm.accountMessage()).catch(() => null) };
+}
+
+/**
+ * Auto Apply on an account page: Create account first (the candidate may never have signed up here),
+ * then signs in the natural way. "Sign up", "Register" and "Create account" are one step; "Sign in",
+ * "Log in" and "Login" are the other. QTS types the candidate's email and the saved password, ticks
+ * the agreements, and clicks the page's own button. An account that already exists: Sign in instead.
+ * At most one Create account and one Sign in per site in an application; a password is never tried
+ * again. A verification code or link, a human check, a refusal, or anything QTS does not know is the
+ * Manager's: { manager: message }. { reached: true } once the page is past the account step.
+ */
+async function autoAccountSteps(tabId, application) {
+  const sessions = self.__qtsSiteSessions;
+  const site = sessions.siteOf(sessions.hostOf((await getTab(tabId))?.url || ''));
+  application.accountTries ||= new Map();
+  const tries = application.accountTries.get(site) || { created: false, exists: false, signedIn: false, openedCreate: false };
+  application.accountTries.set(site, tries);
+  const verifyMessage = (said) => `${said ? `The site says: "${said}". ` : ''}Do the verification yourself (the code or the link sent to ${application.candidate.email || 'the candidate\'s email'}). QTS goes on to the form when the page moves on.`;
+  const yourself = (text) => `${text} Finish this account step yourself with ${application.candidate.email || 'this candidate\'s email'} (never another candidate's account); QTS goes on to the form when the page moves on.`;
+  for (let round = 0; round < 8; round += 1) {
+    const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+    const type = page?.type || '';
+    if (['application_form', 'partial_application_form', 'application_navigation'].includes(type)) return { reached: true };
+    // A way without an account (also on a Sign in or Create account page) always comes first.
+    if (!tries.guestTexts) tries.guestTexts = [];
+    const guestBefore = { url: (await getTab(tabId))?.url || '', type, alerts: [] };
+    const guestClick = noteTabClick(tabId, 'start');
+    const guest = await inForm(tabId, (skip) => globalThis.__qtsApplyForm.clickGuestWay(skip), [tries.guestTexts]).catch(() => null);
+    if (!guest?.ok) forgetTabClick(tabId, guestClick);
+    if (guest?.ok) {
+      tries.guestTexts.push(guest.text);
+      diag('guest-way', { text: String(guest.text || '').slice(0, 60), from: 'account page' });
+      await waitForAccountChange(tabId, guestBefore);
+      continue;
+    }
+    const seen = await inForm(tabId, () => globalThis.__qtsApplyForm.accountMessage()).catch(() => null);
+    if (['verification_required', 'captcha_required'].includes(type)) {
+      // A code or a link sent by email: read from the Manager's verification mailbox when there is one.
+      if (type === 'verification_required' && await self.__qtsVerificationMail.complete(tabId, application)) continue;
+      return { manager: type === 'captcha_required' ? yourself('The site shows a human check (CAPTCHA).') : verifyMessage(accountSaid(seen, ACCOUNT_VERIFY)) };
+    }
+    if (ACCOUNT_VERIFY.test([...(seen?.alerts || []), seen?.text || ''].join(' ')) && (tries.created || tries.signedIn)) {
+      if (await self.__qtsVerificationMail.complete(tabId, application)) continue;
+      return { manager: verifyMessage(accountSaid(seen, ACCOUNT_VERIFY)) };
+    }
+    let kind = type === 'registration_required' ? 'create' : ['authentication_required', 'email_first_application'].includes(type) ? 'sign_in' : '';
+    if (!kind) {
+      // Only "Sign in with email" beside the social ones: opened, then looked at again.
+      const opened = await inForm(tabId, () => globalThis.__qtsApplyForm.clickEmailSignIn()).catch(() => null);
+      if (opened?.ok) { await sleep(1500); continue; }
+      if (round === 0) return { manager: yourself('QTS could not tell how to sign up or sign in on this page.') };
+      return { reached: true };
+    }
+    // Create account first: a sign-in page that offers it, while this site has not had one made.
+    if (kind === 'sign_in' && !tries.created && !tries.exists && !tries.openedCreate
+      && await inForm(tabId, () => globalThis.__qtsApplyForm.hasAccountSwitch('create')).catch(() => false)) {
+      tries.openedCreate = true;
+      const before = { url: (await getTab(tabId))?.url || '', type, alerts: seen?.alerts || [] };
+      noteTabClick(tabId, 'start');
+      await inForm(tabId, () => globalThis.__qtsApplyForm.clickAccountSwitch('create')).catch(() => null);
+      await waitForAccountChange(tabId, before);
+      continue;
+    }
+    // Made already (or it exists): Sign in instead, from the page's own Sign in / Log in.
+    if (kind === 'create' && (tries.created || tries.exists)) {
+      if (!tries.signedIn && await inForm(tabId, () => globalThis.__qtsApplyForm.hasAccountSwitch('sign_in')).catch(() => false)) {
+        const before = { url: (await getTab(tabId))?.url || '', type, alerts: seen?.alerts || [] };
+        noteTabClick(tabId, 'start');
+        await inForm(tabId, () => globalThis.__qtsApplyForm.clickAccountSwitch('sign_in')).catch(() => null);
+        await waitForAccountChange(tabId, before);
+        continue;
+      }
+      const said = accountSaid(seen, ACCOUNT_REFUSED) || accountSaid(seen, ACCOUNT_EXISTS);
+      return { manager: yourself(said ? `The site says: "${said}".` : 'Creating the account did not go through.') };
+    }
+    if (kind === 'sign_in' && tries.signedIn) {
+      const said = accountSaid(seen, ACCOUNT_REFUSED);
+      return { manager: yourself(said ? `Signing in did not go through. The site says: "${said}". QTS does not try the password again.` : 'Signing in did not go through, and QTS does not try the password again.') };
+    }
+    const filled = await fillAccountDetails(tabId, application);
+    diag('account-step', { kind, ok: filled.ok, agreed: filled.agreed.length, notTicked: filled.notTicked.length });
+    if (!filled.ok) return { manager: yourself(filled.reason) };
+    if (filled.notTicked.length) {
+      return { manager: yourself(`QTS typed the details, but the site did not take its tick on ${filled.notTicked.map((label) => `"${label}"`).join(', ')}: tick it, then click ${kind === 'create' ? 'Create account' : 'Sign in'}.`) };
+    }
+    const before = { url: (await getTab(tabId))?.url || '', type, alerts: seen?.alerts || [] };
+    noteTabClick(tabId, 'start');
+    const action = await inForm(tabId, (pageType) => globalThis.__qtsApplyForm.clickAccountAction(pageType), [filled.pageType || type]).catch(() => null);
+    if (!action?.ok) {
+      return { manager: `QTS typed ${application.candidate.email || 'the email'} and the saved password${filled.agreed.length ? ` and ticked ${filled.agreed.map((label) => `"${label}"`).join(', ')}` : ''}, but found no single ${kind === 'create' ? 'Create account' : 'Sign in'} button. Click it yourself; QTS goes on to the form when the page moves on.` };
+    }
+    if (kind === 'create') tries.created = true;
+    else tries.signedIn = true;
+    // Signed up or in by QTS with this candidate's email: this site's account is theirs.
+    application.verifiedSites?.add(site);
+    const after = await waitForAccountChange(tabId, before);
+    if (!after) return { manager: yourself('The page closed.') };
+    const words = [...(after.seen?.alerts || []), after.seen?.text || ''].join(' ');
+    if (kind === 'create' && ACCOUNT_EXISTS.test(words)) {
+      tries.exists = true;
+      continue;
+    }
+    if (ACCOUNT_VERIFY.test(words) && !['application_form', 'partial_application_form'].includes(after.page?.type)) {
+      if (await self.__qtsVerificationMail.complete(tabId, application)) continue;
+      return { manager: verifyMessage(accountSaid(after.seen, ACCOUNT_VERIFY)) };
+    }
+    if (ACCOUNT_REFUSED.test((after.seen?.alerts || []).join(' ')) && after.page?.type === type) {
+      return { manager: yourself(`The site says: "${accountSaid(after.seen, ACCOUNT_REFUSED)}".${kind === 'sign_in' ? ' QTS does not try the password again.' : ''}`) };
+    }
+  }
+  return { manager: yourself('QTS could not get past the account step.') };
+}
+
+/**
  * From a job page to its application form, the way a person gets there: click "Apply" (and a
  * following "Apply manually"), follow a new tab or page, or open an embedded job-site form.
  * onTab hears about a new tab so the caller keeps the right one. Returns the tab with the form.
@@ -213,6 +418,10 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
   const visited = new Set();
   let bounces = 0;
   let lookedAgain = false;
+  // Auto Apply: a start / continue button seen twice in a row on a page that has stopped changing is
+  // clicked at once (about half a second), not after 2 s. The same buttons, the same order; only the
+  // wait is shorter. Off switch: qtsAutoApplySpeedOff in local storage brings back the 2 s wait.
+  const steadyClicks = guestFirst && (await chrome.storage.local.get('qtsAutoApplySpeedOff').catch(() => ({}))).qtsAutoApplySpeedOff !== true;
   for (let step = 0; step < APPLY_START_STEPS; step += 1) {
     if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
     if (guestFirst) {
@@ -230,13 +439,19 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     // still empty (Workday draws everything with JavaScript) gets up to 20 s; one whose Apply button
     // has appeared goes on to it at once.
     let page = null;
+    let startSeen = 0;
     for (let waited = 0; waited < 20000; waited += tick) {
       page = await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
       if (['application_form', 'partial_application_form'].includes(page?.type)) return tab;
       if (['email_first_application', 'authentication_required', 'registration_required',
         'verification_required', 'captcha_required'].includes(page?.type)) break;
+      startSeen = page?.type === 'application_navigation' ? startSeen + 1 : 0;
+      // Steady: seen twice in a row, and the page quiet for 0.4 s (still drawing: an embedded form
+      // may be on its way, so the usual wait applies).
+      if (steadyClicks && startSeen >= 2
+        && await inForm(tab.id, () => globalThis.__qtsApplyForm.settled({ quietMs: 400, maxMs: 900 })).catch(() => false)) break;
       if (page?.type === 'application_navigation' && waited >= 2000) break;
-      if (guestFirst && page?.type === 'unsupported_page' && waited >= 1500) {
+      if (guestFirst && page?.type === 'unsupported_page' && waited >= (steadyClicks ? 600 : 1500)) {
         const found = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true, apiFlow: true }), [clicked]).catch(() => null);
         if (found?.ok) break;
         // Finished drawing, and no way on: no reason to wait out the full time.
@@ -259,6 +474,47 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       const probe = await inForm(tab.id, (skip, apiFlow) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true, apiFlow }), [clicked, guestFirst]).catch(() => null);
       accountEscape = probe?.ok === true;
     }
+    // Auto Apply with APIs: a way without an account comes first, on every page, also beside a Sign
+    // in or Create account form ("Continue as guest", "Apply without an account", a guest choice,
+    // "Not now" on a sign-in pop-up). QTS takes it, follows a tab it opens, and looks again.
+    if (guestFirst && !['application_form', 'partial_application_form'].includes(page?.type)) {
+      const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
+      const guestClick = noteTabClick(tab.id, 'start');
+      const guest = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickGuestWay(skip), [clicked]).catch(() => null);
+      if (!guest?.ok) forgetTabClick(tab.id, guestClick);
+      if (guest?.ok) {
+        clicked.push(guest.text);
+        diag('guest-way', { text: String(guest.text || '').slice(0, 60), then: guest.then || null });
+        for (let waited = 0; waited < 3000; waited += 300) {
+          await sleep(300);
+          const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && (entry.openerTabId === tab.id || navigationSources.get(entry.id) === tab.id));
+          if (opened) {
+            const jobPage = tab;
+            tab = opened;
+            onTab(tab);
+            await tabOwnership.markTab(tab.id, 'apply');
+            if (handleAccountSteps) chrome.tabs.remove(jobPage.id).catch(() => {});
+            break;
+          }
+          if ((await getTab(tab.id))?.status === 'loading') break;
+        }
+        await waitForTabComplete(tab.id, 20000).catch(() => {});
+        continue;
+      }
+    }
+    // Auto Apply with APIs: a page offering only signing in (also one showing only "Sign in with
+    // email" beside Google, Apple, LinkedIn): Create account first, then Sign in, by QTS itself.
+    const accountPage =['email_first_application', 'authentication_required', 'registration_required'].includes(page?.type);
+    if (guestFirst && !accountEscape && handleAccountSteps && !['application_form', 'partial_application_form'].includes(page?.type)
+      && (accountPage || await inForm(tab.id, () => globalThis.__qtsApplyForm.hasEmailSignIn()).catch(() => false))) {
+      const start = accountPage ? null : await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true, apiFlow: true }), [clicked]).catch(() => null);
+      if (!start?.ok) {
+        // Create account first, then Sign in, the natural way; the Manager takes over for a code or an error.
+        const done = await autoAccountSteps(tab.id, application);
+        if (done.reached) continue;
+        throw new ApplyStop(done.manager, { skip: false, keepTab: true, pageType: 'account_needs_you' });
+      }
+    }
     if (!accountEscape && ['email_first_application', 'authentication_required', 'registration_required'].includes(page?.type)) {
       if (!handleAccountSteps) {
         throw new ApplyStop('Only signing in or creating an account is offered here: do that yourself on the employer site. QTS continues to the form when the page advances.', {
@@ -280,6 +536,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       if (guestFirst) application.verifiedSites?.add(self.__qtsSiteSessions.siteOf(self.__qtsSiteSessions.hostOf((await getTab(tab.id))?.url || '')));
       const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
       const beforeUrl = (await getTab(tab.id))?.url;
+      noteTabClick(tab.id, 'start');
       const action = await inForm(tab.id, (type) => globalThis.__qtsApplyForm.clickAccountAction(type), [account.pageType])
         .catch(() => ({ ok: false, error: 'QTS could not continue the account form. Review it manually.' }));
       if (!action?.ok) {
@@ -290,7 +547,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       let advanced = false;
       for (let waited = 0; waited < APPLY_START_WAIT_MS; waited += tick) {
         await sleep(tick);
-        const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && entry.openerTabId === tab.id);
+        const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && (entry.openerTabId === tab.id || navigationSources.get(entry.id) === tab.id));
         if (opened) {
           const previousTab = tab;
           tab = opened;
@@ -316,6 +573,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     }
     const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
     if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
+    noteTabClick(tab.id, 'start');
     let start = await inForm(tab.id, (skip, assistant, apiFlow) => globalThis.__qtsApplyForm.clickStart(skip, { assistant, apiFlow }), [clicked, seeksGuestWay, guestFirst]).catch(() => null);
     // Nothing leads on without an account: only now the site's own Sign in or Register.
     if (guestFirst && !start?.ok && !start?.email) {
@@ -345,7 +603,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     for (let waited = 0; waited < (guestFirst ? 8000 : APPLY_START_WAIT_MS); waited += tick) {
       await sleep(tick);
       if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
-      const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && entry.openerTabId === tab.id);
+      const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && (entry.openerTabId === tab.id || navigationSources.get(entry.id) === tab.id));
       if (opened) {
         const jobPage = tab;
         tab = opened;
@@ -546,6 +804,114 @@ async function pickOneWithRealClick(tabId, field, wanted) {
   } catch (error) {
     return { ok: false, error: `real clicks failed: ${error instanceof Error ? error.message : error}` };
   }
+}
+
+// ---- Search and suggestion boxes (city, school, country, skills…): Chrome's own input, never letter by letter ----
+// The whole text goes in at once as real input (as a paste), then one real Backspace and its last
+// letter, which wakes a box that searches only on key presses. No suggestion: the same with only the
+// first word. Still none: the box is left empty for the Manager ("pick it yourself"). Nothing is put
+// in unless the cursor is in that box.
+const REAL_KEYS = {
+  selectAll: { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 },
+  backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
+};
+async function realKey(tabId, key) {
+  await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key });
+  await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...key });
+}
+/** One real key press that types a character (keyDown with its text, then keyUp). */
+async function realCharacter(tabId, character) {
+  const upper = character.toUpperCase();
+  const letter = /^[A-Z]$/.test(upper);
+  const digit = /^[0-9]$/.test(character);
+  const code = letter ? `Key${upper}` : digit ? `Digit${character}` : '';
+  const virtual = letter || digit ? upper.charCodeAt(0) : 0;
+  await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', key: character, code, windowsVirtualKeyCode: virtual, text: character, unmodifiedText: character });
+  await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: character, code, windowsVirtualKeyCode: virtual });
+}
+/** The box emptied, then the whole text pasted in as real input, then Backspace and its last letter. */
+async function realPasteText(tabId, text) {
+  await realKey(tabId, REAL_KEYS.selectAll);
+  await realKey(tabId, REAL_KEYS.backspace);
+  await debuggerSend(tabId, 'Input.insertText', { text });
+  const last = [...text].pop();
+  if (last && last.trim()) {
+    await realKey(tabId, REAL_KEYS.backspace);
+    await realCharacter(tabId, last);
+  }
+}
+const firstWordOf = (text) => String(text).trim().split(/[\s,;/]+/)[0] || '';
+
+/** One answer into a suggestion box: { ok } or { ok: false, error, pickYourself, choices }. */
+async function realSuggestionOne(tabId, field, wanted) {
+  const id = field.id;
+  const squash = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  // Already holding this answer: left as it is.
+  const before = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.shownValue(fieldId), [id]).catch(() => '');
+  if (before && squash(before) === squash(wanted)) return { ok: true };
+  if (await inForm(tabId, (fieldId, text) => globalThis.__qtsApplyForm.choiceShown(fieldId, text), [id, wanted]).catch(() => false)) return { ok: true };
+  const tries = [wanted];
+  const first = firstWordOf(wanted);
+  if (first && squash(first) !== squash(wanted)) tries.push(first);
+  let seen = [];
+  for (const text of tries) {
+    const box = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.boxOf(fieldId), [id]).catch(() => null);
+    if (!box) return { ok: false, error: 'the box is not on the screen: pick it yourself', pickYourself: true };
+    await inForm(tabId, () => globalThis.__qtsApplyForm.markShownChoices()).catch(() => false);
+    await realClick(tabId, box);
+    await sleep(250);
+    // Real input goes wherever the cursor is: never into another question.
+    if (!(await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.cursorInField(fieldId), [id]).catch(() => false))) {
+      return { ok: false, error: 'the cursor could not be put in this box: pick it yourself', pickYourself: true };
+    }
+    await realPasteText(tabId, text);
+    let choice = null;
+    for (let waited = 0; waited < 3500 && !choice; waited += 350) {
+      await sleep(350);
+      choice = await inForm(tabId, (fieldId, value) => globalThis.__qtsApplyForm.suggestionChoiceBox(fieldId, value), [id, wanted]).catch(() => null);
+    }
+    if (!choice) {
+      const shown = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.suggestionTexts(fieldId), [id]).catch(() => []);
+      seen = [...new Set([...seen, ...(shown || [])])];
+      continue;
+    }
+    await realClick(tabId, choice);
+    await sleep(400);
+    const now = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.shownValue(fieldId), [id]).catch(() => '');
+    const [held, picked] = [squash(now), squash(choice.text)];
+    if (held && (held.includes(picked) || (held.length >= 2 && picked.includes(held)))) return { ok: true };
+    if (await inForm(tabId, (fieldId, value) => globalThis.__qtsApplyForm.choiceShown(fieldId, value), [id, choice.text]).catch(() => false)) return { ok: true };
+  }
+  // No suggestion: nothing typed stays in the box.
+  await realKey(tabId, REAL_KEYS.selectAll).catch(() => {});
+  await realKey(tabId, REAL_KEYS.backspace).catch(() => {});
+  await realEscape(tabId);
+  await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.clearField(fieldId), [id]).catch(() => false);
+  return { ok: false, error: `no suggestion for "${String(wanted).slice(0, 80)}": pick it yourself`, pickYourself: true, choices: seen.slice(0, 300) };
+}
+
+/** Each answer (a skills box takes several) into a suggestion box with real input. */
+async function realSuggestionFill(tabId, field, value) {
+  const values = [].concat(value).map((entry) => String(entry ?? '').trim()).filter(Boolean);
+  if (!values.length) return { ok: false, error: 'no answer' };
+  try {
+    for (const wanted of values) {
+      const result = await realSuggestionOne(tabId, field, wanted);
+      if (!result.ok) return result;
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: `real input failed (${error instanceof Error ? error.message : error}): pick it yourself`, pickYourself: true };
+  }
+}
+
+/** One box filled: a suggestion box with real input, any other box by the form engine. */
+async function fillBox(tabId, fieldId, value) {
+  const suggests = value != null && typeof value !== 'boolean'
+    && await inForm(tabId, (id) => globalThis.__qtsApplyForm.suggestionBox(id), [fieldId]).catch(() => false);
+  if (!suggests) return inForm(tabId, (id, next) => globalThis.__qtsApplyForm.fillField(id, next), [fieldId, value]).catch(() => null);
+  const real = await realSuggestionFill(tabId, { id: fieldId }, value);
+  return real.ok ? { ok: true } : { ok: false, error: real.error, choices: real.choices || [], pickYourself: real.pickYourself === true };
 }
 
 /** Ticks radio or tick-box options with real clicks on their labels; { ok } or { ok: false, error }. */
@@ -1196,7 +1562,10 @@ async function fillAndCheck(tabId, field, answer, file, seen) {
 }
 
 async function fillAndCheckField(tabId, field, answer, file, seen) {
-  const fill = (fieldId) => inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file]);
+  // A search or suggestion box gets Chrome's own input (fillBox); any other box the form engine's.
+  const fill = (fieldId) => (file
+    ? inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file])
+    : fillBox(tabId, fieldId, answer.value ?? null));
   let fieldId = field.id;
   let result = await fill(fieldId);
   // The page may rebuild a field after another answer (BambooHR); find it again by its question.
@@ -1211,7 +1580,8 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
   // A dropdown that ignored simulated events gets real clicks, and so does a text box that ended up
   // empty: it keeps a value only when one of its suggestions is clicked (Lever's location).
   const emptied = field.kind === 'text' && !String(result?.value ?? '').trim();
-  if (!result?.ok && (['menu', 'combobox'].includes(field.kind) || emptied) && !file) {
+  // (A suggestion box already had its real input: left for the Manager to pick.)
+  if (!result?.ok && !result?.pickYourself && (['menu', 'combobox'].includes(field.kind) || emptied) && !file) {
     const real = await pickWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     // The choices either way of opening it showed go to the AI, so it picks one the field has.
     const choices = real.choices?.length ? real.choices : result?.choices;
@@ -1222,7 +1592,7 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
     const real = await checkWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
   }
-  if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [], ...(result?.manualUpload ? { manualUpload: true } : {}) };
+  if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [], ...(result?.manualUpload ? { manualUpload: true } : {}), ...(result?.pickYourself ? { pickYourself: true } : {}) };
   const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
   // "This field is required" left from before the pick, under a field that now holds its answer, is
   // not the site rejecting it: the answer matched, and the field is not filled again.
@@ -1678,7 +2048,9 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
         // reusable answer and its note), the site's reason, and the choices the field showed;
         // without AI it is the Manager's.
         if (assist || noAi) {
-          problem(`Fill by hand: "${field.label}" — the site did not take ${answer.source === 'reusable' ? 'the reusable answer' : 'the profile\'s'} "${meant}".`, field, 'check');
+          problem(outcome.pickYourself
+            ? `Pick it yourself: "${field.label}" — no suggestion matched ${answer.source === 'reusable' ? 'the reusable answer' : 'the profile\'s'} "${meant}", so the box is left empty.`
+            : `Fill by hand: "${field.label}" — the site did not take ${answer.source === 'reusable' ? 'the reusable answer' : 'the profile\'s'} "${meant}".`, field, 'check');
           continue;
         }
         const was = answer.source === 'reusable'
@@ -2011,6 +2383,10 @@ function answerManager(attemptId, decision) {
   // Auto Apply: Submitted counts at any moment, also while QTS fills or the AI answers: that work stops.
   // (A review waiting for the Manager takes it as its answer instead.)
   if (decision.action === 'submitted' && !reviewWaiters.has(attemptId)) activeReviews.get(attemptId)?.onSubmitted?.(decision);
+  // Auto Apply: Cancel, too, stops at once whatever QTS is doing; the job goes back unchanged.
+  if (decision.action === 'cancel' && !reviewWaiters.has(attemptId)) activeReviews.get(attemptId)?.onCancelled?.();
+  // Auto Apply: Remove, too (the job row is deleted afterwards).
+  if (decision.action === 'remove' && !reviewWaiters.has(attemptId)) activeReviews.get(attemptId)?.onRemoveRequested?.();
   const resolve = reviewWaiters.get(attemptId);
   if (!resolve) {
     const waiting = activeReviews.get(attemptId);
@@ -2029,6 +2405,8 @@ function answerManager(attemptId, decision) {
 
 // The assistant's panel (state.assist: the job page with the profile) or the review panel.
 async function showReviewPanel(tabId, state, { reveal = false } = {}) {
+  // Auto Apply: what lives with the application (a tab notice, tabs to ask about, the panel's own view).
+  state = autoPanelExtras(state);
   const panel = state?.assist ? 'content/apply-assist.js' : 'content/apply-review.js';
   await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content/apply-form.js', panel] });
   await chrome.scripting.executeScript({
@@ -2106,6 +2484,8 @@ async function askManager(review, panelState, noticeKind, noticeText) {
   }, APPLY_REVIEW_REMINDER_MS);
   try {
     const decision = await waitForManager(review.attemptId);
+    // Auto Apply moved to a new tab while QTS was working in the old one: the old one closes now.
+    if (decision.action === 'tab_moved') await closeMovedFromTabs(review);
     // The page may change right after a choice (Next, Submit): it shows "working" until the next state.
     review.panel = { ...panelState, mode: 'working', workingText: 'One moment…' };
     return decision;
@@ -2120,6 +2500,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== 'QTS_APPLY_PANEL' || typeof msg.attemptId !== 'string') return false;
   (async () => {
     if (msg.action === 'ping') return { ok: true };
+    // Auto Apply: a stopped application's panel (no application runs there): Submitted, Give back, Remove.
+    if (!activeReviews.has(msg.attemptId) && ['submitted', 'give_back', 'remove', 'cancel', 'skip', 'later', 'fill_again', 'ask_ai', 'recheck', 'continue', 'continue_manual'].includes(msg.action)) {
+      const stopped = await globalThis.__qtsAutoApplyStopped?.answer?.(msg, sender);
+      if (stopped) return stopped;
+    }
+    // Auto Apply: the Manager clicked a start / continue control in the application's tab; a tab it
+    // opens is the next step (see judgeAutoContinuation).
+    if (msg.action === 'page_click') {
+      const review = activeReviews.get(msg.attemptId);
+      if (review?.auto && sender.tab?.id === review.tabId && ['start', 'unclear', 'side'].includes(msg.kind)) noteTabClick(sender.tab.id, msg.kind, 'manager');
+      return { ok: true };
+    }
+    // Auto Apply: the panel's own view (small, moved, folded sections, scroll), carried to a new tab.
+    if (msg.action === 'ui_state') {
+      const review = activeReviews.get(msg.attemptId);
+      if (review?.auto && sender.tab?.id === review.tabId && msg.ui && typeof msg.ui === 'object') review.panelUi = msg.ui;
+      return { ok: true };
+    }
+    // Auto Apply: "Is this tab this application?" answered.
+    if (msg.action === 'use_tab' || msg.action === 'ignore_tab') {
+      const review = activeReviews.get(msg.attemptId);
+      const entry = review?.askTabs?.get(Number(msg.tabId));
+      if (!review?.auto || !entry) return { ok: false, error: 'That tab is no longer open.' };
+      review.askTabs.delete(entry.tabId);
+      if (msg.action === 'ignore_tab') (review.sideTabs ||= new Set()).add(entry.tabId);
+      else if (review.navigating) review.pendingTab = { tabId: entry.tabId, snapshot: null };
+      else await moveAutoApplication(review, entry.tabId, null);
+      refreshAutoPanel(review);
+      return { ok: true };
+    }
     // New pages or safe navigation controls on an assistant's page.
     if (msg.action === 'fields_changed') {
       activeReviews.get(msg.attemptId)?.assistant?.poke(sender.tab?.id);
@@ -2174,6 +2584,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (answerManager(msg.attemptId, { action: msg.action, answers: msg.answers || null, manualCheck: msg.manualCheck === true, answerId: msg.answerId, noticed: msg.noticed === true, tabId: sender.tab?.id, label: typeof msg.label === 'string' ? msg.label : null, look: msg.look && typeof msg.look === 'object' ? msg.look : null })) {
       return { ok: true };
     }
+    diag('panel-without-runner', { action: msg.action, tabId: sender.tab?.id, held: Boolean(activeReviews.get(msg.attemptId)), waiting: reviewWaiters.has(msg.attemptId) });
     return msg.assist
       ? answerAssistWithoutRunner(msg, sender.tab?.id)
       : answerWithoutRunner(msg.attemptId, msg.action, sender.tab?.id);
@@ -2311,7 +2722,10 @@ chrome.webNavigation?.onCreatedNavigationTarget?.addListener(({ tabId, sourceTab
     if (review.tabId === tabId) review.tabId = parent;
     rememberApplySession(review).catch(() => {});
   }
-  getTab(tabId).then((tab) => adoptAssistContinuation(tab)).catch(() => {});
+  for (const review of activeReviews.values()) {
+    if (review.auto && review.autoChildren?.has(tabId) && review.autoChildren.get(tabId) !== sourceTabId) review.autoChildren.delete(tabId);
+  }
+  getTab(tabId).then((tab) => { adoptAssistContinuation(tab); if (typeof adoptAutoContinuation === 'function') adoptAutoContinuation(tab); }).catch(() => {});
 });
 chrome.tabs.onRemoved.addListener((tabId) => { navigationSources.delete(tabId); });
 
@@ -2470,6 +2884,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, change) => {
     }
   }
   adoptAssistContinuation(updated);
+  // (Auto Apply's tabs: the block at the end of this file.)
+  if (typeof adoptAutoContinuation === 'function') adoptAutoContinuation(updated);
   for (const review of activeReviews.values()) {
     if (!tabsOf(review).has(tabId) || !review.panel) continue;
     // The page changed under a review: the Manager clicked the site's Next (go on to the next
@@ -2491,7 +2907,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, change) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes[EXTENSION_STATUS_KEY] || changes[EXTENSION_STATUS_KEY].newValue === 'apply') return;
   for (const review of activeReviews.values()) {
-    answerManager(review.attemptId, { action: review.panel?.mode === 'confirm' ? 'stopped' : 'later' });
+    // (Auto Apply: switched off is not the Manager ending the application: its tab and panel stay.)
+    answerManager(review.attemptId, { action: review.panel?.mode === 'confirm' || review.auto ? 'stopped' : 'later' });
   }
 });
 
@@ -2499,7 +2916,23 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const review of activeReviews.values()) {
     if (!review.tabIds) {
+      review.askTabs?.delete(tabId);
       if (review.tabId === tabId) {
+        diag('application-tab-closed', { attempt: String(review.attemptId).slice(0, 8), tabId, children: review.autoChildren?.size || 0 });
+        // Auto Apply: the site closed its own tab after moving on (a next step is opening from it):
+        // moved, not cancelled. Without one in 25 s it counts as closed.
+        const recent = (tabClicks.get(tabId) || []).some((click) => click.kind !== 'side' && Date.now() - click.at < 5000);
+        if (review.auto && (review.autoChildren?.size || recent)) {
+          review.orphaned = true;
+          review.onMoveSignal?.();
+          setTimeout(() => {
+            if (!review.orphaned || review.tabId !== tabId || activeReviews.get(review.attemptId) !== review) return;
+            review.orphaned = false;
+            review.onClosed?.();
+            answerManager(review.attemptId, { action: 'closed' });
+          }, 25000);
+          continue;
+        }
         review.onClosed?.();
         answerManager(review.attemptId, { action: 'closed' });
       }
@@ -2533,14 +2966,9 @@ chrome.tabs.onCreated.addListener((tab) => {
       finishAssistTabHandoff(review, tab.id).catch(() => {});
       continue;
     }
-    if (review.auto && review.followChildTabs && review.tabId === tab.openerTabId) {
-      const originalTabId = review.tabId;
-      review.onTab?.(tab);
-      tabOwnership.markTab(tab.id, 'apply').catch(() => {});
-      chrome.tabs.remove(originalTabId).catch(() => {});
-      answerManager(review.attemptId, { action: 'continue_manual' });
-    }
   }
+  // Auto Apply: judged first (next step or side tab), then followed.
+  if (typeof adoptAutoContinuation === 'function') adoptAutoContinuation(tab);
 });
 
 // The tab the Manager looks at is the one QTS fills.
@@ -2573,6 +3001,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   if (!auto) application.normalApplyAnswers = true;
   let lostClaim = false;
   let tabClosed = false;
+  // Auto Apply: the Manager's Cancel or Remove (which end it with its tab), a stopped panel kept on
+  // the page, and why the application ended (for the local stop log).
+  let cancelRequested = false;
+  let removeRequested = false;
+  let keptStopped = false;
+  let endReason = 'ended';
   // Auto Apply: Cancel, Stop all, or a lost claim interrupts the work at once (the step being filled,
   // a wait), not only between steps; the form's tab closes, which ends whatever was still running there.
   let signalStop = () => {};
@@ -2607,7 +3041,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     const waiting = reviewWaiters.has(application.attemptId);
     const renewEvery = self.__qtsIdlePacing.renewEveryMs(waitingLeaseSeconds);
     if (waiting && Date.now() - renewedAt < (auto ? Math.min(renewEvery, AUTO_APPLY_HEARTBEAT_MS) : renewEvery)) return;
-    const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId: application.attemptId });
+    // Auto Apply: its job and the Stop all count it was taken with, so a hold that ran out while this
+    // Chrome was away (a VPN drop, a PC asleep) is taken back instead of lost.
+    const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', {
+      attemptId: application.attemptId,
+      ...(auto && Number.isInteger(application.applyStopVersion) ? { jobId: application.job.id, stopVersion: application.applyStopVersion } : {}),
+    });
     if (renewed._httpStatus === 409) {
       lostClaim = true;
       aiAbortController?.abort();
@@ -2655,6 +3094,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   const memory = () => ({
     checkBaselines: [...checkBaselines], savedChanges,
     tabId: tab?.id ?? null, used: answersUsed, cache: [...application.answerCache], unresolved: [...unresolved.values()],
+    closedAnswers: activeReviews.get(application.attemptId)?.closedAnswers || resume?.closedAnswers || [],
     refused: [...(application.aiRefused || [])], aiCalls: application.aiCalls || 0, provisional: [...provisional.values()],
     ...(checklist ? { checklist: checklist.save(), stepShapes: [...stepShapes] } : {}),
     ...(application.apiFlow ? {
@@ -2752,12 +3192,22 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     // Auto Apply's panel shows the folder's full path.
     resumeFolderPath: auto ? await fullDownloadsPath(application.job.resumeFolder) : '',
     panel: null,
-    followChildTabs: false,
     // Auto Apply: Cancel or Stop all before its review waits (panel and notice still being shown) is kept.
     ...(auto ? { auto: true, onClosed: () => {
       tabClosed = true;
       aiAbortController?.abort();
       signalStop(application.apiFlow ? 'The application tab was closed. The job went back to the list, unchanged.' : 'The application tab was closed. QTS will retry it automatically.');
+    }, onCancelled: () => {
+      cancelRequested = true;
+      stopRequested = true;
+      aiAbortController?.abort();
+      signalStop('Cancelled by the Manager. The job went back to the list, unchanged.');
+    }, onRemoveRequested: () => {
+      // The panel's Remove while QTS works (filling, Ask AI): that stops at once, then the row goes.
+      removeRequested = true;
+      stopRequested = true;
+      aiAbortController?.abort();
+      signalStop('Removed by the Manager.');
     }, onSubmitted: (decision) => {
       // The panel's Submitted, at any moment: whatever QTS is doing stops, and the bid is saved.
       if (submitRequest) return;
@@ -2770,6 +3220,10 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     tab = opened;
     review.tabId = opened.id;
   };
+  // Auto Apply: the answers of every page the application left (their tabs closed), for the bid.
+  review.closedAnswers = [...(resume?.closedAnswers || [])];
+  // Auto Apply: a move is saved at once, so a restarted extension goes on in the new tab.
+  review.persist = () => onProgress({ quiet: true, memory: memory() });
   activeReviews.set(application.attemptId, review);
   publishApplyState();
   const reviewState = (mode, extra = {}) => ({
@@ -2843,6 +3297,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     const current = Array.isArray(decision.answers) && decision.answers.length
       ? decision.answers
       : tab?.id != null ? await inForm(tab.id, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []) : [];
+    // Auto Apply: the pages the application left in other tabs count too (this page's answers last).
+    if (review.closedAnswers?.length) current.unshift(...review.closedAnswers);
     const appliedNow = submittedAnswers(answersUsed, current || []);
     const marked = await report('submitted', { appliedAnswers: appliedNow, learned: application.apiFlow ? [] : learnedAnswers(answersUsed, current || []) });
     let saved = marked.success ? await report('result', { submitted: true, appliedAnswers: appliedNow }) : marked;
@@ -2854,6 +3310,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       return { ok: false, message: saved.message || 'QTS could not save the bid. Click Submitted again.' };
     }
     submitted = true;
+    endReason = 'Submitted: the bid was saved.';
     await onProgress({ step: currentStep, phase: 'submitted' });
     await onProgress({ step: currentStep, phase: 'ended', reason: 'yes' });
     await clearManagerNotice(application.attemptId).catch(() => {});
@@ -2890,15 +3347,63 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   };
   const manualAccountStep = async (stepNumber, message, notice) => {
     return askManager(review, reviewState('review', {
-      step: stepNumber, final: false, problems: [{ message, fieldId: null }],
+      // (Auto Apply: the whole panel, Ask AI too.)
+      step: stepNumber, final: false, problems: [{ message, fieldId: null }], aiOn: auto && application.autoAi !== false,
     }), 'problem', notice);
   };
   const navigateToApplication = async (stepNumber) => {
     for (let checkpoint = 0; ; checkpoint += 1) {
       try {
-        tab = await reachApplicationForm(tab, (opened) => { tab = opened; review.tabId = opened.id; }, application);
+        // Auto Apply: a next-step tab the Manager opens meanwhile is taken up once this is done.
+        review.navigating = true;
+        try {
+          tab = await reachApplicationForm(tab, (opened) => {
+            const left = tab?.id;
+            tab = opened;
+            review.tabId = opened.id;
+            // QTS's own Apply opened a new tab: the panel (with its own view) and the job go there.
+            if (auto && left != null && left !== opened.id) {
+              review.tabNotice = { text: 'Moved to the new tab', until: Date.now() + 20000 };
+              review.persist().catch(() => {});
+            }
+          }, application);
+        } finally { review.navigating = false; }
+        review.tabId = tab.id;
+        const pending = review.pendingTab;
+        review.pendingTab = null;
+        if (auto && pending != null && pending.tabId !== tab.id && await getTab(pending.tabId)) {
+          await moveAutoApplication(review, pending.tabId, pending.snapshot);
+          // (Nobody waits now: the move is taken at once, and the old tab closes.)
+          if (earlyDecisions.get(application.attemptId)?.action === 'tab_moved') earlyDecisions.delete(application.attemptId);
+          review.moveRequested = false;
+          await closeMovedFromTabs(review);
+          continue;
+        }
         return null;
       } catch (error) {
+        // Auto Apply with APIs: a page QTS cannot get past (no way on found, an account step it could
+        // not finish, a check, a page that keeps sending it back) is the Manager's, not an end: the
+        // whole panel stays (Submitted, Ask AI, Skip, Later, Fill again, Continue) with the reason, and
+        // QTS goes on when the Manager clicks through on the site. Only a refusal ends it: a job
+        // board's own application (also one found only on its page), an email-only job, a job closed on the site.
+        const refusal = !(error instanceof ApplyStop) || error.dryRun || error.pageType === 'job_board_hosted'
+          || /takes applications by email|job is closed on the site|continued in another tab|job board only offers its own application/i.test(error.message || '');
+        if (auto && application.apiFlow && !refusal && !(await stoppedForGood())) {
+          // A next-step tab opened meanwhile (the site hid where it came from): the job goes there first.
+          const pending = review.pendingTab;
+          review.pendingTab = null;
+          if (pending != null && pending.tabId !== tab?.id && await getTab(pending.tabId)) {
+            await moveAutoApplication(review, pending.tabId, pending.snapshot);
+            if (earlyDecisions.get(application.attemptId)?.action === 'tab_moved') earlyDecisions.delete(application.attemptId);
+            review.moveRequested = false;
+            await closeMovedFromTabs(review);
+            continue;
+          }
+          await closeMovedFromTabs(review);
+          const decision = await manualAccountStep(stepNumber, error.message || 'QTS could not get past this page.', 'QTS needs you on this page.');
+          if (['submitted', 'skip', 'later', 'cancel', 'closed', 'lost', 'stopped', 'remove'].includes(decision.action)) return decision.action;
+          continue;
+        }
         if (!(error instanceof ApplyStop)
           || !['account_needs_you', 'verification_required', 'captcha_required'].includes(error.pageType)
           || checkpoint >= 4) throw error;
@@ -2910,7 +3415,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
           : error.pageType === 'verification_required'
             ? 'Complete verification, then Continue.'
             : 'Complete this account step, then Continue.');
-        if (!['continue', 'continue_manual'].includes(decision.action)) return decision.action;
+        if (!['continue', 'continue_manual', 'tab_moved'].includes(decision.action)) return decision.action;
       }
     }
   };
@@ -2939,7 +3444,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         continue;
       }
       const decision = await manualAccountStep(stepNumber, seen.message, seen.notice);
-      if (!['continue', 'continue_manual'].includes(decision.action)) return { decision: decision.action };
+      if (!['continue', 'continue_manual', 'tab_moved'].includes(decision.action)) return { decision: decision.action };
+      if (decision.action === 'tab_moved') continue;
       // Continue on an account QTS cannot name is the Manager saying it is this candidate's.
       if (seen.confirmable) application.verifiedSites.add(seen.site);
     }
@@ -2953,10 +3459,103 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     const page = await inForm(tab.id, () => globalThis.__qtsApplyForm.pageIdentity()).catch(() => null);
     if (!self.__qtsApplyRecipes.sameJobPage({ savedUrl: application.job.url, page, company: application.job.company, title: application.job.title })) {
       const decision = await manualAccountStep(stepNumber, `This page does not mention ${application.job.title} at ${application.job.company}. Choose Continue only if it is the right job; otherwise choose Skip.`, 'Check this is the right job.');
+      // A new tab of this application: its page is checked again.
+      if (decision.action === 'tab_moved') return confirmDestination(stepNumber);
       if (!['continue', 'continue_manual'].includes(decision.action)) return decision.action;
     }
     application.destinationConfirmed = true;
     return null;
+  };
+  const stoppedForGood = async () => submitRequest != null || lostClaim || stopRequested || tabClosed || !(await isApplyOn());
+  /**
+   * Auto Apply: the application moved to a new tab. Without a form yet, QTS goes on there: it clicks
+   * a start / continue button; waits for the Manager's sign-in, CAPTCHA or verification; waits while
+   * the page loads; or says no way on was found. It looks again every 15 s, and whenever the page
+   * changes. It never gives the job up by itself. Returns the Manager's ending decision, or null once
+   * the form is there.
+   */
+  const goOnInMovedTab = async () => {
+    review.moveRequested = false;
+    if (earlyDecisions.get(application.attemptId)?.action === 'tab_moved') earlyDecisions.delete(application.attemptId);
+    while (review.orphaned) await interruptible(sleep(500));
+    await closeMovedFromTabs(review);
+    application.tabMoved = true;
+    await interruptible(waitForTabComplete(tab.id, 20 * 1000)).catch((error) => { if (error instanceof ApplyStop) throw error; });
+    for (;;) {
+      if (await stoppedForGood()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
+      const look = await lookAtAutoTab(tab.id);
+      let message = '';
+      if (look.check) message = 'Do this yourself: the security check or verification on this page. QTS goes on when it is done.';
+      // A sign-in: its email option opened (never a social one), email and password typed; the Manager clicks.
+      else if (look.account || (look.emailSignIn && !look.start)) {
+        const done = await autoAccountSteps(tab.id, application);
+        if (done.reached) continue;
+        message = done.manager;
+      }
+      else if (look.fields > 0) return null;
+      else if (look.start && recipe.findStart) {
+        // A start / continue button: QTS clicks it (a tab it opens is followed the same way).
+        const before = tab.id;
+        review.navigating = true;
+        try {
+          tab = await interruptible(reachApplicationForm(tab, (opened) => {
+            if (tab?.id != null && tab.id !== opened.id) (review.closeAfterMove ||= new Set()).add(tab.id);
+            tab = opened;
+            review.tabId = opened.id;
+          }, application, { handleAccountSteps: false }));
+          review.tabId = tab.id;
+          if (tab.id !== before) {
+            review.tabNotice = { text: 'Moved to the new tab', until: Date.now() + 20000 };
+            await review.persist().catch(() => {});
+            if (review.panel) await showReviewPanel(tab.id, review.panel).catch(() => {});
+            await closeMovedFromTabs(review);
+          }
+          continue;
+        } catch (error) {
+          if (!(error instanceof ApplyStop) || await stoppedForGood()) throw error;
+          if (tab.id !== before) await closeMovedFromTabs(review);
+          // Looked at again below: a sign-in or a check gets its own words.
+          const again = await lookAtAutoTab(tab.id);
+          if (again.fields > 0 && !again.account && !again.check) return null;
+          if (!again.check && (again.account || again.emailSignIn)) {
+            const done = await autoAccountSteps(tab.id, application);
+            if (done.reached) continue;
+            message = done.manager;
+          } else {
+            message = again.check ? 'Do this yourself: the security check or verification on this page. QTS goes on when it is done.'
+              : 'No way on found. Click it yourself; QTS fills when the form appears.';
+          }
+        } finally { review.navigating = false; }
+      } else if (look.loading) message = 'The page is still loading. QTS looks again in a moment.';
+      else message = 'No way on found. Click it yourself; QTS fills when the form appears.';
+      // Waits for the Manager: a change on the page (a load, the form appearing, a new tab) or 15 s
+      // brings QTS back to look; Submitted, Skip, Later or Cancel end the application as usual.
+      const shownAt = { url: look.url, fields: look.fields };
+      let watching = true;
+      (async () => {
+        const started = Date.now();
+        while (watching) {
+          await sleep(1500);
+          if (!watching) return;
+          const now = await getTab(tab.id);
+          const fields = await inForm(tab.id, () => globalThis.__qtsApplyForm.scanForm().filter((field) => !field.hidden && !field.disabled).length).catch(() => 0);
+          if ((now?.url && now.url !== shownAt.url) || fields !== shownAt.fields || Date.now() - started >= 15000) {
+            if (answerManager(application.attemptId, { action: 'page_look' })) return;
+          }
+        }
+      })();
+      let decision;
+      try {
+        decision = await askManager(review, reviewState('review', {
+          step: currentStep, final: false, problems: [{ message, fieldId: null }], requiredRows: [], aiOn: application.autoAi !== false,
+        }), 'problem', message);
+      } finally { watching = false; }
+      if (['submitted', 'skip', 'later', 'cancel', 'closed', 'lost', 'stopped', 'remove'].includes(decision.action)) return decision;
+      if (decision.action === 'tab_moved') {
+        while (review.orphaned) await interruptible(sleep(500));
+        await closeMovedFromTabs(review);
+      }
+    }
   };
   try {
     // Resumed after a restart: the form is already open in its tab, at its step.
@@ -2971,6 +3570,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     // Auto Apply with APIs: a site last used for another candidate is cleared before it opens.
     if (application.apiFlow && !resumedTab) await interruptible(self.__qtsAutoApplyApi.prepareSite(recipe.formUrl, application, siteOptions));
     tab = resumedTab || await openApplyTab(recipe.formUrl);
+    // (A stopped panel that was on this tab gives way to the application going on in it.)
+    if (auto && resumedTab) await globalThis.__qtsAutoApplyStopped?.forget?.(resumedTab.id);
     review.tabId = tab.id;
     // Auto Apply: the panel is on the job's page from the start (each page load shows it again), with
     // Submitted at hand while QTS opens the page and finds the form.
@@ -2991,7 +3592,6 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       const decision = await navigateToApplication(1);
       if (decision) return await finishBeforeSubmit(decision);
     }
-    review.followChildTabs = true;
 
     let step = resume && resumedTab ? resume.step || 1 : 1;
     let fillAgain = false;
@@ -3056,24 +3656,53 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       // still empty on this step (optional ones too); every other fill uses no AI.
       const aiNow = askAi && application.autoAi !== false;
       askAi = false;
+      // Auto Apply: this step's own stop for the AI, so a move stops Ask AI in the old tab only.
+      if (auto && aiAbortController && typeof AbortSignal.any === 'function') {
+        review.stepAbort = new AbortController();
+        application.aiAbortSignal = AbortSignal.any([aiAbortController.signal, review.stepAbort.signal]);
+      }
+      const MOVED = { moved: true };
+      const movedAway = auto ? new Promise((resolve) => { review.onMoveSignal = () => resolve(MOVED); }) : null;
+      if (auto && (review.moveRequested || review.orphaned)) review.onMoveSignal();
       try {
-        filled ||= application.apiFlow ? await interruptible(self.__qtsAutoApplyApi.fillPage(tab.id, application, keepAlive, step, {
+        const filling = filled ? null : application.apiFlow ? interruptible(self.__qtsAutoApplyApi.fillPage(tab.id, application, keepAlive, step, {
           noAi: !aiNow,
           onlyEmpty: aiNow,
           // Only the Manager's own Fill again touches questions already reviewed.
           again: fillAgain && !aiNow,
-          stop: async () => lostClaim || submitRequest != null || !(await isApplyOn()),
+          stop: async () => lostClaim || submitRequest != null || review.moveRequested === true || review.orphaned === true || !(await isApplyOn()),
           onPhase: async (workingText) => {
             review.panel = reviewState('working', { step, workingText });
             await showReviewPanel(tab.id, review.panel).catch(() => {});
           },
-        })) : await interruptible(fillFormPage(tab.id, application, keepAlive, step, auto
-          ? { sources: ASSIST_SOURCES, noAi: !aiNow, onlyEmpty: aiNow, listUnresolved: true, stop: async () => lostClaim || submitRequest != null || !(await isApplyOn()) }
+        })) : interruptible(fillFormPage(tab.id, application, keepAlive, step, auto
+          ? { sources: ASSIST_SOURCES, noAi: !aiNow, onlyEmpty: aiNow, listUnresolved: true, stop: async () => lostClaim || submitRequest != null || review.moveRequested === true || review.orphaned === true || !(await isApplyOn()) }
           : undefined));
+        filling?.catch(() => {});
+        if (filling) filled = movedAway ? await Promise.race([filling, movedAway]) : await filling;
       } catch (error) {
-        if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application') throw error;
-        const decision = await navigateToApplication(step);
-        if (decision) return await finishBeforeSubmit(decision);
+        // The application moved (or its tab closed with a next step on the way) while QTS filled: it goes on there.
+        if (auto && (review.moveRequested || review.orphaned) && !(await stoppedForGood())) filled = MOVED;
+        else if (!(error instanceof ApplyStop) || error.pageType !== 'email_first_application') throw error;
+        if (filled !== MOVED) {
+          const decision = await navigateToApplication(step);
+          if (decision) return await finishBeforeSubmit(decision);
+          continue;
+        }
+      }
+      if (auto) review.onMoveSignal = null;
+      if (filled === MOVED) {
+        const ended = await goOnInMovedTab();
+        if (ended) {
+          if (ended.action === 'submitted') {
+            const saved = await finishSubmitted(ended);
+            if (saved.ok) return;
+            notice = `Not saved: ${saved.message}`;
+          } else return await finishBeforeSubmit(ended.action);
+        }
+        const shape = await shapeNow(tab.id);
+        const known = shape && [...stepShapes].find(([, seen]) => sameStep(seen, shape));
+        if (known) { step = known[0]; revisitStep = true; } else if (stepShapes.has(step)) step = Math.max(step, ...stepShapes.keys()) + 1;
         continue;
       }
       Object.assign(answersUsed, filled.used);
@@ -3268,6 +3897,32 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       notice = null;
       fillAgain = false;
       if (newQuestions) continue;
+      // Auto Apply: the application went on in a new tab (the Manager's or QTS's click opened it). A
+      // page that is not the form yet is led on to it; a step QTS has seen is checked again, never
+      // refilled; a new one is filled.
+      if (auto && decision.action === 'tab_moved') {
+        const ended = await goOnInMovedTab();
+        if (ended) {
+          if (ended.action === 'submitted') {
+            const saved = await finishSubmitted(ended);
+            if (saved.ok) return;
+            notice = `Not saved: ${saved.message}`;
+            revisitStep = true;
+            continue;
+          }
+          return await finishBeforeSubmit(ended.action);
+        }
+        const shape = await shapeNow(tab.id);
+        const known = shape && [...stepShapes].find(([, seen]) => sameStep(seen, shape));
+        if (known) {
+          step = known[0];
+          revisitStep = true;
+        } else if (stepShapes.has(step)) {
+          step = Math.max(step, ...stepShapes.keys()) + 1;
+          if (step > AUTO_APPLY_MAX_STEPS) throw new ApplyStop(`The form has more than ${AUTO_APPLY_MAX_STEPS} steps; QTS stopped here. Finish it by hand.`, { skip: false, keepTab: true });
+        }
+        continue;
+      }
       // Auto Apply with APIs never presses the site's Next: the Manager moves the form on.
       if (application.apiFlow && decision.action === 'continue') {
         revisitStep = true;
@@ -3289,6 +3944,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       // Auto Apply: the step as the Manager leaves it (their answers count), before the next one.
       if (decision.action === 'continue' || decision.action === 'continue_manual') await recheckPage(tab.id, step);
       if (decision.action === 'continue') {
+        noteTabClick(tab.id, 'start');
         await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
         await interruptible(sleep(2500));
         step += 1;
@@ -3357,6 +4013,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       return;
     }
     const stop = error instanceof ApplyStop ? error : new ApplyStop(error instanceof Error ? error.message : 'Apply failed.', { skip: false });
+    // Auto Apply: the Manager's Remove while QTS worked: the job row is deleted (or the reason shown).
+    if (auto && removeRequested) return await finishRemoved();
+    if (auto) endReason = stop.message;
     // A Submitted QTS could not save: the page stays open, so the Manager can save it on the Jobs page.
     if (auto && submitRequest) stop.keepTab = true;
     // Stopped while ChatGPT answered with its tab selected: the application's tab first (its own
@@ -3379,7 +4038,12 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     }
     // Test mode gives the job back, so the same job would be claimed again at once: one test per click.
     if (stop.dryRun) await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
-    if (stop.keepTab) {
+    // Auto Apply: only the Manager's Cancel (or a closed tab) takes the tab away. Any other stop (a
+    // lost hold, Auto Apply switched off, sign-in expired, another candidate chosen, a site problem,
+    // an error) keeps the tab, what is filled, and the panel, which says why, with Submitted and Give back.
+    if (auto && !cancelRequested && !tabClosed) {
+      await leaveStopped(stop.message);
+    } else if (stop.keepTab) {
       await notifyApply(`${application.job.company}: ${stop.message}`);
     } else if (tab?.id != null) {
       await chrome.tabs.remove(tab.id).catch(() => {});
@@ -3395,10 +4059,52 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     earlyDecisions.delete(application.attemptId);
     await clearManagerNotice(application.attemptId).catch(() => {});
     if (tab?.id != null) {
-      await removeReviewPanel(tab.id);
+      // (A stopped application keeps its panel: Submitted and Give back.)
+      if (!keptStopped) await removeReviewPanel(tab.id);
       // The "being debugged" bar goes away with the application.
       await releaseDebugger(tab.id);
     }
+    // Auto Apply: every end in the local log (the last 50), so a tab that "closed by itself" can be checked.
+    if (auto) {
+      const tabOpen = tab?.id != null && Boolean(await getTab(tab.id));
+      await logAutoApplyStop({ attemptId: application.attemptId, jobId: application.job.id, title: application.job.title, company: application.job.company, reason: endReason, tabClosed: !tabOpen }).catch(() => {});
+    }
+  }
+
+  /** Auto Apply stopped by itself: the tab, the form and the panel stay (Submitted, Give back, Remove). */
+  async function leaveStopped(reason) {
+    if (tab?.id == null || tabClosed || !(await getTab(tab.id))) return false;
+    keptStopped = true;
+    const state = reviewState('stopped', { step: currentStep, final: false, problems: [{ message: `Why QTS stopped: ${reason}`, fieldId: null }], requiredRows: [], aiOn: application.autoAi !== false });
+    // The tabs the application left close now (a stop never leaves the job page beside its next step).
+    await closeMovedFromTabs(review).catch(() => {});
+    const pending = review.pendingTab;
+    review.pendingTab = null;
+    if (pending?.tabId != null && pending.tabId !== tab.id && await getTab(pending.tabId)) {
+      await chrome.tabs.remove(tab.id).catch(() => {});
+      tab = await getTab(pending.tabId);
+      review.tabId = tab.id;
+    }
+    await keepStoppedAutoTab(tab.id, {
+      attemptId: application.attemptId, jobId: application.job.id, title: application.job.title, company: application.job.company,
+      reason, state, closedAnswers: review.closedAnswers || [], childTabs: [...(review.autoChildren?.keys() || []), ...(review.askTabs?.keys() || [])],
+    });
+    return true;
+  }
+
+  /** The Manager's Remove: the job row deleted (the hold's own, else by the job's id); its tabs close. */
+  async function finishRemoved() {
+    const removed = await removeAutoJob(application.attemptId, application.job.id);
+    await onProgress({ step: currentStep, phase: 'ended', reason: removed.ok ? 'removed' : 'remove refused', resumePending: false, memory: memory() });
+    if (!removed.ok) {
+      endReason = `Not removed: ${removed.message}`;
+      await leaveStopped(`Not removed: ${removed.message}`);
+      return;
+    }
+    endReason = 'Removed by the Manager.';
+    const others = [...(review.autoChildren?.keys() || []), ...(review.askTabs?.keys() || []), ...(review.closeAfterMove || [])];
+    for (const id of others) await chrome.tabs.remove(id).catch(() => {});
+    if (tab?.id != null) await chrome.tabs.remove(tab.id).catch(() => {});
   }
 
   // Skip, Later, a closed tab, a lost claim, or Apply turned off during review: the job is given back.
@@ -3409,6 +4115,21 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       if (saved.ok) return;
       await notifyApply(`${application.job.company}: ${saved.message}`);
     }
+    // Auto Apply: the Manager's Remove deletes the job row (release "remove", never "drop").
+    if (auto && action === 'remove') return finishRemoved();
+    // Auto Apply: only the Manager ends an application with its tab: Skip, Later, Cancel (or closing
+    // it). A lost hold or Auto Apply switched off keeps the tab, the form and the panel.
+    if (auto && !['skip', 'later', 'cancel', 'closed'].includes(action)) {
+      const why = action === 'lost' ? 'This Chrome no longer holds the application (Stop all on the Jobs page, or another Chrome took it).'
+        : action === 'stopped' ? 'Auto Apply was switched off.'
+          : `It ended (${action}).`;
+      endReason = why;
+      await onProgress({ step: currentStep, phase: 'ended', reason: action, resumePending: false, memory: memory() });
+      await release(application.apiFlow ? 'drop' : 'later', why).catch(() => {});
+      await leaveStopped(why);
+      return;
+    }
+    if (auto) endReason = `Ended by the Manager (${action}).`;
     // Auto Apply with APIs: whatever ended it here, the job goes back exactly as it was, with nothing recorded.
     const mode = application.apiFlow ? 'drop' : action === 'skip' && !auto ? 'skip' : 'later';
     const resumePending = auto && !application.apiFlow && (stopRequested || tabClosed || ['closed', 'cancel', 'lost'].includes(action));
@@ -3774,7 +4495,7 @@ async function saveQuestionAnswer(msg, sender) {
     : [[String(msg.fieldId), kind === 'checkbox' ? /^(yes|true|1)$/i.test(answer) : answer]];
   let filledAll = true;
   for (const [id, value] of fills) {
-    const result = await inForm(tabId, (fieldId, next) => globalThis.__qtsApplyForm.fillField(fieldId, next), [id, value]).catch(() => null);
+    const result = await fillBox(tabId, id, value);
     if (!result?.ok && value !== false) filledAll = false;
   }
   assistant.fillRecords ||= new Map();
@@ -3798,7 +4519,7 @@ async function useOfferedAnswer(msg, sender) {
   if (!row) return { ok: false, error: 'That suggestion is no longer on the page. Use Fill again.' };
   const offer = row.offer;
   const value = row.kind === 'checkbox' ? /^(yes|true|1)$/i.test(offer.value) : offer.value;
-  const result = await inForm(tabId, (fieldId, next) => globalThis.__qtsApplyForm.fillField(fieldId, next), [row.id, value]).catch(() => null);
+  const result = await fillBox(tabId, row.id, value);
   if (!owned()) return { ok: false, error: 'Apply stopped.' };
   if (!result?.ok) return { ok: false, error: result?.error || 'The site did not take the answer. Fill it by hand.' };
   assistant.fillRecords ||= new Map();
@@ -4441,7 +5162,8 @@ async function processApplyQueue() {
       await notifyApply(`${error instanceof Error ? error.message : 'QTS could not load your Apply concurrency setting.'} Try again.`);
       return;
     }
-    const applyParallelLimit = autoApply && storedSelection?.mode === 'auto_apply' ? 1 : configuredLimit;
+    // Apply and Auto Apply (chosen jobs included) open as many jobs at once as the Manager's limit in Settings.
+    const applyParallelLimit = configuredLimit;
     // Pages still open from before the extension restarted are taken up first (they count as open).
     if (await isApplyOn() && !autoApply) for (const run of await resumeApplySessions(applyParallelLimit)) track(run);
     // Auto Apply: its applications left open by a restarted worker go on first (up to its run limit).
@@ -4453,8 +5175,14 @@ async function processApplyQueue() {
     }
     while (await isApplyOn()) {
       const testMode = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
-      if (running.size >= (testMode ? 1 : applyParallelLimit)) {
-        await Promise.race(running);
+      // Auto Apply: every application tab open in this Chrome counts toward the Manager's limit: one QTS
+      // works on or waits in, and one kept for the Manager after a stop (Submitted / Give back).
+      const openNow = autoApply
+        ? Math.max(running.size, self.__qtsAutoApply.runningCount?.() || 0) + Object.keys((await chrome.storage.local.get('qtsAutoApplyStopped')).qtsAutoApplyStopped || {}).length
+        : running.size;
+      if (openNow >= (testMode ? 1 : applyParallelLimit)) {
+        // (A kept tab is let go by the Manager, not by a run ending: looked at again every few seconds.)
+        await Promise.race(running.size ? [...running, sleep(5000)] : [sleep(5000)]);
         continue;
       }
       if (autoApply && !(await self.__qtsAutoApply.retryPendingReleases())) break;
@@ -4476,8 +5204,9 @@ async function processApplyQueue() {
       const application = claim.success === true ? claim.application : null;
       if (!application) {
         if (!running.size) break;
-        // Nothing ready now: looked for again in a minute, or when one of the open jobs ends.
-        await Promise.race([...running, sleep(60 * 1000)]);
+        // Nothing ready now: looked for again shortly (Auto Apply: 10 s, so a slot the server frees is
+        // taken soon), else in a minute, or when one of the open jobs ends.
+        await Promise.race([...running, sleep(autoApply ? 10 * 1000 : 60 * 1000)]);
         continue;
       }
       if (!(await isApplyOn())) {
@@ -4595,3 +5324,449 @@ const isBusy = () => activeReviews.size > 0;
 self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
   // The tabs of the applications under way (verification-mail.js watches them for code pages).
   applicationTabs: () => [...activeReviews.values()].flatMap((review) => [...tabsOf(review)].map((tabId) => ({ tabId, attemptId: review.attemptId }))) };
+
+// ---- Auto Apply: the application follows its tabs and pop-up windows, at any time ----
+// A tab (or pop-up window) opened from the application's current tab becomes the application when a
+// start / continue click opened it (QTS's, or the Manager's: the panel says which control was
+// clicked, Ctrl+click and middle-click too). An unclear click (Learn more, View job, Details) counts
+// only when the new tab shows an application form or a start / continue button; otherwise the panel
+// asks. Side tabs (terms, privacy, sign-in pop-ups, upload pickers, the company's site, links the
+// Manager opens) are never taken over or closed. A move keeps the panel, the job, the candidate and
+// the progress; QTS stops in the old tab, goes on in the new one, and closes the old one.
+const AUTO_CLICK_WINDOW_MS = 3000;
+const AUTO_SETTLE_MS = 20000;
+// Clicks in each tab (source tab id -> recent clicks): { at, kind: 'start' | 'unclear' | 'side', by, tabs, results }.
+const tabClicks = new Map();
+function noteTabClick(tabId, kind, by = 'qts') {
+  if (tabId == null) return null;
+  const list = (tabClicks.get(tabId) || []).filter((entry) => Date.now() - entry.at < 30000);
+  const click = { at: Date.now(), kind, by, tabs: new Set(), results: new Map() };
+  list.push(click);
+  tabClicks.set(tabId, list.slice(-10));
+  return click;
+}
+/** A click noted before it was made, that was then not made. */
+function forgetTabClick(tabId, click) {
+  const list = tabClicks.get(tabId);
+  const index = list ? list.indexOf(click) : -1;
+  if (index >= 0) list.splice(index, 1);
+}
+// The click a tab came from: the nearest one in its source tab within ~3 s (a click's message from
+// the panel may come a moment after the tab itself).
+function clickFor(sourceTabId, openedAt) {
+  let best = null;
+  for (const click of tabClicks.get(sourceTabId) || []) {
+    const gap = openedAt - click.at;
+    if (gap < -1500 || gap > AUTO_CLICK_WINDOW_MS) continue;
+    if (!best || Math.abs(gap) < Math.abs(openedAt - best.at)) best = click;
+  }
+  return best;
+}
+// Never the application: documents, social sites, sign-in pop-ups, upload pickers, policy and help pages.
+const AUTO_SIDE_URL = new RegExp([
+  String.raw`\.pdf([?#]|$)`,
+  String.raw`^https?:\/\/([^/]+\.)?(linkedin|facebook|twitter|x|instagram|youtube|tiktok|glassdoor)\.com(:\d+)?\/`,
+  String.raw`^https?:\/\/(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|appleid\.apple\.com|[^/]*\.okta\.com|[^/]*\.auth0\.com|(www\.)?dropbox\.com|drive\.google\.com|docs\.google\.com|onedrive\.live\.com|app\.box\.com|[^/]*\.sharepoint\.com)(:\d+)?\/`,
+  String.raw`^https?:\/\/[^/]+\/([^?#]*\/)?(privacy|terms|cookies?|legal|help|support|faq|about)([-_/.?#]|$)`,
+].join('|'), 'i');
+// A tab that did not load (no connection, refused, blocked).
+const navErrors = new Map();
+chrome.webNavigation?.onErrorOccurred?.addListener(({ tabId, frameId, error }) => {
+  if (frameId === 0 && !/ERR_ABORTED/i.test(error || '')) navErrors.set(tabId, error);
+});
+chrome.webNavigation?.onBeforeNavigate?.addListener(({ tabId, frameId }) => { if (frameId === 0) navErrors.delete(tabId); });
+chrome.tabs.onRemoved.addListener((tabId) => { navErrors.delete(tabId); });
+// Which tab is in front in each window, and which window has the focus (for "front only if the old
+// tab was in front").
+const activeByWindow = new Map();
+let focusedWindowId = null;
+Promise.resolve().then(() => chrome.tabs.query({ active: true }))
+  .then((tabs) => { for (const entry of tabs || []) if (!activeByWindow.has(entry.windowId)) activeByWindow.set(entry.windowId, entry.id); }).catch(() => {});
+Promise.resolve().then(() => chrome.windows.getLastFocused())
+  .then((win) => { if (focusedWindowId == null) focusedWindowId = win?.id ?? null; }).catch(() => {});
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => { activeByWindow.set(windowId, tabId); });
+chrome.windows?.onFocusChanged?.addListener((windowId) => { if (windowId !== chrome.windows.WINDOW_ID_NONE) focusedWindowId = windowId; });
+const frontSnapshot = (newTab) => ({ active: new Map(activeByWindow), focused: focusedWindowId, prevActive: newTab?.windowId != null ? activeByWindow.get(newTab.windowId) ?? null : null });
+
+const autoTabSource = (tab) => (navigationSources.has(tab.id) ? navigationSources.get(tab.id) : tab.openerTabId);
+
+function adoptAutoContinuation(tab) {
+  if (tab?.id == null || !webOrBlank(tab)) return;
+  const opener = autoTabSource(tab);
+  if (opener == null) return;
+  for (const review of activeReviews.values()) {
+    if (!review.auto || review.tabId == null || review.tabId === tab.id) continue;
+    if (review.autoChildren?.has(tab.id) || review.sideTabs?.has(tab.id) || review.askTabs?.has(tab.id)) continue;
+    // Only the job whose tab opened it: never another open job's, never a tab opened elsewhere.
+    if (review.tabId !== opener) continue;
+    (review.autoChildren ||= new Map()).set(tab.id, opener);
+    judgeAutoContinuation(review, tab.id, frontSnapshot(tab)).catch((error) => {
+      review.autoChildren?.delete(tab.id);
+      diag('auto-apply-tab-error', { message: String(error?.message || error).slice(0, 200) });
+    });
+    return;
+  }
+}
+
+function setTabNotice(review, text, ms = 15000) {
+  review.tabNotice = text ? { text, until: Date.now() + ms } : null;
+  refreshAutoPanel(review);
+}
+function refreshAutoPanel(review) {
+  if (review?.panel && review.tabId != null && !review.orphaned) showReviewPanel(review.tabId, review.panel).catch(() => {});
+}
+/** The panel's extras that live with the application, not with one panel state. */
+function autoPanelExtras(state) {
+  const review = state?.auto ? activeReviews.get(state.attemptId) : null;
+  if (!review) return state;
+  const notice = review.tabNotice && review.tabNotice.until > Date.now() ? review.tabNotice.text : '';
+  return { ...state, tabNotice: notice, askTabs: [...(review.askTabs?.values() || [])], ui: review.panelUi || null, revealAt: review.revealAt || 0 };
+}
+
+const leaveAutoTab = (review, tabId) => {
+  review.autoChildren?.delete(tabId);
+  (review.sideTabs ||= new Set()).add(tabId);
+};
+
+/** Waits until the tab's redirects are over (up to 20 s): { gone }, { failed, url } or { url, loading }. */
+async function settleAutoTab(tabId, owned) {
+  let lastUrl = '';
+  let stableSince = 0;
+  const started = Date.now();
+  while (Date.now() - started < AUTO_SETTLE_MS) {
+    if (!owned()) return { gone: true };
+    const tab = await getTab(tabId);
+    if (!tab) return { gone: true };
+    const url = tab.url || tab.pendingUrl || '';
+    if (navErrors.has(tabId) || /^chrome-error:/i.test(url)) return { failed: true, url };
+    if (tab.status === 'complete' && /^https?:\/\//i.test(url)) {
+      if (url !== lastUrl) { lastUrl = url; stableSince = Date.now(); }
+      if (Date.now() - stableSince >= 1000) return { url };
+    } else stableSince = Date.now();
+    await sleep(250);
+  }
+  const tab = await getTab(tabId);
+  if (!tab) return { gone: true };
+  return navErrors.has(tabId) ? { failed: true, url: tab.url || '' } : { url: tab.url || tab.pendingUrl || '', loading: tab.status !== 'complete' };
+}
+
+/** What a tab shows: questions, an application form, a start / continue button, a sign-in. */
+async function lookAtAutoTab(tabId) {
+  // One look at the page (its questions, kind, human check, start button, email sign-in), not five asks.
+  const seen = await inForm(tabId, () => globalThis.__qtsApplyForm.pageLook()).catch(() => null) || {};
+  const { fields = 0, page = null, gate = null, start: probe = null } = seen;
+  const type = page?.type || '';
+  const tab = await getTab(tabId);
+  return {
+    fields: fields || 0,
+    type,
+    form: ['application_form', 'partial_application_form'].includes(type) || (fields > 0 && ASSIST_STEP_PAGE_TYPES.has(type)),
+    start: probe?.ok === true || type === 'application_navigation',
+    account: ['authentication_required', 'registration_required', 'email_first_application'].includes(type),
+    emailSignIn: Boolean(seen.emailSignIn),
+    check: ['verification_required', 'captcha_required'].includes(type) || gate?.kind === 'bot_check',
+    loading: tab?.status !== 'complete',
+    title: tab?.title || '',
+    url: tab?.url || '',
+  };
+}
+const autoTabScore = (look) => (look?.form ? 2 : look?.start ? 1 : 0);
+
+/** A tab opened from the application's tab: the next step (moved there), a side tab, or asked about. */
+async function judgeAutoContinuation(review, tabId, snapshot) {
+  const sourceId = review.autoChildren.get(tabId);
+  const openedAt = Date.now();
+  const owned = () => activeReviews.get(review.attemptId) === review && review.autoChildren?.has(tabId);
+  let click = clickFor(sourceId, openedAt);
+  for (let tries = 0; !click && tries < 8 && owned(); tries += 1) {
+    await sleep(200);
+    click = clickFor(sourceId, openedAt);
+  }
+  if (!owned()) return;
+  const kind = click?.kind || 'unclear';
+  if (kind === 'side') { leaveAutoTab(review, tabId); return; }
+  click?.tabs.add(tabId);
+  if (kind === 'start' && !review.orphaned) setTabNotice(review, 'Next step opened in a new tab — waiting for it to load…', AUTO_SETTLE_MS + 15000);
+  const settled = await settleAutoTab(tabId, owned);
+  if (!owned()) return;
+  const clearWaiting = () => { if (/waiting for it to load/.test(review.tabNotice?.text || '')) setTabNotice(review, ''); };
+  if (settled.gone) { review.autoChildren.delete(tabId); clearWaiting(); return; }
+  if (settled.failed) {
+    leaveAutoTab(review, tabId);
+    if (kind === 'start') setTabNotice(review, 'The next step did not open. Try again or open it yourself.', 60000);
+    else clearWaiting();
+    return;
+  }
+  if (AUTO_SIDE_URL.test(settled.url)) { leaveAutoTab(review, tabId); clearWaiting(); return; }
+  // An unclear click: the page gets the rest of the 20 s to show a form or a start / continue button.
+  let look = await lookAtAutoTab(tabId);
+  for (const deadline = openedAt + AUTO_SETTLE_MS; kind !== 'start' && !autoTabScore(look) && Date.now() < deadline && owned();) {
+    await sleep(1000);
+    look = await lookAtAutoTab(tabId);
+  }
+  if (!owned()) return;
+  click?.results.set(tabId, look);
+  // One click, several tabs: the one with a form (else a start / continue button) is the application.
+  if (click && click.tabs.size > 1) {
+    for (let waited = 0; waited < AUTO_SETTLE_MS && [...click.tabs].some((id) => !click.results.has(id) && review.autoChildren?.has(id)); waited += 500) await sleep(500);
+    const ranked = [...click.tabs].filter((id) => click.results.has(id))
+      .sort((a, b) => autoTabScore(click.results.get(b)) - autoTabScore(click.results.get(a)) || a - b);
+    if (ranked[0] !== tabId) { leaveAutoTab(review, tabId); return; }
+  }
+  if (!owned()) return;
+  const opener = review.autoChildren.get(tabId);
+  review.autoChildren.delete(tabId);
+  if (review.tabId === tabId) { clearWaiting(); return; }
+  if (opener !== review.tabId) { (review.sideTabs ||= new Set()).add(tabId); return; }
+  // (A tab whose application tab the site closed is the application in any case.)
+  if (kind !== 'start' && !autoTabScore(look) && !review.orphaned) {
+    (review.askTabs ||= new Map()).set(tabId, { tabId, title: look.title || 'New tab', url: look.url });
+    if (/waiting for it to load/.test(review.tabNotice?.text || '')) review.tabNotice = null;
+    refreshAutoPanel(review);
+    return;
+  }
+  if (review.navigating) { review.pendingTab = { tabId, snapshot }; return; }
+  await moveAutoApplication(review, tabId, snapshot);
+}
+
+/** Was the application's tab in front (its window focused, it or the new tab shown) as the new tab opened? */
+function wasInFront(snapshot, fromTab, toTab) {
+  if (!fromTab) return true;
+  if (!snapshot) return fromTab.active === true && focusedWindowId === fromTab.windowId;
+  const shown = snapshot.active.get(fromTab.windowId);
+  return snapshot.focused === fromTab.windowId && (shown === fromTab.id || shown === toTab.id);
+}
+
+/**
+ * The application goes on in tabId: the same panel (job, candidate, folder, checklist, progress, the
+ * panel's own view), saved first so a restarted extension goes on there; QTS stops in the old tab and
+ * goes on here; the old tab closes once its answers are kept. Returns true when moved.
+ */
+async function moveAutoApplication(review, tabId, snapshot = null) {
+  const tab = await getTab(tabId);
+  const from = review.tabId;
+  if (!tab || from === tabId || activeReviews.get(review.attemptId) !== review) return false;
+  review.askTabs?.delete(tabId);
+  const fromTab = review.orphaned ? null : await getTab(from);
+  const front = wasInFront(snapshot, fromTab, tab);
+  // The application's tab changes first, so closing the old one never ends the application.
+  review.onTab(tab);
+  review.orphaned = false;
+  review.moves = (review.moves || 0) + 1;
+  tabOwnership.markTab(tabId, 'apply').catch(() => {});
+  await review.persist?.().catch(() => {});
+  review.tabNotice = { text: 'Moved to the new tab', until: Date.now() + 20000 };
+  if (fromTab) await removeReviewPanel(from);
+  if (review.panel) await showReviewPanel(tabId, review.panel).catch(() => {});
+  if (front) {
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  } else if (snapshot?.prevActive != null && snapshot.prevActive !== tabId && (await getTab(tabId))?.active) {
+    // Opened in front of what the Manager was looking at: that stays in front.
+    await chrome.tabs.update(snapshot.prevActive, { active: true }).catch(() => {});
+  }
+  diag('auto-apply-tab', { attempt: String(review.attemptId).slice(0, 8), from, to: tabId, front });
+  if (fromTab) (review.closeAfterMove ||= new Set()).add(from);
+  if (reviewWaiters.has(review.attemptId)) {
+    await closeMovedFromTabs(review);
+    answerManager(review.attemptId, { action: 'tab_moved' });
+    return true;
+  }
+  // QTS is working in the old tab: it stops there (filling, Ask AI) and goes on here.
+  review.moveRequested = true;
+  review.stepAbort?.abort();
+  review.onMoveSignal?.();
+  if (!earlyDecisions.has(review.attemptId)) earlyDecisions.set(review.attemptId, { action: 'tab_moved' });
+  return true;
+}
+
+/** The tabs the application left: their answers are kept for the bid, then they close. */
+async function closeMovedFromTabs(review) {
+  const ids = [...(review.closeAfterMove || [])].filter((id) => id !== review.tabId);
+  review.closeAfterMove?.clear();
+  for (const id of ids) {
+    const answers = await inForm(id, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => null);
+    if (answers?.length) (review.closedAnswers ||= []).push(...answers.filter((entry) => entry?.label && entry.value));
+    // A form still being sent there finishes first (up to 10 s).
+    for (let waited = 0; waited < 10000 && (await getTab(id))?.status === 'loading'; waited += 500) await sleep(500);
+    await chrome.tabs.remove(id).catch(() => {});
+  }
+}
+
+/** Alt+A: the application's tab in front with its panel open (this tab's, else the latest one). */
+async function focusAutoApplication() {
+  const reviews = [...activeReviews.values()].filter((review) => review.auto && review.tabId != null && !review.orphaned);
+  if (!reviews.length) return false;
+  const [current] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+  const review = reviews.find((entry) => entry.tabId === current?.id) || reviews[reviews.length - 1];
+  await focusApplyTab(review.tabId);
+  review.revealAt = Date.now();
+  refreshAutoPanel(review);
+  return true;
+}
+chrome.commands?.onCommand?.addListener((command) => {
+  if (command === 'focus-auto-apply') focusAutoApplication().catch(() => {});
+});
+globalThis.__qtsAutoApplyTabs = { focus: focusAutoApplication };
+
+// ---- Auto Apply: a stopped application keeps its tab; the local stop log; Remove ----
+// Only the Manager ends an application with its tab (Submitted, Cancel, Skip, Later, Remove, closing
+// it, or a move to a new tab). Any other stop leaves the tab, the form and a panel that says why, with
+// Submitted (saves the bid, also without the hold) and Give back (the job back unchanged, the tab
+// closes). Kept in local storage, so a reloaded page or a restarted extension shows it again.
+const AUTO_STOPPED_KEY = 'qtsAutoApplyStopped';
+const AUTO_STOP_LOG_KEY = 'qtsAutoApplyStopLog';
+let autoStoppedWrites = Promise.resolve();
+const changeStoppedAutoTabs = (change) => {
+  const write = autoStoppedWrites.then(async () => {
+    const all = (await chrome.storage.local.get(AUTO_STOPPED_KEY))[AUTO_STOPPED_KEY] || {};
+    change(all);
+    await chrome.storage.local.set({ [AUTO_STOPPED_KEY]: all });
+  });
+  autoStoppedWrites = write.catch(() => {});
+  return write;
+};
+const readStoppedAutoTabs = async () => (await chrome.storage.local.get(AUTO_STOPPED_KEY))[AUTO_STOPPED_KEY] || {};
+
+/** A stopped application's tab: remembered, and its panel shown (mode "stopped"). */
+async function keepStoppedAutoTab(tabId, entry) {
+  await changeStoppedAutoTabs((all) => { all[tabId] = { ...entry, at: Date.now() }; });
+  await showReviewPanel(tabId, entry.state).catch(() => {});
+}
+const forgetStoppedAutoTab = (tabId) => changeStoppedAutoTabs((all) => { delete all[tabId]; });
+
+/** The last 50 ends of Auto Apply applications here: when, which job, why, and whether the tab closed. */
+let autoStopLogWrites = Promise.resolve();
+function logAutoApplyStop({ attemptId, jobId, title, company, reason, tabClosed }) {
+  const write = autoStopLogWrites.then(async () => {
+    const log = (await chrome.storage.local.get(AUTO_STOP_LOG_KEY))[AUTO_STOP_LOG_KEY] || [];
+    log.push({
+      at: new Date().toISOString(), attemptId: attemptId || null, jobId: jobId || null,
+      title: String(title || '').slice(0, 120), company: String(company || '').slice(0, 120),
+      reason: String(reason || '').slice(0, 300), tabClosed: tabClosed === true,
+    });
+    await chrome.storage.local.set({ [AUTO_STOP_LOG_KEY]: log.slice(-50) });
+  });
+  autoStopLogWrites = write.catch(() => {});
+  return write;
+}
+
+/**
+ * The Manager's Remove: the job row deleted by its hold (release "remove"); when the hold is gone, by
+ * the job's id for this Manager (the Jobs page's rules: never one with a bid, one still making its
+ * résumé, or another Manager's). The PDFs stay on disk. { ok } or { ok: false, message }.
+ */
+async function removeAutoJob(attemptId, jobId) {
+  const released = await workerApiRequest('POST', '/api/extension/apply/release', { attemptId, mode: 'remove', reason: 'Removed by the Manager.' }).catch(() => null);
+  if (released?.success === true) return { ok: true };
+  const byId = jobId ? await workerApiRequest('POST', '/api/extension/apply/remove-job', { jobId }).catch(() => null) : null;
+  if (byId?.success === true) return { ok: true };
+  return { ok: false, message: byId?.message || released?.message || 'QTS could not reach the server. Try again.' };
+}
+
+/** The buttons of a stopped application's panel (no application runs there any more). Null: not one. */
+async function answerStoppedAutoTab(msg, sender) {
+  const tabId = sender.tab?.id;
+  const entry = tabId != null ? (await readStoppedAutoTabs())[tabId] : null;
+  if (!entry || entry.attemptId !== msg.attemptId) return null;
+  const close = async (reason) => {
+    await forgetStoppedAutoTab(tabId);
+    await logAutoApplyStop({ ...entry, reason, tabClosed: true });
+    await releaseDebugger(tabId).catch(() => {});
+    await chrome.tabs.remove(tabId).catch(() => {});
+  };
+  const showAgain = async (notice) => {
+    const state = { ...entry.state, notice };
+    await changeStoppedAutoTabs((all) => { if (all[tabId]) all[tabId].state = state; });
+    await showReviewPanel(tabId, state).catch(() => {});
+  };
+  if (msg.action === 'submitted') {
+    // The answers of every page of this application (the tabs it left too), this page's last.
+    const byLabel = new Map();
+    for (const answer of [...(entry.closedAnswers || []), ...(Array.isArray(msg.answers) ? msg.answers : [])]) {
+      if (answer?.label && answer.value) byLabel.set(String(answer.label), String(answer.value));
+    }
+    const appliedAnswers = [...byLabel].map(([question, answer]) => ({ question: question.slice(0, 300), answer: answer.slice(0, 2000), source: 'manager' }));
+    let saved = await workerApiRequest('POST', '/api/extension/apply/submitted', { attemptId: entry.attemptId, appliedAnswers }).catch(() => null);
+    if (saved?.success) saved = await workerApiRequest('POST', '/api/extension/apply/result', { attemptId: entry.attemptId, submitted: true, removeJob: true, appliedAnswers }).catch(() => null);
+    // The hold is gone (often why QTS stopped): the bid from the job itself, unless another Chrome submitted it.
+    if (!saved?.success) saved = await workerApiRequest('POST', '/api/extension/apply/save-bid', { jobId: entry.jobId, appliedAnswers }).catch(() => null);
+    if (!saved?.success) {
+      await showAgain(`Not saved: ${saved?.message || 'QTS could not reach the server.'} Click Submitted again.`);
+      return { ok: false, error: saved?.message || 'Not saved.' };
+    }
+    await close('Submitted after QTS stopped: the bid was saved.');
+    return { ok: true };
+  }
+  if (msg.action === 'remove') {
+    const removed = await removeAutoJob(entry.attemptId, entry.jobId);
+    if (!removed.ok) {
+      await showAgain(`Not removed: ${removed.message}`);
+      return { ok: false, error: removed.message };
+    }
+    for (const id of entry.childTabs || []) await chrome.tabs.remove(id).catch(() => {});
+    await close('Removed by the Manager after QTS stopped.');
+    return { ok: true };
+  }
+  // Fill again, Ask AI, Check (or Continue): the job taken up again in this tab, when it is still free.
+  if (['fill_again', 'ask_ai', 'recheck', 'continue', 'continue_manual'].includes(msg.action)) {
+    const on = (await chrome.storage.local.get([EXTENSION_STATUS_KEY, 'qtsApplyKind']).catch(() => ({})));
+    if (on[EXTENSION_STATUS_KEY] !== 'apply' || on.qtsApplyKind !== 'auto') {
+      await showAgain('Auto Apply is off in this Chrome: start Auto Apply from the QTS panel, then click Fill again here.');
+      return { ok: false, error: 'Auto Apply is off.' };
+    }
+    const reply = await workerApiRequest('POST', '/api/extension/apply/resume', { attemptId: entry.attemptId, jobId: entry.jobId }).catch(() => null);
+    const application = reply?.success === true ? reply.application : null;
+    if (!application) {
+      await showAgain(`QTS could not take this job up again (${reply?.message || 'another Chrome holds it, or it is no longer in the list'}). Submitted or Give back.`);
+      return { ok: false, error: 'Not taken up again.' };
+    }
+    await forgetStoppedAutoTab(tabId);
+    await logAutoApplyStop({ ...entry, reason: 'Taken up again by the Manager (' + msg.action + ').', tabClosed: false });
+    const record = {
+      attemptId: application.attemptId, jobId: entry.jobId, tabId, browserSession: await self.__qtsAutoApply.browserSession(),
+      step: entry.state?.step || 1, phase: 'resuming', apiFlow: true, startedAt: Date.now(), steps: [], closedAnswers: entry.closedAnswers || [],
+    };
+    self.__qtsAutoApply.run(application, self.__qtsApplyRecipes.recipeFor(application.job.url), record).catch(() => {});
+    return { ok: true };
+  }
+  if (['give_back', 'cancel', 'skip', 'later'].includes(msg.action)) {
+    // Give back: the job goes back exactly as it was (its hold, if any, ends); the tab closes.
+    await workerApiRequest('POST', '/api/extension/apply/release', { attemptId: entry.attemptId, mode: 'drop', reason: 'Given back by the Manager after QTS stopped.' }).catch(() => null);
+    await close('Given back by the Manager after QTS stopped.');
+    return { ok: true };
+  }
+  return { ok: true };
+}
+
+// A stopped application's page loads again (a reload, the site's own link): its panel comes back.
+chrome.tabs.onUpdated.addListener(async (tabId, change) => {
+  if (change.status !== 'complete') return;
+  const entry = (await readStoppedAutoTabs().catch(() => ({})))[tabId];
+  if (entry) showReviewPanel(tabId, entry.state).catch(() => {});
+});
+// The Manager closed a stopped application's tab: nothing more to do there (its hold has ended).
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const entry = (await readStoppedAutoTabs().catch(() => ({})))[tabId];
+  if (!entry) return;
+  await forgetStoppedAutoTab(tabId);
+  await logAutoApplyStop({ ...entry, reason: 'The Manager closed the tab after QTS stopped.', tabClosed: true });
+});
+// A restarted extension (updated, woken up) shows the stopped panels again; tabs that are gone are forgotten.
+Promise.resolve().then(async () => {
+  const all = await readStoppedAutoTabs();
+  for (const [tabId, entry] of Object.entries(all)) {
+    const tab = await getTab(Number(tabId));
+    if (tab) await showReviewPanel(Number(tabId), entry.state).catch(() => {});
+    else await forgetStoppedAutoTab(Number(tabId));
+  }
+}).catch(() => {});
+
+globalThis.__qtsAutoApplyStopped = {
+  keep: keepStoppedAutoTab,
+  forget: forgetStoppedAutoTab,
+  answer: answerStoppedAutoTab,
+  log: logAutoApplyStop,
+  STOPPED_KEY: AUTO_STOPPED_KEY,
+  LOG_KEY: AUTO_STOP_LOG_KEY,
+};
