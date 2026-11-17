@@ -5226,7 +5226,15 @@ async function processApplyQueue() {
       return;
     }
     // Apply and Auto Apply (chosen jobs included) open as many jobs at once as the Manager's limit in Settings.
-    const applyParallelLimit = configuredLimit;
+    // Read again every 30 s while running, so a limit changed in Settings counts without Stop and Start.
+    let applyParallelLimit = configuredLimit;
+    let limitReadAt = Date.now();
+    const freshLimit = async () => {
+      if (Date.now() - limitReadAt < 30 * 1000) return applyParallelLimit;
+      limitReadAt = Date.now();
+      try { applyParallelLimit = await getManagerApplyParallelLimit(); } catch { /* the last one stays */ }
+      return applyParallelLimit;
+    };
     // Pages still open from before the extension restarted are taken up first (they count as open).
     if (await isApplyOn() && !autoApply) for (const run of await resumeApplySessions(applyParallelLimit)) track(run);
     // Auto Apply: its applications left open by a restarted worker go on first (up to its run limit).
@@ -5243,7 +5251,7 @@ async function processApplyQueue() {
       const openNow = autoApply
         ? Math.max(running.size, self.__qtsAutoApply.runningCount?.() || 0) + Object.keys((await chrome.storage.local.get('qtsAutoApplyStopped')).qtsAutoApplyStopped || {}).length
         : running.size;
-      if (openNow >= (testMode ? 1 : applyParallelLimit)) {
+      if (openNow >= (testMode ? 1 : await freshLimit())) {
         // (A kept tab is let go by the Manager, not by a run ending: looked at again every few seconds.)
         await Promise.race(running.size ? [...running, sleep(5000)] : [sleep(5000)]);
         continue;
