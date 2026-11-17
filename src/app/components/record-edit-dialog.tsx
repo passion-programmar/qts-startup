@@ -83,7 +83,7 @@ export function RecordEditDialog({
                 >
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Candidate"><select className={inputClass} defaultValue={record.candidateId} name="candidateId" required>{candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></Field>
-                    <Field label="Job URL"><input className={inputClass} defaultValue={record.url} maxLength={2048} name="jobUrl" required type="url" /></Field>
+                    <Field label="Job URL"><input className={inputClass} defaultValue={record.url} maxLength={2048} name="jobUrl" placeholder={kind === "bid" ? "None (Resume page download)" : undefined} required={kind === "job"} type="url" /></Field>
                     <Field label="Job title"><input className={inputClass} defaultValue={record.title} maxLength={500} name="jobTitle" required /></Field>
                     <Field label="Company"><input className={inputClass} defaultValue={record.company} maxLength={500} name="company" required /></Field>
                     <Field label="Location"><input className={inputClass} defaultValue={record.location ?? ""} maxLength={500} name="location" /></Field>
@@ -368,7 +368,7 @@ function BidFields({ record }: { record: EditableBid }) {
     <>
       <Field label="Work type"><input className={inputClass} defaultValue={record.workType ?? ""} maxLength={200} name="workType" placeholder="Full-time · Remote" /></Field>
       <Field label="Salary"><input className={inputClass} defaultValue={record.salary ?? ""} maxLength={500} name="salary" /></Field>
-      <Field className="sm:col-span-2" label="Résumé folder"><input className={inputClass} defaultValue={record.resumeFolder} maxLength={2048} name="resumeFolder" required /></Field>
+      <Field className="sm:col-span-2" label="Résumé folder"><input className={inputClass} defaultValue={record.resumeFolder} maxLength={2048} name="resumeFolder" /></Field>
       <Field className="sm:col-span-2" label="Google Drive path"><input className={inputClass} defaultValue={record.googleDrivePath ?? ""} maxLength={2048} name="googleDrivePath" /></Field>
     </>
   );

@@ -137,9 +137,11 @@ export function InterviewRowActions({ record, onDone }: { record: InterviewRecor
                   <ListPlus aria-hidden="true" className="size-3.5" /> Add next step ({stepLabel(next)})
                 </button>
               )}
-              <a className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50" href={record.jobUrl} onClick={() => setMenuOpen(false)} rel="noreferrer" role="menuitem" target="_blank">
-                <ExternalLink aria-hidden="true" className="size-3.5" /> Open job
-              </a>
+              {record.jobUrl && (
+                <a className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50" href={record.jobUrl} onClick={() => setMenuOpen(false)} rel="noreferrer" role="menuitem" target="_blank">
+                  <ExternalLink aria-hidden="true" className="size-3.5" /> Open job
+                </a>
+              )}
               <form action={deleteAction}>
                 <input name="id" type="hidden" value={record.id} />
                 <ConfirmButton

@@ -1,0 +1,2 @@
+DROP INDEX "bids_candidate_job_url_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "bids_candidate_job_url_unique" ON "bids" USING btree ("candidate_id",regexp_replace(split_part(btrim("job_url"), '#', 1), '/+$', '')) WHERE btrim("bids"."job_url") <> '';
