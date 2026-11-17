@@ -153,7 +153,7 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     await page.evaluate(state => window.__qtsApplyReview.render({ ...state, references: { ...state.references,
       profile: { firstName: 'Sample', linkedinUrl: 'https://linkedin.example/in/sample', githubUrl: 'https://github.example/sample' },
       experiences: [
-        { companyName: 'Acme', jobTitle: 'SRE Lead', startDate: '2021-03-01', isCurrent: true, description: 'Profile text' },
+        { companyName: 'Acme', jobTitle: 'SRE Lead', location: 'Bucharest, Romania', startDate: '2021-03-01', isCurrent: true, description: 'Profile text' },
         { companyName: 'Globex', jobTitle: 'DevOps Engineer', startDate: '2018-01-01', endDate: '2021-02-01', description: 'Globex profile text' },
       ],
       educations: [{ institution: 'Example University', degree: 'BSc', fieldOfStudy: 'Computer Science', startDate: '2014-09-01', endDate: '2018-06-01' }],
@@ -166,7 +166,7 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     // Each job: company, title, dates, and one small Bullets button (hover shows its bullets).
     assert.deepEqual(career, [
       '# Experience',
-      'Acme | SRE Lead | 03/2021 – Present | Bullets[• Cut deploy time by 60%\n• Led on-call]',
+      'Acme | SRE Lead | 03/2021 – Present | Bucharest, Romania | Bullets[• Cut deploy time by 60%\n• Led on-call]',
       'Globex | DevOps Engineer | 01/2018 – 02/2021 | Bullets[Globex profile text]',
       '# Education',
       'Example University | BSc | Computer Science | 09/2014 – 06/2018',
@@ -192,7 +192,7 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     // Each job card: company, title on the first row; dates, Bullets on the second.
     await click('.copy-button', '📁 Path');
     const rows = await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.career-item').querySelectorAll('.career-line')].map(line => [...line.querySelectorAll('.chip')].map(n => n.textContent).join(' | ')));
-    assert.deepEqual(rows, ['Acme | SRE Lead', '03/2021 – Present | Bullets']);
+    assert.deepEqual(rows, ['Acme | SRE Lead', '03/2021 – Present | Bucharest, Romania | Bullets']);
     await click('.copy-button', '📁 Path');
     // Profile: a toggle; saved items in groups, one row each (label, value); a row copies only the
     // value and turns green for a moment.
