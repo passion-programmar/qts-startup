@@ -497,7 +497,7 @@ const server = http.createServer((req, res) => {
       mock.claimBodies.push(data);
       const selection = data.selection;
       const index = selection
-        ? mock.queue.findIndex((entry) => entry.candidate.id === selection.candidateId && selection.jobIds.includes(entry.job.id))
+        ? mock.queue.findIndex((entry) => (selection.candidateId == null || entry.candidate.id === selection.candidateId) && selection.jobIds.includes(entry.job.id))
         : 0;
       const next = index >= 0 ? mock.queue.splice(index, 1)[0] || null : null;
       if (next) mock.byAttempt[next.attemptId] = next;
@@ -1714,6 +1714,29 @@ test('chosen jobs open as many at once as the Manager\'s limit in Settings, not 
     await until(() => mock.results.length === 1, 20000, 'the bid');
     await until(() => mock.queue.length === 0, 60000, 'the third job to be taken');
     await until(async () => ((await storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs || []).length === 2, 60000, 'two open again');
+  } finally { await browser.close(); }
+});
+
+test('with no candidate chosen (all jobs), as many open at once as the Manager\'s limit too', { skip, timeout: 180000 }, async () => {
+  resetMock({ queue: [application(73, 'form'), application(74, 'form'), application(75, 'form'), application(76, 'form')], autoApplyParallelLimit: 2 });
+  const { browser, action, storage } = await launch();
+  try {
+    // The checked jobs of every candidate (no candidate chosen); job 76 is not checked.
+    assert.equal((await action('auto_apply', { candidateId: null, jobIds: [jobId(73), jobId(74), jobId(75)] })).ok, true);
+    const formTabs = async () => (await browser.pages()).filter((page) => page.url().startsWith(`${BASE}/form`));
+    await until(async () => {
+      const runs = (await storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs || [];
+      return runs.length === 2 && runs.every((run) => ['needs_you', 'final'].includes(run.phase));
+    }, 90000, 'two jobs open at once');
+    assert.equal((await formTabs()).length, 2, 'two application tabs');
+    await sleep(2000);
+    assert.equal(mock.queue.length, 2, 'the third job waits: the limit is 2 (76 is not checked)');
+    assert.ok(mock.claimBodies.every((body) => body.selection && body.selection.candidateId == null), 'no candidate goes to the server');
+    await pressPanel((await formTabs())[0], 'Submitted');
+    await until(() => mock.queue.length === 1, 60000, 'the third job to be taken');
+    await until(async () => ((await storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs || []).length === 2, 60000, 'two open again');
+    await sleep(2000);
+    assert.deepEqual(mock.queue.map((entry) => entry.job.id), [jobId(76)], 'the unchecked job is never taken');
   } finally { await browser.close(); }
 });
 

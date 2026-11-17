@@ -5920,10 +5920,11 @@ function resumeFolderRequired(work) {
 function checkedWorkSelection(selection) {
   if (selection === undefined) return null;
   const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-  if (!selection || !validId(selection.candidateId) || !Array.isArray(selection.jobIds)
+  // candidateId null: checked jobs of every candidate (no candidate chosen in the panel).
+  if (!selection || (selection.candidateId != null && !validId(selection.candidateId)) || !Array.isArray(selection.jobIds)
     || !selection.jobIds.length || selection.jobIds.length > 200 || !selection.jobIds.every(validId)
     || new Set(selection.jobIds).size !== selection.jobIds.length) throw new Error('Select an account and between 1 and 200 jobs.');
-  return { candidateId: selection.candidateId, jobIds: selection.jobIds };
+  return { candidateId: selection.candidateId ?? null, jobIds: selection.jobIds };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -6125,6 +6126,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!['generation', 'apply', 'auto_apply', 'all'].includes(msg.mode)) throw new Error('Invalid work mode.');
       const params = new URLSearchParams({ mode: msg.mode });
       if (msg.candidateId !== undefined) params.set('candidateId', String(msg.candidateId));
+      // Every candidate's ready jobs (no candidate chosen in the panel).
+      else if (msg.allCandidates === true && msg.mode !== 'all') params.set('candidates', 'all');
       const result = await workerApiRequest('GET', '/api/extension/work-items?' + params, null, {
         timeoutMs: WORK_ITEMS_REQUEST_TIMEOUT_MS,
       });

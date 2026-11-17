@@ -111,7 +111,7 @@ export async function POST(request: Request): Promise<NextResponse> {
             eq(users.parentUserId, manager.id),
             eq(users.role, "account"),
             isNull(users.blockedAt),
-            ...(selection ? [eq(jobs.candidateId, selection.candidateId), inArray(jobs.id, selection.jobIds)] : []),
+            ...(selection ? [...(selection.candidateId ? [eq(jobs.candidateId, selection.candidateId)] : []), inArray(jobs.id, selection.jobIds)] : []),
             ...(excludedJobIds.length ? [notInArray(jobs.id, excludedJobIds)] : []),
           ))
           .orderBy(asc(jobs.createdAt), asc(jobs.id))

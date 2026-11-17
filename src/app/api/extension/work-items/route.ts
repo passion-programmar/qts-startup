@@ -13,10 +13,12 @@ export async function GET(request: Request): Promise<NextResponse> {
   if (!manager) return reply({ success: false, message: "Sign in to load your accounts and jobs." }, 401);
   const params = new URL(request.url).searchParams;
   const mode = params.get("mode"), candidateId = params.get("candidateId");
+  // candidates=all: the ready jobs of every account (no candidate chosen in the panel), each with its name.
+  const everyAccount = params.get("candidates") === "all" && candidateId === null && mode !== "all";
   // "all" lists the accounts once with every mode's ready count (one shared candidate in the panel);
   // "apply" lists a candidate's jobs for manual Apply. The per-mode account lists stay for older extensions.
   if (!["generation", "apply", "auto_apply", "all"].includes(mode || "") || (candidateId !== null && !isWorkId(candidateId))
-    || (mode === "all" && candidateId !== null) || (mode === "apply" && candidateId === null)) {
+    || (mode === "all" && candidateId !== null) || (mode === "apply" && candidateId === null && !everyAccount)) {
     return reply({ success: false, message: "A valid work mode and account are required." }, 400);
   }
   try {
@@ -58,7 +60,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         },
       })) });
     }
-    if (candidateId === null) {
+    if (candidateId === null && !everyAccount) {
       const accounts = await db.select({
         id: profiles.userId,
         firstName: profiles.firstName,
@@ -90,14 +92,15 @@ export async function GET(request: Request): Promise<NextResponse> {
         eligibleJobCount: Number(eligibleJobCount) || 0,
       })) });
     }
-    const [account] = await db.select({ id: users.id }).from(users).innerJoin(profiles, eq(profiles.userId, users.id))
-      .where(and(ownership, eq(users.id, candidateId))).limit(1);
+    const [account] = everyAccount ? [{ id: null }] : await db.select({ id: users.id }).from(users).innerJoin(profiles, eq(profiles.userId, users.id))
+      .where(and(ownership, eq(users.id, candidateId as string))).limit(1);
     if (!account) return reply({ success: false, message: "This account is unavailable or inactive." }, 403);
     const rows = await db.select({
       id: jobs.id,
       title: jobs.jobTitle,
       company: jobs.company,
       url: jobs.jobUrl,
+      candidateName: sql<string>`trim(concat_ws(' ', ${profiles.firstName}, ${profiles.lastName}))`,
       customUrl: mode === "apply" || mode === "auto_apply"
         ? matchesManagerCustomUrl(manager.id, jobs.jobUrl)
         : sql<boolean>`false`,
@@ -108,20 +111,20 @@ export async function GET(request: Request): Promise<NextResponse> {
       )` : sql<boolean>`false`,
     })
       .from(jobs).innerJoin(users, eq(users.id, jobs.candidateId)).innerJoin(profiles, eq(profiles.userId, users.id))
-      .where(and(ownership, eq(jobs.managerId, manager.id), eq(jobs.candidateId, candidateId),
+      .where(and(ownership, eq(jobs.managerId, manager.id), everyAccount ? sql`true` : eq(jobs.candidateId, candidateId as string),
         mode === "generation" ? readyGeneration(new Date()) : mode === "apply" ? readyApply() : readyAutoApply()))
       .orderBy(asc(jobs.createdAt), asc(jobs.id)).limit(201);
     const jobsToShow = rows.slice(0, 200);
     return reply({
       success: true,
       jobs: mode === "auto_apply"
-        ? jobsToShow.map(({ busy, ...job }) => {
+        ? jobsToShow.map(({ busy, candidateName, ...job }) => {
           const inProgress = busy === true;
-          return { ...job, customUrl: job.customUrl === true, busy: inProgress, selectable: !inProgress };
+          return { ...job, ...(everyAccount ? { candidateName } : {}), customUrl: job.customUrl === true, busy: inProgress, selectable: !inProgress };
         })
         : mode === "apply"
-          ? jobsToShow.map(({ id, title, company, url, customUrl }) => ({ id, title, company, url, customUrl: customUrl === true }))
-          : jobsToShow.map(({ id, title, company, url }) => ({ id, title, company, url })),
+          ? jobsToShow.map(({ id, title, company, url, customUrl, candidateName }) => ({ id, title, company, url, ...(everyAccount ? { candidateName } : {}), customUrl: customUrl === true }))
+          : jobsToShow.map(({ id, title, company, url, candidateName }) => ({ id, title, company, url, ...(everyAccount ? { candidateName } : {}) })),
       hasMore: rows.length > 200,
     });
   } catch (error) {
