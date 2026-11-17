@@ -1717,6 +1717,22 @@ test('chosen jobs open as many at once as the Manager\'s limit in Settings, not 
   } finally { await browser.close(); }
 });
 
+test('a limit raised in Settings while Auto Apply runs counts without Stop and Start', { skip, timeout: 180000 }, async () => {
+  resetMock({ queue: [application(77, 'form'), application(78, 'form')], autoApplyParallelLimit: 1 });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    const runs = async () => ((await storage(['qtsAutoApplyState'])).qtsAutoApplyState?.runs || []).length;
+    await until(async () => (await runs()) === 1, 60000, 'one job open (limit 1)');
+    await sleep(3000);
+    assert.equal(mock.queue.length, 1, 'the second waits');
+    // The Manager raises the limit to 2 in Settings: the second opens within about 30 s.
+    mock.autoApplyParallelLimit = 2;
+    await until(() => mock.queue.length === 0, 60000, 'the second job taken after the limit changed');
+    await until(async () => (await runs()) === 2, 60000, 'two open');
+  } finally { await browser.close(); }
+});
+
 test('with no candidate chosen (all jobs), as many open at once as the Manager\'s limit too', { skip, timeout: 180000 }, async () => {
   resetMock({ queue: [application(73, 'form'), application(74, 'form'), application(75, 'form'), application(76, 'form')], autoApplyParallelLimit: 2 });
   const { browser, action, storage } = await launch();
