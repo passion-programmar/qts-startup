@@ -12,7 +12,8 @@
   // A prior extension context may have left its host in this page after an update.
   for (const stale of document.querySelectorAll('[data-qts-apply-review], [data-qts-auto-apply-dock]')) stale.remove();
 
-  const PANEL_WIDTH = 'min(480px, 48vw)';
+  // 3/4 of the old 480 px (the Manager's choice, 2026-11-17).
+  const PANEL_WIDTH = 'min(360px, 36vw)';
   const dock = document.createElement('style');
   dock.setAttribute('data-qts-auto-apply-dock', '');
   dock.textContent = `
@@ -108,7 +109,42 @@
     .reference-note, .copy-status { padding: 0 10px 8px; color: #94a3b8; font-size: 11px; }
     .copy-row { display: flex; gap: 6px; margin-top: 6px; }
     .copy-button, .row-button { padding: 5px 10px; border: 1px solid #34425a; border-radius: 9px; background: #111a2e; color: #e2e8f0; font: 650 11.5px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
-    .copy-button { flex: 1 1 0; }
+    .copy-button { flex: 1 1 0; padding-left: 6px; padding-right: 6px; }
+    .copy-button.folder-copy { flex: 0 0 auto; color: #93c5fd; }
+    .copy-button.profile-copy { flex: 0 0 auto; color: #93c5fd; }
+    .copy-button.answer-open.on, .copy-button.profile-copy.on, .copy-button.folder-copy.on { border-color: #818cf8; background: #1e2a4a; color: #c7d2fe; }
+    .career { margin-top: 8px; padding: 8px 10px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; }
+    .career-head { display: flex; align-items: center; justify-content: space-between; margin: 2px 0 4px; color: #94a3b8; font-size: 10.5px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+    .career-head button { padding: 0 4px; border: 0; background: none; color: #94a3b8; font: inherit; cursor: pointer; text-transform: none; letter-spacing: 0; }
+    .career-item { margin-top: 5px; padding: 6px 7px; border: 1px solid #243047; border-left: 3px solid #6366f1; border-radius: 9px; background: #101a2e; }
+    .career-head + .career-item { margin-top: 2px; }
+    .career-head:not(:first-child) { margin-top: 9px; }
+    .career-line { display: flex; flex-wrap: wrap; gap: 4px; }
+    .career-line + .career-line { margin-top: 4px; }
+    .chip .chip-label { margin-right: 5px; color: #94a3b8; font-size: 10px; font-weight: 700; }
+    .profile-group { margin: 8px 0 3px; color: #64748b; font-size: 10px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+    .profile-head + .profile-group, .career-head + .profile-group { margin-top: 2px; }
+    .profile-row { display: grid; grid-template-columns: 78px minmax(0, 1fr) 14px; align-items: center; gap: 8px; width: 100%; margin: 0 0 4px; padding: 6px 8px; border: 1px solid #243047; border-left: 3px solid #6366f1; border-radius: 9px; background: #101a2e; color: #e2e8f0; font: 600 12px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+    .profile-row:hover, .profile-row:focus-visible { border-color: #818cf8; background: #15213a; }
+    .profile-label { color: #94a3b8; font-size: 10.5px; font-weight: 700; }
+    .profile-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .profile-copy-mark { color: #475569; font-size: 11px; text-align: right; }
+    .profile-row:hover .profile-copy-mark { color: #a5b4fc; }
+    .profile-row.copied { border-color: #10b981; background: #0b2a22; }
+    .salary-row { grid-template-columns: 78px minmax(0, 1fr) 22px; cursor: default; }
+    .profile-input { min-width: 0; padding: 3px 6px; border: 1px solid #34425a; border-radius: 6px; background: #0b1222; color: #e2e8f0; font: 600 12px Inter, ui-sans-serif, system-ui, sans-serif; }
+    .profile-input:focus, .answer-text:focus { outline: none; border-color: #818cf8; }
+    .profile-copy-button { padding: 0; border: 0; background: none; color: #a5b4fc; font-size: 13px; cursor: pointer; }
+    .answer-label { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 8px 0 3px; color: #94a3b8; font-size: 10.5px; font-weight: 700; }
+    .answer-mini { padding: 1px 6px; border: 1px solid #34425a; border-radius: 999px; background: #111a2e; color: #a5b4fc; font: 600 10px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .answer-text { display: block; width: 100%; padding: 6px 8px; border: 1px solid #34425a; border-left: 3px solid #6366f1; border-radius: 9px; background: #0b1222; color: #e2e8f0; font: 500 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; resize: vertical; }
+    .answer-copy { display: block; width: 100%; margin-top: 8px; color: #c7d2fe; }
+    .profile-row.copied .profile-copy-mark { color: #34d399; }
+    .chip { max-width: 100%; padding: 3px 8px; border: 1px solid #34425a; border-radius: 999px; background: #111a2e; color: #e2e8f0; font: 600 11.5px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+    .chip.main { color: #c7d2fe; font-weight: 750; }
+    .chip:hover, .bullets:hover, .chip:focus-visible, .bullets:focus-visible { border-color: #818cf8; }
+    .chip.bullets { border-color: #4f46e5; background: #1e1b4b; color: #c7d2fe; }
+    .chip.bullets:hover { background: #2e2a6b; }
     .copy-button:hover:not(:disabled), .row-button:hover:not(:disabled) { border-color: #818cf8; color: #c7d2fe; }
     .copy-button:disabled, .row-button:disabled { opacity: .45; cursor: not-allowed; }
     .job-status { margin-top: 6px; color: #a5b4fc; font-size: 11px; }
@@ -152,6 +188,20 @@
     .menu strong { display: block; padding: 4px 8px 6px; color: #94a3b8; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
     .menu button { display: block; width: 100%; margin: 2px 0; padding: 7px 10px; border: 1px solid transparent; border-radius: 8px; background: none; color: #e2e8f0; font: 650 12.5px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; }
     .menu button:hover, .menu button:focus-visible { border-color: #475569; background: #1a2438; outline: none; }
+    /* Auto Apply signals, top left of the page: A (Ask AI) and F (filling). A spinning ring while
+       working, a green ring when done, a red one when the AI did not answer; no words. */
+    .signals { position: fixed; top: 10px; left: 10px; display: flex; gap: 6px; padding: 5px 6px; border: 1px solid rgb(148 163 184 / .18); border-radius: 999px; background: rgb(10 15 28 / .72); backdrop-filter: blur(10px) saturate(140%); -webkit-backdrop-filter: blur(10px) saturate(140%); box-shadow: 0 6px 20px rgb(0 0 0 / .28); pointer-events: none; }
+    .signals[hidden] { display: none; }
+    .sig { position: relative; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: #cbd5e1; font: 800 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .02em; }
+    .sig::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgb(148 163 184 / .28); transition: border-color .25s ease, box-shadow .25s ease; }
+    .sig.busy::before { border-color: transparent; background: conic-gradient(from 0deg, #818cf8, #60a5fa 40%, transparent 70%) border-box; -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px)); mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px)); animation: sig-spin .8s linear infinite; }
+    .sig.busy { color: #c7d2fe; }
+    .sig.done::before { border-color: #22c55e; box-shadow: 0 0 0 3px rgb(34 197 94 / .16), 0 0 10px rgb(34 197 94 / .35); }
+    .sig.done { color: #bbf7d0; }
+    .sig.failed::before { border-color: #ef4444; box-shadow: 0 0 0 3px rgb(239 68 68 / .14); }
+    .sig.failed { color: #fecaca; }
+    @keyframes sig-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .sig.busy::before { animation-duration: 2.4s; } }
   `;
   const panel = document.createElement('div');
   panel.className = 'panel';
@@ -163,7 +213,17 @@
   }
   tab.addEventListener('click', () => { collapsed = false; render(); saveUi(); });
   host.addEventListener('keydown', (event) => { if (event.key === 'Escape' && menuOpen) { menuOpen = false; render(); } });
-  root.append(style, panel, tab);
+  // Auto Apply signals: A (Ask AI) and F (filling), top left of the page.
+  const signals = document.createElement('div');
+  signals.className = 'signals';
+  signals.hidden = true;
+  signals.setAttribute('aria-hidden', 'true');
+  const signalA = document.createElement('span');
+  const signalF = document.createElement('span');
+  signalA.textContent = 'A';
+  signalF.textContent = 'F';
+  signals.append(signalA, signalF);
+  root.append(style, panel, tab, signals);
   (document.documentElement || document.body).appendChild(host);
   // Auto Apply: the panel in the browser's top layer (above any site pop-up, cookie banner or chat),
   // raised again whenever the site puts something of its own there.
@@ -239,6 +299,267 @@
     say(await copyReference(path) ? 'Copied: the folder\'s full path' : 'Could not copy. Try again.');
   }
 
+  // Texts the Manager edits in the panel (salary lines, the Answer text), remembered in this Chrome
+  // for every job and candidate.
+  const DEFAULT_ANSWER_TEXT = 'this is my resume. i wanna make answer to fill for compleing job apply.\nmake answer within 3 - 4 sentences if should explain something, or simply if require simple answer.\nnot require evidence or verified information. answers must be shown high senior level enginer experience to match the job highly.';
+  const panelTexts = { salaryMonth: '6000 EUR per month', salaryYear: '60000 - 70000 EUR per year', answerText: DEFAULT_ANSWER_TEXT };
+  const TEXTS_KEY = 'qtsPanelTexts';
+  try {
+    global.chrome?.storage?.local?.get?.(TEXTS_KEY)?.then?.((stored) => {
+      const saved = stored?.[TEXTS_KEY];
+      if (!saved || typeof saved !== 'object') return;
+      for (const key of Object.keys(panelTexts)) if (typeof saved[key] === 'string') panelTexts[key] = saved[key];
+      if (openBox) render();
+    }).catch?.(() => {});
+  } catch { /* the defaults stay */ }
+  let textsSave = null;
+  function saveTexts() {
+    clearTimeout(textsSave);
+    textsSave = setTimeout(() => { try { global.chrome?.storage?.local?.set?.({ [TEXTS_KEY]: { ...panelTexts } })?.catch?.(() => {}); } catch { /* not saved */ } }, 300);
+  }
+  // LinkedIn always copies as https://www.linkedin.com/…
+  function linkedinFull(url) {
+    const rest = String(url || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+    if (!rest) return '';
+    // A full address keeps its own site; a bare "in/name" is LinkedIn's.
+    return `https://www.${/^[^/\s]+\.[a-z]{2,}(\/|$)/i.test(rest) ? rest : `linkedin.com/${rest.replace(/^\/+/, '')}`}`;
+  }
+
+  // The Answer box: the résumé, this page's empty questions ("question:" one per line, optional ones
+  // too) and the Manager's text, copied as one. The questions are this job's only (kept while it
+  // runs, never saved); the text is remembered for every job.
+  let answerQuestions = { key: '', text: '', edited: false };
+  const jobKey = () => String(state?.job?.id || state?.job?.url || '');
+  function pageQuestions() {
+    const clean = (label) => String(label || '').replace(/\s+/g, ' ').replace(/\s*\((required|optional)\)\s*$/i, '').replace(/[\s*✱:]+$/, '').trim();
+    let labels = [];
+    try {
+      const form = global.__qtsApplyForm;
+      labels = (form?.scanForm?.() || [])
+        .filter((field) => !field.hidden && !field.disabled && field.kind !== 'file' && field.label && form.isUnanswered(field))
+        .map((field) => clean(field.label));
+    } catch { labels = []; }
+    if (!labels.length) labels = (state?.requiredRows || []).filter((row) => !answeredLive(row)).map((row) => clean(row.label));
+    return [...new Set(labels.filter(Boolean))];
+  }
+  function questionsNow() {
+    if (answerQuestions.edited && answerQuestions.key === jobKey()) return answerQuestions.text;
+    answerQuestions = { key: jobKey(), text: pageQuestions().map((label) => `${label}:`).join('\n'), edited: false };
+    return answerQuestions.text;
+  }
+  const answerText = () => [String(state?.references?.resumeText || '').trim(), questionsNow().trim(), panelTexts.answerText.trim()].filter(Boolean).join('\n\n');
+  async function copyAnswer() {
+    say(await copyReference(answerText()) ? 'Copied: résumé, empty questions and your text' : 'Could not copy. Try again.');
+  }
+  function answerBox() {
+    const box = element('div', 'career answer-box');
+    const head = element('div', 'career-head', 'Answer');
+    const hide = element('button', '', 'Hide ✕');
+    hide.type = 'button';
+    hide.addEventListener('click', () => { openBox = ''; render(); });
+    head.append(hide);
+    box.append(head);
+    const questionsHead = element('div', 'answer-label', 'Empty questions on this page (this job only)');
+    const reread = element('button', 'answer-mini', '↻ Read the page again');
+    reread.type = 'button';
+    reread.addEventListener('click', () => { answerQuestions = { key: '', text: '', edited: false }; render(); });
+    questionsHead.append(reread);
+    const questions = element('textarea', 'answer-text');
+    questions.dataset.keep = 'answer-questions';
+    questions.value = questionsNow();
+    questions.rows = Math.min(10, Math.max(3, questions.value.split('\n').length + 1));
+    questions.placeholder = 'No empty question found on this page.';
+    questions.addEventListener('input', () => { answerQuestions = { key: jobKey(), text: questions.value, edited: true }; });
+    const textHead = element('div', 'answer-label', 'Your text (remembered for every job)');
+    const text = element('textarea', 'answer-text');
+    text.dataset.keep = 'answer-text';
+    text.value = panelTexts.answerText;
+    text.rows = 5;
+    text.addEventListener('input', () => { panelTexts.answerText = text.value; saveTexts(); });
+    const again = element('button', 'copy-button answer-copy', '⧉ Copy again');
+    again.type = 'button';
+    again.addEventListener('click', () => copyAnswer());
+    box.append(element('div', 'answer-label', 'Résumé (this job\'s) goes first'), questionsHead, questions, textHead, text, again);
+    return box;
+  }
+
+  // The career box (opened by Copy Path): each job as company, title, dates and its full bullets;
+  // education as school, degree, dates; the profile links. Every piece is one click to copy.
+  // One box open at a time: 'answer', 'profile' or 'career' (Path); '' for none.
+  let openBox = '';
+  const toggleBox = (name) => { openBox = openBox === name ? '' : name; render(); };
+  const monthYear = (value) => {
+    const match = String(value || '').match(/^(\d{4})-(\d{2})/);
+    return match ? `${match[2]}/${match[1]}` : String(value || '').trim();
+  };
+  const fromTo = (entry) => [monthYear(entry.startDate), entry.isCurrent ? 'Present' : monthYear(entry.endDate)].filter(Boolean).join(' – ');
+  // The job's own résumé, in blocks: a heading line ("Role · Company · Place · Dates") and its "- " bullets.
+  function resumeBlocks(text) {
+    return String(text || '').split(/\n\s*\n/).map((block) => {
+      const lines = block.split('\n').map((line) => line.trim()).filter(Boolean);
+      return { heading: lines.find((line) => !line.startsWith('- ')) || '', bullets: lines.filter((line) => line.startsWith('- ')).map((line) => line.slice(2).trim()) };
+    }).filter((block) => block.heading && block.bullets.length);
+  }
+  const bulletText = (bullets) => bullets.map((bullet) => `• ${bullet}`).join('\n');
+  // One job's bullets as one small chip on its line: a click copies them all (hover shows them).
+  function bulletsButton(text, label, copy) {
+    const node = element('button', 'chip bullets', 'Bullets');
+    node.type = 'button';
+    node.title = text;
+    node.addEventListener('click', () => copy(label, text));
+    return node;
+  }
+  // The profile box (opened by Profile): every saved profile item as "label value"; a click copies the value.
+  function profileBox(profile) {
+    const box = element('div', 'career profile-box');
+    const head = element('div', 'career-head', 'Profile');
+    const hide = element('button', '', 'Hide ✕');
+    hide.type = 'button';
+    hide.addEventListener('click', () => { openBox = ''; render(); });
+    head.append(hide);
+    box.append(head);
+    // In groups, one row each: the label on the left, the value on the right; a click on the row
+    // copies the value (the row flashes "Copied").
+    const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
+    const groups = [
+      ['Name', [['Full name', fullName], ['First name', profile.firstName], ['Last name', profile.lastName]]],
+      ['Contact', [['Email', profile.email], ['Phone', profile.phone]]],
+      ['Links', [['LinkedIn', linkedinFull(profile.linkedinUrl)], ['GitHub', profile.githubUrl], ['Portfolio', profile.portfolioUrl]]],
+      ['Address', [['City, Country', [profile.city, profile.country].map((part) => String(part ?? '').trim()).filter(Boolean).join(', ')], ['Street', profile.addressLine1], ['State', profile.province], ['Postal code', profile.postalCode]]],
+      ['More', [['Headline', profile.headline], ['Experience', profile.yearsOfExperience ? `${profile.yearsOfExperience} years` : ''], ['Nationality', profile.nationality], ['Birthday', profile.birthday], ['Languages', Array.isArray(profile.languages) ? profile.languages.join(', ') : profile.languages]]],
+    ].map(([title, rows]) => [title, rows.map(([label, value]) => [label, String(value ?? '').trim()]).filter(([, value]) => value)])
+      .filter(([, rows]) => rows.length);
+    for (const [title, rows] of groups) {
+      box.append(element('div', 'profile-group', title));
+      for (const [label, value] of rows) {
+        const row = element('button', 'profile-row');
+        row.type = 'button';
+        row.title = `Copy ${label}: ${value}`;
+        row.append(element('span', 'profile-label', label), element('span', 'profile-value', value), element('span', 'profile-copy-mark', '⧉'));
+        row.addEventListener('click', async () => {
+          const ok = await copyReference(value);
+          say(ok ? `Copied: ${label}` : 'Could not copy. Try again.');
+          if (!ok) return;
+          row.classList.add('copied');
+          setTimeout(() => row.classList.remove('copied'), 1200);
+        });
+        box.append(row);
+      }
+    }
+    if (!groups.length) box.append(element('div', 'reference-note', 'No profile details saved.'));
+    // Salary: the same two lines for every candidate; the Manager edits them here (remembered).
+    box.append(element('div', 'profile-group', 'Salary'));
+    for (const [key, label] of [['salaryMonth', 'Per month'], ['salaryYear', 'Per year']]) {
+      const row = element('div', 'profile-row salary-row');
+      const input = element('input', 'profile-input');
+      input.dataset.keep = `salary-${key}`;
+      input.value = panelTexts[key];
+      input.title = 'Edit: remembered for every job';
+      input.addEventListener('input', () => { panelTexts[key] = input.value; saveTexts(); });
+      const copy = element('button', 'profile-copy-button', '⧉');
+      copy.type = 'button';
+      copy.title = `Copy ${label}`;
+      copy.addEventListener('click', async () => {
+        const ok = await copyReference(input.value);
+        say(ok ? `Copied: ${input.value}` : 'Could not copy. Try again.');
+        if (!ok) return;
+        row.classList.add('copied');
+        setTimeout(() => row.classList.remove('copied'), 1200);
+      });
+      row.append(element('span', 'profile-label', label), input, copy);
+      box.append(row);
+    }
+    return box;
+  }
+  function careerBox(data) {
+    const box = element('div', 'career');
+    const copyItem = async (label, value) => { say(await copyReference(value) ? `Copied: ${label}` : 'Could not copy. Try again.'); };
+    const chip = (label, value, main = false) => {
+      const node = element('button', `chip${main ? ' main' : ''}`, value);
+      node.type = 'button';
+      node.title = `Copy ${label}`;
+      node.addEventListener('click', () => copyItem(label, value));
+      return node;
+    };
+    const heading = (text, close = false) => {
+      const head = element('div', 'career-head', text);
+      if (close) {
+        const hide = element('button', '', 'Hide ✕');
+        hide.type = 'button';
+        hide.addEventListener('click', () => { openBox = ''; render(); });
+        head.append(hide);
+      }
+      return head;
+    };
+    // Bullets from this job's résumé (the one sent), matched by company; else the profile's own text.
+    const blocks = resumeBlocks(data.resumeText);
+    const used = new Set();
+    const bulletsFor = (entry) => {
+      const company = String(entry.companyName || '').trim().toLowerCase();
+      const title = String(entry.jobTitle || '').trim().toLowerCase();
+      const pick = (test) => blocks.findIndex((block, index) => !used.has(index) && test(block.heading.toLowerCase()));
+      let index = company ? pick((text) => text.includes(company) && (!title || text.includes(title))) : -1;
+      if (index < 0 && company) index = pick((text) => text.includes(company));
+      if (index >= 0) { used.add(index); return bulletText(blocks[index].bullets); }
+      return String(entry.description || '').trim();
+    };
+    const experiences = data.experiences || [];
+    box.append(heading('Experience', true));
+    for (const entry of experiences) {
+      const item = element('div', 'career-item');
+      // Two rows: company, title / dates, Bullets.
+      const line = element('div', 'career-line');
+      if (entry.companyName) line.append(chip('company', entry.companyName, true));
+      if (entry.jobTitle) line.append(chip('title', entry.jobTitle));
+      const second = element('div', 'career-line');
+      if (fromTo(entry)) second.append(chip('dates', fromTo(entry)));
+      const bullets = bulletsFor(entry);
+      if (bullets) second.append(bulletsButton(bullets, `${entry.companyName || 'job'} bullets`, copyItem));
+      item.append(line);
+      if (second.childNodes.length) item.append(second);
+      box.append(item);
+    }
+    // No work history in the profile: the résumé's own jobs, as they are written there.
+    if (!experiences.length) {
+      for (const block of blocks) {
+        const item = element('div', 'career-item');
+        const line = element('div', 'career-line');
+        line.append(chip('heading', block.heading, true), bulletsButton(bulletText(block.bullets), 'bullets', copyItem));
+        item.append(line);
+        box.append(item);
+      }
+    }
+    if (!experiences.length && !blocks.length) box.append(element('div', 'reference-note', 'No work history saved.'));
+    const educations = data.educations || [];
+    if (educations.length) {
+      box.append(heading('Education'));
+      for (const entry of educations) {
+        const item = element('div', 'career-item');
+        const line = element('div', 'career-line');
+        if (entry.institution) line.append(chip('school', entry.institution, true));
+        // Degree and field of study copy separately (forms ask for them in two boxes).
+        if (entry.degree) line.append(chip('degree', entry.degree));
+        if (entry.fieldOfStudy) line.append(chip('field of study', entry.fieldOfStudy));
+        if (fromTo(entry)) line.append(chip('dates', fromTo(entry)));
+        item.append(line);
+        box.append(item);
+      }
+    }
+    const profile = data.profile || {};
+    const links = [['LinkedIn', linkedinFull(profile.linkedinUrl)], ['GitHub', profile.githubUrl], ['Portfolio', profile.portfolioUrl]].filter(([, url]) => String(url || '').trim());
+    if (links.length) {
+      box.append(heading('Profiles'));
+      const line = element('div', 'career-line');
+      for (const [label, url] of links) {
+        const node = chip(label, url);
+        node.textContent = `${label}: ${url}`;
+        line.append(node);
+      }
+      box.append(line);
+    }
+    return box;
+  }
+
   // A required question answered on the form now (read live, so the Manager's typing counts).
   function answeredLive(row) {
     try {
@@ -248,18 +569,19 @@
     }
   }
 
-  /** The page's required questions, each with the candidate's answer: Copy, or Fill it into its box. */
+  /** The page's required questions still empty (read live: a filled one leaves the list), each with
+   * the candidate's answer: Copy, or Fill it into its box. Nothing shows when all are filled. */
   function requiredBox() {
-    const rows = state.requiredRows;
+    const rows = (state.requiredRows || []).filter((row) => !answeredLive(row));
+    if (!rows.length) return null;
     const box = element('div', 'required');
-    box.append(element('strong', '', `Required on this page (${rows.length})`));
+    box.append(element('strong', '', `Still empty on this page (${rows.length})`));
     for (const row of rows) {
       const line = element('div', 'required-row');
       const text = element('div', 'required-text');
       text.title = 'Show this question on the form';
-      const answered = answeredLive(row);
       text.append(
-        element('span', `required-label${answered ? ' done' : ''}`, `${answered ? '✓ ' : ''}${row.label}`),
+        element('span', 'required-label', row.label),
         element('span', `required-value${row.value ? '' : ' none'}`, row.value || 'Not in the profile'),
       );
       text.addEventListener('click', () => global.__qtsApplyForm?.focusField?.(row.fieldId));
@@ -305,7 +627,7 @@
     document.removeEventListener('click', onDocumentClick, true);
     document.removeEventListener('auxclick', onAuxClick, true);
     document.removeEventListener('submit', onDocumentSubmit, true);
-    document.removeEventListener('keydown', onShortcut, true);
+    window.removeEventListener('keydown', onShortcut, true);
     document.removeEventListener('toggle', onPageToggle, true);
     topLayerWatch.disconnect();
     documentWatch.disconnect();
@@ -426,49 +748,22 @@
     }
   }
 
-  function referencePanel(data) {
-    const container = element('details', 'references');
-    container.open = referenceOpen.has('all');
-    container.append(element('summary', '', 'Profile, documents & reusable answers'));
-    container.addEventListener('toggle', () => { if (container.open) referenceOpen.add('all'); else referenceOpen.delete('all'); saveUi(); });
-    container.append(element('div', 'reference-note', 'Click an item to copy, then paste into the form. Approved reusable answers are shared across all candidates.'));
-    const status = element('div', 'copy-status');
-    status.setAttribute('role', 'status');
-    function card(key, title, entries) {
-      const section = element('details', 'reference-card');
-      section.dataset.reference = key;
-      section.open = referenceOpen.has(key);
-      section.append(element('summary', '', `${title} (${entries.length})`));
-      section.addEventListener('toggle', () => { if (section.open) referenceOpen.add(key); else referenceOpen.delete(key); saveUi(); });
-      for (const [label, value, note] of entries) {
-        const item = element('button', 'reference-item');
-        item.type = 'button'; item.title = 'Click to copy';
-        item.append(element('span', 'reference-label', label), element('span', 'reference-value', value));
-        item.addEventListener('click', async () => { status.textContent = await copyReference(value) ? `Copied: ${label}` : 'Could not copy. Try again.'; });
-        section.append(item);
-        if (note) section.append(element('div', 'reference-note', note));
-      }
-      if (!entries.length) section.append(element('div', 'reference-note', 'No saved information.'));
-      container.append(section);
-    }
-    const p = data.profile || {};
-    const fields = [['First name', 'firstName'], ['Last name', 'lastName'], ['Email', 'email'], ['Phone', 'phone'], ['Headline', 'headline'], ['Street', 'addressLine1'], ['Postal code', 'postalCode'], ['City', 'city'], ['State / province', 'province'], ['Country', 'country'], ['Birthday', 'birthday'], ['Nationality', 'nationality'], ['Languages', 'languages'], ['Years of experience', 'yearsOfExperience'], ['LinkedIn', 'linkedinUrl'], ['GitHub', 'githubUrl'], ['Portfolio', 'portfolioUrl']];
-    card('profile', 'Profile', fields.filter(([, key]) => String(p[key] ?? '').trim()).map(([label, key]) => [label, String(p[key])]));
-    const dates = (entry) => [entry.startDate, entry.isCurrent ? 'Present' : entry.endDate].filter(Boolean).join(' – ');
-    card('experience', 'Experience', (data.experiences || []).map((entry) => [
-      [entry.jobTitle, entry.companyName].filter(Boolean).join(' — '),
-      [[entry.jobTitle, entry.companyName].filter(Boolean).join(' — '), [entry.location, entry.workMode, dates(entry)].filter(Boolean).join(' · '), entry.description].filter(Boolean).join('\n'),
-    ]));
-    card('education', 'Education', (data.educations || []).map((entry) => [entry.institution || 'Education',
-      [entry.institution, [entry.degree, entry.fieldOfStudy].filter(Boolean).join(', '), dates(entry), entry.description].filter(Boolean).join('\n'),
-    ]));
-    card('reusable', 'Reusable answers', (data.reusable || []).map((entry) => [entry.question, entry.answer, entry.note]));
-    card('documents', 'Documents & job description', [['Résumé', data.resumeText], ['Cover letter', data.coverLetterText], ['Job description', data.jobDescription]].filter(([, value]) => String(value || '').trim()));
-    container.append(status);
-    return container;
-  }
+  // (The "Profile, documents & reusable answers" section is gone, the Manager's choice of 2026-11-17:
+  // Answer, Profile and Path hold what is copied now.)
+
 
   function render() {
+    const active = root.activeElement;
+    const keep = active?.dataset?.keep ? { key: active.dataset.keep, start: active.selectionStart, end: active.selectionEnd, scroll: active.scrollTop } : null;
+    try { renderPanel(); } finally {
+      const again = keep && root.querySelector(`[data-keep="${keep.key}"]`);
+      if (again) {
+        again.focus({ preventScroll: true });
+        try { again.setSelectionRange(keep.start, keep.end); again.scrollTop = keep.scroll; } catch { /* not a text box */ }
+      }
+    }
+  }
+  function renderPanel() {
     reattach();
     const scrollTop = panel.querySelector('.body')?.scrollTop || 0;
     panel.replaceChildren();
@@ -477,7 +772,7 @@
     panel.classList.toggle('auto', auto);
     panel.classList.toggle('collapsed', collapsed && !auto);
     if (auto) {
-      // The view the panel had in the application's previous tab (once), and Alt+A's "show it".
+      // The view the panel had in the application's previous tab (once), and "bring to front" (its shortcut, when the Manager sets one).
       if (state.ui && !uiApplied) applyUi(state.ui);
       uiApplied = true;
       if (state.revealAt && state.revealAt !== lastReveal) {
@@ -537,7 +832,8 @@
       if (facts) job.append(element('div', 'row muted', facts));
       job.append(element('div', 'row muted', state.job.url));
     }
-    if (state.resumeFolder) {
+    // (Auto Apply: the folder is the small "Copy Path" button between the two copy buttons below.)
+    if (state.resumeFolder && !auto) {
       const shortPath = `Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
       const folder = element('button', 'folder', `📁 ${auto && state.resumeFolderPath ? state.resumeFolderPath : shortPath}`);
       folder.type = 'button';
@@ -548,18 +844,52 @@
     if (!auto && (state.promptName || state.templateName)) {
       job.append(element('div', 'row muted', [state.promptName && `Prompt: ${state.promptName}`, state.templateName && `Template: ${state.templateName}`].filter(Boolean).join(' · ')));
     }
-    // Auto Apply: the résumé and the cover letter as text, one click each.
-    if (auto && state.references) {
+    // Auto Apply: one line — Copy Resume, the folder's full path, Copy Cover Letter (one click each).
+    if (auto && (state.references || state.resumeFolder)) {
       const copies = element('div', 'copy-row');
-      for (const [label, text] of [['Resume', state.references.resumeText], ['Cover Letter', state.references.coverLetterText]]) {
-        const copy = element('button', 'copy-button', `Copy ${label}`);
+      const textButton = (label, text) => {
+        const copy = element('button', 'copy-button', `✉ ${label}`);
         copy.type = 'button';
         copy.disabled = !String(text || '').trim();
         copy.title = copy.disabled ? `This job has no ${label.toLowerCase()} text.` : `Copy the ${label.toLowerCase()} text`;
         copy.addEventListener('click', async () => say(await copyReference(text) ? `Copied: ${label}` : 'Could not copy. Try again.'));
-        copies.append(copy);
+        return copy;
+      };
+      // Answer: copies the résumé, this page's empty questions and the Manager's text in one, and
+      // opens the box to edit them (a toggle, as Profile and Path; one box open at a time).
+      if (state.references) {
+        const answer = element('button', `copy-button answer-open${openBox === 'answer' ? ' on' : ''}`, '💬 Answer');
+        answer.type = 'button';
+        answer.title = 'Copy the résumé, the empty questions and your text';
+        answer.setAttribute('aria-pressed', String(openBox === 'answer'));
+        answer.addEventListener('click', () => { answerQuestions.edited && answerQuestions.key === jobKey() || (answerQuestions = { key: '', text: '', edited: false }); copyAnswer(); toggleBox('answer'); });
+        copies.append(answer);
       }
+      // Profile: a toggle that opens the profile box (name, email, phone, links, address…), each one copy.
+      if (state.references) {
+        const profileButton = element('button', `copy-button profile-copy${openBox === 'profile' ? ' on' : ''}`, '👤 Profile');
+        profileButton.type = 'button';
+        profileButton.title = 'Show the profile: each item copies with one click';
+        profileButton.setAttribute('aria-pressed', String(openBox === 'profile'));
+        profileButton.addEventListener('click', () => toggleBox('profile'));
+        copies.append(profileButton);
+      }
+      if (state.resumeFolder) {
+        const folder = element('button', 'copy-button folder-copy', '📁 Path');
+        folder.type = 'button';
+        folder.title = `Copy the folder's full path: ${state.resumeFolderPath || `Downloads\\${state.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`}`;
+        // The click also opens the career box: work history, education and links, each item one copy.
+        // A toggle: each click copies the path and opens or closes the box (lit while open).
+        folder.setAttribute('aria-pressed', String(Boolean(openBox === 'career' && state.references)));
+        if (openBox === 'career' && state.references) folder.classList.add('on');
+        folder.addEventListener('click', () => { copyFolderPath(); if (state.references) toggleBox('career'); });
+        copies.append(folder);
+      }
+      if (state.references) copies.append(textButton('Letter', state.references.coverLetterText));
       job.append(copies);
+      if (openBox === 'answer' && state.references) job.append(answerBox());
+      if (openBox === 'profile' && state.references) job.append(profileBox(state.references.profile || {}));
+      if (openBox === 'career' && state.references) job.append(careerBox(state.references));
     }
     if (auto) job.append(jobStatus);
     // Auto Apply: the application and its tabs (waiting for a new one, moved, a tab that did not open).
@@ -582,7 +912,8 @@
       body.append(ask);
     }
     body.append(job);
-    if (auto && state.requiredRows?.length) body.append(requiredBox());
+    const stillEmpty = auto && state.requiredRows?.length ? requiredBox() : null;
+    if (stillEmpty) body.append(stillEmpty);
 
     // Auto Apply: one checklist of every question met on every step, checked on the page itself; it
     // takes the place of the separate lists below.
@@ -664,7 +995,6 @@
       body.append(element('div', 'section', steps.length > 1 ? `Step ${step} · ${answers.length} answers` : `Filled answers (${answers.length})`));
       for (const answer of answers) body.append(answerRow(answer));
     }
-    if (state.auto && state.references) body.append(referencePanel(state.references));
     panel.append(body);
 
     const foot = element('div', 'foot');
@@ -677,9 +1007,8 @@
       // Manager saves the bid, or gives the job back unchanged (the tab closes).
       // The whole panel stays: Fill again, Ask AI and Check take the job up again in this tab; Skip,
       // Later and Give back return it unchanged.
-      foot.append(element('div', 'note', 'Auto Apply stopped on this page. Fill again (or Ask AI, Check) takes it up again here; Submitted saves the bid; Skip, Later or Give back returns the job unchanged.'));
+      // (No description above the buttons: the Manager's choice, 2026-11-17.)
       buttons.append(submittedNow());
-      if (state.aiOn) buttons.append(button(`Ask ${state.aiName || 'AI'}`, 'primary', 'ask_ai'));
       buttons.append(button('Check', '', 'recheck'), button('Skip', '', 'skip'), button('Later', '', 'later'), button('Fill again', '', 'fill_again'), button('Give back', 'no', 'give_back'));
       foot.append(buttons);
     } else if (state.mode === 'working') {
@@ -701,13 +1030,16 @@
       foot.append(buttons);
     } else {
       const blocking = blockingNow();
-      foot.append(element('div', 'note', state.blocked
+      // Auto Apply: no description above the buttons (the Manager's choice, 2026-11-17), only the
+      // blocked-candidate warning.
+      if (!auto || state.blocked) foot.append(element('div', 'note', state.blocked
         ? 'This candidate is blocked: skip this job.'
         : auto
           ? [
             state.final ? 'Check the answers, click the site\'s Submit, then Submitted here.' : 'Check this step, then click the site\'s own Next (or Continue). QTS fills the next step when it shows.',
             blocking ? `${blocking} thing${blocking === 1 ? '' : 's'} on the checklist still need${blocking === 1 ? 's' : ''} you.` : '',
-            state.aiOn ? `Ask ${state.aiName || 'AI'} answers the boxes still empty.` : '',
+            // (Ask AI is the Manager's Alt+A, and in the Alt+S menu: no button.)
+            state.aiOn ? 'Alt+A asks the AI for the boxes still empty.' : '',
             'Submitted saves the bid at any time.',
           ].filter(Boolean).join(' ')
         : listed && state.final
@@ -724,7 +1056,6 @@
               : 'Check this step, fix what is marked, then Continue.'));
       if (!state.blocked && !state.final && !listed) buttons.append(button('Continue →', 'primary', 'continue'));
       if (auto) buttons.append(submittedNow());
-      if (auto && !state.blocked && state.aiOn) buttons.append(button(`Ask ${state.aiName || 'AI'}`, 'primary', 'ask_ai'));
       if (!auto && !state.blocked && state.final) {
         const submittedButton = button('I submitted it', '', 'submitted', () => ({ answers: currentAnswers() }));
         if (blocking) {
@@ -746,6 +1077,15 @@
     }
     panel.append(foot);
     if (auto && menuOpen) panel.append(actionsMenu());
+    // The signals: each 'busy', 'done', 'failed' or idle.
+    signals.hidden = !auto;
+    if (auto) {
+      const look = (value) => `sig${['busy', 'done', 'failed'].includes(value) ? ` ${value}` : ''}`;
+      signalA.className = look(state.signals?.ai);
+      signalF.className = look(state.signals?.fill);
+      signalA.title = 'Ask AI';
+      signalF.title = 'Filling';
+    }
     if (auto) {
       body.scrollTop = uiScroll ?? scrollTop;
       uiScroll = null;
@@ -802,7 +1142,7 @@
     const reviewing = state.mode === 'review';
     const stopped = state.mode === 'stopped';
     const items = [
-      reviewing && state.aiOn && !state.blocked ? [`Ask ${state.aiName || 'AI'}`, 'ask_ai'] : null,
+      reviewing && state.aiOn && !state.blocked ? [`Ask ${state.aiName || 'AI'} · Alt+A`, 'ask_ai'] : null,
       reviewing && !state.blocked ? ['Fill again', 'fill_again'] : null,
       ['Submitted', 'submitted'],
       stopped ? ['Give back', 'give_back'] : ['Cancel', 'cancel'],
@@ -827,18 +1167,24 @@
   const onShortcut = (event) => {
     if (!contextAvailable()) { dispose(); return; }
     if (!state?.auto || !event.altKey || event.ctrlKey || event.metaKey) return;
+    // Alt+S: QTS stops filling this step at once (and an AI request under way); what is filled stays.
     if (event.code === 'KeyS') {
       event.preventDefault();
       event.stopPropagation();
-      menuOpen = !menuOpen;
-      if (menuOpen) { collapsed = false; small = false; }
-      render();
+      send('stop_filling');
+    } else if (event.code === 'KeyF') {
+      // Alt+F: QTS fills this step now (also takes a stopped job up again), as Fill again. Caught before
+      // the page and before Chrome's own Alt+F menu.
+      event.preventDefault();
+      event.stopPropagation();
+      send('fill_again');
     } else if (event.key === 'Escape' && menuOpen) {
       menuOpen = false;
       render();
     }
   };
-  document.addEventListener('keydown', onShortcut, true);
+  // (On the window, before the page's own key handlers, so a site cannot swallow Alt+S.)
+  window.addEventListener('keydown', onShortcut, true);
   document.addEventListener('toggle', onPageToggle, true);
   topLayerWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['open', 'popover'] });
   // A page that replaces its whole <html> (the watcher above was on the old one): the panel goes into the new one.
@@ -1013,9 +1359,10 @@
   document.addEventListener('auxclick', onAuxClick, true);
   document.addEventListener('submit', onDocumentSubmit, true);
   // An edit on the form may settle a provisional answer: the panel shows it shortly after.
-  const onEdit = () => {
+  const onEdit = (event) => {
     if (!contextAvailable()) { dispose(); return; }
-    if (!state?.provisional?.length && !state?.checklist) return;
+    if (event?.target === host) return;
+    if (!state?.provisional?.length && !state?.checklist && !state?.requiredRows?.length) return;
     clearTimeout(editRender);
     editRender = setTimeout(render, 300);
   };

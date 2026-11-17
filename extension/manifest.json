@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QTS_Startup",
-  "version": "1.60.0",
+  "version": "1.60.1",
   "description": "Capture job postings with QTS_Startup.",
   "permissions": ["activeTab", "storage", "tabs", "scripting", "webNavigation", "alarms", "downloads", "notifications", "debugger", "browsingData"],
   "host_permissions": [
@@ -70,11 +70,14 @@
       },
       "description": "Show or hide the Highlight panel"
     },
-    "focus-auto-apply": {
+    "auto-apply-ask-ai": {
       "suggested_key": {
         "default": "Alt+A"
       },
-      "description": "Auto Apply: bring the application’s tab to the front with its panel"
+      "description": "Auto Apply: Ask AI on this job page (the empty boxes of the step)"
+    },
+    "focus-auto-apply": {
+      "description": "Auto Apply: bring the application’s tab to the front with its panel (no key unless you set one)"
     }
   },
   "icons": {
