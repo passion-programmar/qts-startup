@@ -8255,6 +8255,61 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
+// Get JD: the page each tab last loaded (its document and when), for a page that changes its own
+// address just after loading.
+const getJdReadyByTab = new Map();
+const getJdUrlRestarts = new Map();
+const GET_JD_SETTLE_MS = 15000;
+
+/**
+ * A job page that changes its own address just after loading (tracking parameters, a router
+ * settling), while Get JD is still reading it: that read stops ("the page changed") and nothing
+ * else would start one, so the tab never shows its Get JD panel. Then it is read again, once or
+ * twice, on the new address. Only the same document, within 15 s of loading, and only while no
+ * result is shown yet; clicking from job to job in a list later still starts nothing.
+ */
+async function restartGetJdAfterUrlChange(details) {
+  const ready = getJdReadyByTab.get(details.tabId);
+  if (!ready || !details.documentId || ready.documentId !== details.documentId) return;
+  // The same job at a new address (only tracking parameters or the #part changed): the result
+  // already read goes with it, so the page keeps its panel. Another job (a list's next one) never.
+  const sameJob = (a, b) => self.__qtsJobPageDetection.normalizeIdentityUrl(a) === self.__qtsJobPageDetection.normalizeIdentityUrl(b);
+  const carryOver = async () => {
+    const shown = (await chrome.storage.session.get([GET_JD_RESULTS_KEY]))[GET_JD_RESULTS_KEY]?.[String(details.tabId)];
+    if (!shown?.pageUrl || shown.pageUrl === details.url || ['processing', 'cancelled'].includes(shown.status) || !sameJob(shown.pageUrl, details.url)) return false;
+    if ((await getTab(details.tabId))?.url !== details.url) return false;
+    const moved = { ...shown, pageUrl: details.url, updatedAt: Date.now() };
+    // (Saved without a second entry in the Get JD history; the page gets it as its result.)
+    await saveGetJdResult(details.tabId, moved, false);
+    chrome.tabs.sendMessage(details.tabId, { type: 'QTS_GET_JD_RESULT_UPDATED', result: moved }, { frameId: 0 }).catch(() => {});
+    return true;
+  };
+  if (await carryOver()) return;
+  if (Date.now() - ready.at > GET_JD_SETTLE_MS) return;
+  if ((getJdUrlRestarts.get(details.documentId) || 0) >= 2 || !(await isGetJdActive())) return;
+  getJdUrlRestarts.set(details.documentId, (getJdUrlRestarts.get(details.documentId) || 0) + 1);
+  const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const storedResult = async () => (await chrome.storage.session.get([GET_JD_RESULTS_KEY]))[GET_JD_RESULTS_KEY]?.[String(details.tabId)];
+  const pageKey = `${details.documentId}:${details.url}`;
+  // The read for the old address may still be starting (or under way): it stops first (its own
+  // checks), then this one starts. A read that lost the race for the tab is tried again.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await sleepMs(1000);
+    for (let waited = 0; getJdInFlightTabs.has(details.tabId) && waited < 20000; waited += 250) await sleepMs(250);
+    const tab = await getTab(details.tabId);
+    if (!tab || tab.url !== details.url || getJdInFlightTabs.has(details.tabId) || !(await isGetJdActive())) return;
+    // The read for the old address finished after all (the same job): its result moves here.
+    if (await carryOver()) return;
+    const stored = await storedResult();
+    // A result already shown (for this address, or the old one finished before it changed): left as it is.
+    if (stored && stored.status !== 'cancelled' && (stored.status !== 'processing' || stored.pageUrl === details.url)) return;
+    if (getJdLastPageByTab.get(details.tabId) === pageKey) getJdLastPageByTab.delete(details.tabId);
+    await processGetJdPage(details.tabId, details.url, details.documentId);
+    const after = await storedResult();
+    if (after?.pageUrl === details.url && after.status !== 'cancelled') return;
+  }
+}
+
 // Get JD starts once the page HTML is ready instead of waiting for every image and ad;
 // detection then waits for the content to settle.
 // Chrome wakes the worker for every navigation event of every frame. These listeners use only
@@ -8266,6 +8321,7 @@ chrome.webNavigation.onDOMContentLoaded.addListener((details) => {
   if (details.frameId !== 0) return;
   if (details.documentLifecycle && details.documentLifecycle !== 'active') return;
   if (!isExtractablePageUrl(details.url)) return;
+  if (details.documentId) getJdReadyByTab.set(details.tabId, { documentId: details.documentId, at: Date.now() });
   getJdNavigation.handle('ready', details).catch((error) => {
     console.error('[QTS Get JD] Could not process the loaded page:', error);
   });
@@ -8302,7 +8358,8 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
     console.warn('[QTS extension] Could not apply URL exclusions after navigation:', error);
   });
   if (!isExtractablePageUrl(details.url)) return;
-  // Standalone SPA navigation is not a Get JD trigger.
+  restartGetJdAfterUrlChange(details).catch((error) => console.warn('[QTS Get JD] Could not read the page again after its address changed:', error));
+  // Standalone SPA navigation is not a Get JD trigger (only the page settling its own address, above).
   (async () => {
     if (await isAutoApplyArmed()) maybeDetectApplyMethodOnOpen(details.tabId, details.url);
     maybeTrackAutoOpen(details.tabId, details.url);
@@ -8320,6 +8377,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   getJdNavigation.remove(tabId).catch(() => {});
   cancelGetJdClose(tabId).catch(() => {});
   getJdLastPageByTab.delete(tabId);
+  getJdReadyByTab.delete(tabId);
   launcherFocus.removeTab(tabId).catch(() => {});
 });
 // On worker restart only restore UI ownership. No Get JD scan is scheduled.
