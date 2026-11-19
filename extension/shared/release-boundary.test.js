@@ -413,7 +413,9 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(manifest.permissions.includes('notifications'));
   assert.ok(releaseRoute.includes('.set({ generationLeaseExpiresAt: null })'));
   assert.equal(releaseRoute.includes('generationStatus: "queued"'), false);
-  assert.ok(claimRoute.includes('.orderBy(asc(jobs.createdAt), asc(jobs.id))'));
+  assert.ok(claimRoute.includes('asc(jobs.createdAt), asc(jobs.id))'));
+  // This Chrome's own custom jobs come first.
+  assert.ok(claimRoute.includes('(${jobs.pinnedBrowserId} = ${browser.id}) desc nulls last'));
   assert.equal(claimRoute.includes('jobs.status'), false);
   // No JD matching note: an active candidate (not blocked) with enough experience can be generated.
   assert.equal(claimRoute.includes('MatchingNote'), false);

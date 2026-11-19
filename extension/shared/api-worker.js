@@ -34,6 +34,10 @@ function workerSupportedApiPath(path) {
     || /^\/api\/extension\/job-detection-url-rules\/[0-9a-f-]+$/i.test(path)
     || path.startsWith('/api/extension/generation/')
     || path.startsWith('/api/extension/apply/')
+    || path === '/api/extension/custom'
+    || path === '/api/extension/get-jd/applied-cleanup'
+    || path === '/api/extension/auto-apply-custom-urls'
+    || /^\/api\/extension\/auto-apply-custom-urls\/[0-9a-f-]+$/i.test(path)
     || path === '/api/extension/browsers/heartbeat'
     || path === '/api/extension/stats'
     || path.startsWith('/api/extension/auth/');

@@ -295,3 +295,21 @@ test('missing account/job listing and other endpoints do not report a Get JD err
   assert.match(generation.message, /generation\/claim/);
   assert.doesNotMatch(generation.message, /Get JD/);
 });
+
+test('worker permits Custom, Custom URLs and applied clean-up endpoints', async () => {
+  const urls = [];
+  const worker = loadApiWorker(async (url) => {
+    urls.push(url);
+    return { ok: true, status: 200, json: async () => ({ success: true }) };
+  });
+  for (const path of [
+    '/api/extension/custom',
+    '/api/extension/get-jd/applied-cleanup',
+    '/api/extension/auto-apply-custom-urls',
+    '/api/extension/auto-apply-custom-urls/0b6f1c2e-1d2a-4c8e-9f00-123456789abc',
+  ]) {
+    const result = await worker.workerApiRequest('POST', path, {});
+    assert.equal(result.disabled, undefined, path);
+  }
+  assert.equal(urls.length, 4);
+});
