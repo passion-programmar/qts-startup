@@ -63,6 +63,12 @@
 
   /** Whether this page waits for an emailed code (a code box) or link (no form to speak of). */
   function waitsForMail() {
+    // Asked every 4 seconds on every application tab. While the Manager types or clicks (apply-form.js
+    // notes when) nothing is read: the next ask comes soon enough.
+    const interaction = globalThis.__qtsApplyInteraction;
+    if (interaction && Date.now() - interaction.at < 1500) return false;
+    // The raw text first, which needs no layout; only a page that may wait for mail is read as shown.
+    if (!WAITS_FOR_MAIL.test(document.body?.textContent || '')) return false;
     const text = (document.body?.innerText || '').slice(0, 6000);
     if (!WAITS_FOR_MAIL.test(text)) return false;
     const boxes = textBoxes();

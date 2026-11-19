@@ -154,3 +154,21 @@ test('actual PostgreSQL answer CRUD enforces ownership, live attempts, atomic pr
     ]) await scenario(name, async () => { await pg.exec(mutation); assert.deepEqual(await run(editAnswerQuery(owner, ids.attempt, input({}))), []); });
   } finally { await pg.close(); }
 });
+
+test('a saved answer takes another form, and a form for one job site', () => {
+  const version = '1763500000.123';
+  const alt = parseAnswerEdit({ action: 'save', id: ids.other, version, question: 'Notice period', answer: '  30   days ', alternative: true });
+  if (typeof alt === 'string') assert.fail(alt);
+  assert.deepEqual((alt as Extract<AnswerEdit, { action: 'save' }>).variation, { kind: 'alternative', options: [], answer: '30 days' });
+  assert.equal(typeof parseAnswerEdit({ action: 'save', question: 'Notice period', answer: '30 days', alternative: true }), 'string', 'needs a saved answer');
+  assert.equal(typeof parseAnswerEdit({ action: 'save', id: ids.other, version, question: 'Notice period', answer: ' ', alternative: true }), 'string', 'needs words');
+  const site = parseAnswerEdit({ action: 'save', id: ids.other, version, question: 'Notice period', fieldQuestion: 'Notice period',
+    confirmVariation: true, answer: '4 weeks', kind: 'select', options: ['2 weeks', '4 weeks'], site: 'job-boards.greenhouse.io/akamai' });
+  if (typeof site === 'string') assert.fail(site);
+  assert.equal((site as Extract<AnswerEdit, { action: 'save' }>).variation?.site, 'job-boards.greenhouse.io/akamai');
+  // A site that is not a plain host (or host/company) is not stored.
+  const odd = parseAnswerEdit({ action: 'save', id: ids.other, version, question: 'Notice period', fieldQuestion: 'Notice period',
+    confirmVariation: true, answer: '4 weeks', kind: 'select', options: ['2 weeks', '4 weeks'], site: 'javascript:alert(1)' });
+  if (typeof odd === 'string') assert.fail(odd);
+  assert.equal((odd as Extract<AnswerEdit, { action: 'save' }>).variation?.site, undefined);
+});

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { canShareQuestion, parseCorrection, profileField, type AnswerVariant } from "./manager-answer-values";
+import { canShareQuestion, parseCorrection, parseSiteKey, profileField, type AnswerVariant } from "./manager-answer-values";
 import { variantUpdate } from "./manager-answer-sql";
 import { type Representation } from "../../../extension/shared/answer-representations.js";
 import identity from "../../../extension/shared/answer-identity.js";
@@ -29,6 +29,15 @@ export function parseAnswerEdit(input: unknown): AnswerEdit | string {
     || (id === null && version !== null)) return "Reload answers before changing this saved answer.";
   if (raw.action === "delete") return id && typeof version === "string" ? { action: "delete", id, version } : "Choose a saved answer to delete.";
   if (raw.action !== "save") return "Unknown answer action.";
+  // Another form of a saved answer ("30 days" for "1 month"), added by the Manager: kept beside it,
+  // tried when the main answer does not fit a box or list.
+  if (raw.alternative === true) {
+    if (!id) return "Choose a saved answer to add another form to.";
+    const text = typeof raw.answer === "string" ? raw.answer.replace(/\s+/g, " ").trim() : "";
+    if (!text || text.length > 500) return "Write the other form of the answer (at most 500 characters).";
+    return { action: "save", id: id as string, version: version as string, question: String(raw.question || ""), questionKey: "", answer: "", kind: "alternative",
+      options: [], scope: "candidate", profileField: null, variation: { kind: "alternative", options: [], answer: text } };
+  }
   if (raw.confirmVariation === true) {
     if (!identityEnabled()) return "Field-variation saving is disabled during rollback. Your existing answers are unchanged.";
     if (!id || typeof raw.fieldQuestion !== "string" || !identity.same(String(raw.question), raw.fieldQuestion)) return "Choose an existing answer with the same meaning and context before confirming a variation.";
@@ -36,7 +45,9 @@ export function parseAnswerEdit(input: unknown): AnswerEdit | string {
     if (typeof variant === "string") return variant;
     return { action: "save", id: id as string, version: version as string, question: String(raw.question), questionKey: "", answer: "", kind: variant.kind,
       options: variant.options, scope: variant.scope, profileField: null,
-      variation: { kind: variant.kind, options: variant.options, answer: variant.answer, ...identityMetadata(raw.fieldQuestion), ...(variant.representation ? { representation: variant.representation } : {}) } };
+      variation: { kind: variant.kind, options: variant.options, answer: variant.answer, ...identityMetadata(raw.fieldQuestion), ...(variant.representation ? { representation: variant.representation } : {}),
+        // The job site this form is for: every job on that site gets it from now on.
+        ...(parseSiteKey(raw.site) ? { site: parseSiteKey(raw.site) as string } : {}) } };
   }
   const parsed = parseCorrection(raw, { normalApply: true });
   if (typeof parsed === "string") return parsed;
@@ -109,7 +120,8 @@ export function editAnswerQuery(owner: AnswerOwner, attemptId: string, edit: Ans
   if (edit.variation) return sql`with held as materialized (${held}), changed as (
     update manager_apply_answers set variants = ${variantUpdate(edit.variation, edit.variation.answer, true, true)}, updated_at = clock_timestamp()
     where exists(select 1 from held) and ${allowed}
-      and scope in (select jsonb_array_elements_text(${JSON.stringify(semantics.recognize(edit.question)?.definition?.allowedScopes || [])}::jsonb)) and id = ${edit.id}::uuid
+      and (${edit.variation.kind === "alternative" || Boolean(edit.variation.site)}
+        or scope in (select jsonb_array_elements_text(${JSON.stringify(semantics.recognize(edit.question)?.definition?.allowedScopes || [])}::jsonb))) and id = ${edit.id}::uuid
       and question_text = ${edit.question} and extract(epoch from updated_at)::text = ${edit.version}
     returning id, scope) select id, scope from changed`;
   const nextVariant = { kind: edit.kind, options: edit.options, answer: edit.answer, ...identityMetadata(edit.question), ...(edit.policyContext ? { policyContext: edit.policyContext } : {}), ...(edit.representation ? { representation: edit.representation } : {}) };

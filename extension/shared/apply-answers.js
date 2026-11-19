@@ -1038,16 +1038,25 @@
    * name in any language or its code, a nationality as its country or its word. Only when exactly
    * one choice does ("Guinea" is never "Papua New Guinea" by chance); null otherwise.
    */
-  function sameFactOption(factName, value, options) {
+  function sameFactOption(factName, value, options, phoneCountry = '') {
     const choices = (options || []).map(String);
-    // A phone's country-code list ("+40", "Romania (+40)"): the number's own code, the longest that fits.
+    // A phone's country-code list ("+40", "Romania (+40)"): the number's own code, the longest that fits
+    // (no calling code is the start of another, so the longest fitting one is the number's).
     if (factName === 'phone') {
       const digits = value.replace(/\D/g, '');
       const codeOf = (choice) => choice.match(/\+\s?(\d{1,4})\b/)?.[1] || '';
       const fitting = /^\s*\+/.test(value) ? choices.filter((choice) => codeOf(choice) && digits.startsWith(codeOf(choice))) : [];
       const longest = Math.max(0, ...fitting.map((choice) => codeOf(choice).length));
       const best = fitting.filter((choice) => codeOf(choice).length === longest);
-      return best.length === 1 ? best[0] : null;
+      if (best.length === 1) return best[0];
+      // A code several countries share (+1: USA, Canada, the Caribbean; +7: Russia, Kazakhstan): the
+      // candidate's own country among them, when exactly one choice names it.
+      const own = countryCode(String(phoneCountry || ''));
+      if (best.length > 1 && own) {
+        const named = best.filter((choice) => countryCode(choice.replace(/\+\s?\d{1,4}/, ' ').replace(/[()[\]]/g, ' ').trim()) === own);
+        if (named.length === 1) return named[0];
+      }
+      return null;
     }
     let code = null;
     if (factName === 'country') code = countryCode(value);
@@ -1376,7 +1385,7 @@
     const definition = found.definition;
     if (!definition.representations.includes(field.kind)) return manual('This meaning has no supported representation for this control.');
     if (definition.id === 'candidate.phoneCallingCode' && candidate.phone && field.options?.length) {
-      const code = sameFactOption('phone', candidate.phone, field.options);
+      const code = sameFactOption('phone', candidate.phone, field.options, candidate.country);
       if (code) return { value: code, source: 'profile', provenance: { authority: 'candidate-profile', meaning: definition.id, operation: 'existing-phone-option-mapping' } };
     }
     const profile = profileRepresentation(field, candidate, definition, context);
@@ -2113,6 +2122,206 @@
    *            lacking names a fact the profile does not have
    *   manager  declarations QTS and the AI never answer, and required boxes nothing can answer
    */
+  // ---- Yes/No questions by meaning and direction (Auto Apply, no AI) ----
+  // A saved answer is read as a FACT ("needs sponsorship = no"), not as a sentence. A question is read
+  // for what it is about (its meaning, in many wordings and languages) and which way it points (a
+  // "not / without" flips it), so "Can you work WITHOUT sponsorship?" gets Yes from "Do you need
+  // sponsorship? No". Anything unclear (two meanings, another country, another time) is left alone.
+  const POLAR_MEANINGS = [
+    ['sponsorship', /\bsponsor(ship|ed|ing)?\b|\bvisa (support|sponsorship|assistance)\b|\bwork visa\b|\bh-?1b\b|\bwiz[ayę]\b|\bvisum\b|\bparrainage\b|\bpatrocinio\b/],
+    ['workPermit', /\b(legally )?(authori[sz]ed|eligible|entitled|permitted|allowed|able) to (work|be employed)\b|\bright to work\b|\bwork (permit|authori[sz]ation)\b|\bpozwoleni\w* na prac|\barbeitserlaubnis\b|\bautorisation de travail\b|\bpermiso de trabajo\b/],
+    ['relocate', /\brelocat\w*|\bwilling to move\b|\bmove to\b|\bprzeprowadz\w*|\bumz(ug|iehen)\b|\bdéménag\w*|\breubic\w*/],
+    ['travel', /\btravel(l?ing)?\b|\bbusiness trips?\b|\bdelegacj\w*|\bdienstreise\w*|\bdéplacements?\b|\bviajar\b/],
+    ['remote', /\bremote(ly)?\b|\bwork(ing)? from home\b|\bzdaln\w*|\bhome ?office\b|\btélétravail\b|\bteletrabajo\b/],
+    ['onsite', /\bon-?site\b|\bin (the )?office\b|\bhybrid\b|\bstacjonarn\w*|\bvor ort\b|\bprésentiel\b|\bpresencial\b/],
+    ['adult', /\b18 years\b|\b(over|at least|older than) (the age of )?18\b|\b18 or (older|over)\b|\blegal (working )?age\b|\bpełnolet\w*|\bvolljährig\b|\bmajeur\b|\bmayor de edad\b/],
+    ['formerEmployee', /\b(ever|previously|formerly|currently or (have you )?ever) (been )?(employed|worked)\b|\bformer employee\b|\bhave you (ever )?worked (for|at)\b|\bemployee, temporary worker, or contingent worker\b/],
+    ['drivingLicence', /\bdriv(er'?s|ing) licen[cs]e\b|\bprawo jazdy\b|\bführerschein\b|\bpermis de conduire\b/],
+    ['sanctioned', /\b(citizen|national|resident)s?\b[^?]*\b(cuba|iran|north korea|syria|sudan|crimea|embargo\w*|sanction\w*)\b/],
+  ];
+  // Words that turn a question around; "or not" ("whether or not") and "(yes/no)" do not.
+  const POLAR_FLIP = /\b(not|never|without|unable|cannot|can't|cant|don't|dont|doesn't|doesnt|won't|wont|isn't|aren't|no longer|nie|bez|ohne|nicht|kein\w*|sans|nunca)\b/g;
+  const SANCTIONED_CODES = new Set(['CU', 'IR', 'KP', 'SY', 'SD']);
+
+  /** The question itself: up to its first "?", without "(yes/no)" or "or not". */
+  function polarClause(text) {
+    const lower = String(text || '').toLowerCase().replace(/\s+/g, ' ');
+    const asked = lower.includes('?') ? lower.slice(0, lower.indexOf('?') + 1) : lower;
+    return asked.slice(0, 400).replace(/\(?\b(yes ?\/ ?no|y ?\/ ?n|yes or no)\b\)?/g, ' ').replace(/\b(whether )?or not\b/g, ' ');
+  }
+  function polarMeanings(text) {
+    const clause = polarClause(text);
+    return POLAR_MEANINGS.filter(([, pattern]) => pattern.test(clause)).map(([id]) => id);
+  }
+  /** -1 when the question is turned around once ("without", "not"), 1 otherwise (two turns cancel). */
+  function polarDirection(text) {
+    return ((polarClause(text).match(POLAR_FLIP) || []).length % 2) ? -1 : 1;
+  }
+  const asksFuture = (text) => /\bfuture\b|\blater\b|\bat any (point|time)\b|\bnow or\b/.test(polarClause(text));
+  // The country or region a work question names ("in the EU", "in Poland"), or ''.
+  function polarPlace(text) {
+    const clause = polarClause(text);
+    if (/\b(eu|european union|eea|schengen)\b/.test(clause)) return 'EU';
+    const named = clause.match(/\b(?:in|within)\s+(?:the\s+)?([a-z][a-z .'-]{1,40}?)(?=\s*[?,.;:]|\s+(?:without|now|or|and|for|with|on|as|at|from|if|once)\b|$)/);
+    return named ? countryCode(named[1]) || '' : '';
+  }
+
+  /** The candidate's saved Yes/No facts by meaning, closest level first: { meaning: { value, row } }. */
+  function polarFacts(savedAnswers) {
+    const facts = {};
+    for (const scope of ['application', 'candidate', 'manager']) {
+      const found = {};
+      for (const row of (savedAnswers || []).filter((entry) => entry.scope === scope)) {
+        const meanings = polarMeanings(row.questionText);
+        if (meanings.length !== 1) continue;
+        const said = typeof row.answer === 'boolean' ? row.answer : checkboxAnswerValue(row.answer) ?? yesOrNo(row.answer);
+        if (said === null || said === undefined) continue;
+        const value = polarDirection(row.questionText) === -1 ? !said : said;
+        const [meaning] = meanings;
+        // Two saved answers that disagree at one level: neither is used.
+        if (found[meaning] && found[meaning].value !== value) found[meaning] = { conflict: true };
+        else if (!found[meaning]) found[meaning] = { value, row };
+      }
+      for (const [meaning, fact] of Object.entries(found)) if (!(meaning in facts)) facts[meaning] = fact;
+    }
+    return facts;
+  }
+
+  /** Facts the profile itself states (no saved answer needed): sanctions, age, a former employer. */
+  function profilePolarFact(meaning, candidate, context) {
+    if (meaning === 'sanctioned') {
+      const codes = [nationalityCode(candidate.nationality || ''), countryCode(candidate.country || '')].filter(Boolean);
+      return codes.length ? { value: codes.some((code) => SANCTIONED_CODES.has(code)) } : null;
+    }
+    if (meaning === 'adult' && /^\d{4}-\d{2}-\d{2}/.test(String(candidate.birthday || ''))) {
+      const [y, m, d] = String(candidate.birthday).slice(0, 10).split('-').map(Number);
+      const today = context.today instanceof Date ? context.today : new Date();
+      const age = today.getFullYear() - y - ((today.getMonth() + 1 < m || (today.getMonth() + 1 === m && today.getDate() < d)) ? 1 : 0);
+      return { value: age >= 18 };
+    }
+    if (meaning === 'formerEmployee' && context.jobCompany && Array.isArray(context.experiences)) {
+      const squash = (text) => String(text || '').toLowerCase().replace(/\b(inc|ltd|llc|gmbh|sp\.? z o\.?o|s\.?a|corp(oration)?|technologies|group)\b|[^\p{L}\p{N}]+/gu, '');
+      const company = squash(context.jobCompany);
+      if (company.length < 3) return null;
+      return { value: context.experiences.some((entry) => { const own = squash(entry.company); return own.length >= 3 && (own.includes(company) || company.includes(own)); }) };
+    }
+    return null;
+  }
+
+  /** The option (or tick) for a yes or a no in the field's own words, or null when it is not one clear choice. */
+  function polarOption(field, meaning, value) {
+    if (field.kind === 'checkbox' && !hasOptions(field)) return value;
+    if (!hasOptions(field)) return null;
+    const simple = yesNoAnswer(field, value);
+    if (simple !== null && simple !== undefined) return simple;
+    // Longer choices ("I have never worked for Akamai Technologies"): the one that says "never / not".
+    if (meaning === 'formerEmployee' && value === false) {
+      const never = field.options.filter((option) => /\b(never|have not|haven't|not (been )?(employed|worked))\b/i.test(String(option)));
+      return never.length === 1 ? never[0] : null;
+    }
+    return null;
+  }
+
+  /**
+   * A Yes/No question answered from a saved fact or the profile, turned the way the question points:
+   * { value, source, fact, intended, polar } or null when it is not clear.
+   */
+  function polarAnswer(field, savedAnswers, candidate = {}, context = {}) {
+    if (!['radio', 'select', 'combobox', 'menu', 'checkbox'].includes(field.kind)) return null;
+    const label = labelOf(field);
+    if (SENSITIVE_DECLARATION.test(label)) return null;
+    let meanings = polarMeanings(label);
+    // "Authorised to work … without sponsorship": one question about both.
+    const both = meanings.includes('workPermit') && meanings.includes('sponsorship');
+    if (both) meanings = ['workWithoutSponsorship'];
+    if (meanings.length !== 1) return null;
+    const [meaning] = meanings;
+    const facts = polarFacts(savedAnswers);
+    let fact;
+    let source = 'reusable';
+    if (meaning === 'workWithoutSponsorship') {
+      const [permit, sponsor] = [facts.workPermit, facts.sponsorship];
+      if (!sponsor || sponsor.conflict || permit?.conflict) return null;
+      // A named country or region needs the saved work-permit answer for that same place.
+      const place = polarPlace(label);
+      if (place && (!permit || polarPlace(permit.row.questionText) !== place)) return null;
+      // "Can you work … without sponsorship?" is yes when allowed to work and needing none (needing
+      // no sponsorship already says the candidate may work, where no place is named).
+      fact = { value: (permit ? permit.value : !sponsor.value) && !sponsor.value, row: (permit || sponsor).row };
+      // The "without sponsorship / a visa" is the question's meaning, not a turn of its direction.
+      const direction = polarClause(label).replace(/\bwithout\b[^?]*?\b(sponsor\w*|visa|h-?1b)\b/, ' ');
+      if (polarDirection(direction) === -1) fact = { ...fact, value: !fact.value };
+      const option = polarOption(field, meaning, fact.value);
+      return option === null ? null : { value: option, source, fact: 'answer', intended: fact.value ? 'Yes' : 'No', polar: meaning };
+    }
+    fact = facts[meaning];
+    if (fact?.conflict) return null;
+    if (!fact) {
+      fact = profilePolarFact(meaning, candidate, context);
+      source = 'profile';
+    }
+    if (!fact) return null;
+    if (fact.row && ['workPermit', 'sponsorship'].includes(meaning)) {
+      // Another country or region than the saved answer covers: not this fact.
+      const [asked, saved] = [polarPlace(label), polarPlace(fact.row.questionText)];
+      if (asked && asked !== saved) return null;
+      // "Now or in the future": a saved "no sponsorship now" says nothing about later.
+      if (meaning === 'sponsorship' && asksFuture(label) && !asksFuture(fact.row.questionText) && fact.value === false) return null;
+    }
+    const value = polarDirection(label) === -1 ? !fact.value : fact.value;
+    const option = polarOption(field, meaning, value);
+    if (option === null) return null;
+    return { value: option, source, fact: 'answer', intended: value ? 'Yes' : 'No', polar: meaning };
+  }
+
+  // ---- One answer, many forms: each job site's own form, and the Manager's other forms ----
+  // Job boards that hold many companies: the company's part of the address keeps them apart.
+  const SHARED_BOARDS = /^(job-boards\.greenhouse\.io|boards\.greenhouse\.io|job-boards\.eu\.greenhouse\.io|jobs\.lever\.co|jobs\.eu\.lever\.co|jobs\.ashbyhq\.com|apply\.workable\.com|jobs\.smartrecruiters\.com|jobs\.jobvite\.com|careers\.jobscore\.com|jobs\.personio\.\w+|[\w-]+\.recruitee\.com)$/;
+  /** The job site an address belongs to: "boards.greenhouse.io/akamai", "acme.wd3.myworkdayjobs.com". */
+  function siteKeyOf(url) {
+    let page;
+    try { page = new URL(String(url || '')); } catch { return ''; }
+    if (!/^https?:$/.test(page.protocol)) return '';
+    const host = page.hostname.toLowerCase().replace(/^www\./, '');
+    const first = page.pathname.split('/').filter(Boolean)[0]?.toLowerCase() || '';
+    return SHARED_BOARDS.test(host) && /^[a-z0-9._-]{1,80}$/.test(first) ? `${host}/${first}` : host;
+  }
+
+  /** A saved answer's forms: the variants as saved (a confirmed variation is wrapped). */
+  const formsOf = (row) => (Array.isArray(row.variants) ? row.variants : []).map((entry) => entry?.normalVariation || entry).filter(Boolean);
+  const plainWords = (text) => String(text ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+  const numberBox = (field) => field.kind === 'number' || /^(\[0-9\]|\\d)[+*]?$|^\[0-9\]\{|\\d\{/.test(String(field.pattern || ''));
+
+  /**
+   * A saved answer in the form THIS box wants: this job site's own form first (what the site took
+   * before), then for a list the option matching the answer or one of its other forms, for a
+   * number box the form that is a number. null when nothing fits (left as before).
+   */
+  function siteFormAnswer(field, savedAnswers, siteKey = '') {
+    const key = correctionKey(field.label);
+    const rows = (savedAnswers || []).filter((row) => correctionKey(row.questionText) === key
+      || formsOf(row).some((form) => form.questionText && correctionKey(form.questionText) === key));
+    for (const scope of ['application', 'candidate', 'manager']) {
+      for (const row of rows.filter((entry) => entry.scope === scope)) {
+        const forms = formsOf(row);
+        const inList = (value) => hasOptions(field) ? field.options.find((option) => plainWords(option) === plainWords(value)) ?? null : null;
+        const own = siteKey && forms.find((form) => form.site === siteKey && form.kind === field.kind && (!hasOptions(field) || inList(form.answer) !== null));
+        if (own) return { value: hasOptions(field) ? inList(own.answer) : own.answer, source: 'reusable', fact: 'answer', intended: row.answer, siteForm: siteKey };
+        const values = [row.answer, ...forms.filter((form) => form.kind === 'alternative').map((form) => form.answer)];
+        if (hasOptions(field)) {
+          for (const value of values) {
+            const option = inList(value);
+            if (option !== null) return { value: option, source: 'reusable', fact: 'answer', intended: row.answer };
+          }
+        } else if (numberBox(field)) {
+          const digits = values.find((value) => /^\d+(?:[.,]\d+)?$/.test(String(value).trim()));
+          if (digits !== undefined) return { value: String(digits).trim(), source: 'reusable', fact: 'answer', intended: row.answer };
+        }
+      }
+    }
+    return null;
+  }
+
   function planApiFields(fields, profile, savedAnswers, context = {}) {
     const shown = (fields || []).filter((field) => !field.hidden && !field.disabled);
     const resolved = resolveFields(shown, profile, savedAnswers, { ...context, autoApply: true, normalApply: false });
@@ -2143,6 +2352,26 @@
       if (answer?.source === 'consent' || answer?.source === 'documents') {
         plan.code.push({ field, answer });
         continue;
+      }
+      // A Yes/No question its meaning and direction answer (a saved fact, or the profile's own):
+      // filled on Alt+F like a profile fact, no AI. The AI is only asked about it on Ask AI.
+      const exactSaved = (savedAnswers || []).some((row) => row.questionKey === normalizeQuestionKey(field.label));
+      const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exactSaved && answer.fact === 'answer'));
+      // The saved answer in this box's form: this job site's own form first, else the form that fits
+      // (an option, a number). A profile fact stays the profile's.
+      if (answer?.source !== 'profile') {
+        const fitted = siteFormAnswer(field, savedAnswers, context.siteKey || '');
+        if (fitted && (fitted.siteForm || !alreadyKnown || hasOptions(field) || numberBox(field))) {
+          plan.ai.push({ field: asked || field, check: fitted });
+          continue;
+        }
+      }
+      if (!alreadyKnown) {
+        const polar = polarAnswer(field, savedAnswers, profile, context);
+        if (polar) {
+          plan.ai.push({ field: asked || field, check: polar });
+          continue;
+        }
       }
       if (!answer && !asked) {
         if (byHand.has(field.id)) askManager(field, byHand.get(field.id));
@@ -2222,7 +2451,7 @@
     return wrong;
   }
 
-  const api = { planApiFields, verifyApiAnswer, personalMismatches, changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
+  const api = { planApiFields, polarAnswer, siteFormAnswer, siteKeyOf, verifyApiAnswer, personalMismatches, changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

@@ -15,6 +15,14 @@
   // Lives with the document across reinjection and worker retries. Records belong to logical
   // upload destinations, not disposable DOM inputs, and never authorize an automatic resend.
   const uploadState = global.__qtsApplyUploadState ||= { entries: new Map(), roots: new WeakMap(), nextRoot: 0, context: '' };
+  // When the Manager last typed or clicked on this page (once per document, across reinjection):
+  // the 1.5-second step check waits while they work (stepGlance).
+  const interaction = global.__qtsApplyInteraction ||= (() => {
+    const state = { at: 0 };
+    const note = () => { state.at = Date.now(); };
+    for (const type of ['keydown', 'pointerdown', 'input']) document.addEventListener(type, note, { capture: true, passive: true });
+    return state;
+  })();
   // English first, then the words Polish, German, French, Spanish, Portuguese, and Italian sites use.
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
@@ -463,6 +471,20 @@
     return options.length >= 2 && options.filter((text) => /\+\s?\d{1,4}\b/.test(text)).length >= options.length / 2;
   }
 
+  // A box labelled only "Country code" (or "Code") is a phone's country code when a phone box sits
+  // beside it (Greenhouse's new forms: "Country code" search list next to "Phone Number"). Named so,
+  // it is answered from the candidate's number instead of being read like an unknown list.
+  const BARE_CODE_LABEL = /^\s*(country\s*)?code\s*\*?\s*$/i;
+  function besidePhone(control) {
+    const up = (node) => node.parentElement || node.parentNode?.host || null;
+    const phoneBox = (input) => input !== control && ((input.getAttribute('type') || '').toLowerCase() === 'tel'
+      || /phone|mobile|telefon|\btel\b/i.test(`${input.name || ''} ${input.id || ''} ${input.autocomplete || ''} ${input.getAttribute('aria-label') || ''}`));
+    for (let box = up(control), depth = 0; box && depth < 4; box = up(box), depth += 1) {
+      if (deepQuery(box, 'input').some(phoneBox)) return true;
+    }
+    return /phone|mobile|telefon/i.test(blockQuestion(control).text || '');
+  }
+
   /** An editable box that is a field: the outermost editable element (an editor's writing area). */
   function isEditorHost(element) {
     const editable = element.getAttribute?.('contenteditable');
@@ -679,13 +701,31 @@
   // This file is injected again for every call; the prefix keeps new ids from repeating earlier ones.
   const idPrefix = Math.random().toString(36).slice(2, 6);
   let nextFieldNumber = 1;
+  // Each field's box, remembered by its id (for this document, across the engine being sent again):
+  // finding a box no longer walks every element of the page each time (many times per question).
+  // A remembered box counts only while it is still on the page with that id; else it is searched.
+  const fieldCache = global.__qtsApplyFieldCache ||= new Map();
   function fieldId(element) {
     if (!element.getAttribute(FIELD_ATTRIBUTE)) element.setAttribute(FIELD_ATTRIBUTE, `f${idPrefix}${nextFieldNumber++}`);
-    return element.getAttribute(FIELD_ATTRIBUTE);
+    const id = element.getAttribute(FIELD_ATTRIBUTE);
+    fieldCache.set(id, element);
+    return id;
+  }
+
+  // A QTS marker tag, written only when missing or different: rewriting the same value on every
+  // scan still counts as a page change for the site's own watchers.
+  function mark(element, name, value) {
+    if (element.getAttribute(name) !== value) element.setAttribute(name, value);
   }
 
   function findField(id) {
-    return allElements().find((element) => element.getAttribute(FIELD_ATTRIBUTE) === id) || null;
+    const remembered = fieldCache.get(id);
+    if (remembered?.isConnected && remembered.getAttribute(FIELD_ATTRIBUTE) === id) return remembered;
+    // Not remembered, or the site rebuilt it: searched the long way, as before.
+    const found = allElements().find((element) => element.getAttribute(FIELD_ATTRIBUTE) === id) || null;
+    if (found) fieldCache.set(id, found);
+    else fieldCache.delete(id);
+    return found;
   }
 
   /** The form's fields, one entry per question; radios and checkbox groups are one field each. */
@@ -724,7 +764,7 @@
       // the tick box the page keeps hidden beside them is not a question of its own.
       if (isPressGroup(control)) {
         const label = blockQuestion(control).text;
-        control.setAttribute(RADIO_GROUP_ATTRIBUTE, 'press');
+        mark(control, RADIO_GROUP_ATTRIBUTE, 'press');
         fields.push({
           id: fieldId(control),
           label,
@@ -740,7 +780,7 @@
       // Menus count only inside the form (a "Share page" menu is not a question).
       if (isMenuButton(control) && control.closest('form, fieldset') && menuChoices(control)) {
         const label = labelFor(control);
-        control.setAttribute(MENU_ATTRIBUTE, '1');
+        mark(control, MENU_ATTRIBUTE, '1');
         fields.push({
           id: fieldId(control),
           label,
@@ -760,7 +800,7 @@
         // "Import resume from…" and autofill pickers are not questions.
         && !/import|autofill|upload|attach|apply with|\bresume\b|\bcv\b|svg/i.test(`${textOf(control)} ${labelFor(control)}`)) {
         const label = menuLabel(control);
-        control.setAttribute(MENU_ATTRIBUTE, 'lazy');
+        mark(control, MENU_ATTRIBUTE, 'lazy');
         fields.push({
           id: fieldId(control),
           label,
@@ -775,7 +815,7 @@
       }
       if (tag !== 'INPUT' && listboxChoices(control)) {
         const label = menuLabel(control);
-        control.setAttribute(MENU_ATTRIBUTE, 'listbox');
+        mark(control, MENU_ATTRIBUTE, 'listbox');
         fields.push({
           id: fieldId(control),
           label,
@@ -806,7 +846,7 @@
         const items = [...control.querySelectorAll('[role="radio"]')];
         if (items.length >= 2) {
           const label = cleanText(control.getAttribute('aria-label')) || labelForGroup(items[0]) || labelFor(control);
-          control.setAttribute(RADIO_GROUP_ATTRIBUTE, '1');
+          mark(control, RADIO_GROUP_ATTRIBUTE, '1');
           fields.push({
             id: fieldId(control),
             label,
@@ -830,7 +870,7 @@
         // Selectize may move the choices out of that select; then they are read by opening the list.
         // The visible input's own label; the hidden select's would be its fieldset's section heading.
         const label = labelFor(control) || blockQuestion(selectize).text;
-        control.setAttribute(MENU_ATTRIBUTE, options.length ? 'listbox' : 'lazy');
+        mark(control, MENU_ATTRIBUTE, options.length ? 'listbox' : 'lazy');
         fields.push({
           id: fieldId(control),
           label,
@@ -853,7 +893,9 @@
       // No text names this box for sure: its name attribute is only a hint ("first_name"), and the
       // question is marked unresolved, so it is never answered as if it were another question.
       // A dropdown with no label of its own whose choices are dialing codes is a phone's country code.
-      const named = labelFor(control) || (tag === 'SELECT' && dialCodeList(realOptions(control)) ? 'Phone country code' : '');
+      const ownLabelText = labelFor(control);
+      const named = (ownLabelText && BARE_CODE_LABEL.test(ownLabelText) && besidePhone(control) ? 'Phone country code' : ownLabelText)
+        || (tag === 'SELECT' && dialCodeList(realOptions(control)) ? 'Phone country code' : '');
       const labelUnresolved = !named && type !== 'radio' && type !== 'checkbox' && type !== 'file';
       const label = named || (labelUnresolved ? cleanText(String(control.name || control.id || '').replace(/[_\-[\].]+/g, ' ')) : '');
       // A styled radio or tick box hides its input and shows its label instead.
@@ -949,7 +991,7 @@
       fields.push(field);
     }
     for (const zone of dropZones()) {
-      zone.element.setAttribute(DROP_ATTRIBUTE, '1');
+      mark(zone.element, DROP_ATTRIBUTE, '1');
       fields.push({
         id: fieldId(zone.element),
         label: zone.question,
@@ -1131,7 +1173,7 @@
    * takes as a new tag); the box is emptied after and checked to be as it was.
    * { options, partial: true, changed }.
    */
-  async function searchComboboxChoices(id) {
+  async function searchComboboxChoices(id, queries = ['a', 'e', 'i', 'o', 'u', '1']) {
     const input = findField(id);
     if (!input || input.tagName !== 'INPUT') return { options: [], partial: true, changed: false };
     const state = fieldState(input);
@@ -1144,7 +1186,8 @@
     };
     markShownChoices();
     input.focus();
-    for (const query of ['a', 'e', 'i', 'o', 'u', '1']) {
+    // Sample searches by default; a list QTS knows what to look for in (a phone's country) gets that.
+    for (const query of queries) {
       typeQuietly(query);
       input.dispatchEvent(new KeyboardEvent('keyup', { key: query, bubbles: true, composed: true }));
       for (let waited = 0; waited < 1500; waited += 300) {
@@ -1981,6 +2024,22 @@
    * The site's complaint about one field right after it was filled: the field marked invalid, or an
    * error message in its question block. '' when the site accepted it.
    */
+  /**
+   * One question in ONE trip (they were three: is it a suggestion box, fill it, did the site complain):
+   * fills the box and reads the site's reaction a moment later. A suggestion box is not filled here
+   * ({ suggest: true }): it gets Chrome's real input from the service worker, as before.
+   * { suggest } | { result } | { result, issue, unanswered }.
+   */
+  async function fillAndInspect(id, value, field) {
+    if (value != null && typeof value !== 'boolean' && suggestionBox(id)) return { suggest: true };
+    const result = await fillField(id, value);
+    if (!result?.ok) return { result };
+    // About the time the next trip used to take: a site that checks on change has shown its message.
+    await sleep(60);
+    const issue = fieldIssue(id);
+    return { result, issue, unanswered: issue ? isUnanswered({ ...(field || {}), id }) : false };
+  }
+
   function fieldIssue(id) {
     const element = findField(id);
     if (!element) return '';
@@ -2246,6 +2305,29 @@
   function stepShape() {
     const labels = scanForm().filter((field) => !field.hidden && field.kind !== 'file' && field.label).map((field) => String(field.label).trim().slice(0, 80));
     return { path: `${location.pathname}${location.hash}`, labels: [...new Set(labels)].sort(), errors: fieldErrors().slice(0, 10) };
+  }
+
+  /**
+   * Auto Apply's quick look between full checks (stepShape): the address, how many boxes the page
+   * has, and its error marks, read without any layout or style lookups and without writing to the
+   * page. A different key means something changed and the full check runs. busy: the Manager typed
+   * or clicked in the last 1.5 seconds.
+   */
+  function stepGlance() {
+    let boxes = 0;
+    let invalid = 0;
+    let alerts = '';
+    for (const element of allElements()) {
+      if (element.matches(INTERACTIVE)) boxes += 1;
+      if (element.getAttribute('aria-invalid') === 'true') invalid += 1;
+      else if (element.getAttribute('role') === 'alert' || /(^|\s|-)error(-message)?($|\s|-)/i.test(typeof element.className === 'string' ? element.className : '')) {
+        alerts += `${(element.textContent || '').trim().slice(0, 120)}|`;
+      }
+    }
+    return {
+      key: `${location.pathname}${location.hash}#${boxes}#${invalid}#${alerts.slice(0, 2000)}`,
+      busy: Date.now() - interaction.at < 1500,
+    };
   }
 
   /**
@@ -2977,6 +3059,60 @@
     return { result: 'unclear', evidence: text.slice(0, 300) };
   }
 
+  // Auto Apply: the site's own "application submitted" page after the Manager's Submit, read strictly,
+  // because finding one saves the bid on its own. Greenhouse ends its address in /confirmation ("Thank
+  // you for applying. Your application has been received."), Workday says "You have submitted", others
+  // write their own message. "Thank you for your interest" alone is not enough (job pages say it before
+  // anyone applies), and "already applied/submitted" is not a new application.
+  const SUBMITTED_SIGN = /thank(s| you) for (applying|your application|submitting( your application)?)|(your )?application (has been |was )?(successfully )?(received|submitted|sent)|we['’]?ve received your application|we have received your application|successfully (applied|submitted)|you have (successfully )?(submitted|applied)|your application (is|was|has been) (complete|submitted|received)|application (submitted|complete)\b/i;
+  const ALREADY_APPLIED = /already (applied|submitted)|application has already been submitted/i;
+  const SUBMITTED_PATH = /\/(confirmation|thank-?you|thanks|application-?submitted|submitted|success)(\/|$|\?)/i;
+
+  /**
+   * Whether this page is the site's confirmation of a submitted application: its address or a strong
+   * message says so, and the form is gone (no Submit button, no unanswered required question).
+   * { confirmed, evidence } or { confirmed: false, already? }.
+   */
+  // A site that sends the candidate to their "My Applications" list instead of a thank-you page
+  // (Akamai's career site: "Platform Engineer II … Status: Under Consideration … Applied on 11/19/2026").
+  const LISTED_STATUS = /\b(applied on|date applied|submitted on|status\s*:|under consideration|in review|application received|new application)\b/i;
+  /** Whether the page lists this job (its title) with an applied status, dated today when it shows a date. */
+  function listedAsApplied(text, jobTitle) {
+    const title = cleanText(jobTitle || '').toLowerCase();
+    if (title.length < 6) return false;
+    const lower = text.toLowerCase();
+    const today = new Date();
+    const [y, m, d] = [today.getFullYear(), today.getMonth() + 1, today.getDate()];
+    for (let at = lower.indexOf(title); at >= 0; at = lower.indexOf(title, at + 1)) {
+      const near = text.slice(at, at + title.length + 300);
+      if (!LISTED_STATUS.test(near)) continue;
+      // A date beside it must be today's (month/day or day/month, or year-month-day): an old application is not this one.
+      const dates = [...near.matchAll(/\b(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})\b/g)];
+      if (!dates.length) return true;
+      if (dates.some(([, a, b, c]) => {
+        const [p, q, r] = [Number(a), Number(b), Number(c)];
+        return (p === y && q === m && r === d) || (r === y && ((p === m && q === d) || (p === d && q === m)));
+      })) return true;
+    }
+    return false;
+  }
+
+  function submittedPage(jobTitle = '') {
+    const text = cleanText(document.body?.innerText || '').slice(0, 20000);
+    if (ALREADY_APPLIED.test(text)) return { confirmed: false, already: true };
+    const byPath = SUBMITTED_PATH.test(location.pathname);
+    const byText = SUBMITTED_SIGN.test(text);
+    const byList = !byPath && !byText && listedAsApplied(text, jobTitle);
+    if (!byPath && !byText && !byList) return { confirmed: false };
+    if (byList && !emptyRequired().length && !findButton('submit')) return { confirmed: true, evidence: `listed as applied: "${cleanText(jobTitle).slice(0, 100)}"` };
+    // Any Submit still shown (one, or several findButton would refuse to choose from) means the form is still there.
+    const submitShown = Boolean(findButton('submit')) || allElements().some((element) => (
+      (element.tagName === 'BUTTON' || (element.tagName === 'INPUT' && ['submit', 'button'].includes(element.type)) || element.getAttribute('role') === 'button')
+      && !element.disabled && /\b(submit|send application|absenden|envoyer|enviar|wyślij|invia)\b/i.test(startText(element)) && isShown(element)));
+    if (submitShown || emptyRequired().length) return { confirmed: false };
+    return { confirmed: true, evidence: (text.match(SUBMITTED_SIGN)?.[0] || location.pathname).slice(0, 200) };
+  }
+
   // ---- Apply as the Manager's assistant: which boxes belong to the application ----
 
   // Forms that are not the application: a site search, a newsletter, job alerts.
@@ -3432,6 +3568,7 @@
     fillField,
     clearField,
     fieldIssue,
+    fillAndInspect,
     boxOf,
     cursorInField,
     suggestionBox,
@@ -3452,6 +3589,7 @@
     pageGate,
     auditForm,
     stepShape,
+    stepGlance,
     revealLazySections,
     uploadAccepted,
     buttons,
@@ -3472,6 +3610,7 @@
     declineCookies,
     jobClosed,
     pageOutcome,
+    submittedPage,
     pageText: () => cleanText(document.body?.innerText || '').slice(0, 20000),
     currentAnswers,
     panelQuestions,
@@ -3924,15 +4063,73 @@
     return problems;
   }
 
-  /** Scrolls a question into view and outlines it briefly, for "click an answer" in the review panel. */
+  /**
+   * The element holding a question's own words (its label), found the way labelFor reads them:
+   * aria-labelledby, <label for>, a wrapping <label>, the fieldset's <legend>, then the nearest
+   * worded heading before the box with no other field between. null when none is found.
+   */
+  function labelNodeFor(control) {
+    const root = control.getRootNode();
+    for (const id of (control.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)) {
+      const node = root.getElementById?.(id);
+      if (node && node !== control && hasWords(textOf(node))) return node;
+    }
+    if (control.id) {
+      const node = root.querySelector?.(`label[for="${CSS.escape(control.id)}"]`);
+      if (node && hasWords(textOf(node))) return node;
+    }
+    const wrapping = control.closest('label');
+    if (wrapping && hasWords(textOf(wrapping))) return wrapping;
+    const legend = control.closest('fieldset')?.querySelector('legend');
+    if (legend && hasWords(textOf(legend))) return legend;
+    const before = (element, later) => Boolean(element.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
+    for (let node = control.parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
+      const fieldsHere = [...node.querySelectorAll(FIELD_CONTROLS)].filter((other) => other !== control && other.type !== 'hidden' && isShown(other));
+      const headings = [...node.querySelectorAll('label, legend, [class*="label" i], [class*="question" i], h3, h4')]
+        .filter((element) => !element.contains(control) && before(element, control) && hasWords(textOf(element))
+          && !element.querySelector(FIELD_CONTROLS)
+          && !fieldsHere.some((other) => before(element, other) && before(other, control)));
+      if (headings.length) return headings[headings.length - 1];
+      if (fieldsHere.some((other) => before(other, control))) break;
+    }
+    return null;
+  }
+
+  // The question last pointed at from the panel, and how to put it back as it was.
+  let pointed = null;
+  function clearPointed() {
+    if (!pointed) return;
+    clearTimeout(pointed.timer);
+    pointed.restore();
+    pointed = null;
+  }
+
+  /**
+   * Scrolls a question into view and marks only its words (its label) with a red background for a
+   * few seconds, for "click a question" in the review panel. A box with no label of its own gets a
+   * thin red line around the box itself instead.
+   */
   function focusField(id) {
     const element = findField(id);
     if (!element) return false;
+    clearPointed();
     element.scrollIntoView({ block: 'center', behavior: 'instant' });
-    const box = element.closest('label, fieldset, [class*="field" i], [class*="question" i]') || element;
-    const before = box.style.outline;
-    box.style.outline = '3px solid #6366f1';
-    setTimeout(() => { box.style.outline = before; }, 2500);
+    const label = labelNodeFor(element);
+    const target = label || element;
+    const keep = ['backgroundColor', 'borderRadius', 'boxDecorationBreak', 'outline', 'outlineOffset']
+      .map((name) => [name, target.style[name]]);
+    if (label) {
+      label.style.backgroundColor = 'rgb(254 202 202)';
+      label.style.borderRadius = '4px';
+      label.style.boxDecorationBreak = 'clone';
+    } else {
+      element.style.outline = '2px solid #e11d48';
+      element.style.outlineOffset = '1px';
+    }
+    pointed = {
+      restore: () => { for (const [name, value] of keep) target.style[name] = value; },
+      timer: setTimeout(clearPointed, 4000),
+    };
     return true;
   }
 

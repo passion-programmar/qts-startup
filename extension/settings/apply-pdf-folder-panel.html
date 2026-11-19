@@ -5,59 +5,154 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Apply PDFs folder</title>
   <style>
-    :root { color-scheme: light; font: 13px/1.5 Inter, system-ui, sans-serif; color: #172033; background: transparent; }
-    body { margin: 0; padding: 4px; }
-    main { display: flex; flex-direction: column; gap: 14px; }
-    section { display: flex; flex-direction: column; gap: 8px; }
-    h2 { margin: 0; font-size: 13px; color: #172033; }
-    p { margin: 0; color: #64748b; }
-    ol { margin: 0; padding-left: 18px; color: #475569; }
-    label { font-weight: 600; color: #334155; }
-    input[type="text"] { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; }
-    .row { display: flex; flex-wrap: wrap; gap: 6px; }
-    button { min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: #4f46e5; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
-    button.secondary { border: 1px solid #cbd5e1; background: #fff; color: #334155; }
-    button:disabled { opacity: .5; cursor: default; }
-    #folder-status, #file-access-status { padding: 10px 12px; border-radius: 9px; background: #f1f5f9; overflow-wrap: anywhere; }
-    [data-state="ready"] { background: #f0fdf4 !important; color: #166534; }
-    [data-state="error"], [data-state="denied"], [data-state="revoked"] { background: #fef2f2 !important; color: #991b1b; }
-    #folder-picker-settings { border-top: 1px solid #e2e8f0; padding-top: 12px; }
+    /* The QTS launcher's dark navy look: same colours, borders and radius as its menu. */
+    :root {
+      color-scheme: dark;
+      --bg: #0a0f1c; --card: #111a2d; --card-2: #0e1627; --field: #0b1322;
+      --line: #1f2a40; --line-2: #2c3a55; --line-3: #34425a;
+      --text: #e6ebf5; --muted: #8b9ab3; --faint: #66758c;
+      --primary: #6366f1; --primary-2: #4f46e5; --focus: #a78bfa;
+      --good: #6ee7b7; --good-bg: rgb(16 185 129 / .1); --good-line: rgb(16 185 129 / .45);
+      --warn: #fdba74; --warn-bg: rgb(249 115 22 / .1); --warn-line: rgb(249 115 22 / .5);
+      --bad: #fca5a5; --bad-bg: rgb(239 68 68 / .1); --bad-line: rgb(239 68 68 / .5);
+      font: 13px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: transparent;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 4px 2px 12px; }
+    html:not(.embedded) body { min-height: 100vh; padding: 18px; background: var(--bg); }
+    main { display: flex; flex-direction: column; gap: 12px; max-width: 560px; margin: 0 auto; }
+    p { margin: 0; color: var(--muted); }
+    strong { color: var(--text); }
+
+    .intro { display: flex; align-items: flex-start; gap: 11px; padding: 2px 2px 4px; }
+    .intro-icon {
+      display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+      background: rgb(236 72 153 / .14); color: #f9a8d4;
+    }
+    .intro h1 { margin: 0 0 2px; color: #f8fafc; font-size: 14px; font-weight: 750; letter-spacing: -.01em; }
+
+    .card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+    .card-head { display: flex; align-items: center; gap: 10px; }
+    .step {
+      display: grid; flex: none; place-items: center; width: 24px; height: 24px; border-radius: 8px;
+      background: rgb(99 102 241 / .16); color: #a5b4fc; font: 800 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+    }
+    .card h2 { flex: 1; margin: 0; color: #f1f5f9; font-size: 13px; font-weight: 700; }
+    .tag {
+      flex: none; padding: 3px 8px; border: 1px solid var(--line-3); border-radius: 999px;
+      color: #94a3b8; font-size: 10.5px; font-weight: 700; white-space: nowrap;
+    }
+    .tag.optional { color: var(--faint); }
+
+    .row { display: flex; flex-wrap: wrap; gap: 8px; }
+    button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      min-height: 36px; padding: 8px 14px; border: 1px solid transparent; border-radius: 10px;
+      background: linear-gradient(180deg, var(--primary), var(--primary-2)); color: #fff;
+      font: 650 12.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer;
+      transition: filter .15s ease, background .15s ease, border-color .15s ease;
+    }
+    button:hover:not(:disabled) { filter: brightness(1.1); }
+    button.big { width: 100%; min-height: 42px; font-size: 13.5px; }
+    button.secondary { border-color: var(--line-2); background: #111a2e; color: #cbd5e1; }
+    button.secondary:hover:not(:disabled) { filter: none; border-color: #3b4b69; background: #16213a; }
+    button.link { min-height: 0; padding: 0; border: 0; background: none; color: #a5b4fc; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+    button.link:hover:not(:disabled) { filter: none; color: #c4b5fd; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    button:disabled { opacity: .45; cursor: default; }
+
+    label { color: #cbd5e1; font-size: 12px; font-weight: 650; }
+    input[type="text"] {
+      width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 10px;
+      background: var(--field); color: var(--text); font: 500 12.5px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    }
+    input[type="text"]::placeholder { color: var(--faint); }
+    input[type="text"]:disabled { opacity: .55; }
+
+    ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding-left: 18px; color: var(--muted); }
+    ol li::marker { color: var(--faint); font-weight: 700; }
+
+    /* Status lines: a coloured dot and tint per state. */
+    .status {
+      display: flex; gap: 9px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px;
+      background: var(--card-2); color: #cbd5e1; font-size: 12.5px; overflow-wrap: anywhere;
+    }
+    .status::before { content: ""; flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: #64748b; }
+    .status[data-state="ready"] { border-color: var(--good-line); background: var(--good-bg); color: var(--good); }
+    .status[data-state="ready"]::before { background: #10b981; box-shadow: 0 0 0 3px rgb(16 185 129 / .2); }
+    .status[data-state="unconfigured"], .status[data-state="revoked"] { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn); }
+    .status[data-state="unconfigured"]::before, .status[data-state="revoked"]::before { background: #f97316; }
+    .status[data-state="error"], .status[data-state="denied"] { border-color: var(--bad-line); background: var(--bad-bg); color: var(--bad); }
+    .status[data-state="error"]::before, .status[data-state="denied"]::before { background: #ef4444; }
+
+    details.more { border-top: 1px solid var(--line); padding-top: 10px; }
+    details.more > summary { color: var(--muted); font-size: 12px; font-weight: 650; cursor: pointer; list-style: none; }
+    details.more > summary::-webkit-details-marker { display: none; }
+    details.more > summary::before { content: "▸"; display: inline-block; width: 14px; color: var(--faint); transition: transform .15s ease; }
+    details.more[open] > summary::before { transform: rotate(90deg); }
+    details.more > .inner { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
     [hidden] { display: none !important; }
   </style>
 </head>
 <body>
   <main>
-    <p id="folder-help">Apply and Auto Apply upload the PDFs Generation saved in QTS_Resume; they never create replacement résumés.</p>
-    <!-- Recommended: works with every QTS window closed and after Chrome restarts. -->
-    <section aria-labelledby="file-access-title">
-      <h2 id="file-access-title">Recommended: PDFs always available</h2>
-      <ol>
-        <li><button id="open-extension-details" class="secondary" type="button">Open Chrome's QTS settings</button> and turn on <strong>Allow access to file URLs</strong>.</li>
-        <li>Fill in the full QTS_Resume path (or let QTS find it) and save.</li>
-      </ol>
-      <label for="file-folder-path">Full Windows path to QTS_Resume</label>
-      <input id="file-folder-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\Users\YourName\Downloads\QTS_Resume" disabled>
-      <div class="row">
-        <button id="detect-path" class="secondary" type="button">Find path from QTS downloads</button>
-        <button id="save-file-access" type="button" disabled>Save</button>
-        <button id="use-picker-access" class="secondary" type="button" disabled>Use folder picker instead</button>
+    <div class="intro">
+      <span class="intro-icon" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+      </span>
+      <div>
+        <h1>Résumé folder: Downloads › QTS_Resume</h1>
+        <p id="folder-help">Generation saves the résumé PDFs here, Apply uploads them from here, and removing a job deletes them here. Apply never makes replacement résumés.</p>
       </div>
-      <p id="file-access-status" role="status" aria-live="polite">Checking local PDF access…</p>
+    </div>
+
+    <!-- Step 1: one click. Chrome's own Allow appears in the same step; QTS asks nothing more. -->
+    <section id="folder-picker-settings" class="card" aria-labelledby="picker-title">
+      <div class="card-head">
+        <span class="step" aria-hidden="true">1</span>
+        <h2 id="picker-title">Choose the folder</h2>
+        <span class="tag">Required</span>
+      </div>
+      <p>Pick <strong>QTS_Resume</strong> inside Downloads, then click <strong>Allow</strong> on Chrome's question. That is all: QTS reads and deletes résumés there from now on.</p>
+      <button id="choose-folder" class="big" type="button" disabled>Choose QTS_Resume folder</button>
+      <button id="restore-access" class="secondary" type="button" hidden disabled>Allow again</button>
+      <p id="folder-status" class="status" role="status" aria-live="polite">Checking access…</p>
     </section>
-    <!-- Folder picker: Chrome keeps its permission only while a QTS page is open. -->
-    <section id="folder-picker-settings">
-      <h2>Folder picker (needs a QTS page open)</h2>
-      <p>Chrome may withdraw this folder permission when QTS windows close, and Apply then pauses uploads. Use the recommended setting above when you can.</p>
-      <button id="choose-folder" type="button" disabled>Open folder chooser</button>
-      <button id="restore-access" class="secondary" type="button" hidden disabled>Allow saved folder access</button>
-      <p id="folder-status" role="status" aria-live="polite">Checking Apply access…</p>
+
+    <!-- Step 2 (optional): file URLs keep Apply's uploads working with every QTS window closed and
+         after Chrome restarts. Only the Manager can switch it on; QTS fills in and saves the path. -->
+    <section class="card" aria-labelledby="file-access-title">
+      <div class="card-head">
+        <span class="step" aria-hidden="true">2</span>
+        <h2 id="file-access-title">Keep uploads working after restarts</h2>
+        <span class="tag optional">Optional</span>
+      </div>
+      <ol>
+        <li><button id="open-extension-details" class="link" type="button">Open Chrome's QTS settings</button> and turn on <strong>Allow access to file URLs</strong>.</li>
+        <li>Come back here: QTS finds the folder path and saves it by itself.</li>
+      </ol>
+      <p id="file-access-status" class="status" role="status" aria-live="polite">Checking…</p>
+      <details class="more">
+        <summary>Folder path</summary>
+        <div class="inner">
+          <label for="file-folder-path">Full Windows path to QTS_Resume</label>
+          <input id="file-folder-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\Users\YourName\Downloads\QTS_Resume" disabled>
+          <div class="row">
+            <button id="detect-path" class="secondary" type="button">Find path</button>
+            <button id="save-file-access" type="button" disabled>Save path</button>
+            <button id="use-picker-access" class="secondary" type="button" disabled>Stop using file URLs</button>
+          </div>
+        </div>
+      </details>
     </section>
   </main>
   <script src="../shared/scanner-document-store.js"></script>
   <script src="../shared/apply-file-access.js"></script>
   <script src="../shared/apply-local-pdfs.js"></script>
   <script src="apply-pdf-folder-panel.js"></script>
-  <script src="apply-pdf-file-access.js"></script>
   <script src="apply-pdf-path-detect.js"></script>
+  <script src="apply-pdf-file-access.js"></script>
 </body>
 </html>

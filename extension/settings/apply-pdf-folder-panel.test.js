@@ -88,7 +88,7 @@ test('embedded panel opens the top-level chooser instead of requesting browser p
   const f = fixture({ embedded: true, saved: directory('prompt') });
   await settle();
   assert.equal(f.status.dataset.state, 'ready');
-  assert.match(f.status.textContent, /Folder saved/);
+  assert.match(f.status.textContent, /Chosen: /);
   assert.equal(f.restore.hidden, true);
   await f.choose();
   assert.deepEqual(JSON.parse(JSON.stringify(f.calls.filter(([kind]) => kind === 'open').map(([, message]) => message))), [
@@ -109,7 +109,7 @@ test('authorized Manager saves a selected QTS_Resume handle to Apply shared stor
   assert.equal(f.calls.at(-1)[0], 'picker');
   await choosing;
   assert.deepEqual(f.calls.map(([kind]) => kind), ['access', 'picker', 'access']);
-  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[1][1])), { mode: 'read', startIn: 'downloads' });
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[1][1])), { mode: 'readwrite', startIn: 'downloads' });
   assert.equal(f.state.saved, selected);
   assert.equal(f.status.dataset.state, 'ready');
   assert.equal(f.state.writes.length, 1);
@@ -159,5 +159,5 @@ test('the window getting focus back when the folder dialog closes does not drop 
   await picking; await settle(); await settle();
   assert.equal(panel.state.writes.length, 1, 'the chosen folder is saved');
   assert.equal(panel.state.saved, chosen);
-  assert.match(panel.status.textContent, /Ready: Apply can read PDFs from QTS_Resume/);
+  assert.match(panel.status.textContent, /Ready: QTS reads and deletes résumés in QTS_Resume/);
 });

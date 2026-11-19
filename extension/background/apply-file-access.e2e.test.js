@@ -72,7 +72,7 @@ test('direct local PDFs survive closed settings/restart, upload original bytes i
     assert.equal(await worker.evaluate(() => chrome.extension.isAllowedFileSchemeAccess()), true, 'isolated unpacked Chrome enables file URLs; this is checked rather than mocked');
     await settings.type('#file-folder-path', rootPath); await settings.click('#save-file-access');
     await settings.waitForFunction(() => document.getElementById('file-access-status').dataset.state === 'ready');
-    assert.equal(await settings.$eval('#folder-picker-settings', (section) => section.hidden), true, 'inactive picker warnings are hidden');
+    assert.equal(await settings.$eval('#folder-picker-settings', (section) => section.hidden), false, 'step 1 (the chosen folder) always shows: deleting résumés needs it');
     await settings.close();
     const assertNoSettings = async () => assert.equal((await browser.pages()).some((p) => p.url().startsWith(settingsUrl)), false);
     await assertNoSettings();

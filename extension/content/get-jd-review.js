@@ -531,7 +531,7 @@ async function initializeGetJdReviewOnce() {
           </section>
           <section class="manager-settings-group" data-job-detection-group hidden>
             <h3>Blocked URL rules</h3>
-            <p>QTS controls and workflows do not run when the current URL contains any saved fragment.</p>
+            <p>Get JD and text highlights do not run when the current URL contains any saved fragment. Everything else in QTS still works there.</p>
             <form data-job-detection-form>
               <label class="manager-settings-label" for="qts-manager-job-url">URL fragment</label>
               <input class="manager-settings-input" id="qts-manager-job-url" name="url" type="text" placeholder="example.com/private" required>

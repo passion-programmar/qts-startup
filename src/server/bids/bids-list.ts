@@ -10,6 +10,7 @@ import { likePattern } from "@/server/jobs/jobs-list-query";
 
 export const bidSearchFields = [
   { key: "candidate", label: "Candidate" },
+  { key: "url", label: "Job URL" },
   { key: "source", label: "Source URL" },
   { key: "title", label: "Job title" },
   { key: "company", label: "Company" },
@@ -42,12 +43,27 @@ export function parseBidsQuery(raw: Record<string, string | string[] | undefined
 // "2026/11/15", the date the table shows (Romania time).
 const createdDay = sql`to_char(${bids.createdAt} at time zone ${ROMANIA_TIME_ZONE}, 'YYYY/MM/DD')`;
 
+/**
+ * A pasted job link matches its bid however it was copied: "https://", "www.", a "#section" and
+ * a trailing "/" are dropped, so the rest is found inside the saved URL. A plain word is unchanged.
+ */
+export function jobUrlSearchText(words: string): string {
+  const trimmed = words.trim();
+  const core = trimmed
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/#.*$/, "")
+    .replace(/\/+$/, "");
+  return core || trimmed;
+}
+
 function searchCondition(query: BidsQuery): SQL | undefined {
   const words = query.q.trim();
   if (!words) return undefined;
   const pattern = likePattern(words);
   const byField: Record<Exclude<BidSearchField, "all">, SQL> = {
     candidate: sql`concat_ws(' ', ${profiles.firstName}, ${profiles.lastName}) ilike ${pattern}`,
+    url: ilike(bids.jobUrl, likePattern(jobUrlSearchText(words))),
     source: ilike(bids.sourceSiteUrl, pattern),
     title: ilike(bids.jobTitle, pattern),
     company: ilike(bids.company, pattern),

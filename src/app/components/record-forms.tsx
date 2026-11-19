@@ -4,6 +4,7 @@ import { ListPlus, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useActionState, useState } from "react";
 import { deleteJobAction, setJobGenerationQueueAction } from "@/app/jobs/actions";
+import { useDeleteLocalResumeFiles } from "@/app/components/local-resume-files";
 import { initialRecordState } from "@/app/record-action-state";
 import type { ApplyRun } from "@/server/apply/apply-values";
 import { ConfirmButton } from "@/app/components/confirm-button";
@@ -145,6 +146,8 @@ function RecordActions({
   const [open, setOpen] = useState(false);
   // Only jobs can be deleted; a bid never shows the Delete button.
   const [deleteState, deleteFormAction, deleting] = useActionState(deleteJobAction, initialRecordState);
+  // A deleted job's résumé PDFs are deleted on this PC too.
+  useDeleteLocalResumeFiles(deleteState);
 
   return (
     <div className="flex min-w-0 items-start gap-2">
@@ -156,7 +159,7 @@ function RecordActions({
             ariaLabel={`Delete ${record.title}`}
             className="inline-flex size-9 shrink-0 items-center justify-center rounded-control border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
             confirmLabel={`Delete ${kind}`}
-            description={<>This will permanently delete “{record.title}”. This action cannot be undone.</>}
+            description={<>This will permanently delete “{record.title}”, and its résumé PDFs on this PC. This action cannot be undone.</>}
             disabled={deleting}
             title={`Delete this ${kind}?`}
           >

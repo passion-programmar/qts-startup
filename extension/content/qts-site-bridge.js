@@ -43,6 +43,12 @@
           .catch(() => reply({ ok: false }));
         return;
       }
+      if (data.type === 'delete-resume-files') {
+        chrome.runtime.sendMessage({ type: 'QTS_DELETE_RESUME_FILES', files: Array.isArray(data.files) ? data.files : [] })
+          .then((result) => reply(result || { ok: false, error: 'No answer from the extension.' }))
+          .catch(() => reply({ ok: false, error: 'The extension could not be reached. Reload this page.' }));
+        return;
+      }
       if (data.type !== 'open-resume-folder') return;
       chrome.runtime.sendMessage({ type: 'QTS_OPEN_RESUME_FOLDER', folder: String(data.folder || '') })
         .then((result) => reply(result || { ok: false, error: 'No answer from the extension.' }))

@@ -722,6 +722,26 @@
     return brand;
   }
 
+  // Auto Apply: "Save for this site": every box the Manager filled or changed by hand becomes this
+  // job site's form of its saved answer (used at once, and on every later job of the site).
+  let savingForSite = false;
+  async function saveForSite() {
+    if (savingForSite) return;
+    savingForSite = true;
+    say('Saving your answers for this site…');
+    const result = await send('site_forms');
+    savingForSite = false;
+    say(result?.ok ? result.message || 'Saved for this site.' : `Not saved: ${result?.error || 'try again'}`);
+  }
+  function siteFormsButton() {
+    const node = element('button', '', 'Save for this site');
+    node.type = 'button';
+    node.title = 'Keep the answers you filled or changed on this page as this job site\'s answers (used on every job of this site)';
+    node.disabled = busy;
+    node.addEventListener('click', () => saveForSite());
+    return node;
+  }
+
   function button(label, className, action, extra) {
     const node = element('button', className, label);
     node.type = 'button';
@@ -1093,6 +1113,7 @@
       if (!state.blocked) {
         buttons.append(button('Later', '', 'later'));
         buttons.append(button('Fill again', '', 'fill_again'));
+        if (auto) buttons.append(siteFormsButton());
         if (!auto && state.canAskAgain) buttons.append(button(`Ask ${state.aiName || 'ChatGPT'} again`, '', 'ask_again'));
         // Auto Apply: the answers the Manager changed go to Super Admin as drafts (never approved by this).
       }
@@ -1167,6 +1188,7 @@
     const items = [
       reviewing && state.aiOn && !state.blocked ? [`Ask ${state.aiName || 'AI'} · Alt+A`, 'ask_ai'] : null,
       reviewing && !state.blocked ? ['Fill again', 'fill_again'] : null,
+      reviewing ? ['Save for this site', 'site_forms'] : null,
       ['Submitted', 'submitted'],
       stopped ? ['Give back', 'give_back'] : ['Cancel', 'cancel'],
       state.mode !== 'confirm' ? ['Remove', 'remove'] : null,
@@ -1178,6 +1200,12 @@
       node.addEventListener('click', async () => {
         if (action === 'remove' && !confirmRemove()) return;
         menuOpen = false;
+        // Save for this site answers with a message and changes nothing in the review.
+        if (action === 'site_forms') {
+          render();
+          await saveForSite();
+          return;
+        }
         busy = true;
         render();
         await send(action, action === 'submitted' ? { answers: currentAnswers() } : {});

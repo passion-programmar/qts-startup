@@ -145,7 +145,13 @@ function loadPageToast() {
   };
 }
 
-const messageOf = (toastElement) => toastElement.children[1].textContent;
+// The toast body is a head (title, Q·T·S mark) and the message; Get JD adds chips and the page.
+const textOf = (node) => [node.textContent, ...node.children.map(textOf)].filter(Boolean).join(' ');
+const messageOf = (toastElement) => {
+  const parts = toastElement.children[1].children.slice(1);
+  return parts.length === 1 ? parts[0].textContent : parts.map(textOf).join(' ');
+};
+const titleOf = (toastElement) => toastElement.children[1].children[0].children[0].textContent;
 
 test('page toasts stack newest first and retire the oldest beyond four', () => {
   const { toast, stack } = loadPageToast();
@@ -196,8 +202,8 @@ test('Get JD outcomes update one toast and aggregate simultaneous results', () =
   const active = stack().children.filter((element) => !element.classList.contains('leaving'));
   assert.equal(active.length, 1);
   assert.ok(active[0].classList.contains('error'));
-  assert.match(messageOf(active[0]), /Success 1 · Failed 1 · Skipped 1/);
-  assert.match(messageOf(active[0]), /3 results/);
+  assert.match(messageOf(active[0]), /Success 1 Failed 1 Skipped 1/);
+  assert.match(titleOf(active[0]), /3 results/);
 });
 
 test('Get JD processing updates in place and duplicate snapshots do not reset dismissal', () => {
@@ -211,7 +217,9 @@ test('Get JD processing updates in place and duplicate snapshots do not reset di
   advance(3000);
   toast.showGetJdSummary(batch(4000, 'success'));
   assert.equal(stack().children[0], original);
-  assert.match(messageOf(original), /Success 1 · Failed 0/);
+  // Only non-zero counts get a chip.
+  assert.match(messageOf(original), /Success 1/);
+  assert.doesNotMatch(messageOf(original), /Failed/);
   toast.showGetJdSummary(batch(4000, 'success'));
   advance(4999);
   assert.equal(original.isConnected, true);

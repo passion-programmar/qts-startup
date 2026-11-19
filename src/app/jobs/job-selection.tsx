@@ -6,6 +6,7 @@
 import { Trash2, X } from "lucide-react";
 import { createContext, useActionState, useCallback, useContext, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { deleteJobsAction } from "@/app/jobs/actions";
+import { useDeleteLocalResumeFiles } from "@/app/components/local-resume-files";
 import { initialRecordState, type RecordActionState } from "@/app/record-action-state";
 import { ConfirmButton } from "@/app/components/confirm-button";
 import { LoadingIcon } from "@/app/components/loading-icon";
@@ -108,6 +109,8 @@ export function SelectJobCheckbox({ jobId, title, disabledReason }: { jobId: str
 export function SelectedJobsBar() {
   const { selected, clear } = useSelection();
   const [state, formAction, deleting] = useActionState(deleteJobsAction, initialRecordState);
+  // The deleted jobs' résumé PDFs are deleted on this PC too.
+  useDeleteLocalResumeFiles(state);
   const [dismissed, setDismissed] = useState<RecordActionState | null>(null);
   const count = selected.size;
   const message = state !== dismissed ? state.error ?? state.success : null;
@@ -138,7 +141,7 @@ export function SelectedJobsBar() {
       <ConfirmButton
         className="inline-flex h-8 items-center gap-1.5 rounded-control bg-danger px-3 text-xs font-semibold text-white shadow-sm hover:bg-danger-hover disabled:cursor-wait disabled:opacity-60"
         confirmLabel={`Delete ${count} ${word}`}
-        description={<>This permanently deletes the {count} selected {word}, with their Apply history. Jobs still making a résumé or with a bid are kept. This cannot be undone.</>}
+        description={<>This permanently deletes the {count} selected {word}, with their Apply history and their résumé PDFs on this PC. Jobs still making a résumé or with a bid are kept. This cannot be undone.</>}
         disabled={deleting}
         title={`Delete ${count} selected ${word}?`}
       >

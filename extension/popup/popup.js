@@ -1742,10 +1742,10 @@ async function selectApplyPdfDownloadsDirectory() {
   if (typeof window.showDirectoryPicker !== 'function') {
     throw new Error('This Chrome version does not support choosing a Downloads folder.');
   }
-  const directory = await window.showDirectoryPicker({ mode: 'read', startIn: 'downloads' });
-  let permission = await directory.queryPermission({ mode: 'read' });
-  if (permission !== 'granted') permission = await directory.requestPermission({ mode: 'read' });
-  if (permission !== 'granted') throw new Error('Read access was not granted for the selected Downloads folder.');
+  const directory = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
+  let permission = await directory.queryPermission({ mode: 'readwrite' });
+  if (permission !== 'granted') permission = await directory.requestPermission({ mode: 'readwrite' });
+  if (permission !== 'granted') throw new Error('Read and write access was not granted for the selected folder.');
   await window.__qtsScannerDocumentStore.putSetting(APPLY_PDF_DOWNLOADS_DIRECTORY_SETTING, directory);
   await restoreApplyPdfDownloadsDirectoryStatus();
 }
@@ -1763,7 +1763,7 @@ async function restoreApplyPdfDownloadsDirectoryStatus() {
     return;
   }
   button.textContent = 'Change Downloads folder for Apply PDFs';
-  const permission = await directory.queryPermission({ mode: 'read' });
+  const permission = await directory.queryPermission({ mode: 'readwrite' });
   status.textContent = permission === 'granted'
     ? `Local PDF reuse is ready from ${directory.name}.`
     : `Access to ${directory.name} is unavailable. Choose the folder again before Apply; PDFs are never regenerated during Apply.`;

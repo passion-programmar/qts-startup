@@ -10,7 +10,7 @@ const fixture = { deleted: [] as { id: string }[], kept: [] as { generationStatu
 (globalThis as Record<string, unknown>).__qtsDeleteJobsFixture = fixture;
 (globalThis as Record<string, unknown>).__qtsDialect = new PgDialect();
 
-type Result = { deleted: number; generating: number; applied: number; other: number };
+type Result = { deleted: number; generating: number; applied: number; other: number; resumeFiles?: string[] };
 type DeleteJobsModule = {
   deleteManagerJobs: (managerId: string, ids: string[]) => Promise<Result>;
   deleteJobsMessage: (result: Result) => string;
@@ -47,7 +47,7 @@ test.beforeEach(() => { fixture.deleted = []; fixture.kept = []; fixture.deletes
 
 test("selected jobs are deleted in one statement, only the Manager's own and only those allowed", async () => {
   fixture.deleted = [{ id: jobA }, { id: jobB }];
-  assert.deepEqual(await deleteJobs.deleteManagerJobs(manager, [jobA, jobB]), { deleted: 2, generating: 0, applied: 0, other: 0 });
+  assert.deepEqual(await deleteJobs.deleteManagerJobs(manager, [jobA, jobB]), { deleted: 2, generating: 0, applied: 0, other: 0, resumeFiles: [] });
   assert.equal(fixture.deletes.length, 1);
   const [statement] = fixture.deletes;
   assert.match(statement.sql, /"jobs"\."id" in \(\$1, \$2\)/);
@@ -63,18 +63,18 @@ test("jobs that stay are read once to say why: generating, applied, or not found
   fixture.deleted = [{ id: jobA }];
   fixture.kept = [{ generationStatus: "processing", hasBid: false }];
   const result = await deleteJobs.deleteManagerJobs(manager, [jobA, jobB, jobC]);
-  assert.deepEqual(result, { deleted: 1, generating: 1, applied: 0, other: 1 });
+  assert.deepEqual(result, { deleted: 1, generating: 1, applied: 0, other: 1, resumeFiles: [] });
   assert.equal(fixture.selects.length, 1);
   assert.deepEqual(fixture.selects[0].params.slice(0, 2), [jobB, jobC]);
   assert.ok(fixture.selects[0].params.includes(manager), "only the Manager's own jobs are looked up");
 
   fixture.deleted = [];
   fixture.kept = [{ generationStatus: "completed", hasBid: true }];
-  assert.deepEqual(await deleteJobs.deleteManagerJobs(manager, [jobA]), { deleted: 0, generating: 0, applied: 1, other: 0 });
+  assert.deepEqual(await deleteJobs.deleteManagerJobs(manager, [jobA]), { deleted: 0, generating: 0, applied: 1, other: 0, resumeFiles: [] });
 });
 
 test("nothing selected deletes nothing and asks nothing", async () => {
-  assert.deepEqual(await deleteJobs.deleteManagerJobs(manager, []), { deleted: 0, generating: 0, applied: 0, other: 0 });
+  assert.deepEqual(await deleteJobs.deleteManagerJobs(manager, []), { deleted: 0, generating: 0, applied: 0, other: 0, resumeFiles: [] });
   assert.equal(fixture.deletes.length, 0);
 });
 
@@ -90,4 +90,16 @@ test("the message says what was deleted and why any job was kept", () => {
     "No jobs were deleted. Kept 2 jobs still making a résumé: cancel Generation first.",
   );
   assert.equal(deleteJobs.MAX_JOBS_PER_DELETE, 100);
+});
+
+test("the deleted jobs' PDFs under QTS_Resume are returned for the page to delete on this PC", async () => {
+  fixture.deleted = [
+    { id: jobA, resumeLocalPath: String.raw`QTS_Resume\MSK\Anna\2026_Dev_Acme\Anna.pdf`, coverLetterLocalPath: "QTS_Resume/MSK/Anna/2026_Dev_Acme/Anna_Cover_Letter.pdf" },
+    { id: jobB, resumeLocalPath: "C:/Windows/system.pdf", coverLetterLocalPath: "QTS_Resume/../secret.pdf" },
+  ] as unknown as { id: string }[];
+  const result = await deleteJobs.deleteManagerJobs(manager, [jobA, jobB]);
+  assert.deepEqual(result.resumeFiles, [
+    "QTS_Resume/MSK/Anna/2026_Dev_Acme/Anna.pdf",
+    "QTS_Resume/MSK/Anna/2026_Dev_Acme/Anna_Cover_Letter.pdf",
+  ]);
 });

@@ -20,7 +20,7 @@
   async function showFolder(expectedRevision) {
     const saved = await store.getSetting(key);
     const directory = saved?.value;
-    const permission = directory ? await directory.queryPermission({ mode: 'read' }) : null;
+    const permission = directory ? await directory.queryPermission({ mode: 'readwrite' }) : null;
     if (revision !== expectedRevision || !allowed) return;
     savedDirectory = directory || null;
     restore.hidden = !directory || permission === 'granted';
@@ -29,9 +29,9 @@
     if (!directory) {
       showStatus('Choose QTS_Resume inside Downloads before running Apply. Chrome blocks selecting Downloads itself.', 'unconfigured');
     } else if (permission === 'granted') {
-      showStatus(`Ready: Apply can read existing Generation PDFs from ${directory.name}.`, 'ready');
+      showStatus(`Ready: Apply reads Generation PDFs from ${directory.name}, and removing a job deletes its résumé PDFs there.`, 'ready');
     } else {
-      showStatus(`Read access to ${directory.name} needs approval. Choose Allow saved folder access, or select QTS_Resume inside Downloads again.`, 'revoked');
+      showStatus(`Read and write access to ${directory.name} needs approval. Choose Allow saved folder access, or select QTS_Resume inside Downloads again.`, 'revoked');
     }
   }
 
@@ -71,13 +71,13 @@
     button.disabled = restore.disabled = true;
     try {
       // Invoke the picker directly from the click, before any async work consumes user activation.
-      const directory = await window.showDirectoryPicker({ mode: 'read', startIn: 'downloads' });
+      const directory = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
       if (directory.name !== 'QTS_Resume') {
         throw new Error('Select the QTS_Resume subfolder inside Downloads, not Downloads itself or a job subfolder.');
       }
-      let permission = await directory.queryPermission({ mode: 'read' });
-      if (permission !== 'granted') permission = await directory.requestPermission({ mode: 'read' });
-      if (permission !== 'granted') throw new Error('Read access was not granted. Choose the folder again and allow read access.');
+      let permission = await directory.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') permission = await directory.requestPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') throw new Error('Read and write access was not granted. Choose the folder again and allow it.');
       const response = await checkAccess();
       if (current !== revision) return;
       allowed = hasAccess(response);
@@ -107,8 +107,8 @@
     button.disabled = restore.disabled = true;
     try {
       // The permission prompt also requires direct user activation; do not await a server call first.
-      const permission = await directory.requestPermission({ mode: 'read' });
-      if (permission !== 'granted') throw new Error('Read access was not granted. Select QTS_Resume again and allow read access.');
+      const permission = await directory.requestPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') throw new Error('Read and write access was not granted. Select QTS_Resume again and allow it.');
       const response = await checkAccess();
       if (current !== revision) return;
       allowed = hasAccess(response);

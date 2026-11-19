@@ -2147,7 +2147,8 @@ test('Alt+F: nothing is filled until the Manager presses it; each new step waits
     await worker.evaluate(() => chrome.storage.local.set({ qtsAutoApplyFillOnKey: true }));
     assert.equal((await action('auto_apply')).ok, true);
     const form = await until(() => formPage(browser, '/steps'), 30000, 'the form');
-    await until_panel(form, /Press Alt\+F to fill this step/, 40000);
+    // No hint box any more: the step's review waiting is the sign it waits for Alt+F.
+    await until(async () => (await globalThis.__diag()).some((review) => review.waiting && review.mode === 'review'), 40000, 'step 1 waits for Alt+F');
     await sleep(2000);
     assert.equal(await valueOf(form, 'fn'), '', 'not filled without Alt+F');
     assert.equal((await signalClasses(form)).f, 'sig', 'F dim');
@@ -2160,7 +2161,7 @@ test('Alt+F: nothing is filled until the Manager presses it; each new step waits
     await until(async () => (await signalClasses(form)).f === 'sig done', 15000, 'F green');
     // The Manager's own Next: the next step waits for Alt+F again.
     await form.click('#next1');
-    await until_panel(form, /Press Alt\+F to fill this step/, 40000);
+    await until(async () => Boolean(await form.$('#note')) && (await globalThis.__diag()).some((review) => review.waiting && review.mode === 'review'), 40000, 'step 2 waits for Alt+F');
     await sleep(1500);
     assert.equal(await valueOf(form, 'note'), '', 'step 2 not filled without Alt+F');
     assert.equal(mock.answers, 0);

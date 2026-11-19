@@ -16,7 +16,21 @@ export type DeleteJobsResult = {
   applied: number;
   /** Not found among this Manager's jobs (already deleted, or changed meanwhile). */
   other: number;
+  /** The deleted jobs' résumé and cover-letter PDFs ("QTS_Resume/…"), for the page to delete on this PC. */
+  resumeFiles: string[];
 };
+
+type LocalFileRow = { resumeLocalPath: string | null; coverLetterLocalPath: string | null };
+
+/** The deleted jobs' PDFs saved under Downloads/QTS_Resume, the only files QTS ever deletes on the PC. */
+export function localResumeFiles(rows: LocalFileRow[]): string[] {
+  const files = rows.flatMap((row) => [row.resumeLocalPath, row.coverLetterLocalPath])
+    .filter((path): path is string => typeof path === "string")
+    .map((path) => path.replace(/\\/g, "/").trim())
+    .filter((path) => path.startsWith("QTS_Resume/") && /\.pdf$/i.test(path) && path.length <= 500
+      && !path.split("/").some((part) => !part || part === "." || part === ".."));
+  return [...new Set(files)];
+}
 
 /**
  * Deletes the chosen jobs of one Manager in one statement, with the same rules as deleting one job:
@@ -24,15 +38,16 @@ export type DeleteJobsResult = {
  * read once afterwards, only when some stayed, to say why.
  */
 export async function deleteManagerJobs(managerId: string, ids: string[]): Promise<DeleteJobsResult> {
-  if (ids.length === 0) return { deleted: 0, generating: 0, applied: 0, other: 0 };
+  if (ids.length === 0) return { deleted: 0, generating: 0, applied: 0, other: 0, resumeFiles: [] };
   const appliedBid = jobHasBid();
   const deleted = await db.delete(jobs).where(and(
     inArray(jobs.id, ids),
     eq(jobs.managerId, managerId),
     ne(jobs.generationStatus, "processing"),
     sql`not ${appliedBid}`,
-  )).returning({ id: jobs.id });
-  if (deleted.length === ids.length) return { deleted: deleted.length, generating: 0, applied: 0, other: 0 };
+  )).returning({ id: jobs.id, resumeLocalPath: jobs.resumeLocalPath, coverLetterLocalPath: jobs.coverLetterLocalPath });
+  const resumeFiles = localResumeFiles(deleted);
+  if (deleted.length === ids.length) return { deleted: deleted.length, generating: 0, applied: 0, other: 0, resumeFiles };
 
   const gone = new Set(deleted.map((row) => row.id));
   const keptIds = ids.filter((id) => !gone.has(id));
@@ -41,7 +56,7 @@ export async function deleteManagerJobs(managerId: string, ids: string[]): Promi
     .where(and(inArray(jobs.id, keptIds), eq(jobs.managerId, managerId)));
   const generating = kept.filter((row) => row.generationStatus === "processing").length;
   const applied = kept.filter((row) => row.generationStatus !== "processing" && row.hasBid).length;
-  return { deleted: deleted.length, generating, applied, other: keptIds.length - generating - applied };
+  return { deleted: deleted.length, generating, applied, other: keptIds.length - generating - applied, resumeFiles };
 }
 
 const jobsWord = (count: number) => `${count} ${count === 1 ? "job" : "jobs"}`;

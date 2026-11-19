@@ -7,7 +7,16 @@ export { answerIdentity };
 export const recognizeSemanticField = semantics.recognize;
 
 export type AnswerScope = "manager" | "candidate" | "application";
-export type AnswerVariant = { kind: string; options: string[]; answer: string; questionText?: string; identity?: AnswerIdentity; policyContext?: string; representation?: Representation; normalVariation?: AnswerVariant };
+// site: the job site this form was taken by ("boards.greenhouse.io/akamai"), reused for every job
+// there. kind "alternative": another form of the same answer ("30 days" for "1 month") the Manager added.
+export type AnswerVariant = { kind: string; options: string[]; answer: string; questionText?: string; identity?: AnswerIdentity; policyContext?: string; representation?: Representation; normalVariation?: AnswerVariant; site?: string };
+
+/** A job site key as the extension sends it: a host, with the company's path part on shared boards. */
+export function parseSiteKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const site = value.trim().toLowerCase();
+  return site.length <= 200 && /^[a-z0-9.-]+\.[a-z]{2,}(\/[a-z0-9._-]{1,80})?$/.test(site) ? site : null;
+}
 // Only unambiguous profile mappings. Combined address/name questions remain scoped answers.
 const PROFILE_FIELDS = [
   ["city", /^(?:location\s*\(?city\)?|city|town|current city|city of residence)$/i],

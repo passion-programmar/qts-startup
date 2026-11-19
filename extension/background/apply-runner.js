@@ -940,7 +940,15 @@ async function checkWithRealClick(tabId, field, value) {
  * click; 3. only when nothing shows, sample searches typed into a search list (collected, never
  * picked; only some of its choices, so the AI may still give its own wording).
  */
-async function readComboboxOptions(tabId, fields, stop = null) {
+// A phone's country-code search list (Greenhouse's "Country code"): QTS knows what it looks for, so it
+// searches once for the candidate's country instead of reading the whole list (sample letters with
+// waits, then scrolling ~240 countries took many seconds a phone number).
+// A saved answer's forms as saved (a confirmed variation is wrapped in normalVariation).
+const formsOfRow = (row) => (Array.isArray(row?.variants) ? row.variants : []).map((entry) => entry?.normalVariation || entry).filter(Boolean);
+
+const isPhoneCodeList = (field) => field?.kind === 'combobox' && /^phone country code$/i.test(String(field.label || '').trim());
+
+async function readComboboxOptions(tabId, fields, stop = null, candidate = null) {
   // Fields whose box looking at the choices changed (a tag a site created): checked by the Manager.
   const changed = [];
   const keepChoices = (field, read, source) => {
@@ -957,6 +965,27 @@ async function readComboboxOptions(tabId, fields, stop = null) {
   for (const field of fields) {
     if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
     if (field.hidden || field.disabled || field.options?.length) continue;
+    if (isPhoneCodeList(field) && /^\s*\+\d/.test(String(candidate?.phone || ''))) {
+      const digits = String(candidate.phone).replace(/\D/g, '');
+      const search = (queries) => inForm(tabId, (id, words) => globalThis.__qtsApplyForm.searchComboboxChoices(id, words), [field.id, queries]).catch(() => null);
+      // A choice whose "+code" starts the candidate's number.
+      const fits = (read) => (read?.options || []).some((text) => {
+        const code = String(text).match(/\+\s?(\d{1,4})\b/)?.[1];
+        return code && digits.startsWith(code);
+      });
+      // 1. The candidate's country (one search: "Romania" → "+40 (Romania)").
+      const country = String(candidate.country || '').trim();
+      let read = country ? await search([country]) : null;
+      // 2. A number from another country than the candidate's: its first digits ("+4", "+40", "+402"),
+      //    which bring up every code it may start with; the longest that fits is picked.
+      if (!fits(read)) {
+        if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
+        const byDigits = await search([1, 2, 3].map((length) => `+${digits.slice(0, length)}`));
+        if (fits(byDigits)) read = { ...byDigits, options: [...new Set([...(read?.options || []), ...byDigits.options])], changed: Boolean(read?.changed || byDigits.changed) };
+      }
+      if (fits(read) && keepChoices(field, read, 'search')) continue;
+      if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
+    }
     if (field.kind === 'combobox') {
       if (keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.discoverComboboxChoices(id), [field.id]).catch(() => null), 'click')) continue;
       if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
@@ -1568,9 +1597,21 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
     ? inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file])
     : fillBox(tabId, fieldId, answer.value ?? null));
   let fieldId = field.id;
-  let result = await fill(fieldId);
+  // The usual case in ONE trip: filled, and the site's reaction read with it (fillAndInspect). A
+  // suggestion box, an upload, or an engine without it takes the separate trips, as before.
+  let inspected = null;
+  let result = null;
+  if (!file) {
+    const once = await inForm(tabId, (id, value, entry) => globalThis.__qtsApplyForm.fillAndInspect?.(id, value, entry) ?? null, [fieldId, answer.value ?? null, field]).catch(() => null);
+    if (once?.result) {
+      result = once.result;
+      if (once.result.ok) inspected = { issue: once.issue || '', unanswered: once.unanswered === true };
+    }
+  }
+  if (!result) result = await fill(fieldId);
   // The page may rebuild a field after another answer (BambooHR); find it again by its question.
   if (result?.error === 'The field is no longer on the page.') {
+    inspected = null;
     const again = (await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()) || [])
       .find((entry) => entry.label === field.label && entry.kind === field.kind && !entry.hidden);
     if (!again) return { gone: true };
@@ -1583,6 +1624,7 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
   const emptied = field.kind === 'text' && !String(result?.value ?? '').trim();
   // (A suggestion box already had its real input: left for the Manager to pick.)
   if (!result?.ok && !result?.pickYourself && (['menu', 'combobox'].includes(field.kind) || emptied) && !file) {
+    inspected = null;
     const real = await pickWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     // The choices either way of opening it showed go to the AI, so it picks one the field has.
     const choices = real.choices?.length ? real.choices : result?.choices;
@@ -1590,15 +1632,17 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
   }
   // Radio and tick-box options a site ignores simulated clicks on get real clicks on their labels.
   if (!result?.ok && ['radio', 'checkbox-group'].includes(field.kind)) {
+    inspected = null;
     const real = await checkWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
   }
   if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [], ...(result?.manualUpload ? { manualUpload: true } : {}), ...(result?.pickYourself ? { pickYourself: true } : {}) };
-  const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
+  const issue = inspected ? inspected.issue : await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
   // "This field is required" left from before the pick, under a field that now holds its answer, is
   // not the site rejecting it: the answer matched, and the field is not filled again.
   if (issue && REQUIRED_MESSAGE.test(issue)) {
-    const empty = await inForm(tabId, (entry) => globalThis.__qtsApplyForm.isUnanswered(entry), [{ ...field, id: fieldId }]).catch(() => true);
+    const empty = inspected ? inspected.unanswered
+      : await inForm(tabId, (entry) => globalThis.__qtsApplyForm.isUnanswered(entry), [{ ...field, id: fieldId }]).catch(() => true);
     if (!empty) return { ok: true };
   }
   return issue ? { ok: false, error: issue } : { ok: true };
@@ -1929,7 +1973,9 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
       ? fresh.filter((field) => allowed.has(helpers.resolveFields([field], application.candidate, application.savedAnswers, discoveryContext).answers[field.id]?.source)
         || (normalApply && helpers.worthReading?.(field, application.candidate, application.savedAnswers, discoveryContext)))
       : fresh;
-    const changedByLooking = await readComboboxOptions(tabId, toDiscover, options.stop);
+    // A phone's country-code list is always looked up (its choice comes from the candidate's number).
+    for (const field of fresh) if (isPhoneCodeList(field) && !toDiscover.includes(field)) toDiscover.push(field);
+    const changedByLooking = await readComboboxOptions(tabId, toDiscover, options.stop, application.candidate);
     timings.discovery += Date.now() - discoveryStarted;
     for (const field of changedByLooking) {
       problem(`Check "${field.label}": looking at its choices changed it; set it as it should be.`, field);
@@ -2584,6 +2630,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!held?.auto || held.tabId !== sender.tab?.id || !held.fillRow) return { ok: false, error: 'This page does not own the application review.' };
       return held.fillRow(String(msg.fieldId || ''));
     }
+    // Auto Apply: "Save for this site": the boxes the Manager filled or changed become this site's forms.
+    if (msg.action === 'site_forms') {
+      const held = activeReviews.get(msg.attemptId);
+      if (!held?.auto || held.tabId !== sender.tab?.id || !held.saveSiteForms) return { ok: false, error: 'This page does not own the application review.' };
+      return held.saveSiteForms({ explicit: true });
+    }
     if (['recheck', 'reuse_answer', 'ask_ai'].includes(msg.action)) {
       const held = activeReviews.get(msg.attemptId);
       if (!held || held.tabId !== sender.tab?.id) return { ok: false, error: 'This page does not own the application review.' };
@@ -2701,7 +2753,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type !== 'QTS_SHOW_APPLICATION') return false;
   const tabId = activeReviews.get(msg.attemptId)?.tabId;
   if (tabId == null) {
-    sendResponse({ ok: false, error: 'That application is no longer open in this Chrome.' });
+    sendResponse({ ok: false, error: 'That application is no longer open in this Chrome (QTS restarted). QTS gives the job back to the list by itself; to stop now, click Stop on Auto Apply.' });
     return false;
   }
   focusApplyTab(tabId).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false, error: 'QTS could not show that page.' }));
@@ -3152,26 +3204,71 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
    * 'page_changed'; a question appearing, or an error the site shows (a refused Next), only checks
    * the step again ('recheck'). Returns the function that stops the watch.
    */
+  // The full check (stepShape) reads every box, label and error with layout lookups: run every 1.5 s
+  // it made typing and choosing stutter on big forms. With the light watch (default; storage
+  // qtsApplyLightWatch=false turns it off) a quick look (stepGlance) runs first and the full check
+  // only when the page changed, never while the Manager types or clicks, and at least every 6 s.
+  const glanceNow = (tabId) => inForm(tabId, () => globalThis.__qtsApplyForm.stepGlance?.() || null).catch(() => null);
+  const FULL_CHECK_AT_LEAST_MS = 6000;
   const watchManagerNavigation = (tabId, base) => {
     let stopped = false;
     let seen = base;
     (async () => {
+      const light = (await chrome.storage.local.get('qtsApplyLightWatch').catch(() => ({}))).qtsApplyLightWatch !== false;
+      let lastFull = Date.now();
+      // The quick look's key of a page the full check found nothing more to do on; null: check fully.
+      let quietKey = null;
+      // The form's answers as last seen at rest: a confirmation page has no form to read them from.
+      let lastAnswers = null;
       while (!stopped) {
         await sleep(1500);
         if (stopped) return;
+        let glance = null;
+        if (light) {
+          glance = await glanceNow(tabId);
+          if (stopped) return;
+          const due = Date.now() - lastFull >= FULL_CHECK_AT_LEAST_MS;
+          if (glance && !due && (glance.busy || (quietKey !== null && glance.key === quietKey))) continue;
+        }
+        lastFull = Date.now();
+        quietKey = null;
         const now = await shapeNow(tabId);
         if (!now || stopped) continue;
-        if (!sameStep(base, now)) {
-          await sleep(1000);
-          const settled = await shapeNow(tabId);
-          if (stopped || !settled || sameStep(base, settled) || sameStep(now, settled) === false) continue;
-          if (!settled.labels.length) continue;
-          // Taken only while the review waits (it may be redrawing); otherwise tried again.
-          if (answerManager(application.attemptId, { action: 'page_changed', shape: settled })) return;
-          continue;
+        const changed = !sameStep(base, now);
+        if (changed || !now.labels.length) {
+          let settled = now;
+          if (changed) {
+            await sleep(1000);
+            settled = await shapeNow(tabId);
+            if (stopped || !settled || sameStep(base, settled)) continue;
+          }
+          // The Manager's Submit led to the site's own confirmation ("Thank you for applying", an
+          // address ending in /confirmation, no form left): the same as clicking Submitted — the bid
+          // is saved with the answers and the tab closes. The panel's Submitted works at any time too.
+          const done = await inForm(tabId, (title) => globalThis.__qtsApplyForm.submittedPage?.(title) || null, [application.job?.title || '']).catch(() => null);
+          if (stopped) return;
+          if (done?.confirmed) {
+            diag('submitted-page', { evidence: done.evidence });
+            if (answerManager(application.attemptId, { action: 'submitted', detected: done.evidence, ...(lastAnswers?.length ? { answers: lastAnswers } : {}) })) return;
+            continue;
+          }
+          if (changed) {
+            if (sameStep(now, settled) === false || !settled.labels.length) continue;
+            // Taken only while the review waits (it may be redrawing); otherwise tried again.
+            if (answerManager(application.attemptId, { action: 'page_changed', shape: settled })) return;
+            continue;
+          }
         }
         if (JSON.stringify([now.labels, now.errors]) !== JSON.stringify([seen.labels, seen.errors])) {
           if (answerManager(application.attemptId, { action: 'recheck' })) seen = now;
+          // Not taken (the review is busy): checked fully again next time.
+          continue;
+        }
+        // The same step with nothing new: until the quick look changes, no full check is needed.
+        if (glance) {
+          quietKey = glance.key;
+          // Read once per quiet state, for a confirmation page that comes after the Manager's Submit.
+          if (now.labels.length) lastAnswers = await inForm(tabId, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => lastAnswers);
         }
       }
     })();
@@ -3340,10 +3437,15 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       return { ok: false, message: saved.message || 'QTS could not save the bid. Click Submitted again.' };
     }
     submitted = true;
-    endReason = 'Submitted: the bid was saved.';
+    endReason = decision.detected
+      ? `Submitted: QTS saw the site's confirmation ("${String(decision.detected).slice(0, 120)}") and saved the bid.`
+      : 'Submitted: the bid was saved.';
     await onProgress({ step: currentStep, phase: 'submitted' });
     await onProgress({ step: currentStep, phase: 'ended', reason: 'yes' });
     await clearManagerNotice(application.attemptId).catch(() => {});
+    // Learning: the boxes the Manager changed by hand become this site's forms of their saved answers
+    // (only questions that already have one). In the background: the bid is already saved.
+    if (auto && application.apiFlow) review.saveSiteForms?.({ answers: current }).catch(() => {});
     if (tab?.id != null) await chrome.tabs.remove(tab.id).catch(() => {});
     return { ok: true };
   })());
@@ -3374,6 +3476,74 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     if (!row || tab?.id == null) return { ok: false, error: 'QTS has no answer for this question.' };
     const outcome = await fillAndCheck(tab.id, row.field, row.answer, null, new Set()).catch((error) => ({ ok: false, error: error?.message }));
     return outcome.ok ? { ok: true } : { ok: false, error: outcome.error || 'The site did not take it. Fill it by hand.' };
+  };
+  /**
+   * Auto Apply: "Save for this site" (explicit) and Submitted (learning): every box the Manager filled
+   * or changed by hand is kept as THIS job site's form of its saved answer, used at once by every
+   * open application in this Chrome and on every later job of the site. Explicit, a choice or short
+   * answer with no saved answer yet becomes one (this candidate). Profile facts and secrets never.
+   * answers: the boxes as read before the page left (Submitted); else they are read now.
+   */
+  review.saveSiteForms = async ({ explicit = false, answers = null } = {}) => {
+    if (!auto || !application.apiFlow || tab?.id == null) return { ok: false, error: 'Save for this site works in Auto Apply.' };
+    const helpers = self.__qtsApplyAnswers;
+    const siteKey = application.siteKey || helpers.siteKeyOf((await getTab(tab.id))?.url);
+    if (!siteKey) return { ok: false, error: 'This page has no job site address.' };
+    const boxes = answers?.length ? answers : await inForm(tab.id, () => globalThis.__qtsApplyForm.currentAnswers()).catch(() => []);
+    const plain = (value) => String(Array.isArray(value) ? value.join(' | ') : value ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+    const filledBy = new Map(Object.values(answersUsed).filter((entry) => entry?.fieldId).map((entry) => [entry.fieldId, plain(entry.value)]));
+    const send = async (answer) => workerApiRequest('POST', '/api/extension/apply/answer-library', { attemptId: application.attemptId, action: 'save', answer });
+    const rowFor = (label) => {
+      const key = helpers.correctionKey(label);
+      for (const scope of ['candidate', 'application', 'manager']) {
+        const row = (application.savedAnswers || []).find((entry) => entry.scope === scope && entry.id && helpers.correctionKey(entry.questionText) === key);
+        if (row) return row;
+      }
+      return null;
+    };
+    let saved = 0, created = 0;
+    const failed = [];
+    for (const box of boxes || []) {
+      const value = plain(box.value);
+      if (!value || value.length > 500 || ['file', 'password'].includes(box.kind)) continue;
+      if (/password|passcode|captcha|verification code|one.time code|\bOTP\b/i.test(box.label || '')) continue;
+      // Who the candidate is stays the profile's (name, email, phone, city, LinkedIn…).
+      if (self.__qtsSemanticFields?.recognize(box.label)?.definition?.profileField) continue;
+      // What QTS filled and the Manager left as it was is already known.
+      if (filledBy.has(box.id) && filledBy.get(box.id).toLowerCase() === value.toLowerCase()) continue;
+      let row = rowFor(box.label);
+      if (row && formsOfRow(row).some((form) => form.site === siteKey && plain(form.answer).toLowerCase() === value.toLowerCase())) continue;
+      if (!row) {
+        // Learning on Submitted never invents saved answers; only the Manager's own click does.
+        if (!explicit || (!box.options?.length && value.length > 120)) continue;
+        const made = await send({ question: box.label, answer: value, kind: box.kind, options: box.options || [], level: 'candidate' });
+        if (!made.success) { failed.push(`"${box.label}": ${made.message || 'not saved'}`); continue; }
+        application.savedAnswers = made.savedAnswers || application.savedAnswers;
+        created += 1;
+        row = rowFor(box.label);
+        if (!row) continue;
+      }
+      const result = await send({ id: row.id, version: row.version, question: row.questionText, fieldQuestion: box.label,
+        answer: value, kind: box.kind, options: box.options || [], confirmVariation: true, site: siteKey });
+      if (!result.success) { failed.push(`"${box.label}": ${result.message || 'not saved'}`); continue; }
+      application.savedAnswers = result.savedAnswers || application.savedAnswers;
+      saved += 1;
+    }
+    // At once for every open Auto Apply application in this Chrome: the same candidate's answers,
+    // and the answers for all candidates.
+    if (saved || created) {
+      const shared = (application.savedAnswers || []).filter((row) => row.scope === 'manager');
+      const own = (application.savedAnswers || []).filter((row) => row.scope === 'candidate');
+      for (const other of activeReviews.values()) {
+        if (other === review || !other.auto || !other.application?.apiFlow) continue;
+        const sameCandidate = application.candidate?.candidateId && other.application.candidate?.candidateId === application.candidate.candidateId;
+        other.application.savedAnswers = [...(other.application.savedAnswers || []).filter((row) => row.scope !== 'manager' && !(sameCandidate && row.scope === 'candidate')),
+          ...(sameCandidate ? own : []), ...shared];
+      }
+    }
+    diag('site-forms', { site: siteKey, saved, created, failed: failed.length, explicit });
+    if (!saved && !created) return failed.length ? { ok: false, error: failed.join('; ') } : { ok: true, message: 'Nothing new to save for this site: no box was filled or changed by hand.' };
+    return { ok: true, message: `Saved for ${siteKey}: ${saved} answer${saved === 1 ? '' : 's'}${created ? ` (${created} new)` : ''}.${failed.length ? ` Not saved: ${failed.join('; ')}` : ''}` };
   };
   const manualAccountStep = async (stepNumber, message, notice) => {
     return askManager(review, reviewState('review', {
@@ -3697,8 +3867,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       // still empty on this step (optional ones too); every other fill uses no AI.
       const aiNow = askAi && application.autoAi !== false;
       // Auto Apply: not filled until the Manager presses Alt+F (or Fill again); Alt+A asks the AI.
+      // No hint box for it in the panel (the Manager asked for none).
       if (auto && application.apiFlow && application.fillOnKey && !filled && !fillAgain && !aiNow) {
-        notice = 'Press Alt+F to fill this step (or Fill again). Alt+A asks the AI for the boxes still empty.';
         filled = { used: {}, unresolved: [], problems: [], provisional: [], waitingForKey: true };
       }
       askAi = false;

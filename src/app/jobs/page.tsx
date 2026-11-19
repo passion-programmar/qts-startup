@@ -12,6 +12,7 @@ import {
 } from "@/app/components/record-forms";
 import { GenerationSetup } from "@/app/components/generation-setup";
 import { OpenFolderButton } from "@/app/components/open-folder";
+import { LocalResumeFilesNotice } from "@/app/components/local-resume-files";
 import { ExportUrlsButton } from "@/app/components/export-urls";
 import { StopAllButtons } from "@/app/jobs/stop-all-buttons";
 import { AnswerApplicationButtons, ApplyAgainButton } from "@/app/jobs/apply-buttons";
@@ -301,6 +302,7 @@ export default async function JobsPage({
           })}
         />
         </JobSelectionProvider>
+        <LocalResumeFilesNotice />
       </main>
   );
 }

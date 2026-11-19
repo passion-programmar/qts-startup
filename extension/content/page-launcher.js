@@ -231,6 +231,7 @@ async function initializeQtsPageLauncher() {
     .work-refresh { padding: 3px 6px; border: 0; border-radius: 5px; background: transparent; color: #a5b4fc; font: inherit; cursor: pointer; }
     .work-jobs { max-height: 230px; overflow-y: auto; overscroll-behavior: contain; }
     .work-job { display: flex; align-items: flex-start; gap: 9px; padding: 9px 1px; border-top: 1px solid #1d293b; }
+    .work-job[hidden], .work-note[hidden] { display: none; }
     .work-job input { flex-shrink: 0; margin-top: 3px; accent-color: #a78bfa; }
     .work-link { display: flex; flex-direction: column; gap: 3px; min-width: 0; color: #e2e8f0; text-decoration: none; }
     .work-link:hover .work-title { color: #c4b5fd; }
@@ -616,7 +617,7 @@ async function initializeQtsPageLauncher() {
     for (const mode of WORK_MODES) {
       const ready = menu.querySelector(`[data-action="${mode}"] .ready`);
       if (ready) ready.textContent = candidate.loaded ? `${counts[mode]} ready` : '';
-      renderWorkPicker(mode);
+      updateWorkPicker(mode);
     }
   }
 
@@ -707,8 +708,13 @@ async function initializeQtsPageLauncher() {
     }
   }
 
-  function renderWorkPicker(action) {
-    const picker = workPickers.get(action), panel = picker.panel;
+  // The job list is built once (renderWorkPicker) and then only updated (updateWorkPicker): typing in
+  // its search box hides and shows rows, and a tick changes one box and the counts. Rebuilding up to
+  // 200 rows and the search box on every key made typing and ticking lag.
+  const jobMatches = (job, query) => !query || [job.title, job.company, job.url, job.candidateName].some(value => String(value || '').toLowerCase().includes(query));
+
+  function syncWorkToggle(action) {
+    const picker = workPickers.get(action);
     const account = chosenAccount();
     // "Choose jobs" shows with something ready (or a list already open): for the chosen candidate, or
     // with no candidate chosen, every candidate's jobs.
@@ -717,26 +723,77 @@ async function initializeQtsPageLauncher() {
     const checked = picker.loaded ? `${picker.selected.size} of ${picker.jobs.length}` : `all ${count}`;
     picker.toggle.textContent = `${picker.open ? '▾' : '▸'} Choose jobs (${checked})`;
     picker.toggle.setAttribute('aria-expanded', String(picker.open));
+  }
+
+  /** Brings the built list up to date with the search and the ticks, without rebuilding it. */
+  function updateWorkPicker(action) {
+    const picker = workPickers.get(action), refs = picker.refs;
+    // Built for another state (closed, another job list, loading, an error): built again instead.
+    if (!refs || !refs.list.isConnected || !picker.open || refs.jobs !== picker.jobs
+      || refs.loading !== picker.loading || refs.error !== picker.error || refs.hasMore !== picker.hasMore) {
+      renderWorkPicker(action);
+      return;
+    }
+    syncWorkToggle(action);
+    const query = String(picker.search || '').trim().toLowerCase();
+    let shown = 0, selectedVisible = 0;
+    refs.refresh.disabled = picker.loading || Boolean(picker.cancelling);
+    refs.cancel.textContent = picker.cancelling ? 'Cancelling…' : 'Cancel';
+    refs.cancel.disabled = Boolean(picker.cancelling);
+    for (const job of picker.jobs) {
+      const entry = refs.rows.get(job.id);
+      if (!entry) continue;
+      const match = jobMatches(job, query);
+      entry.row.hidden = !match;
+      entry.check.checked = !job.busy && picker.selected.has(job.id);
+      entry.check.disabled = Boolean(picker.cancelling || job.busy || job.selectable === false);
+      if (!match) continue;
+      shown += 1;
+      if (picker.selected.has(job.id)) selectedVisible += 1;
+    }
+    refs.all.checked = shown > 0 && selectedVisible === shown;
+    refs.all.indeterminate = selectedVisible > 0 && selectedVisible < shown;
+    refs.all.disabled = !shown || Boolean(picker.cancelling);
+    const noMatch = query && !shown && !picker.loading ? 'No jobs match your search.' : '';
+    refs.noMatch.textContent = noMatch;
+    refs.noMatch.hidden = !noMatch;
+    const hiddenSelected = picker.selected.size - selectedVisible;
+    const hiddenNote = query && hiddenSelected > 0 ? `${hiddenSelected} selected job${hiddenSelected === 1 ? ' is' : 's are'} hidden by this filter.` : '';
+    refs.hiddenNote.textContent = hiddenNote;
+    refs.hiddenNote.hidden = !hiddenNote;
+    refs.summary.textContent = `${picker.selected.size} selected${query ? ` · ${shown} shown` : ''}`;
+    const button = menu.querySelector(`[data-action="${action}"]`);
+    refs.start.disabled = picker.cancelling || picker.loading || !picker.selected.size || button.disabled || button.classList.contains('running');
+  }
+
+  function renderWorkPicker(action) {
+    const picker = workPickers.get(action), panel = picker.panel;
+    syncWorkToggle(action);
+    picker.refs = null;
     panel.replaceChildren(); panel.hidden = !picker.open;
     if (panel.hidden) return;
     const toolbar = Object.assign(document.createElement('div'), { className: 'work-toolbar' });
-    const query = String(picker.search || '').trim().toLowerCase();
-    const visible = picker.jobs.filter(job => !query || [job.title, job.company, job.url, job.candidateName].some(value => String(value || '').toLowerCase().includes(query)));
     const allLabel = document.createElement('label');
-    const selectedVisible = visible.filter(job => picker.selected.has(job.id)).length;
-    const all = Object.assign(document.createElement('input'), { type: 'checkbox', checked: visible.length > 0 && selectedVisible === visible.length });
-    all.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
-    all.disabled = !visible.length || Boolean(picker.cancelling);
-    all.addEventListener('change', () => { for (const job of visible) { if (all.checked) picker.selected.add(job.id); else picker.selected.delete(job.id); } renderWorkPicker(action); });
+    const all = Object.assign(document.createElement('input'), { type: 'checkbox' });
+    all.addEventListener('change', () => {
+      const query = String(picker.search || '').trim().toLowerCase();
+      for (const job of picker.jobs) {
+        if (!jobMatches(job, query)) continue;
+        if (all.checked) picker.selected.add(job.id); else picker.selected.delete(job.id);
+      }
+      updateWorkPicker(action);
+    });
     allLabel.append(all, 'Select all');
     const refresh = Object.assign(document.createElement('button'), { type: 'button', className: 'work-refresh', textContent: 'Refresh', disabled: picker.loading || Boolean(picker.cancelling) });
     refresh.addEventListener('click', () => loadWorkJobs(action));
     const search = Object.assign(document.createElement('input'), { type: 'search', className: 'work-search', placeholder: 'Title, URL, company', value: picker.search || '' });
     search.setAttribute('aria-label', 'Filter jobs by title, URL or company');
-    search.addEventListener('input', () => { const position = search.selectionStart; picker.search = search.value; renderWorkPicker(action); const next = panel.querySelector('.work-search'); next.focus({ preventScroll: true }); if (position !== null) next.setSelectionRange(position, position); });
+    // The same box stays while typing: only the rows below are hidden or shown.
+    search.addEventListener('input', () => { picker.search = search.value; updateWorkPicker(action); });
     toolbar.append(allLabel, search, refresh); panel.append(toolbar);
     const list = Object.assign(document.createElement('div'), { className: 'work-jobs' });
-    for (const job of visible) {
+    const rows = new Map();
+    for (const job of picker.jobs) {
       const row = Object.assign(document.createElement('div'), { className: `work-job${job.busy ? ' busy' : ''}`, title: job.busy ? 'Already in progress; cannot select.' : job.url });
       const check = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !job.busy && picker.selected.has(job.id) });
       check.disabled = Boolean(picker.cancelling || job.busy || job.selectable === false);
@@ -745,10 +802,7 @@ async function initializeQtsPageLauncher() {
       check.addEventListener('change', () => {
         if (check.checked) picker.selected.add(job.id);
         else picker.selected.delete(job.id);
-        const scroll = list.scrollTop;
-        renderWorkPicker(action);
-        picker.panel.querySelector('.work-jobs').scrollTop = scroll;
-        picker.panel.querySelector(`[data-job-id="${job.id}"]`)?.focus({ preventScroll: true });
+        updateWorkPicker(action);
       });
       let url;
       try { const parsed = new URL(job.url); if (['https:', 'http:'].includes(parsed.protocol)) url = parsed; } catch { /* Invalid saved addresses are never executable links. */ }
@@ -757,25 +811,32 @@ async function initializeQtsPageLauncher() {
       const title = Object.assign(document.createElement('span'), { className: 'work-title', textContent: job.title, title: job.url });
       const domain = Object.assign(document.createElement('span'), { className: 'work-domain', textContent: [url?.hostname.replace(/^www\./, '') || 'Link unavailable', job.company, job.candidateName, job.customUrl ? 'Custom URL · off by default' : '', job.busy ? 'In progress · unavailable' : ''].filter(Boolean).join(' · '), title: job.url });
       link.append(title, domain); row.append(check, link); list.append(row);
+      rows.set(job.id, { row, check });
     }
     panel.append(list);
-    if (query && !visible.length && !picker.loading) panel.append(Object.assign(document.createElement('div'), { className: 'work-note', textContent: 'No jobs match your search.' }));
-    const hiddenSelected = picker.selected.size - selectedVisible;
-    if (query && hiddenSelected > 0) panel.append(Object.assign(document.createElement('div'), { className: 'work-note', textContent: `${hiddenSelected} selected job${hiddenSelected === 1 ? ' is' : 's are'} hidden by this filter.` }));
+    const noMatch = Object.assign(document.createElement('div'), { className: 'work-note', hidden: true });
+    const hiddenNote = Object.assign(document.createElement('div'), { className: 'work-note', hidden: true });
+    panel.append(noMatch, hiddenNote);
     if (picker.loading || picker.error || !picker.jobs.length || picker.hasMore) {
       panel.append(Object.assign(document.createElement('div'), { className: `work-note${picker.error ? ' error' : ''}`, textContent: picker.loading ? 'Loading jobs…' : picker.error || (picker.hasMore ? 'Showing the first 200 eligible jobs. Refresh after this batch.' : (candidate.select.value ? 'No eligible jobs for this account.' : 'No eligible jobs.')) }));
     }
     const footer = Object.assign(document.createElement('div'), { className: 'work-footer' });
     const start = Object.assign(document.createElement('button'), { type: 'button', className: 'work-start', textContent: { generation: 'Generate selected', apply: 'Apply to selected', auto_apply: 'Auto Apply selected' }[action] });
     const button = menu.querySelector(`[data-action="${action}"]`);
-    start.disabled = picker.cancelling || picker.loading || !picker.selected.size || button.disabled || button.classList.contains('running');
     start.addEventListener('click', () => runAction(action, button));
     const cancel = Object.assign(document.createElement('button'), { type: 'button', className: 'work-cancel', textContent: picker.cancelling ? 'Cancelling…' : 'Cancel', disabled: Boolean(picker.cancelling) });
     cancel.setAttribute('aria-label', `Cancel ${picker.label} selection or run`);
     cancel.addEventListener('click', () => cancelWorkPicker(action));
     const buttons = Object.assign(document.createElement('div'), { className: 'work-buttons' });
     buttons.append(cancel, start);
-    footer.append(`${picker.selected.size} selected${query ? ` · ${visible.length} shown` : ''}`, buttons); panel.append(footer);
+    const summary = document.createElement('span');
+    footer.append(summary, buttons); panel.append(footer);
+    picker.refs = {
+      list, rows, all, refresh, cancel, noMatch, hiddenNote, summary, start,
+      jobs: picker.jobs, loading: picker.loading, error: picker.error, hasMore: picker.hasMore,
+    };
+    // Ticks, counts, filter and the start button come from the one update.
+    updateWorkPicker(action);
   }
 
   // Credentials are typed in an extension-origin frame, never in this page's DOM,
@@ -1729,12 +1790,8 @@ async function initializeQtsPageLauncher() {
     // The candidate stays fixed while a run uses it.
     candidate.select.disabled = ['generation', 'apply'].includes(workStatus)
       || [...workPickers.values()].some((picker) => picker.cancelling);
-    for (const [action, picker] of workPickers) {
-      const scroll = picker.panel.querySelector('.work-jobs')?.scrollTop || 0;
-      renderWorkPicker(action);
-      const list = picker.panel.querySelector('.work-jobs');
-      if (list) list.scrollTop = scroll;
-    }
+    // Every status change of a run lands here: the open lists are only updated, never rebuilt.
+    for (const action of workPickers.keys()) updateWorkPicker(action);
   }
 
   function refreshModeActions() {

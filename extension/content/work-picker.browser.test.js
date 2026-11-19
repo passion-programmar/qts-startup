@@ -132,7 +132,7 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     const requestsBeforeSearch = await page.evaluate(() => window.calls.length);
     for (const [query, title] of [['machine learning', 'Machine Learning Engineer III'], ['DJINNI.CO/jobs', 'Senior DevOps Engineer'], ['MAPBOX', 'Machine Learning Engineer III']]) {
       await page.evaluate(query => { const input = window.testRoot.querySelector('[data-work-picker="generation"] .work-search'); input.value = query; input.dispatchEvent(new Event('input')); }, query);
-      assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-title')].map(node => node.textContent)), [title]);
+      assert.deepEqual(await page.evaluate(() => [...window.testRoot.querySelectorAll('[data-work-picker="generation"] .work-job:not([hidden]) .work-title')].map(node => node.textContent)), [title]);
       assert.match(await page.evaluate(() => window.testRoot.querySelector('[data-work-picker="generation"]').textContent), /2 selected/);
     }
     await page.evaluate(() => { const input = window.testRoot.querySelector('[data-work-picker="generation"] .work-search'); input.value = 'no matches'; input.dispatchEvent(new Event('input')); });

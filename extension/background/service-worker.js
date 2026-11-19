@@ -105,8 +105,7 @@ const launcherFocus = self.__qtsPageActivity.createLauncherFocus({
   eligible: async (tab) => isExtractablePageUrl(tab.url)
     && !getJdHelperTabs.has(tab.id)
     && !self.__qtsChromePdf.isPrintTab(tab.id)
-    && !(await isWorkflowTab(tab.id, tab))
-    && !(await isPageBlockedForManager(tab.url, true)),
+    && !(await isWorkflowTab(tab.id, tab)),
 });
 const getJdNavigation = self.__qtsPageActivity.createNavigationMonitor({
   chrome, evaluate: (tabId, url, documentId) => processGetJdPage(tabId, url, documentId),
@@ -774,6 +773,7 @@ function isTextHighlightJobPage(tabId, url) {
   if (!textHighlightJobPages.has(key)) {
     for (const old of textHighlightJobPages.keys()) if (old.startsWith(`${tabId} `)) textHighlightJobPages.delete(old);
     textHighlightJobPages.set(key, (async () => {
+      // Site Setting blocked URLs: no text highlights, as no Get JD.
       if (await isPageBlockedForManager(url)) return false;
       for (const attempt of GET_JD_DETECTION_ATTEMPTS) {
         if (attempt.delayMs) await sleep(attempt.delayMs);
@@ -869,12 +869,28 @@ async function validateAutoApplyCustomUrlsResponse(result) {
   return { ...result, customUrls };
 }
 
-async function notifyPageUrlAccess(tabId, url) {
-  const rules = await getCachedManagerJobDetectionUrlRules();
+// Site Setting blocked URLs stop only Get JD (processGetJdPage) and text highlights
+// (isTextHighlightJobPage); the QTS button, Apply and Auto Apply keep working there. Only a tab printing PDFs turns QTS off.
+async function notifyPageUrlAccess(tabId) {
   await chrome.tabs.sendMessage(tabId, {
     type: 'QTS_PAGE_URL_CHANGED',
-    excluded: isManagerBlockedUrl(url, rules),
+    excluded: self.__qtsChromePdf.isPrintTab(tabId),
   }).catch(() => {});
+}
+
+// A rule added while a page is open: its Get JD panel, draft and retry go away. A page the
+// Manager just marked "Never on this site" keeps its message.
+async function clearGetJdOnBlockedTab(tab) {
+  if (!tab?.id || !tab.url || !(await isPageBlockedForManager(tab.url))) return;
+  const current = await readGetJdResultForTab(tab.id);
+  if (current?.status === 'dismissed') return;
+  await cancelGetJdAutoRetry(tab.id).catch(() => {});
+  await cancelGetJdClose(tab.id).catch(() => {});
+  getJdLastPageByTab.delete(tab.id);
+  if (current) await forgetGetJdResult(tab.id);
+  chrome.tabs.sendMessage(tab.id, { type: 'QTS_GET_JD_RESULT_UPDATED', result: null }).catch(() => {});
+  chrome.tabs.sendMessage(tab.id, { type: 'QTS_GET_JD_OUTCOME', outcome: { kind: 'clear' } }, { frameId: 0 })
+    .catch(() => {});
 }
 
 async function refreshLauncherForManagerJobRules() {
@@ -2236,6 +2252,8 @@ async function processGetJdPage(tabId, url, documentId = '', options = {}) {
       getJdFinishedPageByTab.set(tabId, { url, listPage: draftListPage });
       if (!(await checkDuplicate({ jobUrl: url, jobTitle: draftJob.title, company: draftJob.company }))) return;
       if (!(await isGetJdActive()) || (await getTab(tabId))?.url !== url) return;
+      // A Site Setting rule added while the page was read: no draft is shown.
+      if (await isPageBlockedForManager(url)) return;
       await saveGetJdResult(tabId, { ...getJdDraftResult(initialResult, tab, draftJob), listPage: draftListPage });
       return;
     }
@@ -5658,6 +5676,7 @@ async function autoDetectJob(
   if (!forcePipeline && !(await isAutoApplyArmed())) return;
 
   if (!isExtractablePageUrl(url) || isChatGptHostUrl(url)) return;
+  // Reading a page's job while browsing is Get JD's kind of work: never on Site Setting blocked URLs.
   if (await isPageBlockedForManager(url) || !(await isPageDetectedAsJobForManager(tabId))) return;
 
   const generation = (detectGenerationByTab.get(tabId) || 0) + 1;
@@ -5699,7 +5718,7 @@ async function startAutoApplyOnJobTab(tabId) {
   if (!isExtractablePageUrl(tab.url) || isChatGptHostUrl(tab.url)) {
     throw new Error('This tab is not a supported job page.');
   }
-  if (await isPageBlockedForManager(tab.url) || !(await isPageDetectedAsJobForManager(tabId))) {
+  if (!(await isPageDetectedAsJobForManager(tabId))) {
     throw new Error('This URL is not enabled as a job page for the signed-in Manager.');
   }
 
@@ -6089,6 +6108,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })().catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'The folder could not be opened.' }));
     return true;
   }
+  // Jobs page Remove / Delete selected: the removed jobs' résumé PDFs are deleted from this PC
+  // through the Apply PDFs folder (read + write), whichever Chrome downloaded them.
+  if (msg.type === 'QTS_DELETE_RESUME_FILES') {
+    (async () => {
+      if (!(await isQtsSite(sender.url))) {
+        sendResponse({ ok: false, error: 'Only the QTS site can delete résumé files.' });
+        return;
+      }
+      const files = Array.isArray(msg.files)
+        ? msg.files.filter((file) => typeof file === 'string' && file.length <= 500).slice(0, 400)
+        : [];
+      if (!files.length) {
+        sendResponse({ ok: true, deleted: 0, missing: 0 });
+        return;
+      }
+      const saved = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY);
+      sendResponse(await self.__qtsApplyLocalPdfs.deleteJobFiles(saved?.value || null, files));
+    })().catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'The résumé files could not be deleted.' }));
+    return true;
+  }
   // The Resume page's Download: both PDFs printed here as Generation prints them (shared/chrome-pdf.js),
   // in a hidden tab of the page's window. { ok: false } sends the page to QTS's server to print; an
   // invalid request is refused with its reason and nothing is printed (shared/resume-print-requests.js).
@@ -6470,6 +6509,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, error: 'Open a web page before starting Get JD.' });
         return;
       }
+      const previewTab = await getTab(tabId);
+      if (previewTab?.url && await isPageBlockedForManager(previewTab.url)) {
+        sendResponse({ ok: false, error: 'Get JD is off on this page (Site Setting).' });
+        return;
+      }
       const extraction = await extractJobFromTab(tabId);
       if (extraction.error) {
         sendResponse({ ok: false, error: extraction.error });
@@ -6515,7 +6559,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Get JD review must be requested from a web page.' });
       return false;
     }
-    readGetJdResultForTab(tabId)
+    // A Site Setting blocked URL shows no Get JD result, even one saved before the rule was added.
+    (async () => (sender.tab?.url && await isPageBlockedForManager(sender.tab.url)
+      ? null
+      : readGetJdResultForTab(tabId)))()
       .then((result) => sendResponse({ ok: true, result }))
       .catch((error) => sendResponse({
         ok: false,
@@ -6756,13 +6803,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'The current page is unavailable.' });
       return false;
     }
-    getCachedManagerJobDetectionUrlRules(msg.localOnly === true)
-      .then(async (rules) => {
-        const features = await getManagerExtensionFeatures(false, msg.localOnly === true);
+    getManagerExtensionFeatures(false, msg.localOnly === true)
+      .then((features) => {
         sendResponse({
           ok: true,
-          // A tab printing PDFs gets no QTS button: it would be printed into the PDF.
-          excluded: self.__qtsChromePdf.isPrintTab(sender.tab.id) || isManagerBlockedUrl(sender.tab.url, rules),
+          // A tab printing PDFs gets no QTS button: it would be printed into the PDF. Site Setting
+          // blocked URLs never turn QTS off; they only stop Get JD and text highlights.
+          excluded: self.__qtsChromePdf.isPrintTab(sender.tab.id),
           canManagePageExclusions: features.success === true
             && features.features?.canManagePageExclusions === true,
           canManageJobDetectionUrlRules: features.success === true
@@ -7609,6 +7656,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
         notifyPageUrlAccess(tab.id, tab.url).catch((error) => {
           console.warn('[QTS blocked URLs] Could not refresh an open page:', error);
         });
+        clearGetJdOnBlockedTab(tab).catch((error) => {
+          console.warn('[QTS blocked URLs] Could not clear Get JD on a blocked page:', error);
+        });
       }
     }).catch((error) => {
       console.warn('[QTS blocked URLs] Could not find open pages to refresh:', error);
@@ -7869,8 +7919,28 @@ async function recoverWorkOnStartup() {
   }
 }
 
+// Right after the extension is reloaded or updated, Chrome can refuse calls with "No SW" while the
+// new worker is still being registered. That is a moment, not a fault: recovery waits and tries
+// again (1 s, 3 s, 6 s), and the queue alarm would still pick the work up after that.
+const WORKER_NOT_READY = /\bNo SW\b/i;
+async function recoverWorkWhenReady(source) {
+  for (const waitMs of [0, 1000, 3000, 6000]) {
+    if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    try {
+      await recoverWorkOnStartup();
+      return;
+    } catch (error) {
+      if (!WORKER_NOT_READY.test(String(error?.message || error))) {
+        console.error(`[QTS] ${source} recovery will retry on the queue alarm:`, error);
+        return;
+      }
+    }
+  }
+  console.warn(`[QTS] ${source} recovery: Chrome was still starting this worker; the queue alarm picks the work up.`);
+}
+
 self.chrome?.runtime?.onStartup?.addListener(() => {
-  recoverWorkOnStartup().catch((error) => console.error('[QTS] Startup recovery will retry on the queue alarm:', error));
+  recoverWorkWhenReady('Startup');
 });
 
 self.chrome?.alarms?.onAlarm?.addListener((alarm) => {
@@ -8247,4 +8317,4 @@ async function openCapturePanel(tabId, { toggle = false } = {}) {
 
 // MV3 may wake a restored worker without delivering onStartup (including unpacked extensions).
 // Recover from durable state on every new worker instance; queue guards prevent duplicate work.
-recoverWorkOnStartup().catch((error) => console.error('[QTS] Worker recovery will retry on the queue alarm:', error));
+recoverWorkWhenReady('Worker');

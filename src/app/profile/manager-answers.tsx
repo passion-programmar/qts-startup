@@ -2,6 +2,8 @@
 import { useActionState, useMemo, useState } from "react";
 import { manageAnswer } from "./manager-answer-actions";
 import { dismissUnansweredQuestion } from "./unanswered-actions";
+import { AnswerForms } from "./answer-forms";
+import type { AnswerVariant } from "@/server/apply/manager-answer-values";
 import identity from "../../../extension/shared/answer-identity.js";
 import meaning from "../../../extension/shared/answer-meaning.js";
 
@@ -117,7 +119,7 @@ function AnswerForm({ row, duplicate, presetQuestion = "" }: { row: Row | null; 
   const [state, action, pending] = useActionState(manageAnswer, { message: "" });
   const saved = /^(Saved|Deleted|Moved)/.test(state.message);
   const wordings = row?.variants.map((variant, index) => ({ variant: variant.normalVariation || variant, index })) || [];
-  return <form action={action} className="space-y-2 rounded-xl border border-slate-200 p-3">
+  return <div className="space-y-2 rounded-xl border border-slate-200 p-3"><form action={action} className="space-y-2">
       {row && <input type="hidden" name="id" value={row.id} />}
       {row && <input type="hidden" name="version" value={row.version} />}
       <p className="text-xs font-semibold">{row ? row.scope === "candidate" ? `This candidate · ${row.candidateName || "Candidate"}` : row.scope === "manager" ? "All my candidates" : `This job · ${row.candidateName || "Candidate"}` : "Add an answer for all my candidates"}</p>
@@ -131,7 +133,10 @@ function AnswerForm({ row, duplicate, presetQuestion = "" }: { row: Row | null; 
         {row && <button disabled={pending} name="action" value="delete" formNoValidate className="rounded-lg border px-3 py-2 text-rose-600">Delete</button>}
       </div>
       {state.message && <p role="status" className={`rounded-lg p-2 text-xs ${saved ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>{state.message}</p>}
-    </form>;
+    </form>
+    {/* Separate forms: a form cannot sit inside the answer's own form. */}
+    {row && <AnswerForms id={row.id} version={row.version} variants={row.variants as AnswerVariant[]} />}
+  </div>;
 }
 
 /** Language levels for all candidates, saved as one answer ("English: Native; Other languages: A1"). */

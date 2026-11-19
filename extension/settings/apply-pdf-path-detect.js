@@ -42,7 +42,13 @@
         }
         input.value = root;
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        status.textContent = `Found ${root}. Choose Save to use it.`;
+        // Found: saved at once when file URLs are on; otherwise it waits for that switch.
+        const save = document.getElementById('save-file-access');
+        if (save && !save.disabled && await global.__qtsApplyFileAccess?.permissionGranted?.()) {
+          save.click();
+          return;
+        }
+        status.textContent = `Found ${root}. Turn on Allow access to file URLs, then Save path.`;
         status.dataset.state = 'unconfigured';
       } catch (error) {
         status.textContent = error?.message || 'Could not look up QTS downloads. Type the path instead.';

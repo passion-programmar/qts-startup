@@ -57,6 +57,15 @@ function publishAutoApplyState() {
     .catch(error => console.error('Could not save Auto Apply status.', error));
 }
 
+// A restarted worker (an extension reload, Chrome waking it) runs nothing until it takes its runs up
+// again: the cards the previous worker left in the panel go now, or the launcher would show a job as
+// "Opening the form" that no longer runs ("That application is no longer open in this Chrome").
+// Runs taken up again publish themselves; the last finished run's summary is kept.
+Promise.resolve(chrome.storage?.local?.get(AUTO_APPLY_STATE_KEY)).then((stored) => {
+  lastAutoRun ||= stored?.[AUTO_APPLY_STATE_KEY]?.last || null;
+  publishAutoApplyState();
+}).catch(() => {});
+
 // Kept one change at a time, so two quick steps never overwrite each other.
 function changeStoredRuns(change) {
   const write = runWrites.then(async () => {
@@ -91,8 +100,9 @@ async function prepareAutoApplication(application) {
     application.minimalPrompt = false;
     application.aiRetryWaits = AUTO_APPLY_API_RETRY_WAITS;
     delete application.chatFocus;
-    // Saved answers play no part here, at any level: what they held, Super Admin writes in the prompt.
-    application.savedAnswers = [];
+    // Saved answers (2026-11-19, the Manager's decision): Alt+F fills a question its saved answer
+    // answers, by the same wording or, for Yes/No questions, by meaning and direction
+    // (apply-answers.js polarAnswer), with no AI. Personal facts still come only from the profile.
   }
   application.factSources = self.__qtsApplyAnswers.factSources({
     candidate: application.candidate,

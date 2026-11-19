@@ -31,11 +31,11 @@ test('signed-out or unauthorized Managers cannot configure local file access', a
 test('explicit setup validates permission and freshly authorizes Manager before storing only local config', async () => {
   const f = fixture(); await settle(); f.input.value = config.rootPath;
   await f.save(); assert.deepEqual(f.state.saved, config);
-  assert.equal(f.folderPicker.hidden, true, 'inactive picker permission warnings do not contradict direct setup');
+  assert.equal(f.folderPicker.hidden, false, 'step 1 (the chosen folder) always shows: deleting résumés needs it');
   assert.equal(f.state.messages.length, 2); assert.equal(f.state.messages.every((message) => message.refresh === true && !JSON.stringify(message).includes(config.rootPath)), true);
-  assert.match(f.status.textContent, /close settings.*Retry autofill/);
+  assert.match(f.status.textContent, /keep working after restarts.*Retry autofill/);
   assert.deepEqual(f.state.events, ['qts-pdf-folder-updated']);
-  await f.picker(); assert.equal(f.state.saved, null); assert.match(f.status.textContent, /handle is unchanged/);
+  await f.picker(); assert.equal(f.state.saved, null); assert.match(f.status.textContent, /uses only the folder chosen in step 1/);
   assert.equal(f.folderPicker.hidden, false);
 });
 
@@ -50,7 +50,7 @@ test('reopening and focus check revoked permission while retaining the saved pat
 test('invalid paths, missing permission and newly revoked Manager access never write settings', async () => {
   const f = fixture(); await settle(); f.input.value = 'C:/Downloads'; await f.save();
   assert.match(f.status.textContent, /end with QTS_Resume/);
-  f.input.value = config.rootPath; f.state.permission = false; await f.save(); assert.match(f.status.textContent, /Enable Allow access/);
+  f.input.value = config.rootPath; f.state.permission = false; await f.save(); assert.match(f.status.textContent, /Turn on Allow access/);
   f.state.permission = true; f.state.access = false; await f.save(); assert.match(f.status.textContent, /Sign in as a Manager/);
   assert.equal(f.state.writes.length, 0);
 });

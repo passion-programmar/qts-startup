@@ -81,7 +81,7 @@ test('authorized setup invokes a read-only picker immediately and rechecks Manag
   assert.equal(f.events.at(-1)[0], 'picker', 'no async access request before the user-gesture picker');
   await work;
   assert.deepEqual(f.events.map(([event]) => event), ['access', 'picker', 'access']);
-  assert.deepEqual(f.events[1][1], { mode: 'read', startIn: 'downloads' });
+  assert.deepEqual(f.events[1][1], { mode: 'readwrite', startIn: 'downloads' });
   assert.equal(f.state.saved, selected);
   assert.equal(f.status.dataset.state, 'ready');
   assert.equal(selected.calls.some(([event]) => event === 'request'), false);
@@ -112,7 +112,7 @@ test('denied read access and cancelling the picker preserve the existing folder'
   denied.state.selected = directory('prompt', 'denied');
   await denied.click();
   assert.equal(denied.status.dataset.state, 'error');
-  assert.match(denied.status.textContent, /Read access was not granted/);
+  assert.match(denied.status.textContent, /Read and write access was not granted/);
   assert.equal(denied.state.saved, saved);
   assert.equal(denied.state.writes.length, 0);
   assert.deepEqual(denied.state.selected.calls, [['query', 'read'], ['request', 'read']]);

@@ -17,6 +17,9 @@ export function variantUpdate(next: AnswerVariant, authoritativeAnswer = next.an
         and coalesce(coalesce(saved.value->'normalVariation', saved.value)->>'questionText', '') = ${next.questionText || ''}
         and coalesce(coalesce(saved.value->'normalVariation', saved.value)->'representation', 'null'::jsonb) = ${JSON.stringify(next.representation || null)}::jsonb
         and coalesce(coalesce(saved.value->'normalVariation', saved.value)->>'policyContext', '') = ${next.policyContext || ''}
+        -- A form for one job site replaces only that site's form; other forms ("30 days") are each kept.
+        and coalesce(coalesce(saved.value->'normalVariation', saved.value)->>'site', '') = ${next.site || ''}
+        and (${next.kind} <> 'alternative' or coalesce(saved.value->'normalVariation', saved.value)->>'answer' = ${next.answer})
         and (coalesce(saved.value->'normalVariation', saved.value)->'options') @> ${JSON.stringify(next.options)}::jsonb
         and ${JSON.stringify(next.options)}::jsonb @> (coalesce(saved.value->'normalVariation', saved.value)->'options'))
         and (not (saved.value ? 'identity') or saved.value->'identity'->>'key' = ${next.identity?.key || ''})

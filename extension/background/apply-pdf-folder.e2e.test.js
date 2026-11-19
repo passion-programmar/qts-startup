@@ -169,7 +169,7 @@ test('authorized Managers configure one persistent read-only folder and both App
     await settings.click('#choose-folder');
     await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready');
     console.log('[folder setup] selected real directory handle');
-    assert.deepEqual(await settings.evaluate(() => window.pickerOptions), { mode: 'read', startIn: 'downloads' });
+    assert.deepEqual(await settings.evaluate(() => window.pickerOptions), { mode: 'readwrite', startIn: 'downloads' });
     assert.equal(await settings.evaluate(() => window.pickerUserGesture), true);
     await folderPanel.evaluate(() => window.dispatchEvent(new Event('focus')));
     await folderPanel.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready'
@@ -214,7 +214,7 @@ test('authorized Managers configure one persistent read-only folder and both App
     await settings.click('#restore-access');
     await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready');
     assert.equal(await settings.evaluate(() => window.restoreUserGesture), true);
-    assert.deepEqual(await settings.evaluate(() => window.restoreOptions), { mode: 'read' });
+    assert.deepEqual(await settings.evaluate(() => window.restoreOptions), { mode: 'readwrite' });
     await settings.reload();
     await settings.waitForFunction(() => document.getElementById('folder-status').dataset.state === 'ready');
 

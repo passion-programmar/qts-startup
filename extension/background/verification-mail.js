@@ -5,6 +5,11 @@
 // Both Normal Apply and Auto Apply call complete() where they meet such a page.
 
 (function initializeQtsVerificationMail(global) {
+  // Switched off for now (the Manager asked, 2026-11-19): the hosted server has no verification
+  // endpoint yet. Off, nothing is checked, asked or shown: complete() answers "not done" at once
+  // (the page stays for the Manager, as with no mailbox) and the 4-second watcher does nothing.
+  // Set to true to turn the verification mailbox back on; the code below is unchanged.
+  const ENABLED = false;
   const FIRST_WAIT_MS = 15_000;
   const ASKS = 3;
   const PAGE_MOVE_WAIT_MS = 15_000;
@@ -76,6 +81,7 @@
   const perApplication = new Map();
 
   function complete(tabId, application, options = {}) {
+    if (!ENABLED) return Promise.resolve(false);
     if (!application?.attemptId || tabId == null) return Promise.resolve(false);
     if (inFlight.has(tabId)) return inFlight.get(tabId);
     const run = search(tabId, application.attemptId, options).finally(() => inFlight.delete(tabId));
@@ -175,7 +181,7 @@
 
   let watching = false;
   setInterval(() => {
-    if (watching) return;
+    if (!ENABLED || watching) return;
     watching = true;
     watch().catch(() => {}).finally(() => { watching = false; });
   }, WATCH_EVERY_MS);

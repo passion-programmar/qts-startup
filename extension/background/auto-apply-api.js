@@ -173,6 +173,7 @@ function answerContext(application) {
     experiences: application.profileDetails?.experiences || [],
     jobCompany: application.job.company || '',
     jobLocation: application.job.location || '',
+    siteKey: application.siteKey || '',
   };
 }
 
@@ -252,6 +253,8 @@ async function fillApiFormPage(tabId, application, keepAlive, step, options = {}
 
 async function fillApiFormPageBody(tabId, application, keepAlive, step, options, stepAttempts) {
   const helpers = self.__qtsApplyAnswers;
+  // The job site this page is on (its own form of a saved answer is used first): from the page itself.
+  application.siteKey = helpers.siteKeyOf?.((await chrome.tabs.get(tabId).catch(() => null))?.url) || application.siteKey || '';
   const throwIfStopped = async () => {
     if (options.stop && await options.stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
   };
@@ -282,28 +285,39 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   const finish = async ({ checks = true } = {}) => {
     const checksStarted = Date.now();
     if (checks) {
-      const uploadProblems = await inForm(tabId, async () => {
+      // The step's checks, read in ONE trip into the page (they were seven): attachments, required
+      // questions still empty, whether the form is still shown, questions QTS could not read, frames
+      // it cannot read, and the site's own error messages. Each read fails on its own, as before.
+      const seen = await inForm(tabId, async () => {
         const api = globalThis.__qtsApplyForm;
-        const verified = await api.verifyUploads();
-        const missing = api.emptyRequiredUploads().filter((entry) => !verified.some((issue) => issue.id === entry.id));
-        return [...verified, ...missing.map((entry) => ({ ...entry, message: 'A required attachment is still missing. Check this upload manually.' }))];
-      }).catch(() => [{ id: null, label: 'Attachments', message: 'Could not verify the attachments. Check them before continuing.' }]);
+        const safe = (read, fallback) => { try { return read(); } catch { return fallback; } };
+        let uploads = null;
+        try {
+          const verified = await api.verifyUploads();
+          const missing = api.emptyRequiredUploads().filter((entry) => !verified.some((issue) => issue.id === entry.id));
+          uploads = [...verified, ...missing.map((entry) => ({ ...entry, message: 'A required attachment is still missing. Check this upload manually.' }))];
+        } catch { /* Reported below as "could not verify". */ }
+        return {
+          uploads,
+          stillEmpty: safe(() => api.emptyRequired(), []),
+          shown: safe(() => api.scanForm().filter((field) => !field.hidden).length, null),
+          unread: safe(() => api.unreadRequired(), []),
+          frames: safe(() => api.unreadableFrames(), []),
+          errors: safe(() => api.fieldErrors(), []),
+        };
+      }).catch(() => null) || { uploads: null, stillEmpty: [], shown: null, unread: [], frames: [], errors: [] };
+      const uploadProblems = seen.uploads || [{ id: null, label: 'Attachments', message: 'Could not verify the attachments. Check them before continuing.' }];
       for (const entry of uploadProblems) problem(entry.message, entry, 'upload');
       const listed = (entry) => problems.some((known) => known.fieldId && known.fieldId === entry.id);
-      const stillEmpty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
-      for (const entry of stillEmpty || []) if (!listed(entry)) problem(`Still empty: "${entry.label}".`, entry);
+      for (const entry of seen.stillEmpty || []) if (!listed(entry)) problem(`Still empty: "${entry.label}".`, entry);
       const answeredIds = new Set(Object.values(used).map((answer) => answer.fieldId));
       for (const entry of unresolved) if (entry.required && !answeredIds.has(entry.id) && !listed(entry)) problem(`Still empty: "${entry.label}".`, entry);
-      const shownNow = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm().filter((field) => !field.hidden).length).catch(() => null);
-      if (metFields.size && shownNow === 0) problem('The application form is no longer shown on this page (it may have closed): open it again and check every answer before Submit.');
-      const unread = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadRequired()).catch(() => []);
-      for (const entry of (unread || []).filter((item) => !listed(item))) {
+      if (metFields.size && seen.shown === 0) problem('The application form is no longer shown on this page (it may have closed): open it again and check every answer before Submit.');
+      for (const entry of (seen.unread || []).filter((item) => !listed(item))) {
         problem(entry.kind === 'unread' ? `QTS couldn't read this question — check it: "${entry.label}".` : `Still empty: "${entry.label}".`, entry);
       }
-      const frames = await inForm(tabId, () => globalThis.__qtsApplyForm.unreadableFrames()).catch(() => []);
-      for (const host of [...new Set(frames || [])]) problem(`Part of this page comes from ${host}, which QTS cannot read: check it for questions to answer.`);
-      const errors = await inForm(tabId, () => globalThis.__qtsApplyForm.fieldErrors()).catch(() => []);
-      for (const text of errors || []) problem(`The form shows: ${text}`);
+      for (const host of [...new Set(seen.frames || [])]) problem(`Part of this page comes from ${host}, which QTS cannot read: check it for questions to answer.`);
+      for (const text of seen.errors || []) problem(`The form shows: ${text}`);
     }
     timings.checks = Date.now() - checksStarted;
     const report = stepReport(step, metFields, used, problems, stepAttempts, { ...timings, total: Date.now() - stepStarted }, (application.aiCalls || 0) - aiCallsBefore);
@@ -390,11 +404,39 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   emptiedCount = (cleaned.emptied || []).length;
   if (!quick) await settle(300, 1500);
 
+  // The AI is called at most once per fill (one Ask AI = one call): a question that appears later in
+  // this fill, or an answer the site refuses, is left for the Manager and the next Ask AI.
+  let aiAsked = false;
+  // Light fill (default; storage qtsApplyLightFill=false turns it off): after a round, the quick look
+  // (address, number of boxes, error marks; no layout work) decides whether the page changed. Unchanged,
+  // the next full read of every question is skipped; only the cheap "required question still empty"
+  // check runs, and a full read follows only when it finds one to try again.
+  const lightFill = (await chrome.storage.local.get('qtsApplyLightFill').catch(() => ({}))).qtsApplyLightFill !== false;
+  const glanceKey = () => inForm(tabId, () => globalThis.__qtsApplyForm.stepGlance?.()?.key ?? null).catch(() => null);
+  let quietAfterFill = false;
   // Rounds: a question that appears after an earlier answer goes through the same steps, alone.
   for (let round = 0; round <= APPLY_FILL_ROUNDS; round += 1) {
     await throwIfStopped();
+    if (quietAfterFill) {
+      quietAfterFill = false;
+      // Complete before review (as below, without the full read): a required question still empty
+      // gets one more round, as if new.
+      if (rechecked) break;
+      rechecked = true;
+      const empty = await inForm(tabId, () => globalThis.__qtsApplyForm.emptyRequired()).catch(() => []);
+      let again = 0;
+      for (const entry of empty || []) {
+        if (problems.some((known) => known.fieldId && known.fieldId === entry.id)) continue;
+        if (await stillAnswered(metFields.get(entry.id) || entry)) continue;
+        seen.delete(entry.id);
+        again += 1;
+      }
+      if (!again) break;
+    }
     // 2. Read every question the page shows now.
     const fields = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist({ fullNotes: true })) || [];
+    // The page as this round read it, to tell after the filling whether anything new appeared.
+    const readKey = lightFill ? await glanceKey() : null;
     let fresh = [];
     for (const field of fields) {
       if (field.hidden || field.disabled || field.unrelated || field.account || field.managerChanged || field.trackingValue || reviewed.has(field.id) || seen.has(field.id)) continue;
@@ -432,7 +474,12 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     const discoveryStarted = Date.now();
     let plan = helpers.planApiFields(fresh, application.candidate, application.savedAnswers, answerContext(application));
     const unread = plan.ai.filter((entry) => !entry.check).map((entry) => fresh.find((field) => field.id === entry.field.id)).filter(Boolean);
-    const changedByLooking = await readComboboxOptions(tabId, unread, options.stop);
+    // A phone's country-code list is looked up too: one search for the candidate's country, then the
+    // profile picks the number's own code from what it shows.
+    for (const field of fresh) {
+      if (field.kind === 'combobox' && /^phone country code$/i.test(String(field.label || '').trim()) && !field.options?.length && !unread.includes(field)) unread.push(field);
+    }
+    const changedByLooking = await readComboboxOptions(tabId, unread, options.stop, application.candidate);
     for (const field of changedByLooking) problem(`Check "${field.label}": looking at its choices changed it; set it as it should be.`, field);
     // Decided again: the choices are known now.
     plan = helpers.planApiFields(fresh, application.candidate, application.savedAnswers, answerContext(application));
@@ -482,14 +529,15 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       }
       toAsk.push(entry);
     }
-    if (toAsk.length && options.noAi) {
-      // The AI is asked only when the Manager clicks Ask AI. Until then a question the profile states
-      // takes the profile's value; the rest stay empty, listed for the Manager.
+    if (toAsk.length && (options.noAi || aiAsked)) {
+      // The AI is asked only when the Manager clicks Ask AI, and once per click. Until then a question
+      // the profile states takes the profile's value; the rest stay empty, listed for the Manager.
       for (const { field, check } of toAsk) {
         if (check) answers[field.id] = { ...check };
-        else leave(field, 'not asked yet: click Ask AI, or fill it yourself');
+        else leave(field, aiAsked ? 'appeared after the AI was asked: click Ask AI again, or fill it yourself' : 'not asked yet: click Ask AI, or fill it yourself');
       }
     } else if (toAsk.length) {
+      aiAsked = true;
       let failure = null;
       let replied = {};
       let reviewed = [];
@@ -648,8 +696,10 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
         problem(`Fill by hand: "${field.label}" — the site did not take "${answerText(chosen.value)}" (${outcome.error}).`, field);
       }
     }
-    // One follow-up for what the site refused: its reason and the choices it showed go with it.
-    if (issues.length && application.geminiTurns?.length && !options.noAi) {
+    // What the site refused is never sent to the AI again on its own (the Manager asked for one call
+    // per Ask AI): it is listed with the site's reason, for the Manager or their next Ask AI.
+    const ASK_AI_AGAIN_ON_REFUSAL = false;
+    if (ASK_AI_AGAIN_ON_REFUSAL && issues.length && application.geminiTurns?.length && !options.noAi) {
       const tried = new Map(issues.map((entry) => [entry.id, entry.reason]));
       const retry = plan.ai.map((entry) => entry.field).filter((field) => tried.has(field.id));
       await say('Asking the AI about the answers the site refused…');
@@ -688,6 +738,8 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     timings.fill += Date.now() - fillStarted;
     // 6. Let the page show the questions these answers unlock, then look again.
     await settle(350, 1500);
+    // Nothing new on the page (same address, boxes and error marks): the next full read is skipped.
+    if (lightFill && readKey !== null && (await glanceKey()) === readKey) quietAfterFill = true;
   }
   await say('Checking the page…');
   return finish();

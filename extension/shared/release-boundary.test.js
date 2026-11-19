@@ -170,8 +170,8 @@ test('Get JD applies Manager URL blocks, then settled job-page detection, before
   assert.equal(serviceWorker.includes("status: 'not_job_page'"), false);
   assert.ok(serviceWorker.includes("msg.type === 'CHECK_EXTENSION_PAGE_ALLOWED'"));
   assert.ok(serviceWorker.includes("workerApiRequest('GET', '/api/extension/job-detection-url-rules')"));
-  // A tab printing PDFs is excluded too (shared/chrome-pdf.js); Manager URL blocks still apply.
-  assert.ok(serviceWorker.includes('excluded: self.__qtsChromePdf.isPrintTab(sender.tab.id) || isManagerBlockedUrl(sender.tab.url, rules)'));
+  // Only a tab printing PDFs is excluded (shared/chrome-pdf.js); Manager URL blocks stop Get JD only.
+  assert.ok(serviceWorker.includes('excluded: self.__qtsChromePdf.isPrintTab(sender.tab.id),'));
   assert.equal(serviceWorker.includes('__qtsPageExclusions.shouldSkipPage'), false);
   assert.equal(serviceWorker.includes('function isIgnoredSite('), false);
   assert.equal(serviceWorker.includes("const ignored = new Set(["), false);

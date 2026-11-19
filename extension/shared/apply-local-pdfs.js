@@ -61,11 +61,64 @@
     };
   }
 
+  // A removed job's résumé and cover letter (Downloads-relative "QTS_Resume/…/x.pdf" paths) are
+  // deleted through the saved folder, not Chrome's download list, so any Chrome on this PC with
+  // read + write access to QTS_Resume can do it. Only .pdf files are touched; then their job folder
+  // (QTS_Resume/<manager>/<candidate>/<job>/) goes too, but only when nothing else is left in it.
+  async function deleteJobFiles(directoryHandle, paths) {
+    if (!directoryHandle || typeof directoryHandle.queryPermission !== 'function') {
+      return { ok: false, needsAccess: true, error: 'Choose the QTS_Resume folder in Apply PDFs folder first.' };
+    }
+    if (await directoryHandle.queryPermission({ mode: 'readwrite' }) !== 'granted') {
+      return { ok: false, needsAccess: true, error: 'Allow read and write access to QTS_Resume in Apply PDFs folder.' };
+    }
+    let deleted = 0;
+    let missing = 0;
+    const folders = new Map();
+    for (const path of [...new Set(paths)]) {
+      let segments;
+      try {
+        segments = relativePathSegments(directoryHandle, path);
+      } catch {
+        continue;
+      }
+      const filename = segments.pop();
+      if (!/\.pdf$/i.test(filename) || /[\\/\u0000-\u001f]/.test(filename)) continue;
+      let parent = directoryHandle;
+      try {
+        for (const segment of segments) parent = await parent.getDirectoryHandle(segment);
+        await parent.removeEntry(filename);
+        deleted += 1;
+      } catch (error) {
+        if (error?.name === 'NotFoundError') {
+          missing += 1;
+          continue;
+        }
+        throw error;
+      }
+      // The full Downloads path has five parts: QTS_Resume, manager, candidate, job folder, file.
+      if (safePathSegments(path).length === 5 && segments.length) folders.set(segments.join('/'), segments);
+    }
+    for (const segments of folders.values()) {
+      const folderName = segments[segments.length - 1];
+      let parent = directoryHandle;
+      try {
+        for (const segment of segments.slice(0, -1)) parent = await parent.getDirectoryHandle(segment);
+        // Not recursive: a folder still holding anything (a file the Manager added) is kept.
+        await parent.removeEntry(folderName);
+      } catch {
+        // Not empty, or already gone.
+      }
+    }
+    return { ok: true, deleted, missing };
+  }
+
   global.__qtsApplyLocalPdfs = Object.freeze({
     SETTING_KEY,
     safePathSegments,
     relativePathSegments,
     readApplyDocuments,
+    deleteJobFiles,
   });
   if (typeof module !== 'undefined' && module.exports) module.exports = global.__qtsApplyLocalPdfs;
 })(typeof self !== 'undefined' ? self : globalThis);

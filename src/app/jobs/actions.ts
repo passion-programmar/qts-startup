@@ -6,7 +6,7 @@ import { applyAttempts, jobs, profiles, prompts, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
 import { jobHasBid } from "@/server/jobs/job-bids";
-import { deleteJobsMessage, deleteManagerJobs, MAX_JOBS_PER_DELETE, type DeleteJobsResult } from "@/server/jobs/delete-jobs";
+import { deleteJobsMessage, deleteManagerJobs, localResumeFiles, MAX_JOBS_PER_DELETE, type DeleteJobsResult } from "@/server/jobs/delete-jobs";
 import { answerApplication, applyJobAgain } from "@/server/apply/apply-attempts";
 import { computeJobKey, computeTitleCompanyKey } from "@/server/jobs/job-key";
 import { jobStatusChangeError, type JobStatus } from "@/server/jobs/job-status-change";
@@ -266,13 +266,15 @@ export async function deleteJobAction(
   if (!uuid(id)) return { error: "Invalid job.", success: null };
   // A row whose account applied (a bid exists) keeps its job; delete the bid on the Bids page first.
   const appliedBid = jobHasBid();
+  let resumeFiles: string[] = [];
   try {
     const deleted = await db.delete(jobs).where(and(
       eq(jobs.id, id),
       eq(jobs.managerId, manager.id),
       ne(jobs.generationStatus, "processing"),
       sql`not ${appliedBid}`,
-    )).returning({ id: jobs.id });
+    )).returning({ id: jobs.id, resumeLocalPath: jobs.resumeLocalPath, coverLetterLocalPath: jobs.coverLetterLocalPath });
+    resumeFiles = localResumeFiles(deleted);
     if (!deleted.length) {
       const [job] = await db.select({
         generationStatus: jobs.generationStatus,
@@ -308,9 +310,10 @@ export async function deleteJobAction(
     return {
       error: null,
       success: "Job deleted. Refresh the page if it is still visible.",
+      resumeFiles,
     };
   }
-  return { error: null, success: "Job deleted." };
+  return { error: null, success: "Job deleted.", resumeFiles };
 }
 
 /** "Delete selected" on the Jobs page: the jobs ticked on the page, as repeated "ids" values. */
@@ -353,7 +356,7 @@ export async function deleteJobsAction(
     }
   }
   const message = deleteJobsMessage(result);
-  return result.deleted > 0 ? { error: null, success: message } : { error: message, success: null };
+  return result.deleted > 0 ? { error: null, success: message, resumeFiles: result.resumeFiles } : { error: message, success: null };
 }
 
 function text(data: FormData, name: string, max: number): string {
