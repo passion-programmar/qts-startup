@@ -694,6 +694,13 @@
       "when": 1794901449938,
       "tag": "0098_bids_url_optional",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1795070123049,
+      "tag": "0099_custom_jobs",
+      "breakpoints": true
     }
   ]
 }

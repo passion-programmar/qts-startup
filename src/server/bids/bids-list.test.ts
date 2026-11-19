@@ -55,7 +55,7 @@ test("one page is read with the Manager's bids only, and the search covers every
   assert.deepEqual(fixture.offsets, [0]);
   const rowsQuery = fixture.queries.find((query) => query.sql.includes("ilike") && query.params.includes("manager-1"));
   assert.ok(rowsQuery);
-  for (const column of ["first_name", "job_url", "source_site_url", "job_title", "company", "created_at"]) assert.match(rowsQuery.sql, new RegExp(column));
+  for (const column of ["first_name", "job_url", "source_site_url", "job_title", "company", "created_at", "custom_note"]) assert.match(rowsQuery.sql, new RegExp(column));
   // The search words are escaped, so % matches a percent sign.
   assert.ok(rowsQuery.params.includes("%50\\%%"));
   // Answers are never read by the list.
@@ -77,5 +77,7 @@ test("Job URL search finds a bid from a pasted link however it was copied", asyn
   assert.ok(rowsQuery);
   assert.match(rowsQuery.sql, /job_url/);
   assert.doesNotMatch(rowsQuery.sql, /source_site_url/);
+  // A Custom bid's note is searched only with "all".
+  assert.doesNotMatch(rowsQuery.sql, /custom_note/);
   assert.ok(rowsQuery.params.includes("%boards.greenhouse.io/acme/jobs/123%"));
 });

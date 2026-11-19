@@ -3014,6 +3014,29 @@
       return { ok: true, action: 'application', text: startText(button), ...(href ? { href } : {}) };
     }
     if (starts.length && !hasApplicationFields) return { ok: false, email: true };
+    // "To apply for this job please visit the following URL: https://airtable.com/… →" (a job board
+    // that shows the employer's form as a written address after its Apply): that link, before any
+    // Log In or account button of the board itself.
+    if (!hasApplicationFields) {
+      const written = (text) => /^(https?:\/\/|www\.)\S{6,}/i.test(String(text).trim());
+      const near = (element) => {
+        for (let node = element.parentElement, depth = 0; node && depth < 3; node = node.parentElement, depth += 1) {
+          const words = textOf(node);
+          if (words.length > 600) break;
+          if (/\bto apply\b|\bapply (here|at|via|on|through|using)\b|\bapplication (form|link)\b|\bvisit the following\b|\bapply for this (job|role|position)\b/i.test(words)) return true;
+        }
+        return false;
+      };
+      const link = candidates.find((element) => element.tagName === 'A' && /^https?:/i.test(element.href || '')
+        && (() => { try { return new URL(element.href).hostname.replace(/^www\./, '') !== location.hostname.replace(/^www\./, ''); } catch { return false; } })()
+        && written(startText(element) || element.textContent || '') && near(element) && isShown(element));
+      if (link) {
+        if (probe) return { ok: true, action: 'application', text: startText(link) };
+        link.scrollIntoView({ block: 'center' });
+        link.click();
+        return { ok: true, action: 'application', text: startText(link), href: link.href };
+      }
+    }
     if (!hasApplicationFields) {
       const continuations = candidates.filter((element) => NEXT_TEXT.test(startText(element)));
       // Several Continue buttons: Normal Apply takes the main (largest) one; otherwise only a single one.

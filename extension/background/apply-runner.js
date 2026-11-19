@@ -2636,6 +2636,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!held?.auto || held.tabId !== sender.tab?.id || !held.saveSiteForms) return { ok: false, error: 'This page does not own the application review.' };
       return held.saveSiteForms({ explicit: true });
     }
+    // Auto Apply: the panel's Saved list (see review.savedAnswersAction).
+    if (msg.action === 'saved_answers') {
+      const held = activeReviews.get(msg.attemptId);
+      if (!held?.auto || held.tabId !== sender.tab?.id || !held.savedAnswersAction) return { ok: false, error: 'This page does not own the application review.' };
+      return held.savedAnswersAction({ op: String(msg.op || ''), input: msg.input });
+    }
     if (['recheck', 'reuse_answer', 'ask_ai'].includes(msg.action)) {
       const held = activeReviews.get(msg.attemptId);
       if (!held || held.tabId !== sender.tab?.id) return { ok: false, error: 'This page does not own the application review.' };
@@ -3365,7 +3371,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       url: application.job.url,
     },
     resumeFolder: application.job.resumeFolder,
-    ...(auto ? { resumeFolderPath: review.resumeFolderPath, candidateName: [application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate', candidateLabel: application.candidate.managerCategory || '' } : {}),
+    ...(auto ? { resumeFolderPath: review.resumeFolderPath, resumeFilePath: review.resumeFolderPath && application.job.resumeFile ? `${review.resumeFolderPath.replace(/\\+$/, '')}\\${application.job.resumeFile}` : '',candidateName: [application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate', candidateLabel: application.candidate.managerCategory || '' } : {}),
     aiName: aiName(application),
     ...(auto ? { references: {
       profile: panelProfile(application.candidate),
@@ -3544,6 +3550,54 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     diag('site-forms', { site: siteKey, saved, created, failed: failed.length, explicit });
     if (!saved && !created) return failed.length ? { ok: false, error: failed.join('; ') } : { ok: true, message: 'Nothing new to save for this site: no box was filled or changed by hand.' };
     return { ok: true, message: `Saved for ${siteKey}: ${saved} answer${saved === 1 ? '' : 's'}${created ? ` (${created} new)` : ''}.${failed.length ? ` Not saved: ${failed.join('; ')}` : ''}` };
+  };
+  /**
+   * Auto Apply: the panel's Saved list. load, add, edit and delete saved answers, their other forms
+   * and this job site's form; each change is used at once by every open Auto Apply application in
+   * this Chrome (the same candidate's answers, and the answers for all candidates).
+   */
+  const shareSavedAnswers = () => {
+    const shared = (application.savedAnswers || []).filter((row) => row.scope === 'manager');
+    const own = (application.savedAnswers || []).filter((row) => row.scope === 'candidate');
+    for (const other of activeReviews.values()) {
+      if (other === review || !other.auto || !other.application?.apiFlow) continue;
+      const sameCandidate = application.candidate?.candidateId && other.application.candidate?.candidateId === application.candidate.candidateId;
+      other.application.savedAnswers = [...(other.application.savedAnswers || []).filter((row) => row.scope !== 'manager' && !(sameCandidate && row.scope === 'candidate')),
+        ...(sameCandidate ? own : []), ...shared];
+    }
+  };
+  review.savedAnswersAction = async (msg) => {
+    if (!auto || !application.apiFlow) return { ok: false, error: 'The Saved list works in Auto Apply.' };
+    const siteKey = application.siteKey || self.__qtsApplyAnswers.siteKeyOf((await getTab(tab?.id))?.url) || '';
+    const call = (action, extra) => workerApiRequest('POST', '/api/extension/apply/answer-library', { attemptId: application.attemptId, action, ...extra });
+    const input = msg.input && typeof msg.input === 'object' ? msg.input : {};
+    const text = (value) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+    let result;
+    if (msg.op === 'load') result = await call('load', {});
+    else if (msg.op === 'add') result = await call('save', { answer: { question: text(input.question), answer: text(input.answer), kind: 'text', options: [], level: input.level === 'manager' ? 'manager' : 'candidate' } });
+    else if (msg.op === 'edit') result = await call('save', { answer: { id: input.id, version: input.version, question: input.question, answer: text(input.answer), kind: 'text', options: [], level: input.scope } });
+    else if (msg.op === 'delete') result = await call('delete', { answer: { id: input.id, version: input.version } });
+    else if (msg.op === 'alternative-add') result = await call('save', { answer: { id: input.id, version: input.version, question: input.question, answer: text(input.text), alternative: true } });
+    else if (msg.op === 'site-set' && input.siteKind) result = await call('forms', { form: { id: input.id, version: input.version, op: 'site-edit', site: siteKey, kind: input.siteKind, text: text(input.text) } });
+    else if (msg.op === 'site-set') result = await call('save', { answer: { id: input.id, version: input.version, question: input.question, fieldQuestion: input.question, answer: text(input.text), kind: 'any', options: [], confirmVariation: true, site: siteKey } });
+    else if (['alternative-remove', 'site-delete'].includes(msg.op)) result = await call('forms', { form: { id: input.id, version: input.version, op: msg.op, site: siteKey, kind: input.siteKind || 'any', text: text(input.text) } });
+    else return { ok: false, error: 'Unknown change.' };
+    if (!result?.success) return { ok: false, error: result?.message || 'Not saved. Try again.' };
+    // forms answers without the list: the list is read again.
+    if (!Array.isArray(result.savedAnswers)) result = await call('load', {});
+    if (Array.isArray(result?.savedAnswers)) {
+      application.savedAnswers = result.savedAnswers;
+      shareSavedAnswers();
+    }
+    const rows = (application.savedAnswers || []).filter((row) => row.id && row.scope !== 'application')
+      .map((row) => {
+        const forms = formsOfRow(row);
+        const siteForm = forms.find((form) => siteKey && form.site === siteKey);
+        return { id: row.id, version: row.version, scope: row.scope, question: row.questionText, answer: row.answer,
+          alternatives: forms.filter((form) => form.kind === 'alternative' && !form.site).map((form) => form.answer),
+          siteForm: siteForm ? { kind: siteForm.kind, answer: siteForm.answer } : null };
+      });
+    return { ok: true, rows, site: siteKey };
   };
   const manualAccountStep = async (stepNumber, message, notice) => {
     return askManager(review, reviewState('review', {

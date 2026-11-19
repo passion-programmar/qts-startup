@@ -12,7 +12,7 @@ let POST: (request: Request) => Promise<Response>;
 test.before(async () => {
   const mocks: Record<string, string> = {
     'server-only': '',
-    '@/lib/db': `const f=globalThis.__answerEditorRoute;export const neonSql={transaction:async(queries,options)=>{if(options.isolationLevel!=='Serializable')throw Error('missing serializable');return Promise.all(queries)},query:async(sql,params)=>{f.calls.push({sql,params});if(f.error)throw Object.assign(Error('fixture'),{code:f.error});return sql.includes('changed as')?(f.changed?[{id:'saved',scope:'candidate'}]:[]):(f.held?[{candidateId:'candidate',jobId:'job'}]:[])}};`,
+    '@/lib/db': `const f=globalThis.__answerEditorRoute;export const neonSql={transaction:async(queries,options)=>{if(options.isolationLevel!=='Serializable')throw Error('missing serializable');return Promise.all(queries)},query:async(sql,params)=>{f.calls.push({sql,params});if(f.error)throw Object.assign(Error('fixture'),{code:f.error});return sql.includes('changed as')?(f.changed?[{id:'saved',scope:'candidate'}]:[]):(f.held?[{candidateId:'candidate',jobId:'job'}]:[])}};export const db={};`,
     '@/server/apply/apply-route-auth': `import {NextResponse} from 'next/server';export const isUuid=v=>typeof v==='string'&&/^[a-f0-9-]{36}$/i.test(v);export const authorizeApplyRequest=async()=>globalThis.__answerEditorRoute.authenticated?{manager:{id:'${manager}',authVersion:3},browser:{id:'${browser}',extensionVersion:globalThis.__answerEditorRoute.extensionVersion}}:NextResponse.json({success:false},{status:401});`,
     '@/server/apply/manager-answers': `export const loadApplicationAnswers=async()=>globalThis.__answerEditorRoute.answers;`,
   };

@@ -366,7 +366,7 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   // ChatGPT gets three minutes per answer; an error ("This response couldn't load") closes the tab
   // and resends once in a fresh pinned tab; an unusable answer gets one follow-up; failed jobs retry
   // while Generation stays on without a persisted failure count.
-  assert.ok(serviceWorker.includes('const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;'));
+  assert.ok(serviceWorker.includes('const GENERATION_ANSWER_MAX_WAIT_MS = 5 * 60 * 1000;'));
   assert.ok(serviceWorker.includes('while (Date.now() - startedAt < GENERATION_ANSWER_MAX_WAIT_MS)'));
   assert.ok(serviceWorker.includes("response couldn['’]t load"));
   assert.ok(serviceWorker.includes("if ((!closed && error?.name !== 'ChatGptPageError') || attempt > 0) throw error;"));

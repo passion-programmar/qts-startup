@@ -69,7 +69,8 @@ function searchCondition(query: BidsQuery): SQL | undefined {
     company: ilike(bids.company, pattern),
     created: sql`${createdDay} ilike ${pattern}`,
   };
-  return query.field === "all" ? or(...Object.values(byField)) : byField[query.field];
+  // A pasted (Custom) bid's note is searched with everything else, not as a field of its own.
+  return query.field === "all" ? or(...Object.values(byField), ilike(bids.customNote, pattern)) : byField[query.field];
 }
 
 const listColumns = {
@@ -80,6 +81,8 @@ const listColumns = {
   workType: bids.workType,
   salary: bids.salary,
   url: bids.jobUrl,
+  customKind: bids.customKind,
+  customNote: bids.customNote,
   sourceSiteUrl: bids.sourceSiteUrl,
   appliedAt: bids.appliedAt,
   createdAt: bids.createdAt,

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
+import { and, eq, or, sql } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { neonSql } from "@/lib/db";
+import { managerApplyAnswers } from "@/db/schema";
+import { db, neonSql } from "@/lib/db";
+import { addAlternative, deleteSiteForm, editSiteForm, removeAlternative } from "@/server/apply/answer-variant-forms";
+import { parseSiteKey } from "@/server/apply/manager-answer-values";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { answerAttemptQuery, editAnswerQuery, linkWordingQuery, parseAnswerEdit } from "@/server/apply/manager-answer-editor";
 import { loadApplicationAnswers } from "@/server/apply/manager-answers";
@@ -18,14 +22,39 @@ export async function POST(request: Request): Promise<NextResponse> {
     const text = await request.text();
     if (text.length > 64000) return reply(400, "The answer request is too large.");
     const body = JSON.parse(text);
-    if (!isUuid(body?.attemptId) || !["load", "save", "delete", "link"].includes(body?.action)) return reply(400, "A valid application and answer action are required.");
+    if (!isUuid(body?.attemptId) || !["load", "save", "delete", "link", "forms"].includes(body?.action)) return reply(400, "A valid application and answer action are required.");
     if (body.action !== "load" && (compareExtensionVersions(auth.browser.extensionVersion || "", "1.46.0") ?? -1) < 0) return reply(426, "Update QTS to version 1.46.0 or newer before editing reusable answers. Existing autofill and other workflows remain available.");
     const owner = { managerId: auth.manager.id, browserId: auth.browser.id, authVersion: auth.manager.authVersion };
     const context = dialect.sqlToQuery(answerAttemptQuery(owner, body.attemptId));
     const [held] = await neonSql.query(context.sql, context.params) as { candidateId: string; jobId: string; profile?: Record<string, string | null> }[];
     if (!held) return reply(409, "This application is no longer held by this Chrome.");
     let profileUpdate = null;
-    if (body.action === "link") {
+    if (body.action === "forms") {
+      // The Auto Apply panel's Saved list: another form of an answer added or removed, this job
+      // site's form set or removed (the Profile page's own helpers). Only an answer this application
+      // may use (all candidates, this candidate, this job), and only the version the panel showed.
+      const form = body.form && typeof body.form === "object" ? body.form as Record<string, unknown> : {};
+      if (!isUuid(form.id) || typeof form.version !== "string" || !/^\d{1,12}(?:\.\d{1,6})?$/.test(form.version)) return reply(400, "Reload answers before changing this saved answer.");
+      const site = parseSiteKey(form.site);
+      if ((form.op === "site-edit" || form.op === "site-delete") && !site) return reply(400, "This page has no job site address.");
+      const where = and(eq(managerApplyAnswers.id, form.id), eq(managerApplyAnswers.managerId, owner.managerId),
+        sql`extract(epoch from ${managerApplyAnswers.updatedAt})::text = ${form.version}`,
+        or(eq(managerApplyAnswers.scope, "manager"),
+          and(eq(managerApplyAnswers.scope, "candidate"), eq(managerApplyAnswers.candidateId, held.candidateId)),
+          and(eq(managerApplyAnswers.scope, "application"), eq(managerApplyAnswers.candidateId, held.candidateId), eq(managerApplyAnswers.jobId, held.jobId))));
+      const [row] = await db.select({ answer: managerApplyAnswers.answer, variants: managerApplyAnswers.variants }).from(managerApplyAnswers).where(where).limit(1);
+      if (!row) return reply(409, "This answer changed or was deleted. Reload answers; nothing was overwritten.");
+      const variants = row.variants ?? [];
+      const kind = typeof form.kind === "string" && /^[a-z-]{1,30}$/.test(form.kind) ? form.kind : "text";
+      const result = form.op === "alternative-add" ? addAlternative(variants, form.text, row.answer)
+        : form.op === "alternative-remove" ? removeAlternative(variants, form.text)
+        : form.op === "site-edit" ? editSiteForm(variants, site, kind, form.text)
+        : form.op === "site-delete" ? deleteSiteForm(variants, site, kind)
+        : { ok: false as const, reason: "Unknown change." };
+      if (!result.ok) return reply(400, result.reason);
+      const changed = await db.update(managerApplyAnswers).set({ variants: result.variants, updatedAt: sql`clock_timestamp()` }).where(where).returning({ id: managerApplyAnswers.id });
+      if (!changed.length) return reply(409, "This answer changed or was deleted. Reload answers; nothing was overwritten.");
+    } else if (body.action === "link") {
       // [Use] in the panel: this wording now means that saved answer (the answer itself is unchanged).
       const link = linkWordingQuery(owner.managerId, held, body.answer);
       if (typeof link === "string") return reply(400, link);

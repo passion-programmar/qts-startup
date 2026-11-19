@@ -2305,7 +2305,8 @@
       for (const row of rows.filter((entry) => entry.scope === scope)) {
         const forms = formsOf(row);
         const inList = (value) => hasOptions(field) ? field.options.find((option) => plainWords(option) === plainWords(value)) ?? null : null;
-        const own = siteKey && forms.find((form) => form.site === siteKey && form.kind === field.kind && (!hasOptions(field) || inList(form.answer) !== null));
+        // A form typed in the panel's Saved list is for any box of the site ("any"), when it fits.
+        const own = siteKey && forms.find((form) => form.site === siteKey && (form.kind === field.kind || form.kind === 'any') && (!hasOptions(field) || inList(form.answer) !== null));
         if (own) return { value: hasOptions(field) ? inList(own.answer) : own.answer, source: 'reusable', fact: 'answer', intended: row.answer, siteForm: siteKey };
         const values = [row.answer, ...forms.filter((form) => form.kind === 'alternative').map((form) => form.answer)];
         if (hasOptions(field)) {

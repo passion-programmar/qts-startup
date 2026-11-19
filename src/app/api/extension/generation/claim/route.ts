@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, ne, notInArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
@@ -113,8 +113,11 @@ export async function POST(request: Request): Promise<NextResponse> {
             isNull(users.blockedAt),
             ...(selection ? [...(selection.candidateId ? [eq(jobs.candidateId, selection.candidateId)] : []), inArray(jobs.id, selection.jobIds)] : []),
             ...(excludedJobIds.length ? [notInArray(jobs.id, excludedJobIds)] : []),
+            // A custom job (the launcher's Custom) is made only by the Chrome it was pasted in…
+            browser ? or(isNull(jobs.pinnedBrowserId), eq(jobs.pinnedBrowserId, browser.id)) : isNull(jobs.pinnedBrowserId),
           ))
-          .orderBy(asc(jobs.createdAt), asc(jobs.id))
+          // … and that Chrome makes it first: the Manager is waiting for it.
+          .orderBy(...(browser ? [sql`(${jobs.pinnedBrowserId} = ${browser.id}) desc nulls last`] : []), asc(jobs.createdAt), asc(jobs.id))
           .limit(1);
         if (!candidate) {
           return NextResponse.json({ success: true, job: null });

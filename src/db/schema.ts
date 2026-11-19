@@ -559,6 +559,14 @@ export const jobs = pgTable(
       (): AnyPgColumn => extensionBrowsers.id,
       { onDelete: "set null" },
     ),
+    // Custom (the launcher's Custom: a pasted JD with no job page): 'easy_apply' or 'recruiter', the
+    // Manager's own note, and the Chrome it was made in, the only one that generates it (first).
+    customKind: text("custom_kind"),
+    customNote: text("custom_note"),
+    pinnedBrowserId: uuid("pinned_browser_id").references(
+      (): AnyPgColumn => extensionBrowsers.id,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -633,6 +641,9 @@ export const bids = pgTable(
     resumeSavedOn: text("resume_saved_on"),
     // The main site the job was found on, copied from the jobs row (LinkedIn, a job board, its own site).
     sourceSiteUrl: text("source_site_url"),
+    // Custom bids: 'easy_apply' or 'recruiter', and the Manager's note (copied from the job).
+    customKind: text("custom_kind"),
+    customNote: text("custom_note"),
     googleDrivePath: text("google_drive_path"),
     templateName: text("template_name"),
     promptName: text("prompt_name"),

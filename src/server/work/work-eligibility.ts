@@ -23,7 +23,8 @@ export function readyGeneration(now = new Date()) {
 
 // Manual Apply: the job conditions of claim_apply_attempt (drizzle/0083) when not Auto Apply.
 export function readyApply(): SQL {
-  return and(sql`${jobs.resumeLocalPath} is not null`, eq(jobs.generationStatus, "completed"), ne(jobs.status, "applied"),
+  // (Custom jobs, the launcher's Easy Apply and recruiter messages, are the Manager's to apply to.)
+  return and(sql`${jobs.resumeLocalPath} is not null`, sql`${jobs.customKind} is null`, eq(jobs.generationStatus, "completed"), ne(jobs.status, "applied"),
     sql`not ${jobHasBid()}`,
     sql`not exists (select 1 from apply_attempts x where x.job_id = ${jobs.id}
       and x.status in ('claimed', 'waiting_review', 'waiting_confirmation', 'submitting', 'confirmed', 'not_confirmed', 'failed', 'skipped'))`,
@@ -33,5 +34,5 @@ export function readyApply(): SQL {
 // Auto Apply exposes every resumable job without a bid. Live claims remain visible in the picker
 // so they can be shown disabled, while the locked claim function prevents concurrent processing.
 export function readyAutoApply() {
-  return and(sql`${jobs.resumeLocalPath} is not null`, sql`not ${jobHasBid()}`);
+  return and(sql`${jobs.resumeLocalPath} is not null`, sql`${jobs.customKind} is null`, sql`not ${jobHasBid()}`);
 }

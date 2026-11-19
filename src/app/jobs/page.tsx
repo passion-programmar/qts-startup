@@ -10,6 +10,7 @@ import {
   type ApplyStatusLine,
   type JobTrack,
 } from "@/app/components/record-forms";
+import { CustomKindBadge, CustomNote } from "@/app/components/custom-job-label";
 import { GenerationSetup } from "@/app/components/generation-setup";
 import { OpenFolderButton } from "@/app/components/open-folder";
 import { LocalResumeFilesNotice } from "@/app/components/local-resume-files";
@@ -263,16 +264,24 @@ export default async function JobsPage({
                 />,
                 offset + index + 1,
                 candidateName,
-                <a
-                  className="font-medium text-blue-700 underline-offset-2 hover:underline"
-                  href={row.url}
-                  key="job"
-                  rel="noopener noreferrer"
-                  target="_blank"
-                  title={row.url}
-                >
-                  {row.title}
-                </a>,
+                <div key="job">
+                  {/* A recruiter message has only a placeholder address, so its title is plain text. */}
+                  {row.customKind === "recruiter"
+                    ? <span className="font-medium text-slate-900" title="Recruiter message (no job URL)">{row.title}</span>
+                    : (
+                      <a
+                        className="font-medium text-blue-700 underline-offset-2 hover:underline"
+                        href={row.url}
+                        rel="noopener noreferrer"
+                        target="_blank"
+                        title={row.url}
+                      >
+                        {row.title}
+                      </a>
+                    )}
+                  <CustomKindBadge kind={row.customKind} />
+                  <CustomNote note={row.customNote} />
+                </div>,
                 row.company,
                 <StatusBadge key="status" row={row} />,
                 row.resumeLocalPath
@@ -292,10 +301,11 @@ export default async function JobsPage({
                     <JobDeleteAction record={editableJob} />
                     <JobGenerationQueueAction prompts={generationPromptOptions} record={editableJob} />
                   </div>
-                  {row.applyAttempt && ["waiting_confirmation", "submitting"].includes(row.applyAttempt.status) && (
+                  {/* A Custom job is applied to by hand, so Apply's buttons are not offered for it. */}
+                  {!row.customKind && row.applyAttempt && ["waiting_confirmation", "submitting"].includes(row.applyAttempt.status) && (
                     <AnswerApplicationButtons attemptId={row.applyAttempt.id} title={`${row.title} — ${row.company}`} />
                   )}
-                  {canApplyAgain(row.applyAttempt, row.status) && <ApplyAgainButton jobId={row.id} />}
+                  {!row.customKind && canApplyAgain(row.applyAttempt, row.status) && <ApplyAgainButton jobId={row.id} />}
                 </div>,
               ],
             };

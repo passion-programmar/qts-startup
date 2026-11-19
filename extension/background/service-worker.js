@@ -122,10 +122,10 @@ const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
 // every 20 s rather than every 3 s (~85% fewer calls). A Manager's cancel on the QTS site is seen
 // within 20 s; a cancel in this Chrome stops it at once.
 const GENERATION_SERVER_CHECK_MS = 20_000;
-// ChatGPT has this long from sending a prompt to finishing its answer.
-const GENERATION_ANSWER_MAX_WAIT_MS = 3 * 60 * 1000;
+// ChatGPT has this long from sending a prompt to finishing its answer (5 minutes, the Manager's choice 2026-11-19).
+const GENERATION_ANSWER_MAX_WAIT_MS = 5 * 60 * 1000;
 // An answer that finished with no text, or ChatGPT never starting, is retried in a fresh tab
-// after these, instead of waiting out the 3 minutes.
+// after these, instead of waiting out the 5 minutes.
 const GENERATION_EMPTY_ANSWER_MS = 6000;
 const GENERATION_NO_START_MS = 60 * 1000;
 const GENERATION_STOPPED_EMPTY_MS = 15 * 1000;
@@ -4004,8 +4004,31 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
 
   // A step card in the corner of the ChatGPT tab, so the Manager can follow Generation there. It also
   // leaves window.__qtsSetGenerationStep behind for steps that run inside the page (typing, sending).
+  // The card QTS shows on the ChatGPT page while it generates: a green ring with the percentage
+  // done, the step and its message. The percentage comes from the step ("4/6 …", "Downloaded 2 of 3")
+  // and never goes back for one job; a stop or a failure turns the ring red.
   function generationStepCardInPage(step, message, kind) {
-    const colors = { info: '#2563eb', success: '#059669', warn: '#d97706', error: '#dc2626' };
+    const RING = 2 * Math.PI * 26;
+    const percentOf = (nextStep, nextMessage, previous) => {
+      const number = Number(/^(\d)\/6/.exec(nextStep)?.[1] || 0);
+      if (!number) return previous;
+      if (number === 4) {
+        const seconds = Number(/(\d+)s of \d+s/.exec(nextMessage)?.[1] || 0);
+        return Math.min(80, 25 + Math.round(55 * (1 - Math.exp(-seconds / 60))));
+      }
+      if (number === 6) {
+        const files = /(Downloading|Downloaded)\b[^(]*\((\d+) of (\d+)\)/.exec(nextMessage);
+        if (files) return Math.min(100, 90 + Math.round(10 * (Number(files[2]) - (files[1] === 'Downloading' ? 1 : 0)) / Math.max(1, Number(files[3]))));
+        return /preparing/i.test(nextStep) ? 90 : 88;
+      }
+      return { 1: 5, 2: 12, 3: 20, 5: 84 }[number] ?? previous;
+    };
+    // Only the progress and the time (the Manager's choice): the ring, the time since this job
+    // started (counting each second), and when done its parts' times as chips. No step texts.
+    const clock = (ms) => {
+      const seconds = Math.max(0, Math.floor(ms / 1000));
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    };
     const show = (nextStep, nextMessage, nextKind = 'info') => {
       let host = document.getElementById('qts-generation-steps');
       if (!host) {
@@ -4013,17 +4036,51 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         host.id = 'qts-generation-steps';
         host.style.cssText = 'all:initial;position:fixed;top:12px;right:12px;z-index:2147483647;pointer-events:none;';
         const root = host.attachShadow({ mode: 'open' });
-        root.innerHTML = '<style>.card{width:300px;padding:10px 12px;border-radius:12px;background:#0f172aee;color:#f8fafc;'
-          + 'font:13px/1.4 system-ui,sans-serif;box-shadow:0 10px 30px #0006;border-left:5px solid var(--c)}'
-          + '.title{font-weight:700;font-size:12px;letter-spacing:.02em;color:#cbd5e1}.step{font-weight:700;margin-top:2px}'
-          + '.message{margin-top:2px;color:#e2e8f0;overflow-wrap:anywhere}</style>'
-          + '<div class="card"><div class="title">QTS Generation</div><div class="step"></div><div class="message"></div></div>';
+        root.innerHTML = '<style>'
+          + '.card{box-sizing:border-box;width:min(384px,48vw);display:flex;align-items:center;gap:12px;padding:10px 14px 10px 10px;border:1px solid #1f2a40;border-radius:16px;'
+          + 'background:linear-gradient(180deg,#131c31f2,#0d1526f2);color:#e6ebf5;font:13px/1.3 Inter,system-ui,sans-serif;box-shadow:0 14px 34px #0008;backdrop-filter:blur(8px)}'
+          + '.ring{position:relative;flex:none;width:56px;height:56px}.ring svg{transform:rotate(-90deg)}'
+          + '.track{stroke:#1f2a40}.bar{stroke:var(--c,#10b981);stroke-linecap:round;transition:stroke-dashoffset .6s ease,stroke .3s;filter:drop-shadow(0 0 4px color-mix(in srgb,var(--c,#10b981) 45%,transparent))}'
+          + '.pct{position:absolute;inset:0;display:grid;place-items:center;color:#f8fafc;font:800 14px/1 Inter,system-ui,sans-serif;font-variant-numeric:tabular-nums}'
+          + '.side{display:flex;flex-direction:column;gap:5px;min-width:0}'
+          + '.top{display:flex;align-items:baseline;gap:8px}.brand{color:#7d8ba3;font-weight:800;font-size:10px;letter-spacing:.12em}'
+          + '.time{color:#f8fafc;font:700 18px/1 Inter,system-ui,sans-serif;font-variant-numeric:tabular-nums}'
+          + '.chips{display:flex;flex-wrap:wrap;gap:4px}.chips:empty{display:none}'
+          + '.chip{padding:2px 7px;border:1px solid #2c3a55;border-radius:999px;background:#0b1322;color:#cbd5e1;font:650 10.5px/1.4 Inter,system-ui,sans-serif;font-variant-numeric:tabular-nums}'
+          + '.chip.bad{border-color:#ef444480;color:#fca5a5}'
+          + '</style><div class="card"><div class="ring"><svg width="56" height="56" viewBox="0 0 64 64" aria-hidden="true">'
+          + `<circle class="track" cx="32" cy="32" r="26" fill="none" stroke-width="7"></circle>`
+          + `<circle class="bar" cx="32" cy="32" r="26" fill="none" stroke-width="7" stroke-dasharray="${RING}" stroke-dashoffset="${RING}"></circle>`
+          + '</svg><div class="pct">0%</div></div><div class="side"><div class="top"><span class="brand">QTS</span><span class="time">0:00</span></div><div class="chips"></div></div></div>';
         (document.body || document.documentElement).append(host);
       }
       const root = host.shadowRoot;
-      root.querySelector('.card').style.setProperty('--c', colors[nextKind] || colors.info);
-      root.querySelector('.step').textContent = nextStep;
-      root.querySelector('.message').textContent = nextMessage;
+      // A new job starts at its first step again; within one job the number only goes up.
+      const fresh = /^1\/6/.test(nextStep) && !window.__qtsGenerationRunning;
+      if (fresh) window.__qtsGenerationStartedAt = Date.now();
+      window.__qtsGenerationStartedAt ||= Date.now();
+      const previous = fresh ? 0 : (window.__qtsGenerationPercent || 0);
+      const done = /^6\/6 · Done\b/.test(nextStep);
+      const failed = nextKind === 'error' || nextKind === 'warn' || /^(Cancelled|Stopped)\b/.test(nextStep);
+      const percent = done ? 100 : Math.max(previous, percentOf(nextStep, nextMessage, previous));
+      window.__qtsGenerationPercent = percent;
+      window.__qtsGenerationRunning = !done && !failed;
+      root.querySelector('.card').style.setProperty('--c', failed ? '#ef4444' : '#10b981');
+      root.querySelector('.bar').style.strokeDashoffset = String(RING * (1 - percent / 100));
+      root.querySelector('.pct').textContent = `${percent}%`;
+      const time = root.querySelector('.time');
+      clearInterval(window.__qtsGenerationTick);
+      if (done) time.textContent = /Done in (\S+)/.exec(nextStep)?.[1] || clock(Date.now() - window.__qtsGenerationStartedAt);
+      else {
+        const tick = () => { time.textContent = clock(Date.now() - window.__qtsGenerationStartedAt); };
+        tick();
+        if (!failed) window.__qtsGenerationTick = setInterval(tick, 1000);
+      }
+      const chips = root.querySelector('.chips');
+      chips.replaceChildren();
+      const chip = (text, bad = false) => Object.assign(document.createElement('span'), { className: `chip${bad ? ' bad' : ''}`, textContent: text });
+      if (done) for (const part of String(nextMessage).split(' · ').filter(Boolean)) chips.append(chip(part));
+      else if (failed) chips.append(chip(/^Cancelled\b/.test(nextStep) ? 'Cancelled' : 'Stopped', true));
     };
     window.__qtsSetGenerationStep = show;
     show(step, message, kind);
@@ -4387,6 +4444,33 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
   }
 
+  // How long each part of one Generation job took (measured to find what to speed up): the queue
+  // marks the start, ChatGPT ready and the files; runGenerationForTab marks the answer and its save.
+  // The finished job's times show on the ChatGPT card and the last 30 stay in qtsGenerationTimings.
+  let generationTiming = null;
+  const markGeneration = (point) => { if (generationTiming && !generationTiming[point]) generationTiming[point] = Date.now(); };
+  // "9s", "1:18": short, for the card's chips.
+  const secondsText = (ms) => {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    return seconds >= 60 ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : `${seconds}s`;
+  };
+  async function finishGenerationTiming(chatTabId) {
+    const timing = generationTiming;
+    generationTiming = null;
+    if (!timing?.start || !timing.files) return;
+    const span = (from, to) => (timing[from] && timing[to] ? timing[to] - timing[from] : null);
+    const parts = { openChatGpt: span('start', 'ready'), chatGpt: span('ready', 'answered'), save: span('answered', 'saved'), files: span('saved', 'files'), total: timing.files - timing.start };
+    const label = [['Tab', parts.openChatGpt], ['GPT', parts.chatGpt], ['Save', parts.save], ['Files', parts.files]]
+      .filter(([, ms]) => ms != null).map(([name, ms]) => `${name} ${secondsText(ms)}`).join(' · ');
+    await showGenerationChatGptStep(chatTabId, `6/6 · Done in ${secondsText(parts.total)}`, label, 'success');
+    try {
+      const stored = (await chrome.storage.local.get('qtsGenerationTimings')).qtsGenerationTimings || [];
+      await chrome.storage.local.set({ qtsGenerationTimings: [...stored, { at: new Date().toISOString(), jobId: timing.jobId, reusedTab: timing.reusedTab === true, ...parts }].slice(-30) });
+    } catch {
+      // Only for measuring: Generation goes on without it.
+    }
+  }
+
   // pinnedChatTab is the queue's { id, jobs } record; a ChatGPT error can swap in a fresh tab id.
   async function runGenerationForTab(jobTabId, queuedJob = null, pinnedChatTab = null) {
     if (!queuedJob?.id) {
@@ -4475,6 +4559,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       };
       await showGenerationPageStatus(jobTabId, 'ChatGPT is generating the résumé and cover letter...');
       let responseText = await askGenerationChatGpt(chatTab, generationPrompt, generationId, active);
+      markGeneration('answered');
 
       // An answer QTS cannot use gets one follow-up in the same chat that says why.
       for (let followUps = 0; ; followUps += 1) {
@@ -4513,6 +4598,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         responseText = await askGenerationChatGpt(chatTab, followUp, generationId, active, generationPrompt);
       }
       await updateGenerationBrowserState({ phase: 'response_saved' });
+      markGeneration('saved');
       await showGenerationChatGptStep(chatTab.id, '6/6 · Answer saved', 'Making the résumé and cover-letter PDFs and downloading them...', 'success');
       const message = 'Generation completed and saved with the JD.';
       await showGenerationPageStatus(jobTabId, message, 'success');
@@ -4974,8 +5060,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (statusBeforePageOpen[EXTENSION_STATUS_KEY] !== 'generation') {
             throw generationCancelledError();
           }
+          generationTiming = { jobId: queuedJob.id, start: Date.now() };
           // ChatGPT first: one pinned conversation serves up to ten jobs, then a fresh tab.
           const tabStillOpen = chatTab && await chrome.tabs.get(chatTab.id).then(() => true, () => false);
+          generationTiming.reusedTab = Boolean(tabStillOpen && chatTab.jobs < GENERATION_JOBS_PER_CHATGPT_TAB);
           if (!tabStillOpen || chatTab.jobs >= GENERATION_JOBS_PER_CHATGPT_TAB) {
             if (tabStillOpen) await chrome.tabs.remove(chatTab.id).catch(() => {});
             const created = await acquireGenerationChatGptTab();
@@ -4990,6 +5078,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
             await ensureChatGptReady(chatTab.id);
           }
+          markGeneration('ready');
           // Still in front while ChatGPT writes, if the Manager looked at another tab meanwhile.
           await bringTabToFront(chatTab.id);
           // No job page is opened: the prompt uses the saved job (description, title, company).
@@ -5017,9 +5106,12 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           }
           await reportQueuedGenerationDelivered(jobTabId);
           await clearGenerationRetry(queuedJob.id);
+          markGeneration('files');
+          await finishGenerationTiming(chatTab.id);
           chatTab.jobs += 1;
           completedCount += 1;
         } catch (error) {
+          generationTiming = null;
           let handledError = error;
           const serverStatus = await readQueuedGenerationStatus(queuedJob.id);
           if (serverStatus === 'completed') {
@@ -5907,6 +5999,59 @@ async function openDownloadedFolder(folderPath) {
   return { ok: true };
 }
 
+/**
+ * Custom jobs are made in this Chrome only, first. Generation running: they join its run (the
+ * server gives this Chrome's custom jobs first). Nothing running: Generation starts for them alone.
+ * Apply running: they wait; the next look at the list starts them. { state, error? }.
+ */
+async function generateCustomJobs(jobIds) {
+  if (!jobIds.length) return { state: 'none' };
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, 'qtsWorkSelection']);
+  const status = stored[EXTENSION_STATUS_KEY];
+  if (status === 'apply') return { state: 'waiting' };
+  if (status === 'generation') {
+    const selection = stored.qtsWorkSelection;
+    if (selection?.mode === 'generation' && Array.isArray(selection.jobIds)) {
+      const ids = [...new Set([...selection.jobIds, ...jobIds])].slice(0, 200);
+      // Another candidate's custom job too: the run then covers every candidate's chosen jobs.
+      await chrome.storage.local.set({ qtsWorkSelection: { ...selection, candidateId: null, jobIds: ids } });
+    }
+    processQueuedGenerationJobs().catch(() => {});
+    return { state: 'generating' };
+  }
+  if (!(await hasSavedResumeFolder())) return { state: 'folder', error: resumeFolderRequired('Generation').error };
+  await chrome.storage.local.set({ qtsWorkSelection: { mode: 'generation', candidateId: null, jobIds: jobIds.slice(0, 200) } });
+  await chrome.storage.local.remove([GENERATION_NOTICE_KEY, GENERATION_IDLE_NOTICE_KEY]);
+  await chrome.storage.local.set({ [GENERATION_QUEUE_RUN_KEY]: { runId: crypto.randomUUID() } });
+  await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'generation' });
+  processQueuedGenerationJobs().catch((error) => console.error('[QTS Generation] Queue worker failed:', error));
+  return { state: 'generating' };
+}
+
+async function handleCustomJob(msg) {
+  const op = String(msg.op || '');
+  const send = (body) => workerApiRequest('POST', '/api/extension/custom', body);
+  let result;
+  if (op === 'list') result = await send({ action: 'list' });
+  else if (op === 'create') result = await send({ action: 'create', job: msg.job });
+  else if (op === 'submitted' || op === 'remove') result = await send({ action: op, jobId: msg.jobId });
+  else return { ok: false, error: 'Unknown Custom action.' };
+  if (!result?.success) return { ok: false, error: result?.message || 'QTS could not reach the server. Try again.' };
+  let notice = '';
+  // Give back: its résumé PDFs leave this PC too (through the Apply PDFs folder).
+  if (op === 'remove' && result.resumeFiles?.length) {
+    const saved = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY).catch(() => null);
+    const deleted = await self.__qtsApplyLocalPdfs.deleteJobFiles(saved?.value || null, result.resumeFiles).catch(() => null);
+    if (!deleted?.ok) notice = 'The job is removed; its résumé PDFs stay on this PC (allow read and write access in Apply PDFs folder to delete them).';
+  }
+  const jobs = Array.isArray(result.jobs) ? result.jobs : [];
+  // Jobs still without a résumé (new, or waiting for Apply to end) are made now when they can be.
+  const waiting = jobs.filter((job) => !job.ready && job.generationStatus !== 'processing').map((job) => job.id);
+  const started = (op === 'create' || op === 'list') ? await generateCustomJobs(waiting) : { state: 'none' };
+  if (started.error) notice = started.error;
+  return { ok: true, jobs, generation: started.state, ...(notice ? { notice } : {}) };
+}
+
 /** Whether a page belongs to the QTS site this extension signs in to. */
 async function isQtsSite(pageUrl) {
   const server = await self.__qtsRuntimeConfig.getServerUrl();
@@ -6173,6 +6318,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
       sendResponse(result.success === true ? { ...result, ok: true } : { ok: false, error: result.message || 'Could not load accounts or jobs.' });
     })().catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  // The launcher's Custom: a pasted JD saved as a job pinned to this Chrome, made here first; then
+  // Submitted (the bid) or Give back (the job and its PDFs on this PC removed).
+  if (msg.type === 'QTS_CUSTOM') {
+    if (sender.id !== chrome.runtime.id || sender.tab?.id == null) {
+      sendResponse({ ok: false, error: 'Custom works from the QTS panel on a web page.' });
+      return false;
+    }
+    handleCustomJob(msg).then(sendResponse, (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Custom failed.' }));
     return true;
   }
   if (msg.type === 'QTS_PAGE_ACTION') {

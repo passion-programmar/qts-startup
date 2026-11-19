@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { CustomKindBadge, CustomNote } from "@/app/components/custom-job-label";
 import { ExportUrlsButton } from "@/app/components/export-urls";
 import { OpenFolderButton } from "@/app/components/open-folder";
 import { PaginatedTable } from "@/app/components/paginated-table";
@@ -114,7 +115,9 @@ export default async function BidsPage({
               <div key="job">
                 {row.url
                   ? <a className="font-medium text-blue-700 hover:underline" href={row.url} rel="noreferrer" target="_blank" title={row.url}>{row.title}</a>
-                  : <span className="font-medium text-slate-900" title="No job URL (downloaded on the Resume page)">{row.title}</span>}
+                  : <span className="font-medium text-slate-900" title={row.customKind === "recruiter" ? "Recruiter message (no job URL)" : "No job URL (downloaded on the Resume page)"}>{row.title}</span>}
+                <CustomKindBadge kind={row.customKind} />
+                <CustomNote note={row.customNote} />
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {row.interviewRounds && <InterviewTrack value={row.interviewRounds} />}
                   <Link className="text-[11px] font-semibold text-indigo-600 hover:underline" href={`/interviews?add=${row.id}`}>+ Interview</Link>

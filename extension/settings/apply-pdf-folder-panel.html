@@ -93,6 +93,15 @@
     details.more > summary::before { content: "▸"; display: inline-block; width: 14px; color: var(--faint); transition: transform .15s ease; }
     details.more[open] > summary::before { transform: rotate(90deg); }
     details.more > .inner { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    #setup-view { display: flex; flex-direction: column; gap: 12px; }
+    .step.ok { background: rgb(16 185 129 / .16); color: var(--good); }
+    .path { color: #e2e8f0; font: 500 12.5px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+    .lines { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
+    .lines li { display: flex; gap: 8px; color: #cbd5e1; }
+    .lines li::before { content: "✓"; color: var(--good); font-weight: 800; }
+    .lines li.off::before { content: "–"; color: var(--warn); }
+    .lines li.off { color: var(--muted); }
+    .row.end { justify-content: flex-end; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -108,6 +117,17 @@
       </div>
     </div>
 
+    <!-- Set up: only what works, and Reset (apply-pdf-folder-ready.js shows one view or the other). -->
+    <section id="ready-view" class="card" hidden aria-labelledby="ready-title">
+      <div class="card-head">
+        <span class="step ok" aria-hidden="true">✓</span>
+        <h2 id="ready-title">Résumé folder ready</h2>
+      </div>
+      <p id="ready-path" class="path"></p>
+      <ul id="ready-lines" class="lines"></ul>
+      <div class="row end"><button id="reset-folder" class="secondary" type="button">Reset</button></div>
+    </section>
+    <div id="setup-view">
     <!-- Step 1: one click. Chrome's own Allow appears in the same step; QTS asks nothing more. -->
     <section id="folder-picker-settings" class="card" aria-labelledby="picker-title">
       <div class="card-head">
@@ -147,6 +167,7 @@
         </div>
       </details>
     </section>
+    </div>
   </main>
   <script src="../shared/scanner-document-store.js"></script>
   <script src="../shared/apply-file-access.js"></script>
@@ -154,5 +175,6 @@
   <script src="apply-pdf-folder-panel.js"></script>
   <script src="apply-pdf-path-detect.js"></script>
   <script src="apply-pdf-file-access.js"></script>
+  <script src="apply-pdf-folder-ready.js"></script>
 </body>
 </html>

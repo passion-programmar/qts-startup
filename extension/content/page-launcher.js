@@ -154,6 +154,35 @@ async function initializeQtsPageLauncher() {
     .row:has(.action-tag.needs) { border-color: rgb(249 115 22 / .45); box-shadow: inset 3px 0 0 #f97316; }
     .row:has(.action-tag.failed) { border-color: rgb(239 68 68 / .45); box-shadow: inset 3px 0 0 #ef4444; }
     /* A row's list (Apply's applications): items under the row, on a guide line. */
+    .custom-form, .custom-cards { display: flex; flex-direction: column; gap: 8px; margin: 0 12px 10px; }
+    .custom-cards:empty { display: none; }
+    .custom-form { padding: 10px; border: 1px solid #243047; border-radius: 12px; background: #0b1322; }
+    .custom-kinds, .custom-buttons, .custom-pair { display: flex; flex-wrap: wrap; gap: 6px; }
+    .custom-pair > * { flex: 1 1 120px; }
+    .custom-for { color: #8b9ab3; font: 600 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .custom-field { display: flex; flex-direction: column; gap: 3px; color: #7d8ba3; font: 700 10.5px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; }
+    .custom-input { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid #2c3a55; border-radius: 9px; background: #081323; color: #e2e8f0; font: 500 12.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; text-transform: none; letter-spacing: 0; color-scheme: dark; }
+    textarea.custom-input { min-height: 90px; max-height: 260px; resize: vertical; }
+    .custom-input:focus { outline: none; border-color: #818cf8; }
+    .custom-btn { min-height: 30px; padding: 5px 11px; border: 1px solid #34425a; border-radius: 9px; background: #111a2e; color: #cbd5e1; font: 650 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .custom-btn:hover:not(:disabled) { border-color: #818cf8; color: #f8fafc; }
+    .custom-btn.on { border-color: rgb(99 102 241 / .6); background: rgb(99 102 241 / .18); color: #c7d2fe; }
+    .custom-btn.primary { border-color: transparent; background: linear-gradient(180deg, #6366f1, #4f46e5); color: #fff; }
+    .custom-btn.danger { color: #fda4af; }
+    .custom-btn:disabled { opacity: .5; cursor: default; }
+    .custom-buttons { justify-content: flex-end; }
+    .custom-card .custom-buttons { justify-content: flex-start; }
+    .custom-error { color: #fca5a5; font: 600 11.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .custom-notice { color: #fdba74; font: 600 11.5px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .custom-card { display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; border: 1px solid #243047; border-left: 3px solid #a855f7; border-radius: 10px; background: #0b1322; }
+    .custom-card.ready { border-left-color: #10b981; }
+    .custom-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .custom-card-title { overflow: hidden; color: #f1f5f9; font: 700 12.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+    .custom-kind { flex: none; padding: 2px 7px; border: 1px solid #34425a; border-radius: 999px; color: #d8b4fe; font: 700 10px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .custom-card-who { overflow: hidden; color: #8b9ab3; font: 500 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+    .custom-card-status { color: #a5b4fc; font: 600 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .custom-card-status.good { color: #6ee7b7; }
+    .custom-card-status.bad { color: #fca5a5; }
     .action-sub { display: flex; flex-direction: column; gap: 6px; margin: 0 12px 12px 30px; padding-left: 12px; border-left: 2px solid rgb(249 115 22 / .35); }
     .action-sub[hidden] { display: none; }
     .action-sub.running { border-left-color: rgb(16 185 129 / .4); }
@@ -385,6 +414,8 @@ async function initializeQtsPageLauncher() {
     element.replaceChildren(svg);
   }
 
+  // The Custom row's parts (its button, form and cards), set when the row is built below.
+  let customUi = null;
   // In this order; tools show only for a Manager assigned them.
   const actions = [
     ['Work'],
@@ -478,8 +509,16 @@ async function initializeQtsPageLauncher() {
     detail.className = 'action-detail';
     button.append(iconElement, labelElement, tag, detail);
     if (action === 'custom') {
-      button.disabled = true;
-      tag.textContent = 'Coming soon';
+      // Custom: a pasted JD (Easy Apply, or a recruiter's message): its form and its cards, here.
+      tag.textContent = '+ New';
+      const row = document.createElement('div');
+      row.className = 'row custom-row';
+      const form = Object.assign(document.createElement('div'), { className: 'custom-form', hidden: true });
+      const cards = Object.assign(document.createElement('div'), { className: 'custom-cards' });
+      row.append(button, form, cards);
+      customUi = { row, button, tag, detail, form, cards };
+      menuList.appendChild(row);
+      continue;
     }
     if (['get_jd', 'generation', 'apply', 'auto_apply'].includes(action)) {
       // A work row: its button, then a list under it (the applications waiting, for Apply).
@@ -599,6 +638,179 @@ async function initializeQtsPageLauncher() {
 
   function chosenAccount() {
     return candidate.accounts.find((account) => account.id === candidate.select.value) || null;
+  }
+
+  // ---- Custom: a pasted JD with no job page (Easy Apply, or a recruiter's message) ----
+  // + New opens the form here; Generate résumé saves the job (pinned to this Chrome, made here
+  // first) and the form closes into a card; the card's Submitted saves the bid, Give back removes it.
+  const customDraft = { kind: 'easy_apply', candidateId: '', title: '', company: '', description: '', url: '', note: '' };
+  const custom = { open: false, jobs: [], busy: false, error: '', notice: '', loaded: false, armed: '', timer: null };
+  const customSend = (body) => chrome.runtime.sendMessage({ type: 'QTS_CUSTOM', ...body }).catch(() => null);
+
+  function toggleCustomForm() {
+    if (!customUi) return;
+    custom.open = !custom.open;
+    custom.error = '';
+    renderCustom();
+    if (custom.open) setTimeout(() => customUi.form.querySelector('textarea')?.focus({ preventScroll: true }), 0);
+    loadCustomJobs();
+  }
+
+  async function loadCustomJobs() {
+    const reply = await customSend({ op: 'list' });
+    if (reply?.ok) {
+      custom.jobs = reply.jobs || [];
+      custom.loaded = true;
+      if (reply.notice) custom.notice = reply.notice;
+      else if (reply.generation === 'waiting') custom.notice = 'Waiting: Generation starts here when Apply / Auto Apply stops.';
+    }
+    renderCustom();
+    // While a résumé is being made, the cards look again every 8 seconds (only with the panel shown).
+    clearTimeout(custom.timer);
+    if (custom.jobs.some((job) => !job.ready)) custom.timer = setTimeout(() => { if (launcher.classList.contains('open')) loadCustomJobs(); }, 8000);
+  }
+
+  function customField(label, node) {
+    const wrap = Object.assign(document.createElement('label'), { className: 'custom-field' });
+    wrap.append(Object.assign(document.createElement('span'), { textContent: label }), node);
+    return wrap;
+  }
+  function customInput(key, placeholder, multiline = false) {
+    const node = document.createElement(multiline ? 'textarea' : 'input');
+    if (!multiline) node.type = 'text';
+    node.className = 'custom-input';
+    node.placeholder = placeholder;
+    node.value = customDraft[key];
+    node.addEventListener('input', () => { customDraft[key] = node.value; });
+    return node;
+  }
+  const customButton = (text, className, onClick) => {
+    const node = Object.assign(document.createElement('button'), { type: 'button', className: `custom-btn ${className}`.trim(), textContent: text });
+    node.disabled = custom.busy;
+    node.addEventListener('click', onClick);
+    return node;
+  };
+
+  function renderCustomForm() {
+    const form = customUi.form;
+    form.hidden = !custom.open;
+    form.replaceChildren();
+    if (!custom.open) return;
+    const kinds = Object.assign(document.createElement('div'), { className: 'custom-kinds' });
+    for (const [value, label] of [['easy_apply', 'Easy Apply'], ['recruiter', 'Recruiter message']]) {
+      const pick = customButton(label, customDraft.kind === value ? 'on' : '', () => { customDraft.kind = value; renderCustomForm(); });
+      pick.setAttribute('aria-pressed', String(customDraft.kind === value));
+      kinds.append(pick);
+    }
+    form.append(kinds);
+    // The account this job is for: its own choice here (the one chosen at the top, when there is one).
+    if (!candidate.loaded) loadWorkAccounts().then(() => { if (custom.open) renderCustomForm(); }).catch(() => {});
+    if (!customDraft.candidateId || !candidate.accounts.some((entry) => entry.id === customDraft.candidateId)) customDraft.candidateId = chosenAccount()?.id || '';
+    const accountSelect = Object.assign(document.createElement('select'), { className: 'custom-input' });
+    accountSelect.append(Object.assign(new Option(candidate.loaded ? 'Choose an account…' : 'Loading accounts…', ''), { disabled: true }));
+    for (const entry of candidate.accounts) accountSelect.append(new Option(entry.name || 'Account', entry.id));
+    accountSelect.value = customDraft.candidateId;
+    accountSelect.addEventListener('change', () => { customDraft.candidateId = accountSelect.value; });
+    form.append(customField('Account', accountSelect));
+    form.append(customField('Job description', customInput('description', 'Paste the job description', true)));
+    const names = Object.assign(document.createElement('div'), { className: 'custom-pair' });
+    names.append(customField('Title', customInput('title', 'Senior DevOps Engineer')), customField('Company', customInput('company', 'Compuco')));
+    form.append(names);
+    if (customDraft.kind === 'easy_apply') form.append(customField('Easy Apply URL', customInput('url', 'https://www.linkedin.com/jobs/view/…')));
+    form.append(customField('Note', customInput('note', customDraft.kind === 'recruiter' ? 'Recruiter, where, what they asked…' : 'Optional')));
+    if (custom.error) form.append(Object.assign(document.createElement('div'), { className: 'custom-error', textContent: custom.error }));
+    const buttons = Object.assign(document.createElement('div'), { className: 'custom-buttons' });
+    buttons.append(
+      customButton('Cancel', '', () => { custom.open = false; custom.error = ''; renderCustom(); }),
+      customButton(custom.busy ? 'Saving…' : 'Generate résumé', 'primary', () => createCustomJob()),
+    );
+    form.append(buttons);
+  }
+
+  async function createCustomJob() {
+    const account = candidate.accounts.find((entry) => entry.id === customDraft.candidateId);
+    if (!account) { custom.error = 'Choose the account for this job.'; renderCustom(); return; }
+    custom.busy = true;
+    custom.error = '';
+    renderCustom();
+    const reply = await customSend({ op: 'create', job: { ...customDraft, candidateId: account.id } });
+    custom.busy = false;
+    if (!reply?.ok) {
+      custom.error = reply?.error || 'Could not reach QTS. Try again.';
+      renderCustom();
+      return;
+    }
+    // Saved: the form empties and closes into its card; the next one can start at once.
+    Object.assign(customDraft, { title: '', company: '', description: '', url: '', note: '' });
+    custom.open = false;
+    custom.jobs = reply.jobs || custom.jobs;
+    custom.notice = reply.notice || (reply.generation === 'waiting' ? 'Waiting: Generation starts here when Apply / Auto Apply stops.' : '');
+    renderCustom();
+    loadCustomJobs();
+  }
+
+  async function customJobAction(job, op) {
+    custom.busy = true;
+    renderCustom();
+    const reply = await customSend({ op, jobId: job.id });
+    custom.busy = false;
+    if (reply?.ok) {
+      custom.jobs = reply.jobs || [];
+      custom.notice = reply.notice || '';
+      showToast(op === 'submitted' ? `Bid saved: ${job.company} · ${job.title}` : `Removed: ${job.company} · ${job.title}`, 'success');
+    } else showToast(reply?.error || 'Could not reach QTS. Try again.', 'error');
+    renderCustom();
+  }
+
+  function renderCustomCards() {
+    const cards = customUi.cards;
+    cards.replaceChildren();
+    if (custom.notice) cards.append(Object.assign(document.createElement('div'), { className: 'custom-notice', textContent: custom.notice }));
+    for (const job of custom.jobs) {
+      const card = Object.assign(document.createElement('div'), { className: `custom-card${job.ready ? ' ready' : ''}` });
+      const head = Object.assign(document.createElement('div'), { className: 'custom-card-head' });
+      head.append(
+        Object.assign(document.createElement('span'), { className: 'custom-card-title', textContent: `${job.company} · ${job.title}`, title: job.note || '' }),
+        Object.assign(document.createElement('span'), { className: 'custom-kind', textContent: job.kind === 'recruiter' ? 'Recruiter' : 'Easy Apply' }),
+      );
+      card.append(head, Object.assign(document.createElement('div'), { className: 'custom-card-who', textContent: job.candidate + (job.note ? ` · ${job.note}` : '') }));
+      const status = job.ready ? 'Résumé ready' : job.generationStatus === 'failed' ? `Résumé failed${job.generationError ? `: ${job.generationError}` : ''}` : 'Making the résumé…';
+      card.append(Object.assign(document.createElement('div'), { className: `custom-card-status${job.ready ? ' good' : job.generationStatus === 'failed' ? ' bad' : ''}`, textContent: status }));
+      const buttons = Object.assign(document.createElement('div'), { className: 'custom-buttons' });
+      if (job.ready && job.resumeFolder) {
+        buttons.append(customButton('📁 Path', '', async () => {
+          const path = `Downloads\\${job.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
+          showToast(await navigator.clipboard.writeText(path).then(() => true, () => false) ? `Copied: ${path}` : 'Could not copy. Try again.', 'info');
+        }));
+      }
+      if (job.ready && job.coverLetterText) {
+        buttons.append(customButton('Letter', '', async () => showToast(await navigator.clipboard.writeText(job.coverLetterText).then(() => true, () => false) ? 'Copied: cover letter' : 'Could not copy. Try again.', 'info')));
+      }
+      if (job.url) buttons.append(customButton('Open URL', '', () => window.open(job.url, '_blank', 'noopener')));
+      if (job.ready) buttons.append(customButton('Submitted', 'primary', () => customJobAction(job, 'submitted')));
+      // Give back asks once more (it deletes the job and its résumé PDFs on this PC).
+      const sure = custom.armed === job.id;
+      buttons.append(customButton(sure ? 'Sure?' : 'Give back', 'danger', () => {
+        if (!sure) {
+          custom.armed = job.id;
+          renderCustom();
+          setTimeout(() => { if (custom.armed === job.id) { custom.armed = ''; renderCustom(); } }, 4000);
+          return;
+        }
+        custom.armed = '';
+        customJobAction(job, 'remove');
+      }));
+      card.append(buttons);
+      cards.append(card);
+    }
+  }
+
+  function renderCustom() {
+    if (!customUi) return;
+    customUi.tag.textContent = custom.open ? 'Close' : '+ New';
+    customUi.detail.textContent = custom.jobs.length ? `${custom.jobs.length} waiting · ${custom.jobs.filter((job) => job.ready).length} ready` : '';
+    renderCustomForm();
+    renderCustomCards();
   }
 
   // The dropdown's accent (the label colour), the summary line, and each mode's ready count.
@@ -1000,6 +1212,8 @@ async function initializeQtsPageLauncher() {
     if (!open) clearTimeout(countsTimer);
     // Opened without catching up first (the Sign In card, a test): it catches up now.
     if (open && panelStale) catchUpPanel().catch(() => {});
+    // The Custom cards (this Chrome's pasted jobs) as they are now.
+    if (open && customUi && launcher.classList.contains('signed-in')) loadCustomJobs().catch(() => {});
     launcher.classList.toggle('open', open);
     menu.hidden = !open;
     host.toggleAttribute('data-menu-open', open);
@@ -1517,7 +1731,7 @@ async function initializeQtsPageLauncher() {
       preview.hidden = true;
       if (expiresAt > 0) {
         chrome.storage.local.set({ qtsExtensionStatus: null, qtsGetJdOn: false }).catch((error) => {
-          console.error('[QTS extension] Could not clear expired extension status:', error);
+          if (!launcherContextGone(error)) console.error('[QTS extension] Could not clear expired extension status:', error);
         });
       }
     }
@@ -1801,6 +2015,10 @@ async function initializeQtsPageLauncher() {
   }
 
   async function runAction(action, button) {
+    if (action === 'custom') {
+      toggleCustomForm();
+      return;
+    }
     if (action === 'text_highlights') {
       await openHighlightPanel(button);
       return;
@@ -2145,7 +2363,7 @@ function restorePageLauncher() {
   if (!globalThis.__qtsPageLauncher?.excluded) return;
   globalThis.__qtsPageLauncher = null;
   initializeQtsPageLauncherOnce().catch((error) => {
-    console.error('[QTS extension] Could not restore page actions:', error);
+    if (!launcherContextGone(error)) console.error('[QTS extension] Could not restore page actions:', error);
   });
 }
 
@@ -2181,7 +2399,7 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
           sendResponse({ ok: true });
         })
         .catch((error) => {
-          console.error('[QTS extension] Could not respond to the toolbar icon:', error);
+          if (!launcherContextGone(error)) console.error('[QTS extension] Could not respond to the toolbar icon:', error);
           sendResponse({ ok: false });
         });
       return true;
@@ -2223,7 +2441,7 @@ if (!globalThis.__qtsPageLauncherNavigationListener) {
         if (response.excluded) globalThis.__qtsPageLauncher?.disable?.();
         else restorePageLauncher();
       })
-      .catch((error) => console.error('[QTS extension] Could not apply URL exclusions:', error));
+      .catch((error) => { if (!launcherContextGone(error)) console.error('[QTS extension] Could not apply URL exclusions:', error); });
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') updatePageLauncherActivity(false);
@@ -2246,7 +2464,19 @@ function updatePageLauncherActivity(value) {
   }
 }
 
+// A tab opened before the extension was reloaded keeps its old page scripts, cut off from the new
+// extension ("Extension context invalidated"): nothing to report, the page gets new scripts on reload.
+function launcherContextGone(error) {
+  try {
+    if (!globalThis.chrome?.runtime?.id) return true;
+  } catch {
+    return true;
+  }
+  return /extension context invalidated/i.test(String(error?.message || error));
+}
+
 async function refreshPageLauncherActivity() {
+  if (launcherContextGone()) return;
   const revision = globalThis.__qtsLauncherActivityRevision || 0;
   const result = await chrome.runtime.sendMessage({ type: 'QTS_GET_LAUNCHER_STATE' });
   if (revision !== (globalThis.__qtsLauncherActivityRevision || 0)) return;
@@ -2255,6 +2485,7 @@ async function refreshPageLauncherActivity() {
 
 function initializePageLauncherAfterLoad() {
   refreshPageLauncherActivity().catch((error) => {
+    if (launcherContextGone(error)) return;
     console.error('[QTS extension] Could not verify page access:', error);
   });
 }

@@ -116,6 +116,8 @@ export async function readJobsPage(managerId: string, query: JobsQuery, today: s
     salary: jobs.salary,
     jobReason: jobs.jobReason,
     url: jobs.jobUrl,
+    customKind: jobs.customKind,
+    customNote: jobs.customNote,
     date: jobs.date,
     status: jobs.status,
     failureReason: jobs.failureReason,

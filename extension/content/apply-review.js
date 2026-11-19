@@ -12,8 +12,8 @@
   // A prior extension context may have left its host in this page after an update.
   for (const stale of document.querySelectorAll('[data-qts-apply-review], [data-qts-auto-apply-dock]')) stale.remove();
 
-  // 3/4 of the old 480 px (the Manager's choice, 2026-11-17).
-  const PANEL_WIDTH = 'min(360px, 36vw)';
+  // The same width as the QTS panel (page-launcher.js MENU_WIDTH) and the Generation card.
+  const PANEL_WIDTH = 'min(384px, 48vw)';
   const dock = document.createElement('style');
   dock.setAttribute('data-qts-auto-apply-dock', '');
   dock.textContent = `
@@ -123,12 +123,32 @@
     .career-line { display: flex; flex-wrap: wrap; gap: 4px; }
     .career-line + .career-line { margin-top: 4px; }
     .chip .chip-label { margin-right: 5px; color: #94a3b8; font-size: 10px; font-weight: 700; }
+    .saved-item { display: flex; flex-direction: column; gap: 5px; margin: 0 0 8px; padding: 8px; border: 1px solid #243047; border-left: 3px solid #f59e0b; border-radius: 9px; background: #101a2e; }
+    .saved-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .saved-question { color: #f1f5f9; font: 700 12px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .saved-scope { flex: none; padding: 2px 6px; border: 1px solid #34425a; border-radius: 999px; color: #94a3b8; font-size: 10px; font-weight: 700; }
+    .saved-line, .saved-forms { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+    .saved-label { color: #7d8ba3; font-size: 10.5px; font-weight: 700; }
+    .saved-input { flex: 1 1 120px; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid #2c3a55; border-radius: 7px; background: #0b1322; color: #e2e8f0; font: 500 12px Inter, ui-sans-serif, system-ui, sans-serif; color-scheme: dark; }
+    .saved-button { height: 28px; padding: 0 9px; border: 1px solid #34425a; border-radius: 7px; background: #111a2e; color: #cbd5e1; font: 650 11.5px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .saved-button:hover:not(:disabled) { border-color: #818cf8; color: #f8fafc; }
+    .saved-button.danger { color: #fda4af; }
+    .saved-button:disabled { opacity: .5; cursor: default; }
+    .saved-chip { display: inline-flex; align-items: center; gap: 3px; padding: 1px 2px 1px 7px; border: 1px solid #34425a; border-radius: 999px; color: #cbd5e1; font-size: 11px; }
+    .saved-button.chip-x { height: 20px; padding: 0 5px; border: 0; background: none; color: #94a3b8; }
+    .saved-error { margin: 0 0 6px; color: #fca5a5; font-size: 11.5px; }
+    .saved-add { border-left-color: #6366f1; }
+    .profile-label { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
+    .profile-icon { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: color-mix(in srgb, var(--tint, #94a3b8) 14%, transparent); }
+    .profile-icon svg { display: block; }
     .profile-group { margin: 8px 0 3px; color: #64748b; font-size: 10px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
     .profile-head + .profile-group, .career-head + .profile-group { margin-top: 2px; }
-    .profile-row { display: grid; grid-template-columns: 78px minmax(0, 1fr) 14px; align-items: center; gap: 8px; width: 100%; margin: 0 0 4px; padding: 6px 8px; border: 1px solid #243047; border-left: 3px solid #6366f1; border-radius: 9px; background: #101a2e; color: #e2e8f0; font: 600 12px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+    .profile-row { display: grid; grid-template-columns: 104px minmax(0, 1fr) 14px; align-items: center; gap: 8px; width: 100%; margin: 0 0 4px; padding: 6px 8px; border: 1px solid #243047; border-left: 3px solid #6366f1; border-radius: 9px; background: #101a2e; color: #e2e8f0; font: 600 12px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
     .profile-row:hover, .profile-row:focus-visible { border-color: #818cf8; background: #15213a; }
     .profile-label { color: #94a3b8; font-size: 10.5px; font-weight: 700; }
     .profile-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* A path keeps its end (the file name) in view: it is cut at its start instead. */
+    .path-row .profile-value { direction: rtl; text-align: left; }
     .profile-copy-mark { color: #475569; font-size: 11px; text-align: right; }
     .profile-row:hover .profile-copy-mark { color: #a5b4fc; }
     .profile-row.copied { border-color: #10b981; background: #0b2a22; }
@@ -386,8 +406,9 @@
 
   // The career box (opened by Copy Path): each job as company, title, dates and its full bullets;
   // education as school, degree, dates; the profile links. Every piece is one click to copy.
-  // One box open at a time: 'answer', 'profile' or 'career' (Path); '' for none.
-  let openBox = '';
+  // One box open at a time: 'answer', 'profile' or 'career' (Path); '' for none. Auto Apply opens
+  // with Profile shown (the Manager's choice); closing it keeps it closed for this page.
+  let openBox = 'profile';
   const toggleBox = (name) => { openBox = openBox === name ? '' : name; render(); };
   const monthYear = (value) => {
     const match = String(value || '').match(/^(\d{4})-(\d{2})/);
@@ -410,6 +431,130 @@
     node.addEventListener('click', () => copy(label, text));
     return node;
   }
+  // ---- Saved: the saved answers this application uses, managed here (Auto Apply) ----
+  // Each answer: its main answer, its other forms ("30 days" for "1 month") and this job site's own
+  // form; add, edit and delete them. A change is used at once by every open Auto Apply job.
+  let saved = { rows: null, site: '', loading: false, error: '' };
+  const savedDrafts = new Map();
+  const draft = (key, fallback = '') => (savedDrafts.has(key) ? savedDrafts.get(key) : fallback);
+  async function savedCall(op, input = {}) {
+    saved.loading = true;
+    saved.error = '';
+    render();
+    const result = await send('saved_answers', { op, input });
+    saved.loading = false;
+    if (result?.ok) {
+      saved.rows = result.rows || [];
+      saved.site = result.site || '';
+      if (op !== 'load') say('Saved answers updated: used at once.');
+    } else saved.error = result?.error || 'Could not reach QTS. Try again.';
+    render();
+    return result?.ok === true;
+  }
+  function savedInput(key, value, placeholder) {
+    const input = element('input', 'saved-input');
+    input.type = 'text';
+    input.value = draft(key, value);
+    input.placeholder = placeholder;
+    input.maxLength = 500;
+    input.addEventListener('input', () => savedDrafts.set(key, input.value));
+    return input;
+  }
+  function savedButton(label, onClick, className = '') {
+    const node = element('button', `saved-button ${className}`.trim(), label);
+    node.type = 'button';
+    node.disabled = saved.loading;
+    node.addEventListener('click', onClick);
+    return node;
+  }
+  function savedBox() {
+    const box = element('div', 'career saved-box');
+    const head = element('div', 'career-head', 'Saved answers');
+    const hide = element('button', '', 'Hide ✕');
+    hide.type = 'button';
+    hide.addEventListener('click', () => { openBox = ''; render(); });
+    head.append(hide);
+    box.append(head);
+    // Read once when opened, right after this drawing (the reading draws the panel again).
+    if (saved.rows === null && !saved.loading) {
+      saved.loading = true;
+      setTimeout(() => { saved.loading = false; savedCall('load'); }, 0);
+    }
+    if (saved.error) box.append(element('div', 'saved-error', saved.error));
+    if (saved.loading && saved.rows === null) { box.append(element('div', 'reference-note', 'Loading…')); return box; }
+    const rows = saved.rows || [];
+    if (!rows.length) box.append(element('div', 'reference-note', 'No saved answers yet. Add one below, or use "Save for this site" after fixing boxes on the page.'));
+    for (const row of rows) {
+      const item = element('div', 'saved-item');
+      const top = element('div', 'saved-top');
+      top.append(element('span', 'saved-question', row.question), element('span', 'saved-scope', row.scope === 'manager' ? 'All candidates' : 'This candidate'));
+      item.append(top);
+      // The main answer: edit, Save; Delete asks once more.
+      const mainKey = `main:${row.id}`;
+      const main = savedInput(mainKey, row.answer, 'Answer');
+      const deleteKey = `delete:${row.id}`;
+      const remove = savedButton(savedDrafts.get(deleteKey) ? 'Sure?' : 'Delete', async () => {
+        if (!savedDrafts.get(deleteKey)) { savedDrafts.set(deleteKey, true); render(); setTimeout(() => { savedDrafts.delete(deleteKey); render(); }, 4000); return; }
+        savedDrafts.delete(deleteKey);
+        await savedCall('delete', { id: row.id, version: row.version });
+      }, 'danger');
+      const line = element('div', 'saved-line');
+      line.append(main, savedButton('Save', async () => {
+        if (await savedCall('edit', { id: row.id, version: row.version, question: row.question, scope: row.scope, answer: main.value })) savedDrafts.delete(mainKey);
+      }), remove);
+      item.append(line);
+      // Other forms: chips with ✕, and one more.
+      const forms = element('div', 'saved-forms');
+      forms.append(element('span', 'saved-label', 'Other forms'));
+      for (const text of row.alternatives || []) {
+        const chip = element('span', 'saved-chip', text);
+        chip.append(savedButton('✕', () => savedCall('alternative-remove', { id: row.id, version: row.version, text }), 'chip-x'));
+        forms.append(chip);
+      }
+      const altKey = `alt:${row.id}`;
+      const alt = savedInput(altKey, '', 'e.g. 30 days');
+      forms.append(alt, savedButton('Add', async () => {
+        if (await savedCall('alternative-add', { id: row.id, version: row.version, question: row.question, text: alt.value })) savedDrafts.delete(altKey);
+      }));
+      item.append(forms);
+      // This job site's own form (what this site should get).
+      if (saved.site) {
+        const siteKeyName = `site:${row.id}`;
+        const siteLine = element('div', 'saved-line');
+        const siteInput = savedInput(siteKeyName, row.siteForm?.answer || '', `For ${saved.site}`);
+        siteLine.append(element('span', 'saved-label', 'This site'), siteInput, savedButton('Save', async () => {
+          if (await savedCall('site-set', { id: row.id, version: row.version, question: row.question, text: siteInput.value, siteKind: row.siteForm?.kind || '' })) savedDrafts.delete(siteKeyName);
+        }));
+        if (row.siteForm) siteLine.append(savedButton('✕', () => savedCall('site-delete', { id: row.id, version: row.version, siteKind: row.siteForm.kind }), 'chip-x'));
+        item.append(siteLine);
+      }
+      box.append(item);
+    }
+    // A new saved answer: for this candidate, or for all candidates.
+    const add = element('div', 'saved-item saved-add');
+    add.append(element('div', 'saved-question', 'Add an answer'));
+    const question = savedInput('new:question', '', 'Question (e.g. Notice period)');
+    const answer = savedInput('new:answer', '', 'Answer (e.g. 1 month)');
+    const level = element('select', 'saved-input');
+    for (const [value, label] of [['candidate', 'This candidate'], ['manager', 'All candidates']]) {
+      const option = element('option', '', label);
+      option.value = value;
+      level.append(option);
+    }
+    level.value = draft('new:level', 'candidate');
+    level.addEventListener('change', () => savedDrafts.set('new:level', level.value));
+    const addLine = element('div', 'saved-line');
+    addLine.append(level, savedButton('Add', async () => {
+      if (await savedCall('add', { question: question.value, answer: answer.value, level: level.value })) {
+        for (const key of ['new:question', 'new:answer']) savedDrafts.delete(key);
+        render();
+      }
+    }));
+    add.append(question, answer, addLine);
+    box.append(add);
+    return box;
+  }
+
   // The profile box (opened by Profile): every saved profile item as "label value"; a click copies the value.
   function profileBox(profile, sitePassword = '') {
     const box = element('div', 'career profile-box');
@@ -422,6 +567,55 @@
     // In groups, one row each: the label on the left, the value on the right; a click on the row
     // copies the value (the row flashes "Copied").
     const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
+    // One line icon per item, tinted by its group, to find it at a glance (the Manager's choice,
+    // 2026-11-19). Built as SVG elements (no HTML strings: safe on pages that forbid them).
+    const P = (d) => ['path', { d }];
+    const C = (cx, cy, r) => ['circle', { cx, cy, r }];
+    const R = (x, y, width, height, rx = 2) => ['rect', { x, y, width, height, rx }];
+    const ICONS = {
+      'Full name': ['#a5b4fc', [C(12, 7, 4), P('M5 21a7 7 0 0 1 14 0')]],
+      'First name': ['#a5b4fc', [P('M4 7V4h16v3'), P('M9 20h6'), P('M12 4v16')]],
+      'Last name': ['#a5b4fc', [R(2, 5, 20, 14), C(8, 12, 2), P('M14 10h4'), P('M14 14h4')]],
+      Email: ['#7dd3fc', [R(2, 4, 20, 16), P('m22 7-10 6L2 7')]],
+      Phone: ['#7dd3fc', [P('M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z')]],
+      LinkedIn: ['#c4b5fd', [P('M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6z'), R(2, 9, 4, 12, 0), C(4, 4, 2)]],
+      GitHub: ['#c4b5fd', [P('M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.1-1.3-.3-2.5-1-3.5.3-1.2.3-2.4 0-3.5 0 0-1 0-3 1.5a13.4 13.4 0 0 0-8 0C6 2 5 2 5 2c-.3 1.1-.3 2.3 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.4.5-.7 1.1-.8 1.7-.2.6-.2 1.2-.2 1.8v4'), P('M9 18c-4.5 2-5-2-7-2')]],
+      Portfolio: ['#c4b5fd', [C(12, 12, 10), P('M2 12h20'), P('M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20')]],
+      'City, Country': ['#6ee7b7', [P('M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z'), C(12, 10, 3)]],
+      Street: ['#6ee7b7', [P('m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'), P('M9 22V12h6v10')]],
+      State: ['#6ee7b7', [P('m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z'), P('M9 3v15'), P('M15 6v15')]],
+      'Postal code': ['#6ee7b7', [P('M4 9h16'), P('M4 15h16'), P('M10 3 8 21'), P('M16 3l-2 18')]],
+      Headline: ['#fcd34d', [R(2, 7, 20, 14), P('M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16')]],
+      Experience: ['#fcd34d', [C(12, 12, 10), P('M12 6v6l4 2')]],
+      Nationality: ['#fcd34d', [P('M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z'), P('M4 22v-7')]],
+      Birthday: ['#fcd34d', [R(3, 4, 18, 18), P('M16 2v4'), P('M8 2v4'), P('M3 10h18')]],
+      Languages: ['#fcd34d', [P('m5 8 6 6'), P('m4 14 6-6 2-3'), P('M2 5h12'), P('M7 2h1'), P('m22 22-5-10-5 10'), P('M14 18h6')]],
+      Password: ['#fda4af', [P('M2.6 18.4A2 2 0 0 0 2 19.8V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4z'), C(16.5, 7.5, 0.5)]],
+      'Per month': ['#86efac', [R(2, 6, 20, 12), C(12, 12, 2), P('M6 12h.01'), P('M18 12h.01')]],
+      'Per year': ['#86efac', [P('m22 7-8.5 8.5-5-5L2 17'), P('M16 7h6v6')]],
+      'Résumé PDF': ['#fdba74', [P('M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'), P('M14 2v4a2 2 0 0 0 2 2h4'), P('M10 9H8'), P('M16 13H8'), P('M16 17H8')]],
+      'Résumé folder': ['#fdba74', [P('M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z')]],
+    };
+    const iconNode = (label) => {
+      const [color, shapes] = ICONS[label] || ['#94a3b8', [C(12, 12, 3)]];
+      const ns = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(ns, 'svg');
+      for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', width: 14, height: 14, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) svg.setAttribute(key, String(value));
+      for (const [tag, attributes] of shapes) {
+        const shape = document.createElementNS(ns, tag);
+        for (const [key, value] of Object.entries(attributes)) shape.setAttribute(key, String(value));
+        svg.append(shape);
+      }
+      const box = element('span', 'profile-icon');
+      box.style.setProperty('--tint', color);
+      box.append(svg);
+      return box;
+    };
+    const labelNode = (label) => {
+      const node = element('span', 'profile-label');
+      node.append(iconNode(label), label);
+      return node;
+    };
     const groups = [
       ['Name', [['Full name', fullName], ['First name', profile.firstName], ['Last name', profile.lastName]]],
       ['Contact', [['Email', profile.email], ['Phone', profile.phone]]],
@@ -436,7 +630,7 @@
         const row = element('button', 'profile-row');
         row.type = 'button';
         row.title = `Copy ${label}: ${value}`;
-        row.append(element('span', 'profile-label', label), element('span', 'profile-value', value), element('span', 'profile-copy-mark', '⧉'));
+        row.append(labelNode(label), element('span', 'profile-value', value), element('span', 'profile-copy-mark', '⧉'));
         row.addEventListener('click', async () => {
           const ok = await copyReference(value);
           say(ok ? `Copied: ${label}` : 'Could not copy. Try again.');
@@ -448,13 +642,34 @@
       }
     }
     if (!groups.length) box.append(element('div', 'reference-note', 'No profile details saved.'));
+    // Files: the résumé PDF's and its folder's full paths (for a site's upload window), one click to copy.
+    const files = [['Résumé PDF', state?.resumeFilePath], ['Résumé folder', state?.resumeFolderPath]]
+      .map(([label, value]) => [label, String(value || '').trim()]).filter(([, value]) => /^[a-z]:\\/i.test(value));
+    if (files.length) {
+      box.append(element('div', 'profile-group', 'Files'));
+      for (const [label, value] of files) {
+        const row = element('button', 'profile-row path-row');
+        row.type = 'button';
+        row.title = `Copy the full path: ${value}`;
+        // (Left-to-right marks keep the path's own order inside the right-to-left cut.)
+        row.append(labelNode(label), element('span', 'profile-value', `‎${value}‎`), element('span', 'profile-copy-mark', '⧉'));
+        row.addEventListener('click', async () => {
+          const ok = await copyReference(value);
+          say(ok ? `Copied: ${label} full path` : 'Could not copy. Try again.');
+          if (!ok) return;
+          row.classList.add('copied');
+          setTimeout(() => row.classList.remove('copied'), 1200);
+        });
+        box.append(row);
+      }
+    }
     // Account: the Manager's password for job sites (Settings), masked; a click copies it in full.
     if (String(sitePassword || '').trim()) {
       box.append(element('div', 'profile-group', 'Account'));
       const row = element('button', 'profile-row password-row');
       row.type = 'button';
       row.title = 'Copy the password for job sites';
-      row.append(element('span', 'profile-label', 'Password'), element('span', 'profile-value', '•'.repeat(Math.min(12, Math.max(8, sitePassword.length)))), element('span', 'profile-copy-mark', '⧉'));
+      row.append(labelNode('Password'), element('span', 'profile-value', '•'.repeat(Math.min(12, Math.max(8, sitePassword.length)))), element('span', 'profile-copy-mark', '⧉'));
       row.addEventListener('click', async () => {
         const ok = await copyReference(sitePassword);
         say(ok ? 'Copied: Password' : 'Could not copy. Try again.');
@@ -483,7 +698,7 @@
         row.classList.add('copied');
         setTimeout(() => row.classList.remove('copied'), 1200);
       });
-      row.append(element('span', 'profile-label', label), input, copy);
+      row.append(labelNode(label), input, copy);
       box.append(row);
     }
     return box;
@@ -887,14 +1102,6 @@
     // Auto Apply: one line — Copy Resume, the folder's full path, Copy Cover Letter (one click each).
     if (auto && (state.references || state.resumeFolder)) {
       const copies = element('div', 'copy-row');
-      const textButton = (label, text) => {
-        const copy = element('button', 'copy-button', `✉ ${label}`);
-        copy.type = 'button';
-        copy.disabled = !String(text || '').trim();
-        copy.title = copy.disabled ? `This job has no ${label.toLowerCase()} text.` : `Copy the ${label.toLowerCase()} text`;
-        copy.addEventListener('click', async () => say(await copyReference(text) ? `Copied: ${label}` : 'Could not copy. Try again.'));
-        return copy;
-      };
       // Answer: copies the résumé, this page's empty questions and the Manager's text in one, and
       // opens the box to edit them (a toggle, as Profile and Path; one box open at a time).
       if (state.references) {
@@ -925,13 +1132,23 @@
         folder.addEventListener('click', () => { copyFolderPath(); if (state.references) toggleBox('career'); });
         copies.append(folder);
       }
-      if (state.references) copies.append(textButton('Letter', state.references.coverLetterText));
+      // (No Letter button in Auto Apply: the Manager's choice, 2026-11-19.)
+      // Saved: the saved answers this application uses, managed here (Auto Apply).
+      if (auto) {
+        const savedButtonNode = element('button', `copy-button saved-open${openBox === 'saved' ? ' on' : ''}`, '⭐ Saved');
+        savedButtonNode.type = 'button';
+        savedButtonNode.title = 'Saved answers: add, edit, other forms and this site\'s form (used at once)';
+        savedButtonNode.setAttribute('aria-pressed', String(openBox === 'saved'));
+        savedButtonNode.addEventListener('click', () => { if (openBox !== 'saved') saved.rows = null; toggleBox('saved'); });
+        copies.append(savedButtonNode);
+      }
       // The button line stays pinned at the top of the panel while it scrolls (its box right under it).
       copies.classList.add('sticky');
       copyBar = [copies];
       if (openBox === 'answer' && state.references) copyBar.push(answerBox());
       if (openBox === 'profile' && state.references) copyBar.push(profileBox(state.references.profile || {}, state.references.sitePassword || ''));
       if (openBox === 'career' && state.references) copyBar.push(careerBox(state.references));
+      if (openBox === 'saved' && auto) copyBar.push(savedBox());
     }
     if (auto) job.append(jobStatus);
     // Auto Apply: the application and its tabs (waiting for a new one, moved, a tab that did not open).
@@ -1229,6 +1446,13 @@
       event.preventDefault();
       event.stopPropagation();
       send('fill_again');
+    } else if (event.code === 'KeyC' && state.references) {
+      // Alt+C: the Answer copy (the résumé, this page's empty questions read again, the Manager's
+      // text), as the Answer button copies it, without opening its box.
+      event.preventDefault();
+      event.stopPropagation();
+      if (!(answerQuestions.edited && answerQuestions.key === jobKey())) answerQuestions = { key: '', text: '', edited: false };
+      copyAnswer();
     } else if (event.key === 'Escape' && menuOpen) {
       menuOpen = false;
       render();

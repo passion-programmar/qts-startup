@@ -69,6 +69,8 @@ export type ClaimedApplication = {
     description: string | null;
     // Where Generation saved the résumé and cover letter, and with which prompt and template.
     resumeFolder: string | null;
+    // The résumé PDF's own file name in that folder ("Anna Kowalska.pdf"): the panel copies its full path.
+    resumeFile: string | null;
     resumeSavedOn: string | null;
     promptName: string | null;
     templateName: string | null;
@@ -155,7 +157,7 @@ function deliveredDocument(part: "resume" | "coverLetter") {
   )`;
 }
 
-const templateLabel = (template: string | null) =>
+export const templateLabel = (template: string | null) =>
   template ? (isPdfTemplate(template) ? pdfTemplateLabels[template] : template) : null;
 
 /**
@@ -180,18 +182,22 @@ export async function claimNextApplication(
   const skipCustomUrlJobs = !selection;
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
   // Exclude all rows outside the explicit selection; an empty/stale selection never falls back.
+  // The launcher's Custom jobs (Easy Apply, a recruiter's message) are applied to by the Manager: never claimed.
+  const customJobs = sql`select c.id from jobs c where c.manager_id = ${managerId} and c.custom_kind is not null`;
   const skips = selection ? sql`ARRAY(
     select j.id from jobs j where j.manager_id = ${managerId}
       and ((${selection.candidateId}::uuid is not null and j.candidate_id <> ${selection.candidateId}::uuid)
         or not (j.id = any(${`{${selection.jobIds.join(",")}}`}::uuid[])))
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
+    union ${customJobs}
   )` : skipCustomUrlJobs ? sql`ARRAY(
     -- No alias: the Custom URL check names the table itself ("jobs"."job_url").
     select ${jobs.id} from ${jobs}
     where ${jobs.managerId} = ${managerId}
       and ${matchesManagerCustomUrl(managerId, jobs.jobUrl)}
     union select unnest(${`{${skipJobIds.join(",")}}`}::uuid[])
-  )` : sql`${`{${skipJobIds.join(",")}}`}::uuid[]`;
+    union ${customJobs}
+  )` : sql`ARRAY(select unnest(${`{${skipJobIds.join(",")}}`}::uuid[]) union ${customJobs})`;
   const claim = await db.execute<{ attemptId: string | null }>(sql`
     select claim_apply_attempt(${managerId}, ${browser.id}, ${parallelLimit}, ${APPLY_LEASE_SECONDS},
       ${skips}, ${options.autoApply === true}, false)::text as "attemptId"
@@ -312,6 +318,7 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
       salary: salary?.trim() || null,
       description,
       resumeFolder: resumeLocalPath ? resumeFolderOf(resumeLocalPath) : null,
+      resumeFile: resumeLocalPath ? resumeLocalPath.replace(/\\/g, "/").split("/").pop() || null : null,
       resumeSavedOn,
       promptName,
       templateName: templateLabel(pdfTemplate),
