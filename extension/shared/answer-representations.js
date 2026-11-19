@@ -4,6 +4,20 @@
   const fail = (reason) => ({ ok: false, reason });
   const formats = ['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'DD.MM.YYYY', 'MM.DD.YYYY', 'DD-MM-YYYY', 'MM-DD-YYYY'];
   const unit = (raw) => String(raw || '').trim().toLowerCase().replace(/s$/, '');
+  /**
+   * The calling code an international number starts with ("+40264484948" → "+40"), read from the
+   * ITU numbering plan (E.164): codes never start one another, and their length follows from the
+   * first digits (+1 and +7 one digit; 20, 27, 30–34, 36, 39, 40, 41, 43–49, 51–58, 60–66, 81, 82,
+   * 84, 86, 90–95, 98 two; every other start three). null for a number without "+".
+   */
+  function callingCodeOf(number) {
+    const text = String(number || '').trim();
+    if (!/^\+\s?[1-9][\d\s().-]{5,}$/.test(text)) return null;
+    const digits = text.replace(/\D/g, '');
+    if (/^[17]/.test(digits)) return `+${digits[0]}`;
+    const two = /^(2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/.test(digits);
+    return `+${digits.slice(0, two ? 2 : 3)}`;
+  }
   function metadata(raw) {
     if (!raw || typeof raw !== 'object') return undefined;
     const out = {};
@@ -210,7 +224,7 @@
     }
     return { ok: true, value, provenance: { operation, stages: [...stages, operation], sourceType, targetType: target.kind, context: used } };
   }
-  const api = Object.freeze({ version: 1, operations, metadata, describeField, number, date, convert });
+  const api = Object.freeze({ version: 1, operations, metadata, describeField, number, date, convert, callingCodeOf });
   global.__qtsAnswerRepresentations = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

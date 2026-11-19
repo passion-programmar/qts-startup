@@ -893,9 +893,15 @@
       // No text names this box for sure: its name attribute is only a hint ("first_name"), and the
       // question is marked unresolved, so it is never answered as if it were another question.
       // A dropdown with no label of its own whose choices are dialing codes is a phone's country code.
+      // So is one labelled only "Country" beside a phone box when its choices are dialing codes
+      // ("RO +40"), and a box labelled only "Number" in a phone question is the phone number.
       const ownLabelText = labelFor(control);
-      const named = (ownLabelText && BARE_CODE_LABEL.test(ownLabelText) && besidePhone(control) ? 'Phone country code' : ownLabelText)
-        || (tag === 'SELECT' && dialCodeList(realOptions(control)) ? 'Phone country code' : '');
+      const dialList = tag === 'SELECT' && dialCodeList(realOptions(control));
+      const named = ((ownLabelText && BARE_CODE_LABEL.test(ownLabelText) || dialList && /^\s*country\s*\*?\s*$/i.test(ownLabelText || '')) && besidePhone(control)
+        ? 'Phone country code'
+        : ownLabelText && /^\s*(number|no\.?)\s*\*?\s*$/i.test(ownLabelText) && tag === 'INPUT'
+          && (type === 'tel' || /phone|mobile|telefon/i.test(blockQuestion(control).text || '')) ? 'Phone number' : ownLabelText)
+        || (dialList ? 'Phone country code' : '');
       const labelUnresolved = !named && type !== 'radio' && type !== 'checkbox' && type !== 'file';
       const label = named || (labelUnresolved ? cleanText(String(control.name || control.id || '').replace(/[_\-[\].]+/g, ' ')) : '');
       // A styled radio or tick box hides its input and shows its label instead.
@@ -1621,15 +1627,45 @@
    */
   const CALLING_CODE_LABEL = /\b(country (phone |dial(l)?ing |calling )?code|phone (country )?code|calling code|dial(l)?ing code)\b/i;
   function separateCallingCode(element) {
+    const coded = separateCodeField(element);
+    if (!coded) return null;
+    const block = blockQuestion(coded.node).block || coded.node.parentElement;
+    return coded.code || String(textOf(block)).match(/\+\s?(\d{1,4})\b/)?.[1] || null;
+  }
+
+  /**
+   * The phone's country code asked as its own question beside the number box, on any site
+   * ("Country code [Romania (+40) ▼]" above "Phone number"; "Dialing code [+40]"): { node, code },
+   * code being the digits it shows now ("40", '' when none). The nearest one to the box; null when
+   * there is none.
+   */
+  /**
+   * The calling code's digits an international number starts with ("40264484948" → "40"), by the
+   * ITU numbering plan; the same rule as callingCodeOf in shared/answer-representations.js (this
+   * file is injected on its own).
+   */
+  function numberCallingCode(digits) {
+    if (!/^[1-9]\d{5,}$/.test(digits)) return '';
+    if (/^[17]/.test(digits)) return digits[0];
+    return digits.slice(0, /^(2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/.test(digits) ? 2 : 3);
+  }
+
+  function separateCodeField(element) {
     const up = (node) => node.parentElement || node.parentNode?.host || null;
+    const isCodeQuestion = (node) => {
+      if (node === element || node.contains(element) || !isShown(node)) return false;
+      const label = cleanText(`${labelFor(node)} ${node.getAttribute('aria-label') || ''}`);
+      return CALLING_CODE_LABEL.test(label) || BARE_CODE_LABEL.test(labelFor(node) || '')
+        || (node.tagName === 'SELECT' && dialCodeList(realOptions(node)));
+    };
     for (let box = up(element), depth = 0; box && depth < 7; box = up(box), depth += 1) {
-      const coded = deepQuery(box, 'input:not([type="hidden"]), select, button, [role="combobox"], [role="button"]')
-        .find((node) => node !== element && !node.contains(element) && isShown(node)
-          && CALLING_CODE_LABEL.test(cleanText(`${labelFor(node)} ${node.getAttribute('aria-label') || ''}`)));
-      if (!coded) continue;
-      const block = blockQuestion(coded).block || coded.parentElement;
-      const chosen = coded.tagName === 'SELECT' ? optionText(coded.selectedOptions?.[0] || { textContent: '' }) : '';
-      return String(`${chosen} ${textOf(block)}`).match(/\+\s?(\d{1,4})\b/)?.[1] || null;
+      const node = deepQuery(box, 'input:not([type="hidden"]), select, button, [role="combobox"], [role="button"]').find(isCodeQuestion);
+      if (!node) continue;
+      const shown = node.tagName === 'SELECT' ? optionText(node.selectedOptions?.[0] || { textContent: '' })
+        : node.tagName === 'INPUT' ? String(node.value || '') : textOf(node);
+      const code = shown.match(/\+\s?(\d{1,4})\b/)?.[1]
+        || (node.tagName === 'INPUT' ? shown.match(/^\s*(?:00)?(\d{1,4})\s*$/)?.[1] : '') || '';
+      return { node, code };
     }
     return null;
   }
@@ -1644,20 +1680,31 @@
     const number = value.trim();
     if (!/^\+\d[\d\s().-]{5,}$/.test(number)) return value;
     const digits = number.replace(/\D/g, '');
+    const codeOf = (text) => String(text).match(/\+\s?(\d{1,4})\b/)?.[1] || '';
+    // Another country's code: the choice with the number's code, the longest that fits (+420 before +4).
+    const best = (texts) => texts.filter((text) => codeOf(text) && digits.startsWith(codeOf(text)))
+      .sort((a, b) => codeOf(b).length - codeOf(a).length)[0];
     const picker = dialPicker(element);
     if (!picker) {
-      // Workday only (*.myworkdayjobs.com, *.myworkdaysite.com): the code asked as its own question in
-      // this section ("Country Phone Code: Romania (+40)"): the number without it, when it is the
-      // number's own code. Every other site keeps the whole number.
-      if (!/(^|\.)myworkday(jobs|site)\.com$/i.test(location.hostname)) return value;
-      const code = separateCallingCode(element);
+      // The code asked as its own question beside the box (any site; Workday's "Country Phone Code:
+      // Romania (+40)"): the number without it, when it shows the number's own code. A list still on
+      // another code (or none) is first put on the number's; a code box showing no code, or another
+      // code it cannot be switched from, keeps the whole number.
+      const coded = separateCodeField(element);
+      if (!coded) return value;
+      let code = coded.code || (/(^|\.)myworkday(jobs|site)\.com$/i.test(location.hostname) ? separateCallingCode(element) : '');
+      // A typed code box still empty (filled after this box, as a search list is): QTS puts the
+      // number's own code there, so the number goes without it.
+      if (!code && coded.node.tagName === 'INPUT' && !coded.node.readOnly && !coded.node.disabled
+        && !String(coded.node.value || '').trim()) code = numberCallingCode(digits);
+      if (coded.node.tagName === 'SELECT' && !(code && digits.startsWith(code))) {
+        const wanted = best([...coded.node.options].map(optionText));
+        const option = wanted && [...coded.node.options].find((entry) => optionText(entry) === wanted);
+        if (option) { setNativeValue(coded.node, option.value); code = codeOf(wanted); }
+      }
       return code && digits.startsWith(code) ? afterCode(number, code) || value : value;
     }
     if (digits.startsWith(picker.code)) return afterCode(number, picker.code) || value;
-    // Another country's code: the picker's choice with the number's code, the longest that fits (+420 before +4).
-    const codeOf = (text) => String(text).match(/\+\s?(\d{1,4})\b/)?.[1] || '';
-    const best = (texts) => texts.filter((text) => codeOf(text) && digits.startsWith(codeOf(text)))
-      .sort((a, b) => codeOf(b).length - codeOf(a).length)[0];
     if (picker.node.tagName === 'SELECT') {
       const option = [...picker.node.options].find((entry) => optionText(entry) === best([...picker.node.options].map(optionText)));
       if (!option) return value;

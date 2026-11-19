@@ -8131,7 +8131,9 @@ async function sendToLauncher(tab, message) {
 }
 
 async function sendToolbarClick(tab) {
-  if (await self.__qtsApplyRunner?.openOwnedPanel?.(tab.id)) return { ok: true };
+  // Alt+Q (or the icon): on an application's tab (Normal Apply, Auto Apply, a stopped Auto Apply
+  // tab) its applying panel is shown or hidden; on any other page, the QTS panel.
+  if (await self.__qtsApplyRunner?.toggleOwnedPanel?.(tab.id)) return { ok: true };
   return sendToLauncher(tab, { type: 'QTS_TOOLBAR_ICON_CLICKED' });
 }
 

@@ -1061,6 +1061,13 @@
       render();
       return true;
     },
+    /** Alt+Q (or the QTS icon) on the application's tab: the panel shown or hidden. true = now shown. */
+    toggle() {
+      if (!state || global.__qtsApplyAssist !== controller) return null;
+      hidden = !hidden;
+      render();
+      return !hidden;
+    },
     render(nextState) {
       if (global.__qtsApplyAssist !== controller) return false;
       if (state && state.attemptId !== nextState.attemptId) Object.assign(answerEditor, { open: false, busy: false, rows: [], fields: [], selected: null, draft: '', question: '', message: '' });

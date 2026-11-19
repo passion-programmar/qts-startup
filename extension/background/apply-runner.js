@@ -407,7 +407,16 @@ async function autoAccountSteps(tabId, application) {
  * following "Apply manually"), follow a new tab or page, or open an embedded job-site form.
  * onTab hears about a new tab so the caller keeps the right one. Returns the tab with the form.
  */
-async function reachApplicationForm(tab, onTab, application, { handleAccountSteps = true, stop = null } = {}) {
+// Auto Apply: the Manager's Alt+S while QTS looks for the form. The page is the Manager's until
+// they press Alt+F (or Fill again): nothing more is clicked, typed or opened there.
+const MANAGER_STOPPED_FINDING = 'You stopped QTS (Alt+S): it no longer looks for the form on this page. Alt+F (or Fill again) goes on.';
+
+async function reachApplicationForm(tab, onTab, application, { handleAccountSteps = true, stop = null, managerStop = null } = {}) {
+  // Alt+S (managerStop): checked after every wait and before every click, so nothing runs on after it.
+  const halt = () => {
+    if (managerStop?.()) throw new ApplyStop(MANAGER_STOPPED_FINDING, { skip: false, keepTab: true, pageType: 'manager_stopped' });
+  };
+  const pause = async (ms) => { await sleep(ms); halt(); };
   // Auto Apply with APIs: a way on without an account (Apply, Continue, Apply as guest) comes first,
   // even beside Sign in or Register. Signing in happens only when nothing else leads on.
   const guestFirst = application.apiFlow === true;
@@ -425,6 +434,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
   const steadyClicks = guestFirst && (await chrome.storage.local.get('qtsAutoApplySpeedOff').catch(() => ({}))).qtsAutoApplySpeedOff !== true;
   for (let step = 0; step < APPLY_START_STEPS; step += 1) {
     if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
+    halt();
     if (guestFirst) {
       const here = String((await getTab(tab.id))?.url || '').split('#')[0];
       if (self.__qtsApplyRecipes.hostedBoardApply(here)) throw self.__qtsAutoApplyApi.hostedApplyStop(here);
@@ -459,12 +469,13 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
         if (waited >= 3000 && await inForm(tab.id, () => globalThis.__qtsApplyForm.pageSettledWithText()).catch(() => false)) break;
       }
       if (waited >= 6000 && page && page.type !== 'unsupported_page') break;
-      await sleep(tick);
+      await pause(tick);
     }
     page ||= await inForm(tab.id, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
     // A code or a link sent by email: read from the Manager's verification mailbox when there is one.
     if (page?.type === 'verification_required'
-      && await self.__qtsVerificationMail.complete(tab.id, application, { stop: stop ? async () => stop() : null })) continue;
+      && await self.__qtsVerificationMail.complete(tab.id, application, { stop: stop || managerStop ? async () => Boolean(stop?.() || managerStop?.()) : null })) continue;
+    halt();
     if (['captcha_required', 'verification_required'].includes(page?.type)) {
       throw await pageStop(tab.id, page.reason || 'The site needs a manual security or verification step.');
     }
@@ -480,6 +491,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     // "Not now" on a sign-in pop-up). QTS takes it, follows a tab it opens, and looks again.
     if (guestFirst && !['application_form', 'partial_application_form'].includes(page?.type)) {
       const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
+      halt();
       const guestClick = noteTabClick(tab.id, 'start');
       const guest = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickGuestWay(skip), [clicked]).catch(() => null);
       if (!guest?.ok) forgetTabClick(tab.id, guestClick);
@@ -487,7 +499,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
         clicked.push(guest.text);
         diag('guest-way', { text: String(guest.text || '').slice(0, 60), then: guest.then || null });
         for (let waited = 0; waited < 3000; waited += 300) {
-          await sleep(300);
+          await pause(300);
           const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && (entry.openerTabId === tab.id || navigationSources.get(entry.id) === tab.id));
           if (opened) {
             const jobPage = tab;
@@ -511,6 +523,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       const start = accountPage ? null : await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true, apiFlow: true }), [clicked]).catch(() => null);
       if (!start?.ok) {
         // Create account first, then Sign in, the natural way; the Manager takes over for a code or an error.
+        halt();
         const done = await autoAccountSteps(tab.id, application);
         if (done.reached) continue;
         throw new ApplyStop(done.manager, { skip: false, keepTab: true, pageType: 'account_needs_you' });
@@ -522,6 +535,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
           skip: false, keepTab: true, pageType: 'account_needs_you',
         });
       }
+      halt();
       const account = await inForm(tab.id, (values) => globalThis.__qtsApplyForm.fillAccountForm(values), [{
         email: application.candidate.email,
         firstName: application.candidate.firstName,
@@ -537,6 +551,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       if (guestFirst) application.verifiedSites?.add(self.__qtsSiteSessions.siteOf(self.__qtsSiteSessions.hostOf((await getTab(tab.id))?.url || '')));
       const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
       const beforeUrl = (await getTab(tab.id))?.url;
+      halt();
       noteTabClick(tab.id, 'start');
       const action = await inForm(tab.id, (type) => globalThis.__qtsApplyForm.clickAccountAction(type), [account.pageType])
         .catch(() => ({ ok: false, error: 'QTS could not continue the account form. Review it manually.' }));
@@ -547,7 +562,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       }
       let advanced = false;
       for (let waited = 0; waited < APPLY_START_WAIT_MS; waited += tick) {
-        await sleep(tick);
+        await pause(tick);
         const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && (entry.openerTabId === tab.id || navigationSources.get(entry.id) === tab.id));
         if (opened) {
           const previousTab = tab;
@@ -574,10 +589,12 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     }
     const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
     if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
+    halt();
     noteTabClick(tab.id, 'start');
     let start = await inForm(tab.id, (skip, assistant, apiFlow) => globalThis.__qtsApplyForm.clickStart(skip, { assistant, apiFlow }), [clicked, seeksGuestWay, guestFirst]).catch(() => null);
     // Nothing leads on without an account: only now the site's own Sign in or Register.
     if (guestFirst && !start?.ok && !start?.email) {
+      halt();
       start = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: false, apiFlow: true }), [clicked]).catch(() => null);
     }
     if (start?.email) throw new ApplyStop('This job takes applications by email; apply by hand.');
@@ -593,7 +610,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     }
     if (start.frameUrl) {
       await chrome.tabs.update(tab.id, { url: start.frameUrl });
-      await sleep(500);
+      await pause(500);
       await waitForTabComplete(tab.id, 45 * 1000);
       continue;
     }
@@ -602,7 +619,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     let movedOn = false;
     // The button may open a new tab, load another page, or show the form on this one.
     for (let waited = 0; waited < (guestFirst ? 8000 : APPLY_START_WAIT_MS); waited += tick) {
-      await sleep(tick);
+      await pause(tick);
       if (stop?.()) throw new ApplyStop('Application continued in another tab.', { skip: false, keepTab: false });
       const opened = (await chrome.tabs.query({})).find((entry) => !knownTabs.has(entry.id) && (entry.openerTabId === tab.id || navigationSources.get(entry.id) === tab.id));
       if (opened) {
@@ -632,7 +649,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
     // its address is opened directly, as a person would by opening the link.
     if (!movedOn && start.href) {
       await chrome.tabs.update(tab.id, { url: start.href });
-      await sleep(500);
+      await pause(500);
       await waitForTabComplete(tab.id, 45 * 1000);
     }
     if (start.action === 'account') return tab;
@@ -2927,6 +2944,36 @@ async function restoreOwnedAssistPanel(review, tabId, { reveal = false } = {}) {
   } catch { return false; /* Protected/loading documents are retried on completion or activation. */ }
 }
 
+/**
+ * Alt+Q (or the QTS icon) on a tab of an application (Normal Apply, Auto Apply, or a stopped Auto
+ * Apply tab kept for the Manager): its applying panel shown or hidden, never the QTS launcher. A
+ * panel not on the page yet (loading, removed) is shown. false: the tab is no application's.
+ */
+async function toggleOwnedPanel(tabId) {
+  const review = [...activeReviews.values()].find((entry) => (entry.assist || entry.auto) && tabsOf(entry).has(tabId) && entry.panel);
+  const kept = !review && Boolean((await chrome.storage.local.get(AUTO_STOPPED_KEY).catch(() => ({})))[AUTO_STOPPED_KEY]?.[tabId]);
+  if (!review && !kept) return false;
+  const [done] = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    func: (assistFirst) => {
+      const panels = [globalThis.__qtsApplyAssist, globalThis.__qtsApplyReview];
+      for (const panel of assistFirst ? panels : panels.reverse()) {
+        const shown = panel?.toggle?.();
+        if (shown === true || shown === false) return shown;
+      }
+      return null;
+    },
+    args: [review?.assist === true],
+  }).catch(() => [null]);
+  if (done?.result === true || done?.result === false) return true;
+  if (review?.assist) return openOwnedAssistPanel(tabId);
+  if (review?.panel) {
+    await showReviewPanel(tabId, review.panel, { reveal: true }).catch(() => {});
+    return true;
+  }
+  return false;
+}
+
 async function openOwnedAssistPanel(tabId) {
   if (!(await isApplyOn())) return false;
   const review = [...activeReviews.values()].find((entry) => entry.assist && tabsOf(entry).has(tabId));
@@ -3072,6 +3119,11 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   let removeRequested = false;
   // Auto Apply: the Manager's Alt+S while QTS fills a step (the step stops; the application goes on).
   let stopFillRequested = false;
+  // Auto Apply: Alt+S at any other time (QTS finding the form: Apply, Continue, sign-in): it stops
+  // and the page is the Manager's until Alt+F (or Fill again); fillWhenFound: that Alt+F also fills
+  // the form once it is found (no second Alt+F).
+  let findStopRequested = false;
+  let fillWhenFound = false;
   let keptStopped = false;
   let endReason = 'ended';
   // Auto Apply: Cancel, Stop all, or a lost claim interrupts the work at once (the step being filled,
@@ -3327,8 +3379,16 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       aiAbortController?.abort();
       signalStop('Cancelled by the Manager. The job went back to the list, unchanged.');
     }, onStopFill: () => {
-      // Only while QTS fills (a step's fill or its AI answers): nothing else is stopped.
-      if (!review.onFillStop) return false;
+      // Not filling: QTS stops finding the form (Apply, Continue, sign-in) too; nothing is clicked,
+      // typed or opened on the page until the Manager's Alt+F (or Fill again).
+      if (!review.onFillStop) {
+        if (!application.apiFlow || !review.finding) return false;
+        findStopRequested = true;
+        fillWhenFound = false;
+        // (A wait in the finding, for the Manager or the page, looks again and shows the stop.)
+        answerManager(application.attemptId, { action: 'page_look' });
+        return true;
+      }
       stopFillRequested = true;
       review.stepAbort?.abort();
       review.onFillStop();
@@ -3605,7 +3665,18 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       step: stepNumber, final: false, problems: [{ message, fieldId: null }], aiOn: auto && application.autoAi !== false,
     }), 'problem', notice);
   };
+  /** The Manager's answer after an Alt+S stop: going on clears it; Alt+F also fills once the form is found. */
+  const afterFindStop = (decision) => {
+    if (!findStopRequested || ['page_look', 'submitted', 'skip', 'later', 'cancel', 'closed', 'lost', 'stopped', 'remove'].includes(decision?.action)) return;
+    findStopRequested = false;
+    fillWhenFound = ['fill_again', 'ask_ai'].includes(decision.action);
+  };
+  // Auto Apply: while QTS finds the form, Alt+S stops it (review.finding: onStopFill).
   const navigateToApplication = async (stepNumber) => {
+    review.finding = true;
+    try { return await findApplicationForm(stepNumber); } finally { review.finding = false; }
+  };
+  const findApplicationForm = async (stepNumber) => {
     for (let checkpoint = 0; ; checkpoint += 1) {
       try {
         // Auto Apply: a next-step tab the Manager opens meanwhile is taken up once this is done.
@@ -3620,7 +3691,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
               review.tabNotice = { text: 'Moved to the new tab', until: Date.now() + 20000 };
               review.persist().catch(() => {});
             }
-          }, application);
+          }, application, { managerStop: () => findStopRequested });
         } finally { review.navigating = false; }
         review.tabId = tab.id;
         const pending = review.pendingTab;
@@ -3654,8 +3725,11 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
             continue;
           }
           await closeMovedFromTabs(review);
-          const decision = await manualAccountStep(stepNumber, error.message || 'QTS could not get past this page.', 'QTS needs you on this page.');
+          const stoppedByYou = error.pageType === 'manager_stopped' || findStopRequested;
+          const decision = await manualAccountStep(stepNumber, stoppedByYou ? MANAGER_STOPPED_FINDING : error.message || 'QTS could not get past this page.',
+            stoppedByYou ? 'Stopped (Alt+S). Alt+F goes on.' : 'QTS needs you on this page.');
           if (['submitted', 'skip', 'later', 'cancel', 'closed', 'lost', 'stopped', 'remove'].includes(decision.action)) return decision.action;
+          afterFindStop(decision);
           continue;
         }
         if (!(error instanceof ApplyStop)
@@ -3669,7 +3743,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
           : error.pageType === 'verification_required'
             ? 'Complete verification, then Continue.'
             : 'Complete this account step, then Continue.');
-        if (!['continue', 'continue_manual', 'tab_moved'].includes(decision.action)) return decision.action;
+        if (!['continue', 'continue_manual', 'tab_moved', 'page_look', 'fill_again', 'ask_ai'].includes(decision.action)) return decision.action;
+        afterFindStop(decision);
       }
     }
   };
@@ -3729,6 +3804,10 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
    * the form is there.
    */
   const goOnInMovedTab = async () => {
+    review.finding = true;
+    try { return await goOnInMovedTabNow(); } finally { review.finding = false; }
+  };
+  const goOnInMovedTabNow = async () => {
     review.moveRequested = false;
     if (earlyDecisions.get(application.attemptId)?.action === 'tab_moved') earlyDecisions.delete(application.attemptId);
     while (review.orphaned) await interruptible(sleep(500));
@@ -3739,14 +3818,19 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       if (await stoppedForGood()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       const look = await lookAtAutoTab(tab.id);
       let message = '';
-      if (look.check) message = 'Do this yourself: the security check or verification on this page. QTS goes on when it is done.';
+      // Alt+S: nothing is clicked or typed here; only the form the Manager reached is taken up.
+      if (findStopRequested && !(look.fields > 0 && !look.account && !look.check)) message = MANAGER_STOPPED_FINDING;
+      else if (look.check) message = 'Do this yourself: the security check or verification on this page. QTS goes on when it is done.';
       // A sign-in: its email option opened (never a social one), email and password typed; the Manager clicks.
       else if (look.account || (look.emailSignIn && !look.start)) {
         const done = await autoAccountSteps(tab.id, application);
         if (done.reached) continue;
         message = done.manager;
       }
-      else if (look.fields > 0) return null;
+      else if (look.fields > 0) {
+        findStopRequested = false;
+        return null;
+      }
       else if (look.start && recipe.findStart) {
         // A start / continue button: QTS clicks it (a tab it opens is followed the same way).
         const before = tab.id;
@@ -3756,7 +3840,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
             if (tab?.id != null && tab.id !== opened.id) (review.closeAfterMove ||= new Set()).add(tab.id);
             tab = opened;
             review.tabId = opened.id;
-          }, application, { handleAccountSteps: false }));
+          }, application, { handleAccountSteps: false, managerStop: () => findStopRequested }));
           review.tabId = tab.id;
           if (tab.id !== before) {
             review.tabNotice = { text: 'Moved to the new tab', until: Date.now() + 20000 };
@@ -3768,10 +3852,11 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         } catch (error) {
           if (!(error instanceof ApplyStop) || await stoppedForGood()) throw error;
           if (tab.id !== before) await closeMovedFromTabs(review);
-          // Looked at again below: a sign-in or a check gets its own words.
-          const again = await lookAtAutoTab(tab.id);
-          if (again.fields > 0 && !again.account && !again.check) return null;
-          if (!again.check && (again.account || again.emailSignIn)) {
+          // Alt+S: the page is the Manager's (no sign-in typed, nothing clicked).
+          const again = findStopRequested ? null : await lookAtAutoTab(tab.id);
+          if (!again) message = MANAGER_STOPPED_FINDING;
+          else if (again.fields > 0 && !again.account && !again.check) return null;
+          else if (!again.check && (again.account || again.emailSignIn)) {
             const done = await autoAccountSteps(tab.id, application);
             if (done.reached) continue;
             message = done.manager;
@@ -3805,6 +3890,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         }), 'problem', message);
       } finally { watching = false; }
       if (['submitted', 'skip', 'later', 'cancel', 'closed', 'lost', 'stopped', 'remove'].includes(decision.action)) return decision;
+      afterFindStop(decision);
       if (decision.action === 'tab_moved') {
         while (review.orphaned) await interruptible(sleep(500));
         await closeMovedFromTabs(review);
@@ -3887,13 +3973,16 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       application.formTabId = tab.id;
       currentStep = step;
       await report('review', { review: false, appliedAnswers: keptAnswers() });
+      // Alt+F after an Alt+S stop while finding the form: that press fills this form too.
+      const keyPressed = fillWhenFound;
+      fillWhenFound = false;
       if (auto) {
         review.signals ||= {};
         if (review.signalsStep !== step && !askAi) review.signals.ai = 'idle';
         review.signalsStep = step;
         // (Ask AI: A spins first, then F while its answers go in.)
         // (Waiting for Alt+F: F stays dim until the Manager presses it.)
-        const waitsForKey = application.apiFlow && application.fillOnKey && !fillAgain && !askAi && !revisitStep && !checkResumedPage;
+        const waitsForKey = application.apiFlow && application.fillOnKey && !fillAgain && !askAi && !revisitStep && !checkResumedPage && !keyPressed;
         if (!askAi) review.signals.fill = waitsForKey ? 'idle' : 'busy';
       }
       review.panel = reviewState('working', { step, workingText: fillAgain ? 'Filling again…' : `Filling step ${step}…` });
@@ -3922,7 +4011,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       const aiNow = askAi && application.autoAi !== false;
       // Auto Apply: not filled until the Manager presses Alt+F (or Fill again); Alt+A asks the AI.
       // No hint box for it in the panel (the Manager asked for none).
-      if (auto && application.apiFlow && application.fillOnKey && !filled && !fillAgain && !aiNow) {
+      if (auto && application.apiFlow && application.fillOnKey && !filled && !fillAgain && !aiNow && !keyPressed) {
         filled = { used: {}, unresolved: [], problems: [], provisional: [], waitingForKey: true };
       }
       askAi = false;
@@ -5619,7 +5708,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // An application being filled or waiting for the Manager: never paced down or turned off.
 const isBusy = () => activeReviews.size > 0;
 
-self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
+self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, toggleOwnedPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
   // The tabs of the applications under way (verification-mail.js watches them for code pages).
   applicationTabs: () => [...activeReviews.values()].flatMap((review) => [...tabsOf(review)].map((tabId) => ({ tabId, attemptId: review.attemptId }))) };
 

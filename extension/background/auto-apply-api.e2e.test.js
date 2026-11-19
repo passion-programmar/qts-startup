@@ -2140,6 +2140,112 @@ test('Alt+S stops the filling at once (here the AI under way): nothing more goes
   } finally { await browser.close(); }
 });
 
+test('Alt+S while QTS finds the form stops that too: nothing is clicked until Alt+F, which then finds and fills it', { skip, timeout: 150000 }, async () => {
+  // The job page draws its Apply link after 6 s: Alt+S comes while QTS waits for it.
+  resetMock({ queue: [application(175, 'job-late')] });
+  const { browser, action, worker } = await launch();
+  try {
+    await worker.evaluate(() => chrome.storage.local.set({ qtsAutoApplyFillOnKey: true }));
+    assert.equal((await action('auto_apply')).ok, true);
+    const page = await until(() => formPage(browser, '/job-late'), 30000, 'the job page');
+    await until_panel(page, /Finding the application form/, 20000);
+    await page.bringToFront();
+    await page.keyboard.down('Alt');
+    await page.keyboard.press('KeyS');
+    await page.keyboard.up('Alt');
+    await until_panel(page, /You stopped QTS \(Alt\+S\)/, 15000);
+    // Well past the link's 6 s: QTS has not clicked it.
+    await sleep(12000);
+    assert.ok(await formPage(browser, '/job-late'), 'still on the job page');
+    assert.equal(await formPage(browser, '/small'), undefined, 'Apply now was not clicked');
+    // Alt+F: QTS goes on, reaches the form and fills it (no second Alt+F).
+    await page.keyboard.down('Alt');
+    await page.keyboard.press('KeyF');
+    await page.keyboard.up('Alt');
+    const form = await until(() => formPage(browser, '/small'), 30000, 'the form after Alt+F');
+    await until(async () => (await valueOf(form, 'fn')) === 'Ana', 40000, 'the form filled');
+  } finally { await browser.close(); }
+});
+
+test('two jobs open: each fills on its own (Alt+F, Alt+S); one submitted on the site and its tab closed, the next job opens', { skip, timeout: 240000 }, async () => {
+  const jobs = [application(176, 'small'), application(177, 'small'), application(178, 'small')];
+  resetMock({ queue: jobs, autoApplyParallelLimit: 2 });
+  const { browser, action, worker, storage } = await launch();
+  try {
+    await worker.evaluate(() => chrome.storage.local.set({ qtsAutoApplyFillOnKey: true }));
+    assert.equal((await action('auto_apply')).ok, true);
+    const open = async () => tabsAt(browser, '/small');
+    await until(async () => (await open()).length === 2, 60000, 'two jobs open');
+    await until(async () => (await globalThis.__diag()).filter((review) => review.waiting && review.mode === 'review').length === 2, 60000, 'both wait for Alt+F');
+    assert.equal(mock.queue.length, 1, 'the third waits: the limit is 2');
+    const jobOf = (page) => new URL(page.url()).searchParams.get('job');
+    const [first, second] = (await open()).sort((a, b) => jobOf(a).localeCompare(jobOf(b)));
+    const altKey = async (page, key) => {
+      await page.bringToFront();
+      await page.keyboard.down('Alt');
+      await page.keyboard.press(key);
+      await page.keyboard.up('Alt');
+    };
+    // Alt+F on the first job fills only that one.
+    await altKey(first, 'KeyF');
+    await until(async () => (await valueOf(first, 'fn')) === 'Ana', 40000, 'the first job filled');
+    await sleep(3000);
+    assert.equal(await valueOf(second, 'fn'), '', 'the second job is not filled by the first one\'s Alt+F');
+    // Alt+S on the first (nothing running there) never stops the second's fill.
+    await altKey(first, 'KeyS');
+    await altKey(second, 'KeyF');
+    await until(async () => (await valueOf(second, 'fn')) === 'Ana', 40000, 'the second job filled');
+    // The first is submitted on the site and its tab closed by the Manager: the third job opens.
+    await first.evaluate(() => document.querySelector('#submit')?.click()).catch(() => {});
+    await first.close();
+    await until(() => mock.queue.length === 0, 60000, 'the third job taken');
+    await until(async () => (await open()).length === 2, 60000, 'two open again');
+    assert.ok((await open()).some((page) => jobOf(page) === '178'), 'the third job is the one opened');
+    assert.ok((await open()).some((page) => page === second), 'the second job stays as it was');
+    assert.equal(await valueOf(second, 'fn'), 'Ana');
+  } finally { await browser.close(); }
+});
+
+test('Alt+Q (the QTS icon) on the application\'s tab shows or hides its applying panel; on another page it is the QTS panel', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(179, 'small')] });
+  const { browser, action, worker, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/small');
+    await until_panel(form, /Submitted/);
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => (tab.url || '').startsWith(url))?.id, `${BASE}/small`);
+    // What Alt+Q runs (Chrome's own shortcut for the toolbar icon).
+    const altQ = (id) => worker.evaluate(async (target) => sendToolbarClick(await chrome.tabs.get(target)), id);
+    // (The panel's shadow root is closed: read through DevTools, as panelText does.)
+    const panelShown = async () => {
+      const { client, doc } = await panelNodes(form);
+      try {
+        const find = (node) => {
+          const attrs = node.attributes || [];
+          const cls = attrs[attrs.indexOf('class') + 1] || '';
+          if (attrs.includes('class') && /^panel\b/.test(cls)) return node;
+          for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) { const hit = find(child); if (hit) return hit; }
+          return null;
+        };
+        const panel = find(doc);
+        return Boolean(panel && !(panel.attributes || []).includes('hidden'));
+      } finally { await client.detach().catch(() => {}); }
+    };
+    assert.equal(await panelShown(), true);
+    assert.equal((await altQ(tabId))?.ok, true);
+    await until(async () => (await panelShown()) === false, 5000, 'the applying panel hidden');
+    assert.equal((await altQ(tabId))?.ok, true);
+    await until(async () => (await panelShown()) === true, 5000, 'the applying panel shown again');
+    // A page that is no application's: Alt+Q goes to the QTS panel (the launcher), not to Apply.
+    const other = await browser.newPage();
+    await other.goto(`${BASE}/blank`);
+    const otherId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url)?.id, `${BASE}/blank`);
+    assert.equal(await worker.evaluate((id) => self.__qtsApplyRunner.toggleOwnedPanel(id), otherId), false);
+    assert.equal(await panelShown(), true, 'the application\'s panel is left as it was');
+  } finally { await browser.close(); }
+});
+
 test('Alt+F: nothing is filled until the Manager presses it; each new step waits for it again', { skip, timeout: 150000 }, async () => {
   resetMock({ queue: [application(174, 'steps')] });
   const { browser, action, worker, storage } = await launch();

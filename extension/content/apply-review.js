@@ -1667,6 +1667,15 @@
       if (nextState?.problemFieldIds) global.__qtsApplyForm?.markProblemFields?.(nextState.problemFieldIds);
       return true;
     },
+    /** Alt+Q (or the QTS icon) on the application's tab: the panel shown or hidden. true = now shown. */
+    toggle() {
+      if (!contextAvailable()) { dispose(); return null; }
+      if (!state) return null;
+      collapsed = !collapsed;
+      render();
+      saveUi();
+      return !collapsed;
+    },
     remove: dispose,
   };
 })(globalThis);

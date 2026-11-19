@@ -1234,7 +1234,11 @@
     const base = context.today instanceof Date ? context.today : new Date(context.today || Date.now());
     const baseDate = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
     const transformed = representations.convert(source, target, { ...description, ...source.conversionContext,
-      callingCode: field.phoneCallingCode || source.context?.callingCode,
+      // A separate code box ("Country code [ ]"): the code the number itself starts with. (A local
+      // number box is still given its digits only beside a code shown on the page.)
+      callingCode: field.phoneCallingCode || source.context?.callingCode
+        || (source.type === 'phone' && !source.context?.national && target.representation === 'calling-code'
+          ? representations.callingCodeOf?.(source.value) : undefined),
       rates: context.exchangeRates?.rates, baseDate,
       // Hours in each pay period (40 h/week, 8 h/day) unless the caller gives its own (decision 2026-11-06).
       periodFactors: context.salaryPeriodFactors || HOURS_IN });
@@ -1387,6 +1391,10 @@
     if (definition.id === 'candidate.phoneCallingCode' && candidate.phone && field.options?.length) {
       const code = sameFactOption('phone', candidate.phone, field.options, candidate.country);
       if (code) return { value: code, source: 'profile', provenance: { authority: 'candidate-profile', meaning: definition.id, operation: 'existing-phone-option-mapping' } };
+      // A code list naming only countries ("Romania", no "+40"): the candidate's own country.
+      const named = !field.options.some((option) => /\+\s?\d{1,4}\b/.test(String(option))) && candidate.country
+        ? sameFactOption('country', candidate.country, field.options) : null;
+      if (named) return { value: named, source: 'profile', provenance: { authority: 'candidate-profile', meaning: definition.id, operation: 'phone-country-option' } };
     }
     const profile = profileRepresentation(field, candidate, definition, context);
     if (profile) return profile;
