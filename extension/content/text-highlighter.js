@@ -6,7 +6,9 @@ const TEXT_HIGHLIGHT_SKIPPED_PATHS = /^\/resume-templates\//;
 const TEXT_HIGHLIGHT_BATCH_MS = 500;
 
 async function startPageTextHighlighter() {
-  if (globalThis.__qtsPageTextHighlighter) return;
+  // One highlighter per page. The extension restarts it in open tabs after a reload or update: a
+  // copy still running stays; one from before the reload (cut off from the extension) is replaced.
+  if (globalThis.__qtsPageTextHighlighter?.alive?.()) return;
   if (TEXT_HIGHLIGHT_SKIPPED_HOSTS.test(location.hostname) || TEXT_HIGHLIGHT_SKIPPED_PATHS.test(location.pathname)) return;
 
   const highlighting = globalThis.__qtsTextHighlighting;
@@ -266,7 +268,7 @@ async function startPageTextHighlighter() {
     }
   }
 
-  globalThis.__qtsPageTextHighlighter = { refresh };
+  globalThis.__qtsPageTextHighlighter = { refresh, alive: contextAvailable };
   function onStorage(changes, area) {
     if (
       area === 'local' &&

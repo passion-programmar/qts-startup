@@ -772,25 +772,53 @@ function isTextHighlightJobPage(tabId, url) {
   const key = `${tabId} ${url}`;
   if (!textHighlightJobPages.has(key)) {
     for (const old of textHighlightJobPages.keys()) if (old.startsWith(`${tabId} `)) textHighlightJobPages.delete(old);
-    textHighlightJobPages.set(key, (async () => {
+    // A check that could not read the page (still loading, an error) is not remembered: the next
+    // ask checks again instead of keeping that "no".
+    let unread = false;
+    const check = (async () => {
       // Site Setting blocked URLs: no text highlights, as no Get JD.
       if (await isPageBlockedForManager(url)) return false;
       for (const attempt of GET_JD_DETECTION_ATTEMPTS) {
         if (attempt.delayMs) await sleep(attempt.delayMs);
-        if ((await getTab(tabId))?.url !== url) return false;
+        if ((await getTab(tabId))?.url !== url) { unread = true; return false; }
         const evaluation = await evaluateJobPageUnlessUnchanged(tabId, url, attempt).catch(() => null);
         if (evaluation?.isJobPage) return true;
-        if (!evaluation || evaluation.reason === 'closed') return false;
+        if (!evaluation) { unread = true; return false; }
+        if (evaluation.reason === 'closed') return false;
       }
       return false;
-    })());
+    })();
+    textHighlightJobPages.set(key, check);
+    check.then(() => {
+      if (unread && textHighlightJobPages.get(key) === check) textHighlightJobPages.delete(key);
+    }, () => { if (textHighlightJobPages.get(key) === check) textHighlightJobPages.delete(key); });
   }
   return textHighlightJobPages.get(key);
 }
-chrome.tabs.onRemoved.addListener((tabId) => {
+function forgetTextHighlightJobPages(tabId) {
   for (const key of textHighlightJobPages.keys()) if (key.startsWith(`${tabId} `)) textHighlightJobPages.delete(key);
+}
+// A new document in the tab (a refresh, or the same address loaded again) is checked again.
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === 'loading') forgetTextHighlightJobPages(tabId);
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  forgetTextHighlightJobPages(tabId);
   lastJobPageCheckByTab.delete(tabId);
 });
+
+// After the extension is installed, updated or reloaded, tabs that were already open lost their
+// highlighter (Chrome stops the old copy and does not start the new one there): it is started again
+// in every open web page, so a signed-in Manager sees highlights without refreshing.
+async function restartTextHighlightersInOpenTabs() {
+  const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] }).catch(() => []);
+  await Promise.all(tabs.map((tab) => (tab.id == null || tab.discarded
+    ? null
+    : chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      files: ['shared/text-highlighting.js', 'content/text-highlighter.js'],
+    }).catch(() => {}))));
+}
 
 async function isPageDetectedAsJobForManager(tabId) {
   try {
@@ -8054,6 +8082,7 @@ chrome.runtime.onInstalled.addListener((details) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
   self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
+  restartTextHighlightersInOpenTabs().catch(() => {});
 });
 
 let startupRecoveryInFlight = false;
