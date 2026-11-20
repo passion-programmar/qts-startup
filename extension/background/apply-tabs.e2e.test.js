@@ -1,8 +1,9 @@
 // End-to-end test of the REAL extension in Chrome (Normal Apply): an application that moves through
 // new tabs. Apply opens an intro page in a new tab and its Start application opens the form in
 // another: QTS follows both, closes the earlier tabs (one tab per job) and fills the form. A privacy
-// policy the Manager opens from the form is a side tab: it stays outside the application and the
-// form tab is still filled. With the Manager's limit of one open job, the next job opens only after
+// policy the Manager opens from the form is an extra tab: it shows the panel at once (decision
+// 2026-11-17) but is never closed or worked in, and the form tab is still filled; when the job ends
+// it stays open without the panel. With the Manager's limit of one open job, the next job opens only after
 // Submitted, however many tabs the first one went through.
 // Nothing leaves this machine. Run with: npm run test:apply-e2e (skipped when Chrome is not
 // installed; QTS_CHROME sets it).
@@ -97,7 +98,7 @@ const until = async (what, check, ms = 60000) => {
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test('Normal Apply follows new tabs to the form, keeps one tab per job, ignores side tabs, and keeps the open-job limit', {
+test('Normal Apply follows new tabs to the form, keeps one tab per job, shows the panel on extra tabs, and keeps the open-job limit', {
   skip: CHROME ? false : 'Chrome is not installed (set QTS_CHROME to run this test).',
   timeout: 300000,
 }, async () => {
@@ -162,12 +163,15 @@ test('Normal Apply follows new tabs to the form, keeps one tab per job, ignores 
     assert.ok(await hasPanel('/form/1'), 'the panel moved with the application');
     assert.equal(log.claims.length, 1, 'the job stays the one open job while it moves between tabs');
 
-    // 2. The Manager opens the privacy policy: a side tab, outside the application.
+    // 2. The Manager opens the privacy policy: an extra tab of the application, with the panel at once.
     await execute('/form/1', () => document.querySelector('#policy').click());
     await until('the privacy policy tab', async () => (await paths()).includes('/privacy'));
+    const opened = Date.now();
+    await until('the panel on the new tab', () => hasPanel('/privacy'), 10000);
+    assert.ok(Date.now() - opened < 10000, 'shown before QTS finished judging the tab');
     await pause(20000);
     assert.deepEqual(await paths(), ['/form/1', '/privacy'], 'neither tab is closed');
-    assert.equal(await hasPanel('/privacy'), false, 'no QTS panel on the side tab');
+    assert.ok(await hasPanel('/privacy'), 'the panel stays on the extra tab');
     assert.ok(await hasPanel('/form/1'));
     // The form tab is still the application's: a question shown later is filled there.
     await execute('/form/1', () => { document.querySelector('#later').innerHTML = '<label for="city">City *</label><input id="city" required>'; });
@@ -186,7 +190,8 @@ test('Normal Apply follows new tabs to the form, keeps one tab per job, ignores 
     }, 90000);
     assert.equal(log.claims.length >= 2, true);
     await until('one tab for the second job', async () => !(await paths()).some((entry) => /^\/(job|intro)\/2$/.test(entry)), 30000);
-    assert.ok((await paths()).includes('/privacy'), 'the side tab was never touched');
+    assert.ok((await paths()).includes('/privacy'), 'the extra tab was never closed');
+    assert.equal(await hasPanel('/privacy'), false, 'its panel went with the first job');
   } finally {
     await browser.close();
     server.closeAllConnections?.();

@@ -2786,6 +2786,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 /** The tabs an application lives in: the assistant's job page and the tabs opened from it. */
 const tabsOf = (review) => review.tabIds || new Set(review.tabId != null ? [review.tabId] : []);
 const assistTabContinued = (review, tabId) => [...(review.continuationParents?.values() || [])].includes(tabId);
+/** The application's page QTS works in: the latest tab that is not an extra one (else the latest). */
+const mainAssistTab = (review) => {
+  const tabs = [...tabsOf(review)];
+  return tabs.filter((tabId) => !review.extraTabs?.has(tabId)).pop() ?? tabs.pop() ?? null;
+};
 
 // The tab a link or pop-up was really opened from (webNavigation's sourceTabId). Chrome's openerTabId
 // can name another tab (one shown at the time), which would hand a page to the wrong application and
@@ -2891,14 +2896,14 @@ async function finishAssistTabHandoff(review, tabId) {
     if (step == null || !owned()) return;
     const ancestors = assistTabAncestors(review, tabId);
     if (!step && ancestors.length) {
-      // A side tab: it leaves the application (its own tab, untouched); the form tab goes on.
-      review.tabIds.delete(tabId);
+      // Another tab (a privacy policy, the company's site): it stays with the application and shows
+      // its panel (decision 2026-11-17), but is never closed or clicked in by QTS; the form tab goes
+      // on as the application's page. A form that shows there later is filled (assistFillPass).
       review.continuationParents.delete(tabId);
-      (review.sideTabs ||= new Set()).add(tabId);
+      (review.extraTabs ||= new Set()).add(tabId);
       if (review.tabId === tabId) review.tabId = ancestors[0];
-      tabOwnership.releaseTab(tabId).catch(() => {});
-      removeReviewPanel(tabId).catch(() => {});
       await rememberApplySession(review);
+      if (owned()) await restoreOwnedAssistPanel(review, tabId);
       review.assistant?.poke(ancestors[0]);
       return;
     }
@@ -2911,14 +2916,18 @@ async function finishAssistTabHandoff(review, tabId) {
     review.tabId = tabId;
     await rememberApplySession(review);
     if (!owned()) return;
-    for (const ancestor of assistTabAncestors(review, tabId)) await chrome.tabs.remove(ancestor).catch(() => {});
+    // (An extra tab is never closed by QTS, also when the next step opened from it.)
+    for (const ancestor of assistTabAncestors(review, tabId)) {
+      if (!review.extraTabs?.has(ancestor)) await chrome.tabs.remove(ancestor).catch(() => {});
+    }
     review.assistant?.poke(tabId);
   } finally { review.handoffTabs.delete(tabId); }
 }
 
 async function restoreOwnedAssistPanel(review, tabId, { reveal = false } = {}) {
+  // Every tab of the application shows the panel, also one still being judged (next step or not).
   const owned = () => review.assist === true && activeReviews.get(review.attemptId) === review
-    && tabsOf(review).has(tabId) && Boolean(review.panel) && !review.assistant?.stopped && !assistTabPending(review, tabId);
+    && tabsOf(review).has(tabId) && Boolean(review.panel) && !review.assistant?.stopped;
   if (!owned()) return false;
   try {
     const results = await chrome.scripting.executeScript({
@@ -3007,7 +3016,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, change) => {
       answerManager(review.attemptId, { action: review.panel.final ? 'submitted' : 'continue_manual', noticed: true });
     }
     // Inject at document start when possible; the complete event retries if the page was not ready.
-    if (!assistTabPending(review, tabId)) showReviewPanel(tabId, review.panel).catch(() => {});
+    // (Normal Apply: a new tab still being judged shows the panel too.)
+    if (review.assist || !assistTabPending(review, tabId)) showReviewPanel(tabId, review.panel).catch(() => {});
     if (change.status === 'complete') finishAssistTabHandoff(review, tabId).catch(() => {});
     // A new document or visible form (a redirect, sign-in, or next step): resume the flow immediately.
     review.assistant?.poke(tabId);
@@ -3054,9 +3064,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     if (!review.tabIds.delete(tabId)) continue;
     review.continuationParents?.delete(tabId);
     review.stepTabs?.delete(tabId);
+    review.extraTabs?.delete(tabId);
     if (!review.tabIds.size) answerManager(review.attemptId, { action: 'closed' });
     else {
-      if (review.tabId === tabId) review.tabId = [...review.tabIds].pop();
+      if (review.tabId === tabId) review.tabId = mainAssistTab(review);
       rememberApplySession(review).catch(() => {});
     }
   }
@@ -3088,7 +3099,8 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
   getTab(tabId).then(adoptAssistContinuation).catch(() => {});
   for (const review of activeReviews.values()) {
     if (review.tabIds?.has(tabId)) {
-      review.tabId = tabId;
+      // An extra tab (a privacy policy) shows the panel but never becomes the page QTS works in.
+      if (!review.extraTabs?.has(tabId)) review.tabId = tabId;
       restoreOwnedAssistPanel(review, tabId).catch(() => {});
     }
   }
@@ -4633,6 +4645,7 @@ function rememberApplySession(review) {
     sessions[review.attemptId] = {
       jobId: review.job.id, company: review.job.company, title: review.job.title, tabIds,
       ...(review.continuationParents?.size ? { continuationParents: [...review.continuationParents] } : {}),
+      ...(review.extraTabs?.size ? { extraTabIds: [...review.extraTabs].filter((tabId) => tabIds.includes(tabId)) } : {}),
       ...(review.assistant?.fillError ? { fillError: review.assistant.fillError } : {}),
       ...(review.assistant?.uploadError ? { uploadError: review.assistant.uploadError } : {}),
       ...(review.assistant?.relinkRequired ? { relinkRequired: true } : {}),
@@ -4668,7 +4681,7 @@ async function resumeApplySessions(limit) {
       ? await workerApiRequest('POST', '/api/extension/apply/resume', { attemptId, jobId: saved.jobId })
       : null;
     if (reply?.success === true && reply.application) {
-      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds, continuationParents: saved.continuationParents, manualPaused: saved.manualPaused, fillError: saved.fillError, uploadError: saved.uploadError, relinkRequired: saved.relinkRequired }));
+      runs.push(runAssistedApplication(reply.application, { resumeTabIds: tabIds, continuationParents: saved.continuationParents, extraTabIds: saved.extraTabIds, manualPaused: saved.manualPaused, fillError: saved.fillError, uploadError: saved.uploadError, relinkRequired: saved.relinkRequired }));
       continue;
     }
     for (const tabId of tabIds) await removeStalePanel(tabId);
@@ -5197,6 +5210,15 @@ async function assistFillPass(tabId, application, assistant, keepAlive) {
     };
   }).catch(() => null);
   if (!pageInfo) return;
+  // An extra tab (opened from the application, not its next step): QTS never clicks there. A form
+  // that shows there is filled, and that tab becomes the application's page.
+  if (currentReview?.extraTabs?.has(tabId)) {
+    if (!['application_form', 'partial_application_form'].includes(pageInfo.type)) return;
+    currentReview.extraTabs.delete(tabId);
+    (currentReview.stepTabs ||= new Set()).add(tabId);
+    currentReview.tabId = tabId;
+    await rememberApplySession(currentReview);
+  }
   if (['application_form', 'partial_application_form'].includes(pageInfo.type)) {
     assistant.navigationAttempts.delete(tabId);
     await fillVisibleAssistForm(tabId, application, assistant, keepAlive);
@@ -5242,7 +5264,7 @@ function panelProfile(candidate) {
  * deleted. Cancel, closing all its tabs, Apply turned off, or an error record nothing: the job stays
  * as it was (not opened again in this Chrome until Apply restarts). No goes back to the form.
  */
-async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null, continuationParents = null, manualPaused = false, fillError = null, uploadError = null, relinkRequired = false } = {}) {
+async function runAssistedApplication(application, { resumeTabIds = null, adoptTabId = null, continuationParents = null, extraTabIds = null, manualPaused = false, fillError = null, uploadError = null, relinkRequired = false } = {}) {
   const { attemptId } = application;
   let renewedAt = Date.now();
   let leaseSeconds = 0;
@@ -5376,18 +5398,19 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     questionsPrompt: assistant.questionsPrompt || null,
     ...extra,
   });
-  // The panel shows in every tab of the application.
+  // The panel shows in every tab of the application: new tabs still being judged and extra tabs too.
   const showPanel = (mode, extra) => {
     review.panel = panelState(mode, extra);
-    return Promise.all([...tabsOf(review)].filter((tabId) => !assistTabPending(review, tabId))
-      .map((tabId) => showReviewPanel(tabId, review.panel).catch(() => {})));
+    return Promise.all([...tabsOf(review)].map((tabId) => showReviewPanel(tabId, review.panel).catch(() => {})));
   };
   assistant.show = () => showPanel('assist');
   const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, { attemptId, ...body });
   // Nothing is recorded unless the Manager clicks Submitted on the panel: any other end lets the job
   // go exactly as it was.
   const drop = (reason) => report('release', { mode: 'drop', reason });
-  const closeTabs = () => Promise.all([...tabsOf(review)].map((tabId) => chrome.tabs.remove(tabId).catch(() => {})));
+  // The job's own tabs close; an extra tab (a privacy policy the Manager opened) stays, without its panel.
+  const closeTabs = () => Promise.all([...tabsOf(review)].filter((tabId) => !review.extraTabs?.has(tabId))
+    .map((tabId) => chrome.tabs.remove(tabId).catch(() => {})));
   let tab = null;
   // The form's answers when Submitted was clicked.
   let answersAtSubmit = null;
@@ -5395,9 +5418,12 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   // The bid's first step reached QTS (the Manager answered; only saving the bid is left).
   let marked = false;
   const readAnswers = async (given) => {
-    // The application's latest web page (never an extension page that joined by mistake).
+    // The application's latest web page (never an extension page that joined by mistake). Its form
+    // tab first: an extra tab (a privacy policy) or a new tab still being judged only when none is left.
     let readTabId = review.tabId;
-    for (const tabId of [review.tabId, ...[...tabsOf(review)].reverse()]) {
+    const byPreference = [review.tabId, ...[...tabsOf(review)].reverse()];
+    const formFirst = [...byPreference.filter((tabId) => !review.extraTabs?.has(tabId) && !assistTabPending(review, tabId)), ...byPreference];
+    for (const tabId of formFirst) {
       const tab = tabId == null ? null : await getTab(tabId);
       if (tab && /^https?:/i.test(tab.url || '')) { readTabId = tabId; break; }
     }
@@ -5420,7 +5446,8 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     } else if (resumeTabIds?.length) {
       // The extension restarted with this job's pages open: keep them available for the Manager.
       review.tabIds = new Set(resumeTabIds);
-      review.tabId = resumeTabIds[resumeTabIds.length - 1];
+      review.extraTabs = new Set((Array.isArray(extraTabIds) ? extraTabIds : []).filter((tabId) => review.tabIds.has(tabId)));
+      review.tabId = mainAssistTab(review);
       review.continuationParents = new Map((Array.isArray(continuationParents) ? continuationParents : [])
         .filter((pair) => Array.isArray(pair) && pair.length === 2 && review.tabIds.has(pair[0]) && review.tabIds.has(pair[1])));
     } else {
@@ -5511,6 +5538,8 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
     for (const tabId of tabsOf(review)) {
       await removeReviewPanel(tabId);
       await releaseDebugger(tabId);
+      // An extra tab left open is the Manager's own again (Get JD may look at it).
+      if (review.extraTabs?.has(tabId)) await tabOwnership.releaseTab(tabId).catch(() => {});
     }
   }
 }
