@@ -10,7 +10,7 @@ export const analysisRanges = {
 } as const;
 export type AnalysisRange = keyof typeof analysisRanges;
 
-// The time zones days, weeks and "today" are counted in. Japan unless another is chosen (?tz=).
+// The time zones days, weeks and "today" are counted in. CET unless another is chosen (?tz=).
 // CET follows Central European summer time too (CEST), as Berlin does.
 export const analysisZones = {
   jp: { label: "Japan", zone: "Asia/Tokyo" },
@@ -18,20 +18,20 @@ export const analysisZones = {
   ro: { label: "Romania", zone: "Europe/Bucharest" },
 } as const;
 export type AnalysisZone = keyof typeof analysisZones;
-export const defaultAnalysisZone: AnalysisZone = "jp";
+export const defaultAnalysisZone: AnalysisZone = "cet";
 
 export type AnalysisView = { range: AnalysisRange; weeksBack: number; zone: AnalysisZone };
 
 const maxWeeksBack = 520;
 
-/** Reads ?range=, ?back= and ?tz= from the address; this week in Japan time unless asked otherwise. */
+/** Reads ?range=, ?back= and ?tz= from the address; this week in CET unless asked otherwise. */
 export function parseAnalysisView(raw: Record<string, string | string[] | undefined>): AnalysisView {
   const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) ?? "";
   const rangeValue = first(raw.range);
   const range: AnalysisRange = rangeValue === "month" || rangeValue === "year" ? rangeValue : "week";
   const back = Number.parseInt(first(raw.back), 10);
   const zoneValue = first(raw.tz);
-  const zone: AnalysisZone = zoneValue === "cet" || zoneValue === "ro" ? zoneValue : defaultAnalysisZone;
+  const zone: AnalysisZone = Object.hasOwn(analysisZones, zoneValue) ? (zoneValue as AnalysisZone) : defaultAnalysisZone;
   return { range, weeksBack: range === "week" && Number.isFinite(back) && back > 0 ? Math.min(back, maxWeeksBack) : 0, zone };
 }
 
@@ -42,7 +42,7 @@ export function windowStartOffset(view: AnalysisView): string {
   return `${count - 1} ${bucket}s`;
 }
 
-/** The Overview address for a view: this week in Japan time is plain "/". */
+/** The Overview address for a view: this week in CET is plain "/". */
 export function analysisHref(view: AnalysisView): string {
   const params = new URLSearchParams();
   if (view.range !== "week") params.set("range", view.range);
@@ -81,7 +81,7 @@ export function weekSpan(monday: string): string {
 }
 
 // Bids each Manager aims for per day (a day in the chosen zone), shown as today's progress on the Overview.
-export const DAILY_BID_TARGET = 500;
+export const DAILY_BID_TARGET = 300;
 
 export type Change = { direction: "up" | "down" | "same"; text: string } | null;
 

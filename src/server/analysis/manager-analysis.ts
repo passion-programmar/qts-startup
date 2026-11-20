@@ -5,7 +5,7 @@ import { analysisRanges, analysisZones, windowStartOffset, type AnalysisView } f
 
 // The Manager's Overview: bids and interview rounds per day of a week, per month or per year, the
 // window before it for comparison, how the rounds went, how far jobs got (Intro → Tech → Final →
-// Offer), and today's bids. Days count in the chosen zone (Japan by default); weeks start on Monday.
+// Offer), and today's bids. Days count in the chosen zone (CET by default); weeks start on Monday.
 // Nothing after today counts: the current week, month or year runs up to the end of today, so later
 // days are not shown and interviews booked after today are left out. One database trip.
 
