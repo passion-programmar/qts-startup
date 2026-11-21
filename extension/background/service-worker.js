@@ -101,7 +101,11 @@ const getJdInFlightJobKeys = new Set();
 const getJdLastPageByTab = new Map();
 const launcherFocus = self.__qtsPageActivity.createLauncherFocus({
   chrome,
-  mount: (tabId) => chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['shared/get-jd-notifications.js', 'content/page-toast.js', 'content/page-launcher.js'] }),
+  // A tab opened before the extension was installed, updated or reloaded has none of the page
+  // scripts: they are added when the tab is shown, the text highlighter too, so a signed-in Manager
+  // sees highlights there without refreshing. (Added only here: a script answering messages in
+  // every old tab would make each one look as if it already had its launcher.)
+  mount: (tabId) => chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: TOOLBAR_LAUNCHER_FILES }),
   eligible: async (tab) => isExtractablePageUrl(tab.url)
     && !getJdHelperTabs.has(tab.id)
     && !self.__qtsChromePdf.isPrintTab(tab.id)
@@ -806,19 +810,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   forgetTextHighlightJobPages(tabId);
   lastJobPageCheckByTab.delete(tabId);
 });
-
-// After the extension is installed, updated or reloaded, tabs that were already open lost their
-// highlighter (Chrome stops the old copy and does not start the new one there): it is started again
-// in every open web page, so a signed-in Manager sees highlights without refreshing.
-async function restartTextHighlightersInOpenTabs() {
-  const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] }).catch(() => []);
-  await Promise.all(tabs.map((tab) => (tab.id == null || tab.discarded
-    ? null
-    : chrome.scripting.executeScript({
-      target: { tabId: tab.id, frameIds: [0] },
-      files: ['shared/text-highlighting.js', 'content/text-highlighter.js'],
-    }).catch(() => {}))));
-}
 
 async function isPageDetectedAsJobForManager(tabId) {
   try {
@@ -8082,7 +8073,6 @@ chrome.runtime.onInstalled.addListener((details) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });
   self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
-  restartTextHighlightersInOpenTabs().catch(() => {});
 });
 
 let startupRecoveryInFlight = false;
@@ -8146,7 +8136,11 @@ self.__qtsCustomGpt?.loadCustomGptConfigFromStorage?.().catch(() => {});
 
 // The launcher's page scripts, added to a tab that has none: one opened before the extension was
 // installed or reloaded, which Chrome leaves without the manifest's content scripts.
-const TOOLBAR_LAUNCHER_FILES = ['shared/get-jd-notifications.js', 'content/page-toast.js', 'content/page-launcher.js'];
+// The text highlighter comes along (it keeps one copy per page).
+const TOOLBAR_LAUNCHER_FILES = [
+  'shared/text-highlighting.js', 'content/text-highlighter.js',
+  'shared/get-jd-notifications.js', 'content/page-toast.js', 'content/page-launcher.js',
+];
 
 // A message for the tab's launcher, adding its page scripts first when the tab has none.
 async function sendToLauncher(tab, message) {
