@@ -193,3 +193,13 @@ test("AM / PM: shown in 12-hour, typed either way, stored as 24-hour", async () 
   assert.equal(parseTypedTime("13pm"), "");
   assert.equal(timeRange({ startsAt: "2026-11-23T11:45:00Z", endsAt: "2026-11-23T12:15:00Z" }, "Europe/Berlin"), "12:45 PM–1:15 PM");
 });
+
+test("same company: case, spaces, punctuation and a company-form word at the end do not matter", async () => {
+  const { companyKey } = await import("./interview-values");
+  assert.equal(companyKey("Silent Eight, Inc."), "silenteight");
+  assert.equal(companyKey("silent eight"), "silenteight");
+  assert.equal(companyKey("Silent-Eight Ltd"), "silenteight");
+  assert.equal(companyKey("Autodesk GmbH"), "autodesk");
+  assert.equal(companyKey("Zinc"), "zinc");
+  assert.equal(companyKey("Visa"), "visa");
+});

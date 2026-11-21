@@ -287,3 +287,13 @@ export const resultLook: Record<InterviewResult, { background: string; text: str
   no_show: { background: "#475569", text: "#ffffff", symbol: "!", hint: "Company offered another date? Add a new date — this round stays in the history." },
   cancelled: { background: "#ea580c", text: "#ffffff", symbol: "⊘", hint: "Company offered another date? Add a new date — this round stays in the history." },
 };
+
+// A company-form word at the end ("Inc.", "Ltd", "GmbH"), only when it is a separate word, so
+// "Zinc" or "Visa" keep their letters. The database query uses the same rule (companyFormEnd).
+export const companyFormEnd = "(incorporated|corporation|limited|inc|ltd|llc|gmbh|corp|plc|sa|ag|bv)";
+const companyFormPattern = new RegExp(String.raw`[^\p{L}\p{N}]+` + companyFormEnd + String.raw`[^\p{L}\p{N}]*$`, "u");
+
+/** "Silent Eight, Inc." and "silent eight" match: lower case, no company-form word, letters and digits only. */
+export function companyKey(company: string): string {
+  return company.toLowerCase().replace(companyFormPattern, "").replace(/[^\p{L}\p{N}]+/gu, "");
+}

@@ -7,7 +7,7 @@ import { isHttpUrl, normalizeJobUrl } from "@/server/jobs/job-values";
 import { db } from "@/lib/db";
 import { getCurrentUser, requireUser } from "@/lib/session";
 import type { RecordActionState } from "@/app/record-action-state";
-import { isManagersTrack, passEarlierRounds, readBidChoice, readBidTrack, readTrack, searchBidChoices, type BidChoice } from "@/server/interviews/interviews-list";
+import { isManagersTrack, passEarlierRounds, readBidChoice, readBidTrack, readCallerCompanyClash, readCallerHistory, readTrack, searchBidChoices, type BidChoice, type CallerHistoryRow } from "@/server/interviews/interviews-list";
 import { toInterviewRecord, type InterviewRecord } from "@/server/interviews/interview-record";
 import { isManagersCaller } from "@/server/callers/callers";
 import {
@@ -78,7 +78,7 @@ export async function saveInterviewAction(_state: RecordActionState, formData: F
 
   if (id && !uuid(id)) return { error: "Interview was not found.", success: null };
   const [existing] = id
-    ? await db.select({ bidId: interviews.bidId, callerId: interviews.callerId }).from(interviews)
+    ? await db.select({ bidId: interviews.bidId, callerId: interviews.callerId, trackId: interviews.trackId }).from(interviews)
       .where(and(eq(interviews.id, id), eq(interviews.managerId, manager.id))).limit(1)
     : [];
   if (id && !existing) return { error: "Interview was not found.", success: null };
@@ -132,6 +132,17 @@ export async function saveInterviewAction(_state: RecordActionState, formData: F
     callerId: callerId || null,
     comment: comment || null,
   };
+
+  // The 2-month rule: the same caller may speak to this company for another job only 2 months or
+  // more away from their nearest round there. The job's own track (next steps, new dates) is fine.
+  if (callerId) {
+    const ownTrack = id ? existing?.trackId ?? null : trackId;
+    const clash = await readCallerCompanyClash(manager.id, callerId, company, values.startsAt, ownTrack, id || null);
+    if (clash) {
+      const day = clash.toISOString().slice(0, 10);
+      return { error: `This caller already had an interview with ${company} on ${day} for another job. The same caller can speak to this company again 2 months after that (or choose another caller).`, success: null };
+    }
+  }
 
   try {
     if (id) {
@@ -206,4 +217,12 @@ export async function loadTrackAction(trackId: string): Promise<InterviewRecord[
   const manager = await getCurrentUser();
   if (!manager || manager.role !== "manager" || typeof trackId !== "string" || !uuid(trackId)) return [];
   return (await readTrack(manager.id, trackId)).map(toInterviewRecord);
+}
+
+/** Who already spoke to this company (other jobs' rounds with a caller), for the Add / Edit window. */
+export async function callerHistoryAction(company: string, excludeTrackId: string | null): Promise<CallerHistoryRow[]> {
+  const manager = await getCurrentUser();
+  if (!manager || manager.role !== "manager" || typeof company !== "string") return [];
+  const track = typeof excludeTrackId === "string" && uuid(excludeTrackId) ? excludeTrackId : null;
+  return readCallerHistory(manager.id, company, track);
 }

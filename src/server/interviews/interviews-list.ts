@@ -3,7 +3,7 @@ import { and, asc, desc, eq, gt, gte, ilike, inArray, lt, or, sql, type SQL } fr
 import { bids, callers, categories, interviews, profiles, settings, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { likePattern } from "@/server/jobs/jobs-list-query";
-import { defaultInterviewSettings, interviewSettingsKey, parseInterviewSettings, type InterviewSettings } from "./interview-values";
+import { companyFormEnd, companyKey, defaultInterviewSettings, interviewSettingsKey, parseInterviewSettings, type InterviewSettings } from "./interview-values";
 import type { InterviewSearchField, InterviewsQuery } from "./interviews-query";
 import type { InterviewStep } from "./interview-values";
 
@@ -287,4 +287,111 @@ export async function passEarlierRounds(managerId: string, trackId: string, step
 /** Today's rounds, for the Today tab. */
 export function readTodayRounds(managerId: string, bounds: DayBounds) {
   return readRange(managerId, bounds.todayStart, bounds.todayEnd);
+}
+
+export type CallerHistoryRow = {
+  callerId: string;
+  callerName: string;
+  callerLabel: string | null;
+  callerRemoved: boolean;
+  step: InterviewStep;
+  result: string;
+  startsAt: string;
+  company: string;
+  jobTitle: string;
+  // The account's name only for the Manager's own rounds; another Manager's account is not named.
+  candidateName: string | null;
+  own: boolean;
+  candidateId: string | null;
+};
+
+/** Rounds whose company matches the key (the same rule as companyKey, in the database). */
+function sameCompanySql(key: string) {
+  const formPattern = `[^[:alnum:]]+${companyFormEnd}[^[:alnum:]]*$`;
+  return sql`regexp_replace(regexp_replace(lower(${interviews.company}), ${formPattern}, ''), '[^[:alnum:]]+', '', 'g') = ${key}`;
+}
+
+const callerOfManagersAdmin = (managerId: string) => sql`${callers.adminId} = (select ${users.parentUserId} from ${users} where ${users.id} = ${managerId})`;
+
+/**
+ * The 2-month rule: a caller may speak to the same company for another job only when their nearest
+ * round there (any Manager under the same Admin) is 2 months or more away from the new one. Rounds of
+ * the job's own track (next steps, new dates) never count. Returns the clashing round's start, or null.
+ */
+export async function readCallerCompanyClash(
+  managerId: string,
+  callerId: string,
+  company: string,
+  startsAt: Date,
+  excludeTrackId: string | null,
+  excludeId: string | null,
+): Promise<Date | null> {
+  const key = companyKey(company.trim().slice(0, 500));
+  if (key.length < 2) return null;
+  const [row] = await db.select({ startsAt: interviews.startsAt }).from(interviews)
+    .innerJoin(callers, eq(callers.id, interviews.callerId))
+    .where(and(
+      eq(interviews.callerId, callerId),
+      callerOfManagersAdmin(managerId),
+      sameCompanySql(key),
+      excludeTrackId ? sql`${interviews.trackId} <> ${excludeTrackId}` : undefined,
+      excludeId ? sql`${interviews.id} <> ${excludeId}` : undefined,
+      sql`${interviews.startsAt} > ${startsAt.toISOString()}::timestamptz - interval '2 months'`,
+      sql`${interviews.startsAt} < ${startsAt.toISOString()}::timestamptz + interval '2 months'`,
+    ))
+    .orderBy(desc(interviews.startsAt))
+    .limit(1);
+  return row?.startsAt ?? null;
+}
+
+/**
+ * Earlier rounds at the same company that had a caller (any Manager under the same Admin, since the
+ * callers are shared), newest first, leaving out the job's own track: before a new interview the
+ * Manager sees who already spoke to this company, and the 2-month rule.
+ */
+export async function readCallerHistory(managerId: string, company: string, excludeTrackId: string | null): Promise<CallerHistoryRow[]> {
+  const key = companyKey(company.trim().slice(0, 500));
+  if (key.length < 2) return [];
+  const sameCompany = sameCompanySql(key);
+  const rows = await db.select({
+    callerId: callers.id,
+    callerName: callers.name,
+    callerLabel: callers.label,
+    callerArchivedAt: callers.archivedAt,
+    step: interviews.step,
+    result: interviews.result,
+    startsAt: interviews.startsAt,
+    company: interviews.company,
+    jobTitle: interviews.jobTitle,
+    managerId: interviews.managerId,
+    candidateId: interviews.candidateId,
+    firstName: profiles.firstName,
+    lastName: profiles.lastName,
+  }).from(interviews)
+    .innerJoin(callers, eq(callers.id, interviews.callerId))
+    .leftJoin(profiles, eq(profiles.userId, interviews.candidateId))
+    .where(and(
+      callerOfManagersAdmin(managerId),
+      sameCompany,
+      excludeTrackId ? sql`${interviews.trackId} <> ${excludeTrackId}` : undefined,
+    ))
+    .orderBy(desc(interviews.startsAt))
+    .limit(12);
+  return rows.map((row) => {
+    const own = row.managerId === managerId;
+    return {
+      callerId: row.callerId,
+      callerName: row.callerName,
+      callerLabel: row.callerLabel,
+      callerRemoved: Boolean(row.callerArchivedAt),
+      step: row.step,
+      result: row.result,
+      startsAt: row.startsAt.toISOString(),
+      company: row.company,
+      jobTitle: row.jobTitle,
+      candidateName: own ? [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate" : null,
+      own,
+      candidateId: own ? row.candidateId : null,
+    };
+  });
 }

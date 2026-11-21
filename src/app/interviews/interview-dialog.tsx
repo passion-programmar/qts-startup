@@ -3,9 +3,9 @@
 // The Add / Edit interview window. Picking an applied job (a bid) fills in its account, category,
 // applied date, company, title and link; every value can then be changed, and the job details can
 // also be typed in by hand.
-import { Search, X } from "lucide-react";
+import { AlertTriangle, Search, X } from "lucide-react";
 import { useActionState, useEffect, useRef, useState } from "react";
-import { saveInterviewAction, searchBidChoicesAction } from "@/app/interviews/actions";
+import { callerHistoryAction, saveInterviewAction, searchBidChoicesAction } from "@/app/interviews/actions";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import { TrackLine } from "@/app/interviews/interview-track";
 import { TimeSelect } from "@/app/interviews/time-select";
@@ -13,7 +13,7 @@ import { ZoneSelect } from "@/app/interviews/zone-select";
 import { initialRecordState, type RecordActionState } from "@/app/record-action-state";
 import { DatePicker } from "@/app/components/date-picker";
 import { LoadingIcon } from "@/app/components/loading-icon";
-import type { BidChoice } from "@/server/interviews/interviews-list";
+import type { BidChoice, CallerHistoryRow } from "@/server/interviews/interviews-list";
 import {
   addMinutesToTime,
   endAfterStartChange,
@@ -23,11 +23,12 @@ import {
   interviewSteps,
   joinInterviewer,
   splitInterviewer,
+  stepLabel,
   startTimeOptions,
   timeToMinutes,
   type InterviewStep,
 } from "@/server/interviews/interview-values";
-import { weekdayOf, zonedDay, zonedMoment, zonedTime, zonedTime12, zoneShortName } from "@/server/interviews/zone-time";
+import { addMonths, weekdayOf, zonedDay, zonedMoment, zonedTime, zonedTime12, zoneShortName } from "@/server/interviews/zone-time";
 
 export type { InterviewRecord } from "@/server/interviews/interview-record";
 import type { InterviewRecord } from "@/server/interviews/interview-record";
@@ -116,6 +117,20 @@ export function InterviewDialog({
   const [confirmingClose, setConfirmingClose] = useState(false);
   const requestClose = () => (changedRef.current ? setConfirmingClose(true) : onClose());
   const accountMissing = job && !accounts.some((account) => account.id === job.candidateId);
+  // The caller, and who already spoke to this company for other jobs (the 2-month rule).
+  const [callerChoice, setCallerChoice] = useState(record?.callerId ?? follow?.callerId ?? "");
+  const [companyText, setCompanyText] = useState(job?.company ?? "");
+  const [history, setHistory] = useState<CallerHistoryRow[]>([]);
+  const ownTrack = record?.trackId ?? follow?.trackId ?? null;
+  useEffect(() => {
+    let stale = false;
+    const timer = setTimeout(() => {
+      callerHistoryAction(companyText, ownTrack)
+        .then((rows) => { if (!stale) setHistory(rows.filter((row) => row.startsAt !== record?.startsAt || row.callerId !== record?.callerId)); })
+        .catch(() => { if (!stale) setHistory([]); });
+    }, 350);
+    return () => { stale = true; clearTimeout(timer); };
+  }, [companyText, ownTrack, record?.startsAt, record?.callerId]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -127,6 +142,7 @@ export function InterviewDialog({
     changedRef.current = true;
     if (choice) {
       setJob(jobOf(choice, zone));
+      setCompanyText(choice.company);
       // An edited round stays linked to its own bid; a new one links to the picked bid.
       if (!editing) setBidId(choice.id);
     } else {
@@ -249,7 +265,7 @@ export function InterviewDialog({
                 )}
                 <div>
                   <label className={labelClass} htmlFor="company">Company</label>
-                  <input className={inputClass} defaultValue={job.company} id="company" maxLength={500} name="company" required />
+                  <input className={inputClass} defaultValue={job.company} id="company" maxLength={500} name="company" onChange={(event) => setCompanyText(event.target.value)} required />
                 </div>
                 <div>
                   <label className={labelClass} htmlFor="jobTitle">Job title</label>
@@ -301,7 +317,8 @@ export function InterviewDialog({
               </div>
               <div className="sm:col-span-2">
                 <label className={labelClass} htmlFor="callerId">Caller</label>
-                <select className={inputClass} defaultValue={record?.callerId ?? follow?.callerId ?? ""} id="callerId" name="callerId">
+                <CallerHistoryPanel callerId={callerChoice} day={day} history={history} onUse={(id) => { changedRef.current = true; setCallerChoice(id); }} />
+                <select className={inputClass} id="callerId" name="callerId" onChange={(event) => setCallerChoice(event.target.value)} value={callerChoice}>
                   <option value="">{callers.length ? "No caller" : "No callers yet (your Admin adds them)"}</option>
                   {record?.callerId && !callers.some((caller) => caller.id === record.callerId) && (
                     <option value={record.callerId}>{record.callerName ?? "Caller"} (removed)</option>
@@ -438,6 +455,56 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
     <div>
       <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
       <dd className="mt-0.5 break-words text-slate-800">{children}</dd>
+    </div>
+  );
+}
+
+const RULE_MONTHS = 2;
+
+/** Whether two days ("YYYY-MM-DD") are less than 2 months apart. */
+function withinRule(a: string, b: string): boolean {
+  const [early, late] = a <= b ? [a, b] : [b, a];
+  return addMonths(early, RULE_MONTHS) > late;
+}
+
+/**
+ * Who already spoke to this company for other jobs: a red alarm when the chosen caller is less than
+ * 2 months from one of their rounds there (saving is refused), else an amber note listing the callers,
+ * each with "Use", and when each one may speak to this company again.
+ */
+function CallerHistoryPanel({ history, callerId, day, onUse }: { history: CallerHistoryRow[]; callerId: string; day: string; onUse: (callerId: string) => void }) {
+  const { settings } = useInterviewChoices();
+  if (!history.length) return null;
+  const zone = settings.timeZone;
+  const rows = history.map((row) => {
+    const rowDay = zonedDay(new Date(row.startsAt), zone);
+    return { ...row, rowDay, blocked: Boolean(day) && withinRule(rowDay, day), freeFrom: addMonths(rowDay, RULE_MONTHS) };
+  });
+  const clash = rows.find((row) => row.callerId === callerId && row.blocked);
+  return (
+    <div className={`mb-2 rounded-lg border px-3 py-2.5 text-xs ${clash ? "border-rose-300 bg-rose-50 text-rose-900" : "border-amber-300 bg-amber-50 text-amber-900"}`} role={clash ? "alert" : "status"}>
+      <p className="flex items-center gap-1.5 font-semibold">
+        <AlertTriangle aria-hidden="true" className="size-4 shrink-0" />
+        {clash
+          ? `${clash.callerName} spoke to ${clash.company} on ${clash.rowDay} for another job. Same caller only from ${clash.freeFrom} (2 months) — choose another caller.`
+          : `Callers who already spoke to ${rows[0]?.company} for other jobs (same caller only 2 months after):`}
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {rows.slice(0, 6).map((row, index) => (
+          <li className="flex flex-wrap items-center gap-x-2 gap-y-1" key={`${row.callerId}-${row.startsAt}-${index}`}>
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${row.blocked ? "bg-rose-600 text-white" : "bg-emerald-600 text-white"}`}>
+              {row.blocked ? `Blocked until ${row.freeFrom}` : "OK again"}
+            </span>
+            <span className="font-semibold">{row.callerName}{row.callerLabel ? ` · ${row.callerLabel}` : ""}{row.callerRemoved ? " (removed)" : ""}</span>
+            <span className="text-[11px] opacity-80">
+              {stepLabel(row.step)} · {row.rowDay} · {row.jobTitle} · {row.own ? row.candidateName : "another Manager's account"}
+            </span>
+            {!row.blocked && !row.callerRemoved && row.callerId !== callerId && (
+              <button className="rounded-md border border-current px-1.5 py-0.5 text-[11px] font-semibold hover:bg-white/60" onClick={() => onUse(row.callerId)} type="button">Use {row.callerName}</button>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
