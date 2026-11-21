@@ -492,17 +492,31 @@ textarea {
 @keyframes workspace-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
 @keyframes workspace-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (min-width: 1024px) {
+  /* Collapsed: a rail of icons. Hovering it (or tabbing into it) slides the full menu out over the
+     page (.workspace-sidebar--peek), which keeps its place; its button there keeps the menu open. */
   .workspace-shell--collapsed { --sidebar-width: 76px; }
-  .workspace-shell--collapsed .workspace-brand-row { flex-direction: column; justify-content: center; gap: 6px; height: auto; min-height: var(--header-height); padding: 12px 0; }
-  .workspace-shell--collapsed .workspace-brand__text, .workspace-shell--collapsed .workspace-nav-link > span, .workspace-shell--collapsed .workspace-sidebar__footer > div { display: none; }
-  .workspace-shell--collapsed .workspace-nav-group__label { height: 1px; margin: 0 12px 10px; padding: 0; overflow: hidden; background: var(--color-slate-100); color: transparent; }
-  .workspace-shell--collapsed .workspace-navigation { padding-inline: 14px; }
-  .workspace-shell--collapsed .workspace-nav-link { justify-content: center; padding: 0; }
-  .workspace-shell--collapsed .workspace-nav-link--active::before { left: -14px; }
-  .workspace-shell--collapsed .workspace-theme { margin-inline: 14px; }
-  .workspace-shell--collapsed .workspace-theme-switch { display: none; }
-  .workspace-shell--collapsed .workspace-theme-toggle { display: grid; }
-  .workspace-shell--collapsed .workspace-sidebar__footer { justify-content: center; margin-inline: 14px; padding: 8px; }
+  .workspace-shell--collapsed .workspace-sidebar { overflow-x: hidden; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) :is(.workspace-brand__text, .workspace-nav-link > span, .workspace-sidebar__footer > div, .workspace-collapse) { display: none; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-brand-row { justify-content: center; padding: 0; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-nav-group__label { height: 1px; margin: 0 12px 10px; padding: 0; overflow: hidden; background: var(--color-slate-100); color: transparent; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-navigation { padding-inline: 14px; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-nav-link { justify-content: center; padding: 0; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-nav-link--active::before { left: -14px; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-theme { margin-inline: 14px; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-theme-switch { display: none; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-theme-toggle { display: grid; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-sidebar__footer { justify-content: center; margin-inline: 14px; padding: 8px; }
+  .workspace-sidebar--peek { width: 264px; border-right-color: transparent; box-shadow: 0 24px 64px -12px rgb(15 23 42 / 30%), 0 0 0 1px rgb(15 23 42 / 6%); }
+  .workspace-sidebar--peek :is(.workspace-nav-link, .workspace-brand__text, .workspace-sidebar__footer > div) { white-space: nowrap; }
+  .workspace-sidebar--peek :is(.workspace-brand__text, .workspace-nav-link > span, .workspace-sidebar__footer > div, .workspace-nav-group__label, .workspace-collapse) { animation: workspace-fade .2s ease-out; }
+}
+/* Touch screens have no hover: the collapsed rail keeps its open button under the logo. */
+@media (min-width: 1024px) and (hover: none) {
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-brand-row { flex-direction: column; gap: 6px; height: auto; min-height: var(--header-height); padding: 12px 0; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-collapse { display: grid; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-sidebar, .workspace-sidebar--peek * { transition: none; animation: none; }
 }
 @media (max-width: 1023px) {
   .workspace-header { left: 0; padding-inline: 20px; }

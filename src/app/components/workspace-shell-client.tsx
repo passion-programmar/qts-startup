@@ -25,7 +25,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { logoutAction } from "@/app/login/actions";
 import { LoadingIcon } from "@/app/components/loading-icon";
@@ -63,6 +63,25 @@ export function WorkspaceShellClient({
   const pathname = usePathname();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Collapsed, the sidebar is a rail of icons; hovering it (or tabbing into it) slides the full menu
+  // out over the page, which does not move. Short delays keep a pointer passing by from opening it.
+  const [sidebarPeek, setSidebarPeek] = useState(false);
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function schedulePeek(open: boolean, delay: number) {
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    peekTimer.current = setTimeout(() => setSidebarPeek(open), delay);
+  }
+  function closePeek() {
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    setSidebarPeek(false);
+  }
+  useEffect(() => () => { if (peekTimer.current) clearTimeout(peekTimer.current); }, []);
+  useEffect(() => {
+    if (!sidebarPeek) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") closePeek(); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [sidebarPeek]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       setSidebarCollapsed(localStorage.getItem("qts-sidebar-collapsed") === "true");
@@ -71,6 +90,7 @@ export function WorkspaceShellClient({
   }, []);
 
   function toggleSidebar() {
+    closePeek();
     setSidebarCollapsed((collapsed) => {
       const next = !collapsed;
       localStorage.setItem("qts-sidebar-collapsed", String(next));
@@ -168,13 +188,21 @@ export function WorkspaceShellClient({
         </div>
       </header>
       {mobileNavigationOpen && <button className="workspace-backdrop" aria-label="Close navigation" onClick={() => setMobileNavigationOpen(false)} type="button" />}
-      <aside id="workspace-sidebar" className={`workspace-sidebar ${mobileNavigationOpen ? "workspace-sidebar--open" : ""}`}>
+      <aside
+        id="workspace-sidebar"
+        className={`workspace-sidebar ${mobileNavigationOpen ? "workspace-sidebar--open" : ""} ${sidebarCollapsed && sidebarPeek ? "workspace-sidebar--peek" : ""}`}
+        onPointerEnter={(event) => { if (sidebarCollapsed && event.pointerType === "mouse") schedulePeek(true, 120); }}
+        onPointerLeave={(event) => { if (sidebarCollapsed && event.pointerType === "mouse") schedulePeek(false, 280); }}
+        // Keyboard focus only (Tab): a mouse click focuses too, and must not swap the menu under the pointer.
+        onFocus={(event) => { if (sidebarCollapsed && (event.target as HTMLElement).matches(":focus-visible")) schedulePeek(true, 0); }}
+        onBlur={(event) => { if (sidebarCollapsed && !event.currentTarget.contains(event.relatedTarget as Node | null)) schedulePeek(false, 0); }}
+      >
         <div className="workspace-brand-row">
-          <Link href="/" className="workspace-brand" aria-label="QTS home" onClick={() => setMobileNavigationOpen(false)}>
+          <Link href="/" className="workspace-brand" aria-label="QTS home" onClick={() => { setMobileNavigationOpen(false); closePeek(); }}>
             <span className="workspace-brand__mark"><BriefcaseBusiness size={19} strokeWidth={2} aria-hidden="true" /></span>
             <span className="workspace-brand__text"><strong>QTS</strong><span>Job workspace</span></span>
           </Link>
-          <button type="button" className="workspace-collapse" aria-controls="workspace-sidebar" aria-expanded={!sidebarCollapsed} onClick={toggleSidebar} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
+          <button type="button" className="workspace-collapse" aria-controls="workspace-sidebar" aria-expanded={!sidebarCollapsed} onClick={toggleSidebar} title={sidebarCollapsed ? "Keep the sidebar open" : "Collapse to icons"} aria-label={sidebarCollapsed ? "Keep the sidebar open" : "Collapse to icons"}>
             {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
           </button>
           <button type="button" className="workspace-drawer-close" aria-label="Close navigation" onClick={() => setMobileNavigationOpen(false)}>
@@ -189,7 +217,7 @@ export function WorkspaceShellClient({
                 const Icon = item.icon;
                 const active = activeHref === item.href;
                 return (
-                  <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} aria-label={item.label} className={`workspace-nav-link ${active ? "workspace-nav-link--active" : ""}`} onClick={() => setMobileNavigationOpen(false)} title={sidebarCollapsed ? item.label : undefined}>
+                  <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} aria-label={item.label} className={`workspace-nav-link ${active ? "workspace-nav-link--active" : ""}`} onClick={() => { setMobileNavigationOpen(false); closePeek(); }}>
                     <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
                     <span>{item.label}</span>
                     {counts[item.href] ? (
@@ -202,7 +230,7 @@ export function WorkspaceShellClient({
           ))}
         </nav>
         <ThemeSwitch />
-        <Link className="workspace-sidebar__footer" href="/profile" onClick={() => setMobileNavigationOpen(false)} title={sidebarCollapsed ? user.displayName : undefined}>
+        <Link className="workspace-sidebar__footer" href="/profile" onClick={() => { setMobileNavigationOpen(false); closePeek(); }}>
           <span className="workspace-avatar" aria-hidden="true">{initials}</span>
           <div><strong>{user.displayName}</strong><span>{roleLabels[user.role]}</span></div>
         </Link>
