@@ -72,8 +72,12 @@ export function InterviewHoverCard({ hovered, color }: { hovered: Hovered; color
         </div>
         <Row icon={<Clock className="size-4" />} label="When">
           <span className="font-medium">{readableDay(zonedDay(start, zone))}</span>
-          <span className="block tabular-nums">{timeRange(record, zone)} {zoneShortName(zone, start)} · {minutes} min</span>
-          {second && <span className="block text-xs tabular-nums text-slate-500">{timeRange(record, second)} {zoneShortName(second, start)}</span>}
+          {/* The time in bold, so it is the first thing read. */}
+          <span className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5">
+            <span className="text-base font-bold tabular-nums text-slate-900">{timeRange(record, zone).replace("–", " – ")}</span>
+            <span className="text-xs font-semibold text-slate-600">{zoneShortName(zone, start)} · {minutes} min</span>
+          </span>
+          {second && <span className="block text-xs tabular-nums text-slate-500">{timeRange(record, second).replace("–", " – ")} {zoneShortName(second, start)}</span>}
         </Row>
         <Row icon={<User className="size-4" />} label="Account">{record.candidateName}</Row>
         <Row icon={<Phone className="size-4" />} label="Caller">
