@@ -198,8 +198,8 @@ function TimeGrid({ colors, days, records, onHover, onOpen, query }: { colors: C
             )}
             <div className="relative">
               {hours.map((hour) => hour > 0 && (
-                <span className="absolute right-1.5 -translate-y-1/2 text-[10px] text-slate-500" key={hour} style={{ top: hour * HOUR_HEIGHT }}>
- {hour < 12 ? "AM" : "PM"}
+                <span className="absolute right-1.5 -translate-y-1/2 whitespace-nowrap text-[10px] font-semibold text-slate-600" key={hour} style={{ top: hour * HOUR_HEIGHT }}>
+                  {hour % 12 || 12} {hour < 12 ? "AM" : "PM"}
                 </span>
               ))}
             </div>
