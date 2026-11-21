@@ -22,7 +22,7 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -220,6 +220,7 @@ export function WorkspaceShellClient({
                   <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} aria-label={item.label} className={`workspace-nav-link ${active ? "workspace-nav-link--active" : ""}`} onClick={() => { setMobileNavigationOpen(false); closePeek(); }}>
                     <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
                     <span>{item.label}</span>
+                    <NavPending />
                     {counts[item.href] ? (
                       <span className="ml-auto min-w-5 rounded-full bg-indigo-600 px-1.5 text-center text-[11px] font-semibold text-white" title={`${counts[item.href]} today`}>{counts[item.href]}</span>
                     ) : null}
@@ -248,6 +249,12 @@ export function WorkspaceShellClient({
       </div></div>
     </div>
   );
+}
+
+// A small spinner on the menu item just clicked, until its page starts to show.
+function NavPending() {
+  const { pending } = useLinkStatus();
+  return <span aria-hidden="true" className={`workspace-nav-pending ${pending ? "is-pending" : ""}`} />;
 }
 
 function LogoutButton() {

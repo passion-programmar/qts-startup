@@ -464,6 +464,10 @@ textarea {
 .workspace-nav-group__label { display: block; margin: 0 0 6px; padding: 0 12px; color: var(--color-slate-400); font-size: 10.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .workspace-nav-link { position: relative; display: flex; align-items: center; gap: 11px; min-height: 40px; margin-bottom: 2px; padding: 0 12px; border-radius: 10px; color: var(--color-slate-600); text-decoration: none; font-size: 13.5px; font-weight: 500; transition: background .15s, color .15s; }
 .workspace-nav-link > svg { flex-shrink: 0; color: var(--color-slate-400); transition: color .15s; }
+/* The menu item just clicked spins until its page starts to show. */
+.workspace-nav-pending { position: absolute; top: 50%; right: 10px; width: 14px; height: 14px; margin-top: -7px; border: 2px solid var(--color-indigo-400); border-top-color: transparent; border-radius: 50%; opacity: 0; visibility: hidden; pointer-events: none; }
+.workspace-nav-pending.is-pending { opacity: 1; visibility: visible; animation: workspace-spin .7s linear infinite; }
+@keyframes workspace-spin { to { transform: rotate(360deg); } }
 .workspace-nav-link:hover { color: var(--color-slate-900); background: var(--color-slate-100); }
 .workspace-nav-link:hover > svg { color: var(--color-slate-600); }
 .workspace-nav-link--active, .workspace-nav-link--active:hover { color: var(--color-indigo-700); background: var(--color-indigo-50); font-weight: 600; }
@@ -502,6 +506,7 @@ textarea {
   .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-navigation { padding-inline: 14px; }
   .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-nav-link { justify-content: center; padding: 0; }
   .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-nav-link--active::before { left: -14px; }
+  .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-nav-pending { top: 4px; right: 2px; width: 10px; height: 10px; margin-top: 0; }
   .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-theme { margin-inline: 14px; }
   .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-theme-switch { display: none; }
   .workspace-shell--collapsed .workspace-sidebar:not(.workspace-sidebar--peek) .workspace-theme-toggle { display: grid; }
@@ -517,6 +522,7 @@ textarea {
 }
 @media (prefers-reduced-motion: reduce) {
   .workspace-sidebar, .workspace-sidebar--peek * { transition: none; animation: none; }
+  .workspace-nav-pending.is-pending { animation: none; border-top-color: var(--color-indigo-400); }
 }
 @media (max-width: 1023px) {
   .workspace-header { left: 0; padding-inline: 20px; }

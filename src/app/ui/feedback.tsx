@@ -1,10 +1,10 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
 import { cn } from "@/app/ui/cn";
 
 /** A grey placeholder block shown while data loads. Size it with className (e.g. "h-4 w-32"). */
-export function Skeleton({ className }: { className?: string }) {
-  return <span aria-hidden="true" className={cn("block animate-pulse rounded-md bg-line-soft", className)} />;
+export function Skeleton({ className, style }: { className?: string; style?: CSSProperties }) {
+  return <span aria-hidden="true" className={cn("block animate-pulse rounded-md bg-line-soft", className)} style={style} />;
 }
 
 /** Placeholder rows for a table that is loading. */
