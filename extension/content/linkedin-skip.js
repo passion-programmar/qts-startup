@@ -1,7 +1,8 @@
 // LinkedIn skip-list on LinkedIn's job search: cards whose (title, company) the Manager has already
-// seen (clicked, labelled Viewed / Saved / Applied by LinkedIn, applied or saved in QTS) get their
-// title and company coloured and an outline, painted by the browser: LinkedIn's HTML is never
-// changed, nothing is hidden or clicked. Cards are read only through hooks confirmed on the live
+// seen (clicked, labelled Viewed / Saved / Applied by LinkedIn, applied or saved in QTS) look faded,
+// their title struck through in amber. Only the CSS Custom Highlight API paints it (text ranges and
+// their ::highlight colours): LinkedIn's HTML is never changed, no style rule names its elements,
+// nothing is hidden or clicked. Cards are read only through hooks confirmed on the live
 // page (2026-11-21): the card's componentkey "job-card-component-ref-<id>", the title in its Dismiss
 // button's aria-label (and as a text line), the company as the next line. LinkedIn's class names are
 // hashed and never used. When fewer than half the cards read cleanly, the feature pauses itself.
@@ -16,12 +17,12 @@
   // Lines that are never a company (seen on live cards).
   const NOT_COMPANY = /^(?:viewed|saved|applied|promoted|easy apply|actively reviewing applicants|be an early applicant|posted\b.*|\d+\s+(?:second|minute|hour|day|week|month)s?\s+ago|.*\b(?:alumni|connections?)\b.*\bwork(?:s)? here)$/i;
   const LOCATION_LINE = /\((?:remote|hybrid|on-?site)\)$/i;
-  const HIGHLIGHT = 'qts-linkedin-skip';
+  const HIGHLIGHT = 'qts-linkedin-skip';             // the whole card's text: faded
+  const TITLE_HIGHLIGHT = 'qts-linkedin-skip-title';  // the title: struck through, amber
   const BATCH_MS = 400;
 
   const style = new CSSStyleSheet();
   let styleAdopted = false;
-  let highlight = null;
   let cards = [];            // the cards read on the last look: { id, el, key, title, company, state }
   let skipped = new Set();   // keys the worker said are skipped
   let reported = new Set();  // card ids whose LinkedIn label was already sent
@@ -60,37 +61,41 @@
 
   function clearPaint() {
     CSS.highlights.delete(HIGHLIGHT);
-    highlight = null;
+    CSS.highlights.delete(TITLE_HIGHLIGHT);
     if (styleAdopted) {
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== style);
       styleAdopted = false;
     }
   }
 
-  // The title and company of every skipped card coloured (text ranges), and the card outlined (a
-  // style rule naming its componentkey). Both are painted by the browser; the page is untouched.
+  // Every skipped card: its whole text faded (one range over the card), its title struck through in
+  // amber (a range over each title line, painted on top). Only highlight names get styles: no rule
+  // names LinkedIn's elements, and the page is untouched.
+  style.replaceSync([
+    `::highlight(${HIGHLIGHT}) { color: #9aa3af; }`,
+    `::highlight(${TITLE_HIGHLIGHT}) { color: #78350f; background-color: #fde68a; text-decoration: line-through; text-decoration-thickness: 2px; text-decoration-color: #b45309; }`,
+  ].join('\n'));
   function paint() {
     const seen = cards.filter((card) => skipped.has(card.key));
     status = { ...status, seen: seen.length };
     if (!seen.length) { clearPaint(); return; }
-    highlight = new Highlight();
-    const rules = [`::highlight(${HIGHLIGHT}) { background-color: #fde68a; color: #111827; }`];
+    const faded = new Highlight();
+    const titles = new Highlight();
+    titles.priority = 1;
     for (const card of seen) {
+      const whole = new Range();
+      whole.selectNodeContents(card.el);
+      faded.add(whole);
       for (const node of card.el.querySelectorAll('*')) {
         if (node.children.length) continue;
-        const text = (node.innerText || node.textContent || '').trim();
-        if (text !== card.title && text !== card.company) continue;
+        if ((node.innerText || node.textContent || '').trim() !== card.title) continue;
         const range = new Range();
         range.selectNodeContents(node);
-        highlight.add(range);
+        titles.add(range);
       }
-      // A card drawn by its child (display: contents) gets the outline on that child.
-      const selector = `[componentkey="${CARD_PREFIX}${card.id}"]`;
-      const target = getComputedStyle(card.el).display === 'contents' ? `${selector} > *` : selector;
-      rules.push(`${target} { outline: 2px solid #f59e0b !important; outline-offset: -2px; border-radius: 8px; }`);
     }
-    CSS.highlights.set(HIGHLIGHT, highlight);
-    style.replaceSync(rules.join('\n'));
+    CSS.highlights.set(HIGHLIGHT, faded);
+    CSS.highlights.set(TITLE_HIGHLIGHT, titles);
     adoptStyle();
   }
 

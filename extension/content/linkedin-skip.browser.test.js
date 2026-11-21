@@ -84,13 +84,14 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
       } },
     };
     window.htmlBefore = document.querySelector('main').innerHTML;
-    // What is painted: the outlined cards (style rules) and the coloured text (highlight ranges).
+    // What is painted: the faded cards (one highlight range per card) and the struck titles.
     window.painted = () => {
-      const rules = [...document.adoptedStyleSheets].flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText));
-      const outlined = rules.map((text) => /job-card-component-ref-(\d+)/.exec(text)?.[1]).filter(Boolean);
-      const texts = [...(CSS.highlights.get('qts-linkedin-skip') || [])].map((range) => range.toString());
-      return { outlined, texts };
+      const card = (range) => range.startContainer.closest?.('[componentkey]') || range.startContainer.parentElement?.closest('[componentkey]');
+      const marked = [...(CSS.highlights.get('qts-linkedin-skip') || [])].map((range) => card(range)?.getAttribute('componentkey').replace('job-card-component-ref-', '')).filter(Boolean);
+      const titles = [...(CSS.highlights.get('qts-linkedin-skip-title') || [])].map((range) => range.toString());
+      return { marked, titles };
     };
+    window.styleRules = () => [...document.adoptedStyleSheets].flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText));
   }, { known, signedIn, panel });
   await page.addScriptTag({ path: path.join(root, 'extension', 'shared', 'title-company-key.js') });
   await page.addScriptTag({ path: path.join(root, 'extension', 'content', 'linkedin-skip.js') });
@@ -104,16 +105,27 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
 
 const sorted = (values) => [...values].sort();
 
-test('seen cards are outlined and their title and company coloured; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
+test('seen cards look faded with a struck amber title, painted only by highlights; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
   const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
   try {
     const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
     const page = await openSearch(browser, { cards: PAGE1, known });
-    await page.waitForFunction(() => window.painted().outlined.length === 3);
+    await page.waitForFunction(() => window.painted().marked.length === 3);
     const painted = await page.evaluate(() => window.painted());
     // Viewed (LinkedIn), Applied (LinkedIn), and the QTS bid; the three new jobs are left as they are.
-    assert.deepEqual(sorted(painted.outlined), sorted(['4490425819', '4492410414', '4491500626']));
-    assert.deepEqual(sorted(painted.texts), sorted(['Senior DevOps Engineer (Azure+AWS)', 'N-iX', 'Senior Site Reliability Engineer - AI/GPU', 'TechShack', 'Site Reliability Engineer II', 'Akamai Technologies']));
+    assert.deepEqual(sorted(painted.marked), sorted(['4490425819', '4492410414', '4491500626']));
+    assert.deepEqual(sorted(painted.titles), sorted(['Senior DevOps Engineer (Azure+AWS)', 'Senior Site Reliability Engineer - AI/GPU', 'Site Reliability Engineer II']));
+    // Only highlight names are styled: no rule names LinkedIn's elements.
+    const rules = await page.evaluate(() => window.styleRules());
+    assert.ok(rules.length === 2 && rules.every((rule) => rule.startsWith('::highlight(qts-linkedin-skip')), rules.join(' | '));
+    // On screen: the struck title's background is amber.
+    const box = await page.evaluate(() => {
+      const range = [...CSS.highlights.get('qts-linkedin-skip-title')][0];
+      const rect = range.getBoundingClientRect();
+      return { x: rect.x + 2, y: rect.y + 2, width: 2, height: 2 };
+    });
+    const { data } = await require('sharp')(await page.screenshot({ clip: box })).raw().toBuffer({ resolveWithObject: true });
+    assert.ok([0xfd, 0xe6, 0x8a].every((value, index) => Math.abs(data[index] - value) <= 8), `title background ${[...data.slice(0, 3)]}`);
     // LinkedIn's own labels were sent as marks with their source.
     const marks = await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_MATCH').flatMap((call) => call.marks));
     assert.deepEqual(marks.map((mark) => [mark.title, mark.source]).sort(), [['Senior DevOps Engineer (Azure+AWS)', 'viewed'], ['Senior Site Reliability Engineer - AI/GPU', 'applied']]);
@@ -122,7 +134,7 @@ test('seen cards are outlined and their title and company coloured; LinkedIn\'s 
 
     // A click on a new card: marked at once, sent as "clicked".
     await page.click('[componentkey="job-card-component-ref-4492930672"] p');
-    await page.waitForFunction(() => window.painted().outlined.includes('4492930672'));
+    await page.waitForFunction(() => window.painted().marked.includes('4492930672'));
     const clicked = await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_MARK').map((call) => call.items[0]));
     assert.deepEqual(clicked.map(({ title, company, source }) => [title, company, source]), [['Senior Kubernetes & Reliability Engineer', 'Verda', 'clicked']]);
 
@@ -132,14 +144,14 @@ test('seen cards are outlined and their title and company coloured; LinkedIn\'s 
       history.pushState({}, '', '/jobs/search-results/?currentJobId=4499000001&start=25');
       document.querySelector('section').innerHTML = html;
     }, PAGE2.map(card).join(''));
-    await page.waitForFunction(() => window.__qtsLinkedInSkip.status().total === 3 && window.painted().outlined.length === 1);
-    assert.deepEqual((await page.evaluate(() => window.painted())).outlined, ['4499000002']);
+    await page.waitForFunction(() => window.__qtsLinkedInSkip.status().total === 3 && window.painted().marked.length === 1);
+    assert.deepEqual((await page.evaluate(() => window.painted())).marked, ['4499000002']);
 
     // Skip, then un-skip, the selected job (currentJobId).
     assert.equal((await page.evaluate(() => window.__qtsLinkedInSkip.skipSelected())).ok, true);
-    await page.waitForFunction(() => window.painted().outlined.includes('4499000001'));
+    await page.waitForFunction(() => window.painted().marked.includes('4499000001'));
     assert.equal((await page.evaluate(() => window.__qtsLinkedInSkip.unskipSelected())).ok, true);
-    await page.waitForFunction(() => !window.painted().outlined.includes('4499000001'));
+    await page.waitForFunction(() => !window.painted().marked.includes('4499000001'));
     assert.deepEqual(await page.evaluate(() => window.__qtsLinkedInSkip.selected()), { title: 'Senior DevOps Engineer', company: 'Bloomreach', skipped: false });
   } finally { await browser.close(); }
 });
@@ -150,12 +162,12 @@ test('a layout QTS cannot read pauses the feature; signed out paints nothing', {
     const broken = PAGE1.map((item, index) => ({ ...item, broken: index > 0 }));
     const paused = await openSearch(browser, { cards: broken });
     await paused.waitForFunction(() => window.__qtsLinkedInSkip.status().state === 'paused');
-    assert.deepEqual(await paused.evaluate(() => window.painted()), { outlined: [], texts: [] });
+    assert.deepEqual(await paused.evaluate(() => window.painted()), { marked: [], titles: [] });
     assert.deepEqual(await paused.evaluate(() => window.__qtsLinkedInSkip.status()), { state: 'paused', total: 6, readable: 1, seen: 0 });
 
     const signedOut = await openSearch(browser, { cards: PAGE1, signedIn: false });
     await signedOut.waitForFunction(() => window.__qtsLinkedInSkip.status().state === 'signed-out');
-    assert.deepEqual(await signedOut.evaluate(() => window.painted()), { outlined: [], texts: [] });
+    assert.deepEqual(await signedOut.evaluate(() => window.painted()), { marked: [], titles: [] });
     assert.equal(await signedOut.evaluate(() => window.calls.length), 0, 'nothing asked while signed out');
 
     const elsewhere = await openSearch(browser, { cards: PAGE1, url: 'https://www.linkedin.com/jobs/view/4490425819/' });
@@ -169,7 +181,7 @@ test('the QTS panel on LinkedIn shows the count, Skip / Un-skip for the selected
   try {
     const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
     const page = await openSearch(browser, { cards: PAGE1, known, panel: true });
-    await page.waitForFunction(() => window.painted().outlined.length === 3);
+    await page.waitForFunction(() => window.painted().marked.length === 3);
     await page.evaluate(() => window.__qtsPageLauncher.setOpen(true));
     const section = () => page.evaluate(() => {
       const root = window.panelRoot;
@@ -187,14 +199,14 @@ test('the QTS panel on LinkedIn shows the count, Skip / Un-skip for the selected
 
     // Un-skip the selected job from the panel: its outline goes, the button turns into Skip.
     await page.evaluate(() => window.panelRoot.querySelector('.li-skip-action').click());
-    await page.waitForFunction(() => !window.painted().outlined.includes('4490425819'));
+    await page.waitForFunction(() => !window.painted().marked.includes('4490425819'));
     await page.waitForFunction(() => window.panelRoot.querySelector('.li-skip-action').textContent === 'Skip this job');
     assert.equal(await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_UNSKIP').length), 1);
 
     // The switch: off removes every outline, on brings them back.
     await page.evaluate(() => window.panelRoot.querySelector('.li-skip-switch').click());
-    await page.waitForFunction(() => window.painted().outlined.length === 0 && window.panelRoot.querySelector('.li-skip-count').textContent === 'Off');
+    await page.waitForFunction(() => window.painted().marked.length === 0 && window.panelRoot.querySelector('.li-skip-count').textContent === 'Off');
     await page.evaluate(() => window.panelRoot.querySelector('.li-skip-switch').click());
-    await page.waitForFunction(() => window.painted().outlined.length === 2);
+    await page.waitForFunction(() => window.painted().marked.length === 2);
   } finally { await browser.close(); }
 });
