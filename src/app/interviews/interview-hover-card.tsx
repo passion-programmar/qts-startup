@@ -1,20 +1,18 @@
 "use client";
 
-// The card that floats beside a calendar round while the pointer is on it (or it has keyboard focus):
+// The card shown in the middle of the screen while the pointer is on a calendar round or on the card (or the round has focus):
 // the round's details at a glance, in the round's category colour. Clicking still opens the full card.
-import { Clock, Mic, MessageSquare, Phone, Tag, User } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Check, Clock, Copy, Mic, MessageSquare, Phone, Tag, User } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CategoryColor } from "@/app/interviews/category-colors";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import type { InterviewRecord } from "@/app/interviews/interview-dialog";
 import { resultClasses, resultLabel, stepClasses, stepLabel } from "@/server/interviews/interview-values";
-import { timeRange, weekdayOf, zonedDay, zoneShortName } from "@/server/interviews/zone-time";
+import { timeRange, weekdayOf, zonedDay, zonedTime12, zoneShortName } from "@/server/interviews/zone-time";
 
 export type Hovered = { record: InterviewRecord; rect: DOMRect };
 
 const CARD_WIDTH = 320;
-const GAP = 10;
-const EDGE = 8;
 const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -34,20 +32,9 @@ function Row({ icon, label, children }: { icon: ReactNode; label: string; childr
   );
 }
 
-export function InterviewHoverCard({ hovered, color }: { hovered: Hovered; color: CategoryColor }) {
+export function InterviewHoverCard({ hovered, color, onEnter, onLeave }: { hovered: Hovered; color: CategoryColor; onEnter?: () => void; onLeave?: () => void }) {
   const { settings } = useInterviewChoices();
-  const ref = useRef<HTMLDivElement>(null);
-  const { record, rect } = hovered;
-  // Beside the round (right, or left when there is no room), kept inside the window once measured.
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-  useLayoutEffect(() => {
-    const height = ref.current?.offsetHeight ?? 0;
-    const roomRight = window.innerWidth - rect.right - GAP - EDGE >= CARD_WIDTH;
-    const left = roomRight ? rect.right + GAP : Math.max(EDGE, rect.left - GAP - CARD_WIDTH);
-    const top = Math.min(Math.max(EDGE, rect.top), Math.max(EDGE, window.innerHeight - height - EDGE));
-    setPosition({ left, top });
-  }, [rect]);
-
+  const { record } = hovered;
   const zone = settings.timeZone;
   const second = settings.secondTimeZone;
   const start = new Date(record.startsAt);
@@ -55,10 +42,13 @@ export function InterviewHoverCard({ hovered, color }: { hovered: Hovered; color
 
   return (
     <div
-      className="pointer-events-none fixed z-[80] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl transition-opacity duration-100"
-      ref={ref}
-      role="tooltip"
-      style={{ width: CARD_WIDTH, left: position?.left ?? -9999, top: position?.top ?? 0, opacity: position ? 1 : 0 }}
+      // In the middle of the screen, kept inside it on small screens.
+      className="fixed left-1/2 top-1/2 z-[80] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl"
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      role="dialog"
+      aria-label={`${record.company} · ${stepLabel(record.step)}`}
+      style={{ width: CARD_WIDTH }}
     >
       <div className="px-4 pb-3 pt-3.5" style={{ backgroundColor: color.background, color: color.text }}>
         <p className="text-[11px] font-semibold uppercase tracking-wider opacity-90">{record.category ?? "No category"}</p>
@@ -87,7 +77,53 @@ export function InterviewHoverCard({ hovered, color }: { hovered: Hovered; color
         {record.comment && <Row icon={<MessageSquare className="size-4" />} label="Comment"><span className="line-clamp-3 whitespace-pre-line">{record.comment}</span></Row>}
         {!record.comment && !record.interviewer && <Row icon={<Tag className="size-4" />} label="Applied">{zonedDay(new Date(record.appliedAt), zone)}</Row>}
       </div>
-      <p className="border-t border-slate-100 bg-slate-50 px-4 py-2 text-[11px] text-slate-500">Click for details, edit and result</p>
+      <div className="flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50 px-4 py-2">
+        <span className="text-[11px] text-slate-500">Click the round for details</span>
+        <CopyInterviewButton record={record} />
+      </div>
     </div>
+  );
+}
+
+/** "02:20 PM" for "14:20": the hour with two digits, as the copied line writes it. */
+function paddedTime(moment: Date, zone: string): string {
+  return zonedTime12(moment, zone).padStart(8, "0");
+}
+
+/**
+ * The round as one line to paste into a chat:
+ * "02:20 PM – 02:40 PM CET - @Shayan - Job title - Interviewer - Intro". "??" when no caller is chosen.
+ */
+export function interviewCopyText(record: InterviewRecord, zone: string): string {
+  const start = new Date(record.startsAt);
+  const time = `${paddedTime(start, zone)} – ${paddedTime(new Date(record.endsAt), zone)} ${zoneShortName(zone, start)}`;
+  return [time, `@${record.callerName ?? "??"}`, record.jobTitle, record.interviewer || "—", stepLabel(record.step)].join(" - ");
+}
+
+/** A rectangle "Copy" button that copies the round's line and says "Copied" for a moment. */
+export function CopyInterviewButton({ record, className = "" }: { record: InterviewRecord; className?: string }) {
+  const { settings } = useInterviewChoices();
+  const [copied, setCopied] = useState<"yes" | "no" | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const text = interviewCopyText(record, settings.timeZone);
+  async function copy(event: React.MouseEvent) {
+    event.stopPropagation();
+    let done = false;
+    try { await navigator.clipboard.writeText(text); done = true; } catch { done = false; }
+    setCopied(done ? "yes" : "no");
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(null), 1500);
+  }
+  return (
+    <button
+      className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs font-semibold ${copied === "yes" ? "border-emerald-600 bg-emerald-600 text-white" : "border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-700"} ${className}`}
+      onClick={copy}
+      title={text}
+      type="button"
+    >
+      {copied === "yes" ? <Check aria-hidden="true" className="size-3.5" /> : <Copy aria-hidden="true" className="size-3.5" />}
+      {copied === "yes" ? "Copied" : copied === "no" ? "Copy failed" : "Copy"}
+    </button>
   );
 }

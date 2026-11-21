@@ -7,6 +7,7 @@ import { useState } from "react";
 import { categoryColors, colorOf } from "@/app/interviews/category-colors";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import { InterviewCountdown } from "@/app/interviews/interview-countdown";
+import { CopyInterviewButton } from "@/app/interviews/interview-hover-card";
 import { InterviewRowActions } from "@/app/interviews/interview-controls";
 import { ResultMark, shortDay, TrackLine } from "@/app/interviews/interview-track";
 import type { InterviewRecord } from "@/server/interviews/interview-record";
@@ -67,6 +68,7 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
             {/* Only a round that ended gets a one-line hint: the company may still offer a new date. */}
             {ended && <p className="mt-0.5 text-xs text-slate-500">{look.hint}</p>}
           </div>
+          <CopyInterviewButton record={shown} />
           <button aria-label="Close" autoFocus className="flex size-8 items-center justify-center rounded-lg hover:bg-slate-100" onClick={onClose} type="button"><X className="size-4" /></button>
         </div>
         {/* When: a calendar tile in the category's colour, then the time large, the second zone, and how far away it is. */}

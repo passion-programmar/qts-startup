@@ -109,8 +109,15 @@ export function InterviewCalendar({
   const shown = selected ? records.find((record) => record.id === selected.id) ?? null : null;
   // The round under the pointer (or focused), for its hover card; gone once a round is opened.
   const [hovered, setHovered] = useState<Hovered | null>(null);
-  const hover: HoverHandler = (record, element) => setHovered(record && element ? { record, rect: element.getBoundingClientRect() } : null);
-  const open = (record: InterviewRecord) => { setHovered(null); setSelected(record); };
+  // Leaving a round hides its card half a second later, so the pointer can move onto the card (to Copy).
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const keepCard = () => clearTimeout(hideTimer.current);
+  const hideCard = () => { clearTimeout(hideTimer.current); hideTimer.current = setTimeout(() => setHovered(null), 500); };
+  useEffect(() => () => clearTimeout(hideTimer.current), []);
+  const hover: HoverHandler = (record, element) => {
+    if (record && element) { keepCard(); setHovered({ record, rect: element.getBoundingClientRect() }); } else hideCard();
+  };
+  const open = (record: InterviewRecord) => { keepCard(); setHovered(null); setSelected(record); };
 
   return (
     <>
@@ -118,7 +125,7 @@ export function InterviewCalendar({
       {mode === "month"
         ? <MonthGrid colors={colors} days={days} month={month} onHover={hover} onOpen={open} query={query} records={records} zone={settings.timeZone} />
         : <TimeGrid colors={colors} days={days} onHover={hover} onOpen={open} query={query} records={records} />}
-      {hovered && !selected && <InterviewHoverCard color={colorOf(colors, hovered.record.category)} hovered={hovered} key={hovered.record.id} />}
+      {hovered && !selected && <InterviewHoverCard color={colorOf(colors, hovered.record.category)} hovered={hovered} key={hovered.record.id} onEnter={keepCard} onLeave={hideCard} />}
       {selected && <DetailsCard onClose={() => setSelected(null)} record={shown ?? selected} />}
     </>
   );
