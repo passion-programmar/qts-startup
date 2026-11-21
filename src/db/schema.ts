@@ -710,7 +710,7 @@ export const callers = pgTable(
 );
 
 export const interviewStep = pgEnum("interview_step", ["intro", "tech", "final", "offer"]);
-export const interviewResult = pgEnum("interview_result", ["waiting", "passed", "rejected", "no_show"]);
+export const interviewResult = pgEnum("interview_result", ["waiting", "passed", "rejected", "no_show", "cancelled"]);
 
 // One interview round of an applied job, on the Interviews page and its calendar. Each round is its
 // own row, so a job can have Intro, Tech and Final. The job values start as copies of the bid it was

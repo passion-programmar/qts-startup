@@ -11,7 +11,7 @@ import { DetailsCard } from "@/app/interviews/interview-details";
 import { InterviewHoverCard, type Hovered } from "@/app/interviews/interview-hover-card";
 import type { InterviewRecord } from "@/app/interviews/interview-dialog";
 import { categoryColors, colorOf, type CategoryColor } from "@/app/interviews/category-colors";
-import { stepLabel } from "@/server/interviews/interview-values";
+import { isEndedResult, resultLabel, resultLook, stepLabel } from "@/server/interviews/interview-values";
 import { interviewsHref, type InterviewsQuery } from "@/server/interviews/interviews-query";
 import { weekdayOf, zonedDay, zonedMoment, zonedTime, zoneShortName } from "@/server/interviews/zone-time";
 
@@ -210,14 +210,14 @@ function TimeGrid({ colors, days, records, onHover, onOpen, query }: { colors: C
                 style={{ backgroundImage: "linear-gradient(to bottom, rgba(148,163,184,0.25) 1px, transparent 1px)", backgroundSize: `100% ${HOUR_HEIGHT}px` }}
               >
                 {placedByDay[dayIndex]?.map((entry) => {
-                  const crossedOut = entry.record.result === "rejected" || entry.record.result === "no_show";
+                  const crossedOut = isEndedResult(entry.record.result);
                   const color = colorOf(colors, entry.record.category);
                   return (
                     <button
-                      className={`absolute overflow-hidden rounded-md px-1.5 py-0.5 text-left text-[11px] leading-tight shadow-sm ring-1 ring-black/20 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-300 ${crossedOut ? "opacity-60" : ""}`}
+                      className={`absolute overflow-hidden rounded-md px-1.5 py-0.5 text-left text-[11px] leading-tight shadow-sm ring-1 ring-black/20 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-300`}
                       key={entry.record.id}
                       onClick={() => onOpen(entry.record)}
-                      style={{ backgroundColor: color.background, color: color.text, top: entry.top, height: entry.height, left: `calc(${(entry.lane / entry.lanes) * 100}% + 2px)`, width: `calc(${100 / entry.lanes}% - 4px)` }}
+                      style={{ ...blockLook(color, entry.record.result), top: entry.top, height: entry.height, left: `calc(${(entry.lane / entry.lanes) * 100}% + 2px)`, width: `calc(${100 / entry.lanes}% - 4px)` }}
                       {...hoverProps(entry.record, onHover)}
                       type="button"
                     >
@@ -226,7 +226,7 @@ function TimeGrid({ colors, days, records, onHover, onOpen, query }: { colors: C
                         className={`break-words font-semibold ${crossedOut ? "line-through" : ""}`}
                         style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: Math.max(1, Math.floor((entry.height - 4) / 14)), overflow: "hidden" }}
                       >
-                        {roundLine(entry.record)}
+                        <ResultTag result={entry.record.result} />{roundLine(entry.record)}
                       </span>
                     </button>
                   );
@@ -278,8 +278,8 @@ function MonthGrid({ colors, days, month, records, zone, onHover, onOpen, query 
               </Link>
               <div className="space-y-0.5">
                 {dayRecords.slice(0, 3).map((record) => (
-                  <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-110" key={record.id} onClick={() => onOpen(record)} style={{ backgroundColor: colorOf(colors, record.category).background, color: colorOf(colors, record.category).text }} {...hoverProps(record, onHover)} type="button">
-                    <span className="tabular-nums opacity-90">{zonedTime(new Date(record.startsAt), zone)}</span>
+                  <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-110" key={record.id} onClick={() => onOpen(record)} style={blockLook(colorOf(colors, record.category), record.result)} {...hoverProps(record, onHover)} type="button">
+                    <ResultTag result={record.result} /><span className="tabular-nums opacity-90">{zonedTime(new Date(record.startsAt), zone)}</span>
                     <span className="truncate font-medium">{roundLine(record)}</span>
                   </button>
                 ))}
@@ -294,5 +294,32 @@ function MonthGrid({ colors, days, month, records, zone, onHover, onOpen, query 
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * A round's block: its category colour, a bar on the left in the result's colour once it has one,
+ * and stripes over a round that ended (Rejected, No-show, Cancelled), so the result shows at a glance.
+ */
+function blockLook(color: CategoryColor, result: InterviewRecord["result"]): React.CSSProperties {
+  const look = resultLook[result];
+  return {
+    backgroundColor: color.background,
+    color: color.text,
+    ...(result === "waiting" ? {} : { boxShadow: `inset 4px 0 0 ${look.background}` }),
+    ...(isEndedResult(result)
+      ? { backgroundImage: "repeating-linear-gradient(135deg, rgba(15,23,42,0.45) 0 6px, rgba(15,23,42,0.15) 6px 12px)" }
+      : {}),
+  };
+}
+
+/** The result as a small tag at the start of a round's text; none while Waiting. */
+function ResultTag({ result }: { result: InterviewRecord["result"] }) {
+  if (result === "waiting") return null;
+  const look = resultLook[result];
+  return (
+    <span className="mr-1 inline-flex items-center gap-0.5 rounded px-1 align-[1px] text-[10px] font-bold uppercase leading-[14px] no-underline" style={{ backgroundColor: look.background, color: look.text, textDecoration: "none" }}>
+      {look.symbol} {resultLabel(result)}
+    </span>
   );
 }

@@ -2,7 +2,7 @@
 
 // A job's track: Intro → Tech → Final → Offer, each step with how its latest round went. The rounds
 // load when the line is shown; clicking a step opens that round when the parent allows it.
-import { Check, Circle, X } from "lucide-react";
+import { Ban, Check, Circle, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { loadTrackAction } from "@/app/interviews/actions";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
@@ -17,9 +17,10 @@ export function shortDay(day: string): string {
   return `${Number(day.slice(8))} ${shortMonths[Number(day.slice(5, 7)) - 1] ?? ""}`;
 }
 
-/** The mark for a round's result: ✓ passed, ✗ rejected or no-show, ● waiting. */
+/** The mark for a round's result: ✓ passed, ✗ rejected or no-show, ⊘ cancelled, ● waiting. */
 export function ResultMark({ result, className = "size-3.5" }: { result: InterviewRecord["result"]; className?: string }) {
   if (result === "passed") return <Check aria-hidden="true" className={`${className} text-emerald-600`} strokeWidth={3} />;
+  if (result === "cancelled") return <Ban aria-hidden="true" className={`${className} text-orange-500`} strokeWidth={3} />;
   if (result === "rejected" || result === "no_show") return <X aria-hidden="true" className={`${className} text-rose-600`} strokeWidth={3} />;
   return <Circle aria-hidden="true" className={`${className} fill-amber-400 text-amber-400`} />;
 }

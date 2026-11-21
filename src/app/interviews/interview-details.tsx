@@ -10,7 +10,7 @@ import { InterviewCountdown } from "@/app/interviews/interview-countdown";
 import { InterviewRowActions } from "@/app/interviews/interview-controls";
 import { ResultMark, shortDay, TrackLine } from "@/app/interviews/interview-track";
 import type { InterviewRecord } from "@/server/interviews/interview-record";
-import { resultLabel, stepClasses, stepLabel, type InterviewStep } from "@/server/interviews/interview-values";
+import { isEndedResult, resultLabel, resultLook, stepClasses, stepLabel, type InterviewStep } from "@/server/interviews/interview-values";
 import { timeRange, weekdayOf, zonedDay, zoneShortName } from "@/server/interviews/zone-time";
 
 const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -46,6 +46,8 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
   const minutes = Math.round((new Date(shown.endsAt).getTime() - start.getTime()) / 60000);
   const color = colorOf(categoryColors(categories), shown.category);
   const relative = relativeDay(day, today);
+  const look = resultLook[shown.result];
+  const ended = isEndedResult(shown.result);
   return (
     <div aria-labelledby="interview-details-title" aria-modal="true" className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/40 p-4" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }} onKeyDown={(event) => {
         // Escape in a window opened from the card (Edit) closes that window, not the card.
@@ -58,6 +60,14 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
             <h2 className="text-lg font-semibold text-slate-900" id="interview-details-title">{shown.company} · {stepLabel(shown.step)}</h2>
           </div>
           <button aria-label="Close" autoFocus className="flex size-8 items-center justify-center rounded-lg hover:bg-slate-100" onClick={onClose} type="button"><X className="size-4" /></button>
+        </div>
+        {/* The result as a strong banner, so Rejected or Cancelled is seen at once; the hint says what to do next. */}
+        <div className="mt-3 flex items-center gap-3 rounded-xl px-3.5 py-2.5 shadow-sm" role="status" style={{ backgroundColor: look.background, color: look.text }}>
+          <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-black/15 text-base font-bold">{look.symbol}</span>
+          <div className="min-w-0">
+            <p className="text-sm font-bold uppercase tracking-wider">{resultLabel(shown.result)}</p>
+            <p className="text-xs opacity-90">{look.hint}</p>
+          </div>
         </div>
         {/* When: a calendar tile in the category's colour, then the time large, the second zone, and how far away it is. */}
         <section aria-label="When" className="mt-3 flex items-stretch gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -72,7 +82,7 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${relative.tone}`}>{relative.text}</span>
             </div>
             <p className="mt-1 flex flex-wrap items-baseline gap-x-2">
-              <span className="text-2xl font-bold tabular-nums text-slate-900">{timeRange(shown, zone).replace("–", " – ")}</span>
+              <span className={`text-2xl font-bold tabular-nums text-slate-900 ${ended ? "line-through decoration-2 opacity-60" : ""}`}>{timeRange(shown, zone).replace("–", " – ")}</span>
               <span className="rounded-md bg-indigo-600 px-1.5 py-0.5 text-[11px] font-bold text-white">{zoneShortName(zone, start)}</span>
               <span className="text-xs text-slate-500">{minutes} min</span>
             </p>
@@ -83,7 +93,7 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
               </p>
             )}
             {/* Today's rounds only: the countdown to the start, then its progress. */}
-            {day === today && <InterviewCountdown className="mt-2" endsAt={shown.endsAt} startsAt={shown.startsAt} />}
+            {day === today && !ended && <InterviewCountdown className="mt-2" endsAt={shown.endsAt} startsAt={shown.startsAt} />}
           </div>
         </section>
         <section className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -101,14 +111,19 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
           <dt className="text-slate-500">Step</dt><dd><span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${stepClasses[shown.step]}`}>{stepLabel(shown.step)}</span> <span className="text-xs text-slate-500">{resultLabel(shown.result)}</span></dd>
           {shown.comment && (<><dt className="text-slate-500">Comment</dt><dd className="whitespace-pre-line break-words text-slate-800">{shown.comment}</dd></>)}
         </dl>
-        {/* Join, result, Edit, Add next step and Delete on one line. */}
-        <div className="mt-4 flex items-start gap-1.5 overflow-x-auto border-t border-slate-100 pt-4">
-          {shown.meetingLink && new Date(shown.endsAt) > new Date() && (
-            <a className="inline-flex h-8 items-center gap-1.5 rounded-control bg-emerald-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700" href={shown.meetingLink} rel="noreferrer" target="_blank">
-              <Video aria-hidden="true" className="size-3.5" /> Join
-            </a>
-          )}
-          <InterviewRowActions inline key={shown.id} onDone={onClose} record={shown} />
+        {/* One line: Join, result, next step or new date, then Edit and Delete apart at the end. No Join once the round has ended. */}
+        <div className="mt-4 overflow-x-auto border-t border-slate-100 pt-4">
+          <InterviewRowActions
+            inline
+            key={shown.id}
+            lead={shown.meetingLink && !ended && new Date(shown.endsAt) > new Date() ? (
+              <a className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control bg-emerald-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700" href={shown.meetingLink} rel="noreferrer" target="_blank">
+                <Video aria-hidden="true" className="size-3.5" /> Join
+              </a>
+            ) : null}
+            onDone={onClose}
+            record={shown}
+          />
         </div>
       </div>
     </div>

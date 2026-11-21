@@ -1,10 +1,10 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, ExternalLink, ListPlus, MoreHorizontal, Pencil, Plus, Settings, Trash2, X } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, ExternalLink, ListPlus, MoreHorizontal, Pencil, Plus, Settings, Trash2, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { useActionState, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { deleteInterviewAction, saveInterviewSettingsAction, setInterviewResultAction } from "@/app/interviews/actions";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import type { InterviewRecord } from "@/app/interviews/interview-dialog";
@@ -16,6 +16,8 @@ import type { BidChoice } from "@/server/interviews/interviews-list";
 import {
   interviewLengths,
   interviewResults,
+  isEndedResult,
+  resultLabel,
   interviewSteps,
   nextInterviewStep,
   resultClasses,
@@ -24,7 +26,7 @@ import {
   type InterviewStep,
 } from "@/server/interviews/interview-values";
 import { calendarModes, interviewViews, interviewsHref, trackStatuses, type InterviewsQuery, type InterviewView, type TrackStatus } from "@/server/interviews/interviews-query";
-import { zonedDay, zoneLabel, zoneShortName } from "@/server/interviews/zone-time";
+import { timeRange, zonedDay, zoneLabel, zoneShortName } from "@/server/interviews/zone-time";
 
 // The window (with its calendar) downloads the first time it opens, so the page loads without it.
 const InterviewDialog = dynamic(() => import("@/app/interviews/interview-dialog").then((module) => module.InterviewDialog), {
@@ -61,17 +63,35 @@ export function AddInterviewButton({ startBid }: { startBid: BidChoice | null })
   );
 }
 
-const inlineButton = "inline-flex h-8 items-center gap-1.5 rounded-control border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50";
+const followUpClasses = {
+  plain: "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+  go: "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700",
+  again: "border-orange-300 bg-orange-50 text-orange-800 hover:bg-orange-100",
+} as const;
+
+type FollowUp = { step: InterviewStep; label: string; tone: keyof typeof followUpClasses };
 
 /**
- * A round's result picker, Edit, and Add next step / Open job / Delete: in a ⋯ menu in the tables,
- * or as buttons on the same line (inline) where there is room, like the details card.
+ * What comes after a round: a new date for the same step once it was Rejected, No-show or Cancelled
+ * (the old round stays as history), else the next step (green once Passed); none after Offer.
  */
-export function InterviewRowActions({ record, onDone, inline = false }: { record: InterviewRecord; onDone?: () => void; inline?: boolean }) {
+function followUpOf(record: InterviewRecord, result: InterviewResult): FollowUp | null {
+  if (isEndedResult(result)) return { step: record.step, label: `New date (${stepLabel(record.step)})`, tone: "again" };
+  const next = nextInterviewStep(record.step);
+  return next ? { step: next, label: `Next step (${stepLabel(next)})`, tone: result === "passed" ? "go" : "plain" } : null;
+}
+
+/**
+ * A round's result picker, its follow-up (next step or new date), Edit and Delete: Open job and
+ * Delete in a ⋯ menu in the tables, or everything on one line (inline) in the details card, most used
+ * first and Edit / Delete apart at the end.
+ */
+export function InterviewRowActions({ record, onDone, inline = false, lead }: { record: InterviewRecord; onDone?: () => void; inline?: boolean; lead?: ReactNode }) {
   const { settings } = useInterviewChoices();
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState<InterviewStep | null>(null);
-  const [askNext, setAskNext] = useState<InterviewStep | null>(null);
+  // After a result is set: offer its follow-up (the next round, or a new date) right away.
+  const [ask, setAsk] = useState<{ text: string; followUp: FollowUp } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [result, setResult] = useState<InterviewResult>(record.result);
   const [resultError, setResultError] = useState<string | null>(null);
@@ -82,7 +102,7 @@ export function InterviewRowActions({ record, onDone, inline = false }: { record
     return outcome;
   }, initialRecordState);
   const menuRef = useRef<HTMLDivElement>(null);
-  const next = nextInterviewStep(record.step);
+  const followUp = followUpOf(record, result);
 
   // A new value from the server (after a save elsewhere) replaces the one shown.
   const [shownResult, setShownResult] = useState(record.result);
@@ -104,20 +124,44 @@ export function InterviewRowActions({ record, onDone, inline = false }: { record
     const previous = result;
     setResult(value);
     setResultError(null);
+    setAsk(null);
     startSavingResult(async () => {
       const saved = await setInterviewResultAction(record.id, value);
+      const after = followUpOf(record, value);
       if (saved.error) {
         setResult(previous);
         setResultError(saved.error);
-      } else if (value === "passed" && next) {
-        setAskNext(next);
+      } else if (value === "passed" && after) {
+        setAsk({ text: `Passed. Add the ${stepLabel(after.step)} round?`, followUp: after });
+      } else if (isEndedResult(value) && after) {
+        setAsk({ text: `${resultLabel(value)}. Did the company offer another date?`, followUp: after });
       }
     });
   }
 
+  // The delete window names the exact round, and says it cannot be undone.
+  const deleteText = (
+    <>
+      This deletes the <strong>{stepLabel(record.step)}</strong> round with <strong>{record.company}</strong> ({record.candidateName}) on{" "}
+      <strong>{zonedDay(new Date(record.startsAt), settings.timeZone)} {timeRange(record, settings.timeZone)} {zoneShortName(settings.timeZone, new Date(record.startsAt))}</strong>.
+      It cannot be undone. The bid and the other rounds stay.
+    </>
+  );
+  const editButton = (
+    <button aria-label={`Edit ${record.company} ${stepLabel(record.step)}`} className="inline-flex size-8 shrink-0 items-center justify-center rounded-control border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setEditing(true)} title="Edit" type="button">
+      <Pencil aria-hidden="true" className="size-3.5" />
+    </button>
+  );
+  const followUpButton = followUp && (
+    <button className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-xs font-semibold ${followUpClasses[followUp.tone]}`} onClick={() => setAdding(followUp.step)} type="button">
+      {followUp.tone === "again" ? <CalendarPlus aria-hidden="true" className="size-3.5" /> : <ListPlus aria-hidden="true" className="size-3.5" />} {followUp.label}
+    </button>
+  );
+
   return (
-    <div className="flex flex-col items-start gap-1.5">
-      <div className="flex items-center gap-1.5">
+    <div className={`flex flex-col items-start gap-1.5 ${inline ? "w-full" : ""}`}>
+      <div className={`flex items-center gap-1.5 ${inline ? "w-full" : ""}`}>
+        {lead}
         <label className="sr-only" htmlFor={`result-${record.id}`}>Result</label>
         <select
           className={`h-8 rounded-full px-2 text-[11px] font-semibold ring-1 ring-inset focus:outline-none focus:ring-2 focus:ring-indigo-300 ${resultClasses[result]}`}
@@ -128,40 +172,38 @@ export function InterviewRowActions({ record, onDone, inline = false }: { record
         >
           {interviewResults.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
         </select>
-        <button aria-label={`Edit ${record.company} ${stepLabel(record.step)}`} className="inline-flex size-8 items-center justify-center rounded-control border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setEditing(true)} title="Edit" type="button">
-          <Pencil aria-hidden="true" className="size-3.5" />
-        </button>
+        {inline && followUpButton}
         {inline ? (
-          <>
-            {next && (
-              <button className={inlineButton} onClick={() => setAdding(next)} type="button">
-                <ListPlus aria-hidden="true" className="size-3.5" /> Add next step ({stepLabel(next)})
-              </button>
-            )}
+          // Edit and Delete apart at the end, Delete as a small icon so it is not hit by mistake.
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {editButton}
             {/* No Open job here: the card's job title already opens the job. */}
             <form action={deleteAction}>
               <input name="id" type="hidden" value={record.id} />
               <ConfirmButton
-                className="inline-flex h-8 items-center gap-1.5 rounded-control border border-rose-200 bg-rose-50 px-2.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                ariaLabel="Delete interview"
+                className="inline-flex size-8 items-center justify-center rounded-control border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
                 confirmLabel="Delete interview"
-                description={<>This deletes the {stepLabel(record.step)} round with {record.company} on {zonedDay(new Date(record.startsAt), settings.timeZone)}. The bid stays.</>}
+                description={deleteText}
                 disabled={deleting}
                 title="Delete this interview?"
               >
-                {deleting ? <LoadingIcon className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />} Delete
+                {deleting ? <LoadingIcon className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />}
               </ConfirmButton>
             </form>
-          </>
+          </div>
         ) : (
+        <>
+        {editButton}
         <div className="relative" ref={menuRef}>
           <button aria-expanded={menuOpen} aria-haspopup="menu" aria-label="More actions" className="inline-flex size-8 items-center justify-center rounded-control border border-slate-200 bg-white text-slate-600 hover:bg-slate-50" onClick={() => setMenuOpen((open) => !open)} title="More" type="button">
             <MoreHorizontal aria-hidden="true" className="size-4" />
           </button>
           {menuOpen && (
             <div className="absolute right-0 top-9 z-30 w-48 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
-              {next && (
-                <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50" onClick={() => { setMenuOpen(false); setAdding(next); }} role="menuitem" type="button">
-                  <ListPlus aria-hidden="true" className="size-3.5" /> Add next step ({stepLabel(next)})
+              {followUp && (
+                <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50" onClick={() => { setMenuOpen(false); setAdding(followUp.step); }} role="menuitem" type="button">
+                  {followUp.tone === "again" ? <CalendarPlus aria-hidden="true" className="size-3.5" /> : <ListPlus aria-hidden="true" className="size-3.5" />} {followUp.label}
                 </button>
               )}
               {record.jobUrl && (
@@ -174,7 +216,7 @@ export function InterviewRowActions({ record, onDone, inline = false }: { record
                 <ConfirmButton
                   className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-rose-700 hover:bg-rose-50"
                   confirmLabel="Delete interview"
-                  description={<>This deletes the {stepLabel(record.step)} round with {record.company} on {zonedDay(new Date(record.startsAt), settings.timeZone)}. The bid stays.</>}
+                  description={deleteText}
                   disabled={deleting}
                   title="Delete this interview?"
                 >
@@ -184,14 +226,17 @@ export function InterviewRowActions({ record, onDone, inline = false }: { record
             </div>
           )}
         </div>
+        </>
         )}
       </div>
       {(resultError || deleteState.error) && <p className="max-w-48 text-[11px] text-rose-700" role="alert">{resultError || deleteState.error}</p>}
-      {askNext && (
-        <div className="flex max-w-56 flex-wrap items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-800" role="status">
-          <span>Passed. Add the {stepLabel(askNext)} round?</span>
-          <button className="rounded-md bg-emerald-600 px-2 py-0.5 font-semibold text-white hover:bg-emerald-700" onClick={() => { setAdding(askNext); setAskNext(null); }} type="button">Add</button>
-          <button className="rounded-md px-1.5 py-0.5 font-semibold hover:bg-emerald-100" onClick={() => setAskNext(null)} type="button">Not now</button>
+      {ask && (
+        <div className={`flex flex-wrap items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] ${inline ? "" : "max-w-56"} ${ask.followUp.tone === "again" ? "border-orange-200 bg-orange-50 text-orange-900" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`} role="status">
+          <span>{ask.text}</span>
+          <button className={`rounded-md px-2 py-0.5 font-semibold text-white ${ask.followUp.tone === "again" ? "bg-orange-600 hover:bg-orange-700" : "bg-emerald-600 hover:bg-emerald-700"}`} onClick={() => { setAdding(ask.followUp.step); setAsk(null); }} type="button">
+            {ask.followUp.tone === "again" ? "Add new date" : "Add"}
+          </button>
+          <button className="rounded-md px-1.5 py-0.5 font-semibold hover:bg-black/5" onClick={() => setAsk(null)} type="button">Not now</button>
         </div>
       )}
       {editing && <InterviewDialog onClose={() => { setEditing(false); onDone?.(); }} record={record} />}

@@ -16,6 +16,7 @@ export const interviewResults = [
   { key: "passed", label: "Passed" },
   { key: "rejected", label: "Rejected" },
   { key: "no_show", label: "No-show" },
+  { key: "cancelled", label: "Cancelled" },
 ] as const;
 export type InterviewResult = (typeof interviewResults)[number]["key"];
 
@@ -84,6 +85,7 @@ export const resultClasses: Record<InterviewResult, string> = {
   passed: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   rejected: "bg-rose-50 text-rose-700 ring-rose-200",
   no_show: "bg-slate-100 text-slate-600 ring-slate-200",
+  cancelled: "bg-orange-50 text-orange-800 ring-orange-200",
 };
 
 export function isInterviewStep(value: unknown): value is InterviewStep {
@@ -260,3 +262,18 @@ export function parseInterviewSettings(value: unknown): InterviewSettings {
     defaultMinutes: (interviewLengths as readonly number[]).includes(minutes) ? minutes : defaultInterviewSettings.defaultMinutes,
   };
 }
+
+/** Results that close a round: no Join, no next step; the company may still offer a new date. */
+export function isEndedResult(result: InterviewResult): boolean {
+  return result === "rejected" || result === "no_show" || result === "cancelled";
+}
+
+// Each result's strong look for the calendar, hover card and details card: fixed colours (the dark
+// theme cannot wash them out), a symbol so the colour is never the only clue, and a hint.
+export const resultLook: Record<InterviewResult, { background: string; text: string; symbol: string; hint: string }> = {
+  waiting: { background: "#f59e0b", text: "#1c1917", symbol: "⏳", hint: "Set the result after the call." },
+  passed: { background: "#16a34a", text: "#ffffff", symbol: "✓", hint: "Add the next step when the company sets it." },
+  rejected: { background: "#dc2626", text: "#ffffff", symbol: "✕", hint: "Company offered another date? Add a new date — this round stays in the history." },
+  no_show: { background: "#475569", text: "#ffffff", symbol: "!", hint: "Company offered another date? Add a new date — this round stays in the history." },
+  cancelled: { background: "#ea580c", text: "#ffffff", symbol: "⊘", hint: "Company offered another date? Add a new date — this round stays in the history." },
+};

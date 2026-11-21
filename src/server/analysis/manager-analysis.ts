@@ -12,7 +12,7 @@ import { analysisRanges, analysisZones, windowStartOffset, type AnalysisView } f
 export type AnalysisPoint = { start: string; bids: number; interviews: number };
 export type ManagerAnalysis = {
   points: AnalysisPoint[];
-  results: { waiting: number; passed: number; rejected: number; no_show: number };
+  results: { waiting: number; passed: number; rejected: number; no_show: number; cancelled: number };
   bidsWithInterview: number;
   // The same length of time just before the window, cut at the same day (this week up to today is
   // compared with last week up to the same weekday).
@@ -89,7 +89,8 @@ export async function readManagerAnalysis(managerId: string, view: AnalysisView)
           'waiting', count(*) filter (where result = 'waiting'),
           'passed', count(*) filter (where result = 'passed'),
           'rejected', count(*) filter (where result = 'rejected'),
-          'no_show', count(*) filter (where result = 'no_show'))
+          'no_show', count(*) filter (where result = 'no_show'),
+          'cancelled', count(*) filter (where result = 'cancelled'))
         from rounds) as results,
       -- Bids applied in the window that have at least one round; interviews are few, so start there.
       (select count(distinct interviews.bid_id)::int
@@ -113,7 +114,7 @@ export async function readManagerAnalysis(managerId: string, view: AnalysisView)
   const row = result.rows[0];
   return {
     points: (row?.series ?? []).map(([start, bids, interviews]) => ({ start, bids, interviews })),
-    results: row?.results ?? { waiting: 0, passed: 0, rejected: 0, no_show: 0 },
+    results: row?.results ?? { waiting: 0, passed: 0, rejected: 0, no_show: 0, cancelled: 0 },
     bidsWithInterview: row?.bids_with_interview ?? 0,
     previous: row?.previous ?? { bids: 0, interviews: 0 },
     steps: row?.steps ?? { intro: 0, tech: 0, final: 0, offer: 0 },

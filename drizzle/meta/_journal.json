@@ -701,6 +701,13 @@
       "when": 1795070123049,
       "tag": "0099_custom_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1795255512348,
+      "tag": "0100_interview_cancelled",
+      "breakpoints": true
     }
   ]
 }

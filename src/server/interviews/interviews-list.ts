@@ -122,6 +122,7 @@ export async function countTodayInterviews(managerId: string): Promise<number> {
     .where(and(
       eq(interviews.managerId, managerId),
       sql`${interviews.startsAt} >= ${dayStart}`,
+      sql`${interviews.result} <> 'cancelled'`,
       sql`${interviews.startsAt} < ${dayStart} + interval '1 day'`,
     ));
   return row?.count ?? 0;
@@ -216,7 +217,7 @@ export async function readBidTrack(managerId: string, bidId: string): Promise<st
 /**
  * By job: one page of the Manager's tracks, latest activity first, with every round of each, and how
  * many tracks there are per status. A track's status comes from its latest round: Ended when that was
- * Rejected or No-show, Offer when it is the Offer round, otherwise In progress.
+ * Rejected, No-show or Cancelled, Offer when it is the Offer round, otherwise In progress.
  */
 export async function readTracksPage(managerId: string, query: InterviewsQuery) {
   const latest = db.selectDistinctOn([interviews.trackId], {
@@ -230,7 +231,7 @@ export async function readTracksPage(managerId: string, query: InterviewsQuery) 
     .where(eq(interviews.managerId, managerId))
     .orderBy(interviews.trackId, desc(interviews.startsAt), desc(interviews.createdAt))
     .as("latest");
-  const ended = sql`${latest.result} in ('rejected', 'no_show')`;
+  const ended = sql`${latest.result} in ('rejected', 'no_show', 'cancelled')`;
   const offer = sql`not (${ended}) and ${latest.step} = 'offer'`;
   const active = sql`not (${ended}) and ${latest.step} <> 'offer'`;
   const statusCondition = query.status === "ended" ? ended : query.status === "offer" ? offer : query.status === "active" ? active : undefined;

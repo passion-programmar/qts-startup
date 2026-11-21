@@ -18,7 +18,7 @@ import { requireUser } from "@/lib/session";
 import { readCallerOptions } from "@/server/callers/callers";
 import { readBidChoice, readCalendar, readInterviewSettings, readInterviewsPage, readTodayRounds, readTracksPage } from "@/server/interviews/interviews-list";
 import { defaultInterviewPageSize, interviewSearchFields, interviewsFilterParams, parseInterviewsQuery, trackSearchFields, type InterviewsQuery } from "@/server/interviews/interviews-query";
-import { interviewSteps, resultLabel } from "@/server/interviews/interview-values";
+import { interviewSteps, isEndedResult, resultLabel } from "@/server/interviews/interview-values";
 import { markTodayRounds, stepClasses, stepLabel } from "@/server/interviews/interview-values";
 import { addDays, addMonths, startOfMonth, startOfWeek, timeRange, weekdayOf, zonedDay, zonedMoment, zoneShortName } from "@/server/interviews/zone-time";
 
@@ -66,7 +66,7 @@ export default async function InterviewsPage({
     todayMode ? readTodayRounds(currentUser.id, bounds) : null,
   ]);
   const todayRows = markTodayRounds((todayRounds ?? []).map(toInterviewRecord), now);
-  const left = todayRows.filter((row) => !row.done).length;
+  const left = todayRows.filter((row) => !row.done && !isEndedResult(row.result)).length;
   const candidates = candidateRows.map((row) => ({ id: row.id, name: [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate", blocked: Boolean(row.blockedAt) }));
   const choices = { accounts: candidates, categories: categoryRows.map((row) => row.name), callers: callerOptions, settings, today };
   const second = settings.secondTimeZone;
@@ -123,7 +123,7 @@ export default async function InterviewsPage({
                       <td className="max-w-56 px-3 py-3.5 sm:px-4"><Comment value={row.comment} /></td>
                       <td className="px-3 py-3.5 sm:px-4">
                         <div className="flex items-start gap-2">
-                          {row.meetingLink && !row.done && (
+                          {row.meetingLink && !row.done && !isEndedResult(row.result) && (
                             <a className="inline-flex h-8 items-center gap-1.5 rounded-control bg-emerald-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700" href={row.meetingLink} rel="noreferrer" target="_blank">
                               <Video aria-hidden="true" className="size-3.5" /> Join
                             </a>
@@ -236,7 +236,7 @@ export default async function InterviewsPage({
                     </span>,
                     <Comment key="comment" value={row.comment} />,
                     <div className="flex items-start gap-2" key="actions">
-                      {row.meetingLink && row.endsAt > now && (
+                      {row.meetingLink && row.endsAt > now && !isEndedResult(row.result) && (
                         <a aria-label="Join meeting" className="inline-flex size-8 items-center justify-center rounded-control border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" href={row.meetingLink} rel="noreferrer" target="_blank" title="Join meeting">
                           <Video aria-hidden="true" className="size-3.5" />
                         </a>
@@ -313,7 +313,7 @@ function Comment({ value }: { value: string | null }): ReactNode {
 
 // Where a job stands, from its latest round.
 function TrackStatus({ latest }: { latest: InterviewRecord }): ReactNode {
-  const ended = latest.result === "rejected" || latest.result === "no_show";
+  const ended = isEndedResult(latest.result);
   const tone = ended ? "danger" : latest.step === "offer" ? "success" : "primary";
   const label = ended ? `Ended at ${stepLabel(latest.step)}` : latest.step === "offer" ? "Offer" : `In ${stepLabel(latest.step)}`;
   return (

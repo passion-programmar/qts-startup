@@ -31,17 +31,18 @@ const interviewSteps = [
   { key: "offer", label: "Offer" },
 ] as const;
 type InterviewResult = keyof ManagerAnalysis["results"];
-const resultLabels: Record<InterviewResult, string> = { passed: "Passed", waiting: "Waiting", rejected: "Rejected", no_show: "No-show" };
+const resultLabels: Record<InterviewResult, string> = { passed: "Passed", waiting: "Waiting", rejected: "Rejected", no_show: "No-show", cancelled: "Cancelled" };
 
 // Status colours for round results, the same in light and dark (checked against both card colours).
 // Passed and Rejected are kept apart by Waiting, and every part carries its name, so colour is never
 // the only clue.
-const resultOrder: InterviewResult[] = ["passed", "waiting", "rejected", "no_show"];
+const resultOrder: InterviewResult[] = ["passed", "waiting", "rejected", "no_show", "cancelled"];
 const resultColors: Record<InterviewResult, string> = {
   passed: "#059669",
   waiting: "#d97706",
   rejected: "#e11d48",
   no_show: "#64748b",
+  cancelled: "#ea580c",
 };
 const resultName = (key: InterviewResult) => resultLabels[key];
 

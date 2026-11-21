@@ -1,0 +1,1 @@
+ALTER TYPE "public"."interview_result" ADD VALUE 'cancelled';

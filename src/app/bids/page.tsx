@@ -20,6 +20,7 @@ const trackDotClasses: Record<InterviewResult | "none", string> = {
   waiting: "bg-amber-400",
   rejected: "bg-rose-500",
   no_show: "bg-rose-500",
+  cancelled: "bg-orange-400",
   none: "bg-slate-200",
 };
 
