@@ -57,13 +57,15 @@ export default async function InterviewsPage({
 
   const listMode = query.mode === "list";
   const jobsMode = query.mode === "jobs";
-  const [calendar, list, jobs, jobsToday] = await Promise.all([
-    listMode || jobsMode || !view ? null : readCalendar(currentUser.id, bounds, zonedMoment(view.days[0] ?? today, "00:00", zone), zonedMoment(addDays(view.days.at(-1) ?? today, 1), "00:00", zone)),
+  // Today's rounds have their own tab; the other tabs do not read them.
+  const todayMode = query.mode === "today";
+  const [calendarRows, list, jobs, todayRounds] = await Promise.all([
+    !view ? null : readCalendar(currentUser.id, zonedMoment(view.days[0] ?? today, "00:00", zone), zonedMoment(addDays(view.days.at(-1) ?? today, 1), "00:00", zone)),
     listMode ? readInterviewsPage(currentUser.id, query, bounds) : null,
     jobsMode ? readTracksPage(currentUser.id, query) : null,
-    jobsMode ? readTodayRounds(currentUser.id, bounds) : null,
+    todayMode ? readTodayRounds(currentUser.id, bounds) : null,
   ]);
-  const todayRows = markTodayRounds((calendar?.todayRows ?? list?.todayRows ?? jobsToday ?? []).map(toInterviewRecord), now);
+  const todayRows = markTodayRounds((todayRounds ?? []).map(toInterviewRecord), now);
   const left = todayRows.filter((row) => !row.done).length;
   const candidates = candidateRows.map((row) => ({ id: row.id, name: [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate", blocked: Boolean(row.blockedAt) }));
   const choices = { accounts: candidates, categories: categoryRows.map((row) => row.name), callers: callerOptions, settings, today };
@@ -78,6 +80,9 @@ export default async function InterviewsPage({
           title="Interviews"
         />
 
+        <CalendarToolbar next={view?.next ?? ""} previous={view?.previous ?? ""} query={query} title={view?.title ?? ""} />
+
+        {todayMode && (
         <section aria-labelledby="today-heading" className="mb-6 overflow-hidden rounded-2xl border border-indigo-200 bg-white shadow-sm">
           <header className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-100 bg-indigo-50/70 px-4 py-3">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-indigo-900" id="today-heading">
@@ -133,11 +138,10 @@ export default async function InterviewsPage({
             </div>
           )}
         </section>
+        )}
 
-        <CalendarToolbar next={view?.next ?? ""} previous={view?.previous ?? ""} query={query} title={view?.title ?? ""} />
-
-        {calendar && view && query.mode !== "list" && query.mode !== "jobs" && (
-          <InterviewCalendar days={view.days} mode={query.mode} month={view.month} query={query} records={calendar.rows.map(toInterviewRecord)} />
+        {calendarRows && view && (query.mode === "day" || query.mode === "week" || query.mode === "month") && (
+          <InterviewCalendar days={view.days} mode={query.mode} month={view.month} query={query} records={calendarRows.map(toInterviewRecord)} />
         )}
 
         {jobs && (

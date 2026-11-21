@@ -62,16 +62,12 @@ function readRange(managerId: string, from: Date, to: Date) {
 
 export type DayBounds = { todayStart: Date; todayEnd: Date };
 
-/** Today's rounds, and the calendar's rounds between from and to. */
-export async function readCalendar(managerId: string, bounds: DayBounds, from: Date, to: Date) {
-  const [todayRows, rows] = await Promise.all([
-    readRange(managerId, bounds.todayStart, bounds.todayEnd),
-    readRange(managerId, from, to),
-  ]);
-  return { todayRows, rows };
+/** The calendar's rounds between from and to. */
+export function readCalendar(managerId: string, from: Date, to: Date) {
+  return readRange(managerId, from, to);
 }
 
-/** Today's rounds, one page of the List's view, and the counts for its view buttons. */
+/** One page of the List's view, and the counts for its view buttons. */
 export async function readInterviewsPage(managerId: string, query: InterviewsQuery, bounds: DayBounds) {
   const filters = and(
     eq(interviews.managerId, managerId),
@@ -95,8 +91,7 @@ export async function readInterviewsPage(managerId: string, query: InterviewsQue
     .limit(query.size)
     .offset((page - 1) * query.size);
 
-  const [todayRows, [counts], rows] = await Promise.all([
-    readRange(managerId, bounds.todayStart, bounds.todayEnd),
+  const [[counts], rows] = await Promise.all([
     db.select({
       upcoming: sql<number>`(count(*) filter (where ${upcoming}))::int`,
       past: sql<number>`(count(*) filter (where ${past}))::int`,
@@ -109,7 +104,7 @@ export async function readInterviewsPage(managerId: string, query: InterviewsQue
   const lastPage = Math.max(1, Math.ceil(total / query.size));
   // A page past the end (rounds deleted, or an old link) shows the last page instead.
   const page = Math.min(query.page, lastPage);
-  return { todayRows, rows: page === query.page ? rows : await pageRows(page), total, page, viewCounts };
+  return { rows: page === query.page ? rows : await pageRows(page), total, page, viewCounts };
 }
 
 /** The Manager's calendar settings (zone, second zone, default length). */
@@ -288,7 +283,7 @@ export async function passEarlierRounds(managerId: string, trackId: string, step
     ));
 }
 
-/** Today's rounds only (the By job view shows them above its table). */
+/** Today's rounds, for the Today tab. */
 export function readTodayRounds(managerId: string, bounds: DayBounds) {
   return readRange(managerId, bounds.todayStart, bounds.todayEnd);
 }

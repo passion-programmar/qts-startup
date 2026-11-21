@@ -5,6 +5,7 @@ import { isInterviewStep, normalizeInterviewDate, type InterviewStep } from "./i
 // with it in the browser too.
 
 export const calendarModes = [
+  { key: "today", label: "Today" },
   { key: "day", label: "Day" },
   { key: "week", label: "Week" },
   { key: "month", label: "Month" },

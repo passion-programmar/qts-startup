@@ -9,25 +9,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import { DetailsCard } from "@/app/interviews/interview-details";
 import type { InterviewRecord } from "@/app/interviews/interview-dialog";
-import { stepLabel, type InterviewStep } from "@/server/interviews/interview-values";
+import { categoryColors, colorOf, type CategoryColor } from "@/app/interviews/category-colors";
+import { stepLabel } from "@/server/interviews/interview-values";
 import { interviewsHref, type InterviewsQuery } from "@/server/interviews/interviews-query";
 import { timeRange, weekdayOf, zonedDay, zonedMoment, zonedTime, zoneShortName } from "@/server/interviews/zone-time";
 
 const HOUR_HEIGHT = 48;
 const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-const blockClasses: Record<InterviewStep, string> = {
-  intro: "bg-slate-600 text-white",
-  tech: "bg-blue-600 text-white",
-  final: "bg-violet-600 text-white",
-  offer: "bg-emerald-600 text-white",
-};
-const dotClasses: Record<InterviewStep, string> = {
-  intro: "bg-slate-500",
-  tech: "bg-blue-600",
-  final: "bg-violet-600",
-  offer: "bg-emerald-600",
-};
+type Colors = Map<string, CategoryColor>;
+
+/** What a round shows in the calendar: caller - step - job title - company - account. */
+function roundLine(record: InterviewRecord): string {
+  return [record.callerName ?? "No caller", stepLabel(record.step), record.jobTitle, record.company, record.candidateName].join(" - ");
+}
 
 function minutesOf(time: string): number {
   const [hour, minute] = time.split(":").map(Number);
@@ -94,22 +89,41 @@ export function InterviewCalendar({
   records: InterviewRecord[];
   query: InterviewsQuery;
 }) {
-  const { settings } = useInterviewChoices();
+  const { settings, categories } = useInterviewChoices();
+  // Each round is coloured by its category (AI/ML red, DevOps blue, the others their own colour).
+  const colors = useMemo(() => categoryColors(categories), [categories]);
   const [selected, setSelected] = useState<InterviewRecord | null>(null);
   // A round shown in the details card follows its newest version after a save.
   const shown = selected ? records.find((record) => record.id === selected.id) ?? null : null;
 
   return (
     <>
+      <CategoryKey colors={colors} records={records} />
       {mode === "month"
-        ? <MonthGrid days={days} month={month} onOpen={setSelected} query={query} records={records} zone={settings.timeZone} />
-        : <TimeGrid days={days} onOpen={setSelected} query={query} records={records} />}
+        ? <MonthGrid colors={colors} days={days} month={month} onOpen={setSelected} query={query} records={records} zone={settings.timeZone} />
+        : <TimeGrid colors={colors} days={days} onOpen={setSelected} query={query} records={records} />}
       {selected && <DetailsCard onClose={() => setSelected(null)} record={shown ?? selected} />}
     </>
   );
 }
 
-function TimeGrid({ days, records, onOpen, query }: { days: string[]; records: InterviewRecord[]; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
+/** The colour of each category shown in the calendar, so a block's colour can be read at a glance. */
+function CategoryKey({ colors, records }: { colors: Colors; records: InterviewRecord[] }) {
+  const shown = [...new Set(records.map((record) => record.category ?? ""))].sort((a, b) => a.localeCompare(b));
+  if (!shown.length) return null;
+  return (
+    <ul aria-label="Category colours" className="mb-2 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-600">
+      {shown.map((name) => (
+        <li className="flex items-center gap-1.5" key={name || "none"}>
+          <span aria-hidden="true" className="size-3 rounded-sm" style={{ backgroundColor: colorOf(colors, name || null).background }} />
+          {name || "No category"}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TimeGrid({ colors, days, records, onOpen, query }: { colors: Colors; days: string[]; records: InterviewRecord[]; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
   const { settings, today } = useInterviewChoices();
   const zone = settings.timeZone;
   const second = settings.secondTimeZone;
@@ -180,18 +194,17 @@ function TimeGrid({ days, records, onOpen, query }: { days: string[]; records: I
               >
                 {placedByDay[dayIndex]?.map((entry) => {
                   const crossedOut = entry.record.result === "rejected" || entry.record.result === "no_show";
+                  const color = colorOf(colors, entry.record.category);
                   return (
                     <button
-                      className={`absolute overflow-hidden rounded-md px-1.5 py-0.5 text-left text-[11px] leading-tight shadow-sm ring-1 ring-white/60 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-300 ${blockClasses[entry.record.step]} ${crossedOut ? "opacity-60" : ""}`}
+                      className={`absolute overflow-hidden rounded-md px-1.5 py-0.5 text-left text-[11px] leading-tight shadow-sm ring-1 ring-black/20 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-300 ${crossedOut ? "opacity-60" : ""}`}
                       key={entry.record.id}
                       onClick={() => onOpen(entry.record)}
-                      style={{ top: entry.top, height: entry.height, left: `calc(${(entry.lane / entry.lanes) * 100}% + 2px)`, width: `calc(${100 / entry.lanes}% - 4px)` }}
-                      title={`${entry.record.company} · ${stepLabel(entry.record.step)} · ${timeRange(entry.record, zone)}`}
+                      style={{ backgroundColor: color.background, color: color.text, top: entry.top, height: entry.height, left: `calc(${(entry.lane / entry.lanes) * 100}% + 2px)`, width: `calc(${100 / entry.lanes}% - 4px)` }}
+                      title={`${roundLine(entry.record)}\n${timeRange(entry.record, zone)} · ${entry.record.category ?? "No category"}`}
                       type="button"
                     >
-                      <span className={`block truncate font-semibold ${crossedOut ? "line-through" : ""}`}>{entry.record.company} · {stepLabel(entry.record.step)}</span>
-                      {entry.height >= 30 && <span className="block truncate opacity-90">{timeRange(entry.record, zone)}</span>}
-                      {entry.height >= 44 && <span className="block truncate opacity-80">{entry.record.candidateName}</span>}
+                      <span className={`block break-words font-semibold ${crossedOut ? "line-through" : ""}`}>{roundLine(entry.record)}</span>
                     </button>
                   );
                 })}
@@ -210,7 +223,7 @@ function TimeGrid({ days, records, onOpen, query }: { days: string[]; records: I
   );
 }
 
-function MonthGrid({ days, month, records, zone, onOpen, query }: { days: string[]; month: string; records: InterviewRecord[]; zone: string; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
+function MonthGrid({ colors, days, month, records, zone, onOpen, query }: { colors: Colors; days: string[]; month: string; records: InterviewRecord[]; zone: string; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
   const { today } = useInterviewChoices();
   const byDay = useMemo(() => {
     const map = new Map<string, InterviewRecord[]>();
@@ -242,10 +255,9 @@ function MonthGrid({ days, month, records, zone, onOpen, query }: { days: string
               </Link>
               <div className="space-y-0.5">
                 {dayRecords.slice(0, 3).map((record) => (
-                  <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] text-slate-700 hover:bg-slate-100" key={record.id} onClick={() => onOpen(record)} title={`${record.company} · ${stepLabel(record.step)} · ${timeRange(record, zone)}`} type="button">
-                    <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${dotClasses[record.step]}`} />
-                    <span className="tabular-nums text-slate-500">{zonedTime(new Date(record.startsAt), zone)}</span>
-                    <span className="truncate font-medium">{record.company}</span>
+                  <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-110" key={record.id} onClick={() => onOpen(record)} style={{ backgroundColor: colorOf(colors, record.category).background, color: colorOf(colors, record.category).text }} title={`${roundLine(record)}\n${timeRange(record, zone)} · ${record.category ?? "No category"}`} type="button">
+                    <span className="tabular-nums opacity-90">{zonedTime(new Date(record.startsAt), zone)}</span>
+                    <span className="truncate font-medium">{roundLine(record)}</span>
                   </button>
                 ))}
                 {dayRecords.length > 3 && (

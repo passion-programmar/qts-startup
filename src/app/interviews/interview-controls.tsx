@@ -244,7 +244,7 @@ export function InterviewsFilters({
 export function CalendarToolbar({ query, title, previous, next }: { query: InterviewsQuery; title: string; previous: string; next: string }) {
   const { settings } = useInterviewChoices();
   const navButton = "inline-flex size-9 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100";
-  const list = query.mode === "list" || query.mode === "jobs";
+  const list = query.mode === "list" || query.mode === "jobs" || query.mode === "today";
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2">
       {!list && (
