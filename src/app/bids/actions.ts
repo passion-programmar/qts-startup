@@ -17,7 +17,6 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   const manager = await requireUser();
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
   const id = text(formData, "id", 36);
-  const candidateId = text(formData, "candidateId", 36);
   const jobUrl = text(formData, "jobUrl", 2048);
   const jobTitle = text(formData, "jobTitle", 500);
   const company = text(formData, "company", 500);
@@ -27,22 +26,25 @@ export async function updateBidAction(_state: RecordActionState, formData: FormD
   const resumeFolder = text(formData, "resumeFolder", 2048);
   const googleDrivePath = text(formData, "googleDrivePath", 2048);
   // A bid from a Resume page download has no job URL, and no folder when the browser saved its PDFs.
-  if (!uuid(id) || !uuid(candidateId) || !jobTitle || !company || (jobUrl && !isHttpUrl(jobUrl))) {
-    return { error: "Enter a valid candidate, job title, company, and URL (or leave the URL empty).", success: null };
+  if (!uuid(id) || !jobTitle || !company || (jobUrl && !isHttpUrl(jobUrl))) {
+    return { error: "Enter a valid job title, company, and URL (or leave the URL empty).", success: null };
   }
-  // Blocked candidates are read-only, so a bid cannot be moved to one.
+  // The account never changes after the bid is made: the bid keeps its own, whatever the form sends.
+  const [ownAccount] = await db.select({ candidateId: bids.candidateId }).from(bids)
+    .where(and(eq(bids.id, id), eq(bids.managerId, manager.id))).limit(1);
+  if (!ownAccount) return { error: "Bid was not found.", success: null };
+  // Blocked candidates are read-only, so their bids cannot be edited either.
   const [candidate] = await db.select({ id: profiles.userId }).from(profiles)
     .innerJoin(users, eq(users.id, profiles.userId))
     .where(and(
-      eq(profiles.userId, candidateId),
+      eq(profiles.userId, ownAccount.candidateId),
       eq(users.parentUserId, manager.id),
       eq(users.role, "account"),
       isNull(users.blockedAt),
     )).limit(1);
-  if (!candidate) return { error: "Select one of your active candidate accounts.", success: null };
+  if (!candidate) return { error: "This account is blocked or no longer yours, so its bid cannot be edited.", success: null };
   try {
     const updated = await db.update(bids).set({
-      candidateId,
       jobUrl: jobUrl ? normalizeJobUrl(jobUrl) : "",
       jobTitle,
       company,

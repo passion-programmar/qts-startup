@@ -82,7 +82,15 @@ export function RecordEditDialog({
                   title={kind === "job" ? "Job details" : "Bid details"}
                 >
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Candidate"><select className={inputClass} defaultValue={record.candidateId} name="candidateId" required>{candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></Field>
+                    {/* The account never changes after a job or bid is made: shown locked, sent as it is. */}
+                    <Field label="Candidate">
+                      <input name="candidateId" type="hidden" value={record.candidateId} />
+                      <select aria-describedby={`candidate-locked-${record.id}`} className={`${inputClass} cursor-not-allowed opacity-70`} defaultValue={record.candidateId} disabled title="The account cannot be changed">
+                        {!candidates.some((candidate) => candidate.id === record.candidateId) && <option value={record.candidateId}>{("details" in record && record.details?.candidateName) || "This account"}</option>}
+                        {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+                      </select>
+                      <span className="mt-1 block text-[11px] text-slate-500" id={`candidate-locked-${record.id}`}>The account cannot be changed.</span>
+                    </Field>
                     <Field label="Job URL"><input className={inputClass} defaultValue={record.url} maxLength={2048} name="jobUrl" placeholder={kind === "bid" ? "None (Resume page download)" : undefined} required={kind === "job"} type="url" /></Field>
                     <Field label="Job title"><input className={inputClass} defaultValue={record.title} maxLength={500} name="jobTitle" required /></Field>
                     <Field label="Company"><input className={inputClass} defaultValue={record.company} maxLength={500} name="company" required /></Field>

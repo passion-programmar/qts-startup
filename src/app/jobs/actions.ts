@@ -24,7 +24,6 @@ export async function updateJobAction(
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
 
   const id = text(formData, "id", 36);
-  const candidateId = text(formData, "candidateId", 36);
   const jobUrl = text(formData, "jobUrl", 2048);
   const jobTitle = text(formData, "jobTitle", 500);
   const company = text(formData, "company", 500);
@@ -36,12 +35,17 @@ export async function updateJobAction(
   const date = text(formData, "date", 10);
   const status = text(formData, "status", 20);
   const failureReason = text(formData, "failureReason", 5000);
-  if (!uuid(id) || !uuid(candidateId) || !jobTitle || !company || !isHttpUrl(jobUrl)) {
-    return { error: "Enter valid job, company, URL, and candidate values.", success: null };
+  if (!uuid(id) || !jobTitle || !company || !isHttpUrl(jobUrl)) {
+    return { error: "Enter valid job, company, and URL values.", success: null };
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !["todo", "pending", "applied", "failed"].includes(status)) {
     return { error: "Enter a valid date and status.", success: null };
   }
+  // The account never changes after the job is made: the row keeps its own, whatever the form sends.
+  const [ownAccount] = await db.select({ candidateId: jobs.candidateId }).from(jobs)
+    .where(and(eq(jobs.id, id), eq(jobs.managerId, manager.id))).limit(1);
+  if (!ownAccount) return { error: "Job was not found.", success: null };
+  const candidateId = ownAccount.candidateId;
   const [candidate] = await db.select({ id: profiles.userId }).from(profiles)
     .innerJoin(users, eq(users.id, profiles.userId))
     .where(and(
@@ -50,7 +54,7 @@ export async function updateJobAction(
       eq(users.role, "account"),
       isNull(users.blockedAt),
     )).limit(1);
-  if (!candidate) return { error: "Select one of your active candidate accounts.", success: null };
+  if (!candidate) return { error: "This account is blocked or no longer yours, so its job cannot be edited.", success: null };
 
   const [existingJob] = await db.select({
     status: jobs.status,
@@ -67,9 +71,6 @@ export async function updateJobAction(
   const jobStatus = status as JobStatus;
   const statusError = jobStatusChangeError(jobStatus, existingJob);
   if (statusError) return { error: statusError, success: null };
-  if (existingJob.hasBid && candidateId !== existingJob.candidateId) {
-    return { error: "This candidate applied to this job. Delete the bid on the Bids page before changing the candidate.", success: null };
-  }
 
   const normalizedUrl = normalizeJobUrl(jobUrl);
   const jobKey = computeJobKey({ url: normalizedUrl, title: jobTitle, company });
@@ -111,7 +112,6 @@ export async function updateJobAction(
     const [ownRow] = await db.batch([
       db.update(jobs).set({
         ...sharedDetails,
-        candidateId,
         autoSavedByGetJd: false,
         date, status: jobStatus,
         failureReason: failureReason || null, updatedAt: new Date(),
