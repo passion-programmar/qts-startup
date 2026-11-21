@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  BookOpen,
   BriefcaseBusiness,
   CalendarClock,
   ChevronDown,
@@ -117,6 +118,7 @@ export function WorkspaceShellClient({
           { label: "AI settings", href: "/settings", icon: Settings2 },
           { label: "Gemini usage", href: "/settings/gemini-usage", icon: Activity },
           { label: "Database usage", href: "/settings/database-usage", icon: Database },
+          { label: "System guide", href: "/settings/system-guide", icon: BookOpen },
         ]
       : user.role === "manager"
         ? [
