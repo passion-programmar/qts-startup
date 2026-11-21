@@ -15,6 +15,7 @@ import {
 import { db } from "@/lib/db";
 import { generationHeldSql } from "@/server/generation/generation-hold";
 import { jobHasBid } from "@/server/jobs/job-bids";
+import { localResumeFiles } from "@/server/jobs/delete-jobs";
 import type { ExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 import {
@@ -572,14 +573,7 @@ export async function releaseApplyAttempt(
     const removed = await db.delete(applyAttempts).where(before).returning({ id: applyAttempts.id });
     return removed.length > 0;
   }
-  if (mode === "remove") {
-    const removed = await db.delete(jobs).where(and(
-      eq(jobs.managerId, managerId),
-      sql`not ${generationHeldSql()}`,
-      sql`${jobs.id} = (select ${applyAttempts.jobId} from ${applyAttempts} where ${before})`,
-    )).returning({ id: jobs.id });
-    return removed.length > 0;
-  }
+  if (mode === "remove") return (await removeHeldApplyJob(attemptId, managerId, browserId)) !== null;
   if (mode === "later" || mode === "test") {
     const removed = await db
       .delete(applyAttempts)
@@ -601,6 +595,22 @@ export async function releaseApplyAttempt(
     .returning({ id: applyAttempts.id, jobId: applyAttempts.jobId });
   if (updated[0]) await recordApplyRun(updated[0].jobId, mode === "skip" ? "skipped" : "stopped", reason, answers);
   return updated.length > 0;
+}
+
+/**
+ * The panel's Remove while this Chrome holds the application: the job row is deleted (its attempts
+ * with it; never while Generation still writes it), in one statement that also returns the paths of
+ * its résumé and cover-letter PDFs, so the extension deletes them from the PC (when they are there).
+ * Null when nothing was removed.
+ */
+export async function removeHeldApplyJob(attemptId: string, managerId: string, browserId: string): Promise<string[] | null> {
+  const before = and(ownedBy(attemptId, managerId, browserId), inArray(applyAttempts.status, ["claimed", "waiting_review"]));
+  const removed = await db.delete(jobs).where(and(
+    eq(jobs.managerId, managerId),
+    sql`not ${generationHeldSql()}`,
+    sql`${jobs.id} = (select ${applyAttempts.jobId} from ${applyAttempts} where ${before})`,
+  )).returning({ id: jobs.id, resumeLocalPath: jobs.resumeLocalPath, coverLetterLocalPath: jobs.coverLetterLocalPath });
+  return removed.length ? localResumeFiles(removed) : null;
 }
 
 /**

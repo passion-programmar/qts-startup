@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { releaseApplyAttempt, type ReleaseMode } from "@/server/apply/apply-attempts";
+import { releaseApplyAttempt, removeHeldApplyJob, type ReleaseMode } from "@/server/apply/apply-attempts";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { parseAppliedAnswers } from "@/server/apply/apply-values";
 
@@ -16,6 +16,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ success: false, message: "An attempt ID, how it ends, and a reason are required." }, { status: 400 });
   }
   try {
+    // Remove: the job row goes, and its PDFs' paths come back so the extension deletes them too.
+    if (body.mode === "remove") {
+      const resumeFiles = await removeHeldApplyJob(body.attemptId, auth.manager.id, auth.browser.id);
+      return resumeFiles
+        ? NextResponse.json({ success: true, resumeFiles })
+        : NextResponse.json(
+          { success: false, message: "QTS could not remove this job: it is no longer held by this Chrome, or Generation is still writing it." },
+          { status: 409 },
+        );
+    }
     const released = await releaseApplyAttempt(
       body.attemptId,
       auth.manager.id,

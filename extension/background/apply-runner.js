@@ -2738,6 +2738,7 @@ async function answerAssistWithoutRunner(msg, tabId) {
     if (result?.success) await noteCancelledJob(msg.jobId);
   } else if (action === 'remove') {
     result = await post('release', { mode: 'remove', reason: 'Removed by the Manager.' });
+    if (result?.success) await deleteRemovedJobPdfs(result.resumeFiles);
   } else {
     return { ok: false, error: 'Apply restarted in this Chrome: if the site took the application, click Submitted; else Cancel.' };
   }
@@ -4485,7 +4486,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
 
   /** The Manager's Remove: the job row deleted (the hold's own, else by the job's id); its tabs close. */
   async function finishRemoved() {
-    const removed = await removeAutoJob(application.attemptId, application.job.id);
+    const removed = await removeAutoJob(application.attemptId, application.job.id, application.job.company);
     await onProgress({ step: currentStep, phase: 'ended', reason: removed.ok ? 'removed' : 'remove refused', resumePending: false, memory: memory() });
     if (!removed.ok) {
       endReason = `Not removed: ${removed.message}`;
@@ -5505,6 +5506,7 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
           await showPanel('assist', { message: removed.message || 'QTS did not remove the job; try again.' });
           continue;
         }
+        await deleteRemovedJobPdfs(removed.resumeFiles, application.job.company);
         await closeTabs();
         return;
       }
@@ -6093,15 +6095,46 @@ function logAutoApplyStop({ attemptId, jobId, title, company, reason, tabClosed 
 }
 
 /**
+ * A removed job's résumé and cover-letter PDFs are deleted from this PC as well (2026-11-21, as the
+ * Jobs page's Remove does), through the Apply PDFs folder (read + write), whichever Chrome downloaded
+ * them: each file is checked first; one that is not there is skipped. Without write access the job
+ * stays removed and the Manager is told; nothing else is touched (deleteJobFiles: .pdf files only,
+ * then their job folder only when empty).
+ */
+async function deleteRemovedJobPdfs(resumeFiles, company = '') {
+  const files = Array.isArray(resumeFiles)
+    ? resumeFiles.filter((file) => typeof file === 'string' && file && file.length <= 500).slice(0, 10)
+    : [];
+  if (!files.length) return { deleted: 0, missing: 0 };
+  try {
+    const saved = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY);
+    const result = await self.__qtsApplyLocalPdfs.deleteJobFiles(saved?.value || null, files);
+    if (result?.ok) return result;
+    await notifyApply(`${company ? `${company}: ` : ''}the job is removed; its résumé PDFs stay on this PC (${result?.error || 'allow read and write access in Apply PDFs folder'}).`);
+  } catch (error) {
+    console.warn('[QTS Apply] Could not delete the removed job\'s PDFs:', error);
+    await notifyApply(`${company ? `${company}: ` : ''}the job is removed; its résumé PDFs could not be deleted from this PC.`);
+  }
+  return null;
+}
+
+/**
  * The Manager's Remove: the job row deleted by its hold (release "remove"); when the hold is gone, by
  * the job's id for this Manager (the Jobs page's rules: never one with a bid, one still making its
- * résumé, or another Manager's). The PDFs stay on disk. { ok } or { ok: false, message }.
+ * résumé, or another Manager's). Its PDFs are deleted too when they are on this PC (else skipped).
+ * { ok } or { ok: false, message }.
  */
-async function removeAutoJob(attemptId, jobId) {
+async function removeAutoJob(attemptId, jobId, company = '') {
   const released = await workerApiRequest('POST', '/api/extension/apply/release', { attemptId, mode: 'remove', reason: 'Removed by the Manager.' }).catch(() => null);
-  if (released?.success === true) return { ok: true };
+  if (released?.success === true) {
+    await deleteRemovedJobPdfs(released.resumeFiles, company);
+    return { ok: true };
+  }
   const byId = jobId ? await workerApiRequest('POST', '/api/extension/apply/remove-job', { jobId }).catch(() => null) : null;
-  if (byId?.success === true) return { ok: true };
+  if (byId?.success === true) {
+    await deleteRemovedJobPdfs(byId.resumeFiles, company);
+    return { ok: true };
+  }
   return { ok: false, message: byId?.message || released?.message || 'QTS could not reach the server. Try again.' };
 }
 
@@ -6140,7 +6173,7 @@ async function answerStoppedAutoTab(msg, sender) {
     return { ok: true };
   }
   if (msg.action === 'remove') {
-    const removed = await removeAutoJob(entry.attemptId, entry.jobId);
+    const removed = await removeAutoJob(entry.attemptId, entry.jobId, entry.company || '');
     if (!removed.ok) {
       await showAgain(`Not removed: ${removed.message}`);
       return { ok: false, error: removed.message };

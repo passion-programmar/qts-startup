@@ -4,7 +4,8 @@ import { deleteManagerJobs } from "@/server/jobs/delete-jobs";
 
 // Auto Apply panel's Remove on a job page whose application is no longer held (its hold ran out, or
 // another stop ended it): the job row is deleted by its id, with the Jobs page's rules: only this
-// Manager's own job, never one still making its résumé, never one with a bid. The PDFs stay on disk.
+// Manager's own job, never one still making its résumé, never one with a bid. Its PDFs' paths come
+// back so the extension deletes them from the PC too (when they are there).
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
@@ -14,7 +15,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   try {
     const result = await deleteManagerJobs(auth.manager.id, [body.jobId]);
-    if (result.deleted === 1) return NextResponse.json({ success: true });
+    if (result.deleted === 1) return NextResponse.json({ success: true, resumeFiles: result.resumeFiles });
     const message = result.generating
       ? "QTS is still making this job's résumé: cancel Generation first, then remove it."
       : result.applied
