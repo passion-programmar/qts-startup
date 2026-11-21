@@ -40,6 +40,7 @@ function workerSupportedApiPath(path) {
     || /^\/api\/extension\/auto-apply-custom-urls\/[0-9a-f-]+$/i.test(path)
     || path === '/api/extension/browsers/heartbeat'
     || path === '/api/extension/stats'
+    || /^\/api\/extension\/linkedin-skips(?:\?|$)/.test(path)
     || path.startsWith('/api/extension/auth/');
 }
 

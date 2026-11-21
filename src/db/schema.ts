@@ -1282,6 +1282,37 @@ export const loginRateLimitEvents = pgTable(
   ],
 );
 
+// LinkedIn skip-list: the (title, company) pairs a Manager has seen on LinkedIn's job search, so
+// the extension marks those cards there (clicked, or labelled Viewed / Saved / Applied by LinkedIn).
+// skip_key is computeTitleCompanyKey's "title|company", the same key bids and jobs use. An un-skip
+// keeps the row with removed_at set, so every Chrome learns it; rows not touched for 90 days are
+// removed by the daily clean-up.
+export const linkedinSkips = pgTable(
+  "linkedin_skips",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    managerId: uuid("manager_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    skipKey: text("skip_key").notNull(),
+    company: text("company").notNull(),
+    jobTitle: text("job_title").notNull(),
+    source: text("source").notNull(),
+    removedAt: timestamp("removed_at", { withTimezone: true, mode: "date" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("linkedin_skips_manager_key_unique").on(table.managerId, table.skipKey),
+    index("linkedin_skips_manager_updated_at_index").on(table.managerId, table.updatedAt),
+    check("linkedin_skips_source_check", sql`${table.source} in ('clicked', 'viewed', 'saved', 'applied', 'manual')`),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Profile = typeof profiles.$inferSelect;

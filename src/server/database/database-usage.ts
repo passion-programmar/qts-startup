@@ -6,6 +6,7 @@ import { cache } from "react";
 import { settings } from "@/db/schema";
 import { db } from "@/lib/db";
 import { removeOldGeminiApiCallLogs } from "@/lib/gemini-usage";
+import { removeOldLinkedInSkips } from "@/server/linkedin-skips/linkedin-skips";
 import { ROMANIA_TIME_ZONE, romaniaClock } from "@/lib/romania-time";
 import {
   DATA_TABLES,
@@ -560,6 +561,8 @@ export async function cleanUpNow(byHand: boolean): Promise<CleanupResult> {
   await run("get_jd_page_checks", "expired", 0);
   await run("apply_question_memory", "older", QUESTION_MEMORY_DAYS);
   removed.gemini_api_call_logs = await removeOldGeminiApiCallLogs();
+  // LinkedIn skip-list rows nobody touched for 90 days.
+  removed.linkedin_skips = await removeOldLinkedInSkips();
   const size = await readDatabaseSize();
 
   const at = new Date().toISOString();
