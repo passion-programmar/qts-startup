@@ -15,7 +15,6 @@ export type AnalysisRange = keyof typeof analysisRanges;
 export const analysisZones = {
   jp: { label: "Japan", zone: "Asia/Tokyo" },
   cet: { label: "CET", zone: "Europe/Berlin" },
-  ro: { label: "Romania", zone: "Europe/Bucharest" },
 } as const;
 export type AnalysisZone = keyof typeof analysisZones;
 export const defaultAnalysisZone: AnalysisZone = "cet";

@@ -8,7 +8,7 @@ test("the Overview opens on this week in Japan time; unknown values fall back to
   assert.deepEqual(parseAnalysisView({}), { range: "week", weeksBack: 0, zone: "cet" });
   assert.deepEqual(parseAnalysisView({ range: "quarter", tz: "utc" }), { range: "week", weeksBack: 0, zone: "cet" });
   assert.deepEqual(parseAnalysisView({ range: ["month"], tz: "jp" }), { range: "month", weeksBack: 0, zone: "jp" });
-  assert.deepEqual(parseAnalysisView({ range: "year", back: "3", tz: "ro" }), { range: "year", weeksBack: 0, zone: "ro" });
+  assert.deepEqual(parseAnalysisView({ range: "year", back: "3", tz: "ro" }), { range: "year", weeksBack: 0, zone: "cet" });
   assert.deepEqual(parseAnalysisView({ back: "2" }), { range: "week", weeksBack: 2, zone: "cet" });
   assert.deepEqual(parseAnalysisView({ back: "-4" }), { range: "week", weeksBack: 0, zone: "cet" });
   assert.deepEqual(parseAnalysisView({ back: "99999" }), { range: "week", weeksBack: 520, zone: "cet" });
@@ -19,7 +19,7 @@ test("addresses and window starts for each view", () => {
   assert.equal(analysisHref({ range: "week", weeksBack: 2, ...jp }), "/?back=2&tz=jp");
   assert.equal(analysisHref({ range: "week", weeksBack: 2, zone: "cet" }), "/?back=2");
   assert.equal(analysisHref({ range: "month", weeksBack: 0, ...jp }), "/?range=month&tz=jp");
-  assert.equal(analysisHref({ range: "year", weeksBack: 0, zone: "ro" }), "/?range=year&tz=ro");
+  assert.equal(analysisHref({ range: "year", weeksBack: 0, ...jp }), "/?range=year&tz=jp");
   assert.equal(windowStartOffset({ range: "week", weeksBack: 0, ...jp }), "0 weeks");
   assert.equal(windowStartOffset({ range: "week", weeksBack: 3, ...jp }), "3 weeks");
   assert.equal(windowStartOffset({ range: "month", weeksBack: 0, ...jp }), "11 months");
