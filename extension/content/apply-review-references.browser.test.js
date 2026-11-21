@@ -1,4 +1,4 @@
-// The Auto Apply panel's copy tools in real Chrome (Answer, Profile, Path, Letter); synthetic data,
+// The Auto Apply panel's copy tools in real Chrome (Answer, Profile, Path, Saved); synthetic data,
 // mocked clipboard, runtime and storage only.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -41,9 +41,9 @@ test('Answer copies the résumé, the empty questions and the Manager\'s text; P
     }, selector, text);
     const has = (selector) => shadow(s => Boolean(document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector(s)), selector);
     await render(state);
-    // The old "Profile, documents & reusable answers" section is gone; the buttons: Answer, Profile, Path, Letter.
+    // The old "Profile, documents & reusable answers" section is gone; the buttons: Answer, Profile, Path, Saved (Letter was removed 2026-11-19).
     assert.equal(await has('.references'), false);
-    assert.deepEqual(await shadow(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.copy-row .copy-button')].map(n => n.textContent)), ['💬 Answer', '👤 Profile', '📁 Path', '✉ Letter']);
+    assert.deepEqual(await shadow(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.copy-row .copy-button')].map(n => n.textContent)), ['💬 Answer', '👤 Profile', '📁 Path', '⭐ Saved']);
 
     // Answer: one copy — the résumé, then the empty questions (optional ones too), then the text.
     const defaultText = 'this is my resume. i wanna make answer to fill for compleing job apply.\nmake answer within 3 - 4 sentences if should explain something, or simply if require simple answer.\nnot require evidence or verified information. answers must be shown high senior level enginer experience to match the job highly.';
@@ -90,11 +90,9 @@ test('Answer copies the résumé, the empty questions and the Manager\'s text; P
     assert.ok(shown.startsWith('Password••••') && !shown.includes('S3cret'), shown);
     await click('.password-row');
     await page.waitForFunction(() => window.copied.at(-1) === 'S3cret!pass');
-    // Path closes Profile; Letter copies the letter.
+    // Path closes Profile.
     await click('.copy-button', '📁 Path');
     assert.deepEqual([await has('.profile-box'), await has('.career')], [false, true]);
-    await click('.copy-button', '✉ Letter');
-    await page.waitForFunction(() => window.copied.at(-1) === 'Dear Manager,\nComplete letter.');
 
     // Nothing on the form is touched; nothing is proposed or submitted.
     assert.equal(await page.$eval('#notice', n => n.value), '', 'copy never fills the site');

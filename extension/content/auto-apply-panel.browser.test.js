@@ -48,7 +48,7 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
       answers: [{ question: 'Describe your engineering work', answer: longAnswer, source: 'manager', step: 1 }],
       references: { profile: { firstName: 'Sample', city: 'Example City' }, reusable: [{ question: 'Notice period', answer: 'Immediately' }], resumeText: 'Complete saved résumé.', coverLetterText: 'Complete saved letter.' } };
     await page.evaluate(state => window.__qtsApplyReview.render(state), state);
-    await page.waitForFunction(() => getComputedStyle(document.body).paddingRight === '360px');
+    await page.waitForFunction(() => getComputedStyle(document.body).paddingRight === '384px');
     const actual = await page.evaluate(() => {
       const root = document.querySelector('[data-qts-apply-review]').shadowRoot, panel = root.querySelector('.panel'), body = root.querySelector('.body'), answer = root.querySelector('.answer .a');
       const rect = panel.getBoundingClientRect(), head = root.querySelector('.brand').getBoundingClientRect(), foot = root.querySelector('.foot').getBoundingClientRect();
@@ -59,8 +59,8 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     });
     assert.deepEqual(actual.header, expectedHeader, 'the red-rectangle branding stays identical');
     assert.ok(await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.brand button')].some(n => n.textContent === '▴')), 'the panel has [▴] to make it small');
-    assert.deepEqual(actual.rect, { top: 0, right: 1280, height: 900, width: 360 });
-    assert.equal(actual.padding, '360px', 'the sidebar makes room rather than covering the form');
+    assert.deepEqual(actual.rect, { top: 0, right: 1280, height: 900, width: 384 });
+    assert.equal(actual.padding, '384px', 'the sidebar (as wide as the QTS panel) makes room rather than covering the form');
     assert.equal(actual.answer, longAnswer); assert.equal(actual.answerMaxHeight, 'none');
     assert.equal(actual.scrollable, true); assert.equal(actual.footerFits, true);
     for (const text of ['Sample Candidate', 'DevOps/SRE', 'Staff Platform Engineer — Example', '📁 Path', 'Nothing needs you']) assert.ok(actual.text.includes(text), text);
@@ -74,7 +74,7 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     });
     assert.ok(sizes.name > sizes.title && sizes.label > sizes.title && sizes.label > sizes.folder, JSON.stringify(sizes));
     // Submitted is always there and never greyed out; no Ask AI while the AI is off.
-    assert.deepEqual(actual.buttons, ['Submitted', 'Check', 'Skip', 'Later', 'Fill again']);
+    assert.deepEqual(actual.buttons, ['Submitted', 'Check', 'Skip', 'Later', 'Fill again', 'Save for this site']);
     assert.equal(actual.text.includes('Submitted saves the bid at any time.'), false, 'no description above the buttons');
     assert.equal(actual.text.includes('Select account'), false, 'launcher menus do not populate the Auto Apply panel');
     await page.evaluate(() => {
@@ -122,7 +122,7 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
         buttons: [...root.querySelectorAll('.foot button')].map(n => n.textContent),
       };
     });
-    assert.deepEqual(extra.copies, ['💬 Answer', '👤 Profile', '📁 Path', '✉ Letter']);
+    assert.deepEqual(extra.copies, ['💬 Answer', '👤 Profile', '📁 Path', '⭐ Saved']);
     assert.ok(extra.oneLine, 'the four buttons on one line');
     assert.ok(extra.noPathLine, 'no long folder path line');
     assert.match(extra.pathTitle, /Sample Candidate/, 'the full path shows on hover');
@@ -132,20 +132,20 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
       ['Do you need a visa?', 'Not in the profile', 'Copy (off)', 'Fill (off)'],
     ]);
     // (Ask AI is the Manager's Alt+A and in the Alt+S menu: no button.)
-    assert.deepEqual(extra.buttons, ['Submitted', 'Check', 'Skip', 'Later', 'Fill again']);
+    assert.deepEqual(extra.buttons, ['Submitted', 'Check', 'Skip', 'Later', 'Fill again', 'Save for this site']);
     const click = (selector, text) => page.evaluate((selector, text) => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll(selector)].find(n => n.textContent === text).click(), selector, text);
+    // (Letter was removed 2026-11-19; Saved took its place.)
     await click('.copy-button', '💬 Answer');
-    await click('.copy-button', '✉ Letter');
     await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.required-row')][0].querySelector('button').click());
-    await page.waitForFunction(() => window.clipboard.length === 3);
+    await page.waitForFunction(() => window.clipboard.length === 2);
     const copied = await page.evaluate(() => window.clipboard);
     assert.ok(copied[0].startsWith('Complete saved résumé.\n\n'), 'Answer: the résumé first, then the questions and the text');
-    assert.deepEqual(copied.slice(1), ['Complete saved letter.', '+40 700 000 000']);
+    assert.deepEqual(copied.slice(1), ['+40 700 000 000']);
     await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.required-row')][0].querySelectorAll('button')[1].click());
     await page.evaluate(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.folder-copy').click());
-    await page.waitForFunction(() => window.sent.some(m => m.action === 'fill_field') && window.clipboard.length === 4);
+    await page.waitForFunction(() => window.sent.some(m => m.action === 'fill_field') && window.clipboard.length === 3);
     // The folder button copies its full path; nothing opens.
-    assert.equal(await page.evaluate(() => window.clipboard[3]), String.raw`C:\Users\sample\Downloads\QTS_Resume\Sample Candidate`);
+    assert.equal(await page.evaluate(() => window.clipboard[2]), String.raw`C:\Users\sample\Downloads\QTS_Resume\Sample Candidate`);
     assert.equal(await page.evaluate(() => window.sent.some(m => m.action === 'open_folder')), false);
     assert.equal(await page.evaluate(() => window.sent.find(m => m.action === 'fill_field').fieldId), 'phone');
     // Copy Path also opened the career box: each job (company, title, dates, the résumé's full
@@ -177,14 +177,14 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     // One Bullets button per job copies all that job's bullets (the first is Acme's).
     await click('.chip', 'Bullets');
     await click('.chip', 'LinkedIn: https://www.linkedin.example/in/sample');
-    await page.waitForFunction(() => window.clipboard.length === 7);
-    assert.deepEqual(await page.evaluate(() => window.clipboard.slice(4)), ['SRE Lead', '• Cut deploy time by 60%\n• Led on-call', 'https://www.linkedin.example/in/sample']);
+    await page.waitForFunction(() => window.clipboard.length === 6);
+    assert.deepEqual(await page.evaluate(() => window.clipboard.slice(3)), ['SRE Lead', '• Cut deploy time by 60%\n• Led on-call', 'https://www.linkedin.example/in/sample']);
     // Copy Path is a toggle: lit while open; a click copies the path again and closes the box.
     const careerShown = () => page.evaluate(() => Boolean(document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.career')));
     assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelector('.folder-copy').getAttribute('aria-pressed')), 'true');
     await click('.copy-button', '📁 Path');
     assert.equal(await careerShown(), false, 'the second click closes the box');
-    await page.waitForFunction(() => window.clipboard.length === 8);
+    await page.waitForFunction(() => window.clipboard.length === 7);
     await click('.copy-button', '📁 Path');
     assert.equal(await careerShown(), true, 'the third click opens it again');
     await click('.career-head button', 'Hide ✕');
@@ -208,7 +208,9 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     // value and turns green for a moment.
     await click('.copy-button', '👤 Profile');
     const profile = await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.profile-box .profile-group, .profile-box .profile-row')].map(n => n.classList.contains('profile-group') ? `# ${n.textContent}` : `${n.querySelector('.profile-label').textContent} = ${n.querySelector('.profile-input')?.value ?? n.querySelector('.profile-value').textContent}`));
-    assert.deepEqual(profile, ['# Name', 'Full name = Sample', 'First name = Sample', '# Links', 'LinkedIn = https://www.linkedin.example/in/sample', 'GitHub = https://github.example/sample',
+    // Files: the résumé folder's full path (added 2026-11-19), kept left-to-right with invisible marks.
+    assert.deepEqual(profile.map((row) => row.replace(/\u200e/g, '')), ['# Name', 'Full name = Sample', 'First name = Sample', '# Links', 'LinkedIn = https://www.linkedin.example/in/sample', 'GitHub = https://github.example/sample',
+      '# Files', String.raw`Résumé folder = C:\Users\sample\Downloads\QTS_Resume\Sample Candidate`,
       '# Salary', 'Per month = 6000 EUR per month', 'Per year = 60000 - 70000 EUR per year']);
     await click('.profile-box .profile-row', 'LinkedInhttps://www.linkedin.example/in/sample⧉');
     await page.waitForFunction(() => window.clipboard.at(-1) === 'https://www.linkedin.example/in/sample');

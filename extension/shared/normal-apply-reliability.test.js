@@ -27,7 +27,8 @@ test('actual Normal Apply fill body excludes AI, cached answers and legacy memor
   };
   vm.createContext(context);
   context.inForm = async (_tab, fn, args = []) => vm.runInContext(`(${fn.toString()})(...${JSON.stringify(args)})`, context);
-  vm.runInContext(source.slice(source.indexOf('async function fillFormPageBody('), source.indexOf('async function browserName(')), context);
+  // The fill body uses isPhoneCodeList, defined above it in the same file; it comes along.
+  vm.runInContext(`${source.match(/^const isPhoneCodeList = .*$/m)[0]}\n${source.slice(source.indexOf('async function fillFormPageBody('), source.indexOf('async function browserName('))}`, context);
   const application = { candidate: { firstName: 'Ana', email: 'ana@example.test' }, savedAnswers: [
     { scope: 'manager', questionKey: 'interview channel', questionText: 'Interview channel', answer: 'Video' },
     { scope: 'application', questionText: 'I agree to the privacy policy', questionKey: 'i agree to the privacy policy', answer: 'false', variants: [{ kind: 'checkbox', options: [], answer: 'false', policyContext: 'inline-v1' }] },

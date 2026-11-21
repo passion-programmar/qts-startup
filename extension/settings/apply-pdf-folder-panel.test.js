@@ -17,7 +17,10 @@ function fixture({ access = { ok: true, canUseApply: true }, saved, supported = 
   const state = { access, saved, selected: null, writes: [] };
   const windowObject = { dispatchEvent: () => {}, addEventListener: (type, handler) => { if (type === 'focus') handlers.focus = handler; } };
   windowObject.top = embedded ? {} : windowObject;
+  // The page marks itself "embedded" on <html> inside the launcher (its own background otherwise).
+  const htmlClasses = new Set();
   const documentObject = { getElementById: (id) => ({ 'choose-folder': button, 'restore-access': restore, 'folder-status': status })[id],
+    documentElement: { classList: { toggle: (name, on) => { if (on) htmlClasses.add(name); else htmlClasses.delete(name); }, contains: (name) => htmlClasses.has(name) } },
     addEventListener: (_type, handler) => { handlers.visibility = handler; } };
   const context = {
     document: documentObject,
@@ -123,7 +126,7 @@ test('saved folder permission is displayed and can be restored by explicit user 
   assert.equal(f.restore.hidden, false);
   await f.restoreAccess();
   assert.equal(f.status.dataset.state, 'ready');
-  assert.deepEqual(saved.calls, [['query', 'read'], ['request', 'read'], ['query', 'read']]);
+  assert.deepEqual(saved.calls, [['query', 'readwrite'], ['request', 'readwrite'], ['query', 'readwrite']]);
 });
 
 test('cancelling or denying access leaves the previously saved folder unchanged', async () => {
@@ -135,7 +138,7 @@ test('cancelling or denying access leaves the previously saved folder unchanged'
   assert.equal(f.status.dataset.state, 'error');
   assert.equal(f.state.saved, saved);
   assert.equal(f.state.writes.length, 0);
-  assert.deepEqual(f.state.selected.calls, [['query', 'read'], ['request', 'read']]);
+  assert.deepEqual(f.state.selected.calls, [['query', 'readwrite'], ['request', 'readwrite']]);
 });
 
 test('unsupported directory picker reports an explicit error and stays disabled', async () => {

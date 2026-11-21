@@ -96,7 +96,8 @@ test('pause between fields retains completed field IDs so resuming cannot overwr
   };
   vm.createContext(context);
   context.inForm = async (_tab, fn, args = []) => vm.runInContext(`(${fn})(...${JSON.stringify(args)})`, context);
-  vm.runInContext(source.slice(source.indexOf('async function fillFormPageBody('), source.indexOf('async function browserName(')), context);
+  // The fill body uses isPhoneCodeList, defined above it in the same file; it comes along.
+  vm.runInContext(`${source.match(/^const isPhoneCodeList = .*$/m)[0]}\n${source.slice(source.indexOf('async function fillFormPageBody('), source.indexOf('async function browserName('))}`, context);
   const options = { assist: true, stop: async () => paused, skip: (field) => filled.has(field.id), onFilled: (field) => filled.add(field.id) };
   const application = { job: {}, candidate: {}, savedAnswers: [] };
   await assert.rejects(context.fillFormPageBody(10, application, () => {}, 1, options, []), (error) => error.keepTab === false);
@@ -116,7 +117,7 @@ test('pausing dropdown discovery prevents fallback clicks and discovery of the n
     ApplyStop: class extends Error { constructor(message, options) { super(message); Object.assign(this, options); } },
   };
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('async function readComboboxOptions('), source.indexOf('function answerPromptFor(')), context);
+  vm.runInContext(`${source.match(/^const isPhoneCodeList = .*$/m)[0]}\n${source.slice(source.indexOf('async function readComboboxOptions('), source.indexOf('function answerPromptFor('))}`, context);
   await assert.rejects(context.readComboboxOptions(10, [{ id: 'city', kind: 'combobox' }, { id: 'country', kind: 'combobox' }], async () => paused), (error) => error.keepTab === false);
   assert.equal(reads, 1);
   assert.equal(clicks, 0);

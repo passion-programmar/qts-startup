@@ -71,13 +71,18 @@ test('Generation keeps the existing ChatGPT conversation for jobs within the tab
   const context = vm.createContext({
     chatTab: { id: 8, jobs: 1, url: 'https://chatgpt.com/g/manager-project' },
     queuedJob: { id: 'job-2' },
-    tabBeforeChatGpt: null,
+    // The tab shown before ChatGPT (renamed for Concurrent Generation).
+    generationTabBefore: null,
     GENERATION_JOBS_PER_CHATGPT_TAB: 10,
     chrome: { tabs: { get: async id => ({ id }) } },
     showGenerationChatGptTab: async id => { calls.push(['show', id]); return 4; },
     updateGenerationBrowserState: async state => calls.push(['state', state]),
     ensureChatGptReady: async id => calls.push(['ready', id]),
     acquireGenerationChatGptTab: async () => { throw new Error('must not open another tab'); },
+    // Concurrent Generation: the step runs for one lane and records its timings.
+    lane: 0,
+    generationTimings: new Map([[0, {}]]),
+    markGeneration: () => {},
   });
   await vm.runInContext(`(async () => { ${queueStep} })()`, context);
   assert.equal(context.chatTab.id, 8);

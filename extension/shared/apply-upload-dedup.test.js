@@ -3,7 +3,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 const source = fs.readFileSync(require.resolve('../background/apply-runner.js'), 'utf8');
-const body = source.slice(source.indexOf('async function fillFormPageBody('), source.indexOf('async function browserName('));
+// The fill body uses small helpers defined above it in the same file; they come along.
+const helperLines = source.match(/^const isPhoneCodeList = .*$/m)[0];
+const body = helperLines + '\n' + source.slice(source.indexOf('async function fillFormPageBody('), source.indexOf('async function browserName('));
 function fixture({ fields, manualUpload = false, verification = [], missing = [], inspectError = false } = {}) {
   const state = { calls: [], contexts: [], verificationCount: 0 };
   const list = fields || [{ id: 'cv', kind: 'file', label: 'Resume', required: true }];

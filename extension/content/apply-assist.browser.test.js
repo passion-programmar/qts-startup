@@ -292,14 +292,15 @@ test('"Questions on this page" lists every question with status and source; a cl
     // "Needs you" shows only the empty required one.
     await panel.click('.question-filters button', 'Needs you');
     assert.doesNotMatch(await panel.text(), /Radu Star/);
-    // A click on a row scrolls the page to that box and outlines it.
+    // A click on a row scrolls the page to that box and points at it: its label turns pink, or a box
+    // without a label gets a thin red line.
     await panel.click('.question', ids[1].label);
-    const outlined = await page.evaluate((id) => {
+    const pointed = await page.evaluate((id) => {
       const box = document.querySelector(`[data-qts-apply-field="${id}"]`);
-      const holder = box.closest('label, fieldset, [class*="field" i], [class*="question" i]') || box;
-      return holder.style.outline;
+      const label = (box.id && document.querySelector(`label[for="${CSS.escape(box.id)}"]`)) || box.closest('label');
+      return { label: label?.style.backgroundColor || '', box: box.style.outline || '' };
     }, ids[1].id);
-    assert.match(outlined, /3px/);
+    assert.ok(/254, 202, 202/.test(pointed.label) || /2px/.test(pointed.box), JSON.stringify(pointed));
     // Copy gives what QTS knows for the empty box, without jumping to it.
     await panel.click('.q-copy', 'Copy');
     assert.deepEqual(await panel.copied(), ['ana@example.com']);

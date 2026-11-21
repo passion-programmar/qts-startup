@@ -99,7 +99,7 @@ test('reopening checks the persisted permission and never prompts automatically 
   assert.equal(f.status.dataset.state, 'revoked');
   assert.match(f.status.textContent, /Allow saved folder access/);
   assert.equal(f.button.disabled, false);
-  assert.deepEqual(revoked.calls, [['query', 'read']]);
+  assert.deepEqual(revoked.calls, [['query', 'readwrite']]);
   f.state.selected = directory('granted');
   await f.click();
   assert.equal(f.status.dataset.state, 'ready');
@@ -115,7 +115,7 @@ test('denied read access and cancelling the picker preserve the existing folder'
   assert.match(denied.status.textContent, /Read and write access was not granted/);
   assert.equal(denied.state.saved, saved);
   assert.equal(denied.state.writes.length, 0);
-  assert.deepEqual(denied.state.selected.calls, [['query', 'read'], ['request', 'read']]);
+  assert.deepEqual(denied.state.selected.calls, [['query', 'readwrite'], ['request', 'readwrite']]);
   const cancelled = fixture({ saved, pickerError: { name: 'AbortError' } });
   await settle();
   await cancelled.click();
@@ -178,7 +178,7 @@ test('a persisted handle with prompt permission can be authorized directly witho
   await settle();
   assert.equal(f.restore.hidden, false);
   const restoring = f.restoreAccess();
-  assert.deepEqual(saved.calls, [['request', 'read']], 'permission request precedes asynchronous Manager access check');
+  assert.deepEqual(saved.calls, [['request', 'readwrite']], 'permission request precedes asynchronous Manager access check');
   await restoring;
   assert.equal(f.status.dataset.state, 'ready');
   assert.equal(f.restore.hidden, true);
