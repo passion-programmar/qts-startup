@@ -81,7 +81,7 @@ export function InterviewHoverCard({ hovered, color }: { hovered: Hovered; color
         </Row>
         <Row icon={<User className="size-4" />} label="Account">{record.candidateName}</Row>
         <Row icon={<Phone className="size-4" />} label="Caller">
-          {record.callerName ? <>{record.callerName}{record.callerLabel && <span className="text-slate-500"> · {record.callerLabel}</span>}</> : <span className="text-slate-400">No caller</span>}
+          {record.callerName ? <>{record.callerName}{record.callerLabel && <span className="text-slate-500"> · {record.callerLabel}</span>}</> : <span className="font-bold text-amber-600" title="No caller chosen yet">??</span>}
         </Row>
         {record.interviewer && <Row icon={<Mic className="size-4" />} label="Interviewer">{record.interviewer}</Row>}
         {record.comment && <Row icon={<MessageSquare className="size-4" />} label="Comment"><span className="line-clamp-3 whitespace-pre-line">{record.comment}</span></Row>}

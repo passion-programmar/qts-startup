@@ -31,9 +31,9 @@ function hoverProps(record: InterviewRecord, onHover: HoverHandler) {
   };
 }
 
-/** What a round shows in the calendar: caller - step - job title - company - account. */
+/** What a round shows in the calendar: caller - step - job title - company - account; "??" when no caller is chosen yet. */
 function roundLine(record: InterviewRecord): string {
-  return [record.callerName ?? "No caller", stepLabel(record.step), record.jobTitle, record.company, record.candidateName].join(" - ");
+  return [record.callerName ?? "??", stepLabel(record.step), record.jobTitle, record.company, record.candidateName].join(" - ");
 }
 
 function minutesOf(time: string): number {
@@ -279,7 +279,7 @@ function MonthGrid({ colors, days, month, records, zone, onHover, onOpen, query 
               <div className="space-y-0.5">
                 {dayRecords.slice(0, 3).map((record) => (
                   <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-110" key={record.id} onClick={() => onOpen(record)} style={blockLook(colorOf(colors, record.category), record.result)} {...hoverProps(record, onHover)} type="button">
-                    <ResultTag result={record.result} /><span className="whitespace-nowrap tabular-nums opacity-90">{zonedTime12(new Date(record.startsAt), zone)}</span>
+                    <ResultTag result={record.result} />
                     <span className="truncate font-medium">{roundLine(record)}</span>
                   </button>
                 ))}
