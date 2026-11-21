@@ -12,12 +12,11 @@ const k = (n) => `job ${n}|company ${n}`;
 const item = (n, source, location = 'Poland (Remote)') => ({ key: k(n), title: `Job ${n}`, company: `Company ${n}`, location, source });
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function worker({ server }) {
-  const settings = new Map();
+function worker({ server, settings = new Map(), start = Date.parse('2026-11-21T12:00:00Z') }) {
   const requests = [];
   const timers = [];
   let listener = null;
-  let clock = Date.parse('2026-11-21T12:00:00Z');
+  let clock = start;
   const context = vm.createContext({
     console, URL,
     Date: class extends Date { static now() { return clock; } },
@@ -49,7 +48,7 @@ function worker({ server }) {
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { ask, requests, advance, gets: () => requests.filter((r) => r.method === 'GET'), posts: () => requests.filter((r) => r.method === 'POST') };
+  return { ask, requests, advance, settings, now: () => clock, gets: () => requests.filter((r) => r.method === 'GET'), posts: () => requests.filter((r) => r.method === 'POST') };
 }
 
 const fullList = { success: true, full: true, cursor: 'c1', skips: [{ key: k(1), removed: false, source: 'saved', location: 'Slovakia (Remote)', at: '2026-11-20T10:00:00.000Z' }, { key: k(3), removed: true, source: 'manual', location: null, at: '2026-11-20T10:00:00.000Z' }],
@@ -89,6 +88,7 @@ test('server required: QTS unreachable pauses everything; nothing is matched or 
   assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [item(9, 'viewed')], keys: [k(1)] }), { ok: false, state: 'server-down' });
   assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(9, 'clicked')] }), { ok: false, state: 'server-down' });
   up = true;
+  await chrome.advance(61_000); // the next check comes a minute after the failed one
   const back = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [k(1), k(9)] });
   assert.deepEqual(back.skipped, [k(1)], 'resumes; the mark made while down was never kept');
 });
@@ -148,4 +148,70 @@ test('the Super Admin\'s switch turns it off; only LinkedIn pages may ask', asyn
   assert.equal(chrome.posts().length, 0);
   const outside = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(2, 'clicked')] }, { url: 'https://example.com/', tab: { id: 1 } });
   assert.equal(outside.ok, false);
+});
+
+const server = (state) => (method, url) => {
+  if (state.down) return { success: false, message: 'Cannot connect to the server.' };
+  if (state.disabled && method === 'GET') return { success: false, disabled: true, message: 'Turned off' };
+  if (method === 'GET') return url.includes('since=') ? noChanges : fullList;
+  return state.refusePosts ? { success: false, message: 'Server error', _httpStatus: 500 } : { success: true };
+};
+
+test('QTS down: at most one check a minute, however often LinkedIn changes its page', async () => {
+  const state = { down: false };
+  const chrome = worker({ server: server(state) });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
+  state.down = true;
+  await chrome.advance(3 * 60_000);
+  for (let look = 0; look < 100; look += 1) { await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [] }); await chrome.advance(500); }
+  // 100 looks over 50 seconds: one failed check, then quiet.
+  assert.equal(chrome.gets().length, 2);
+  await chrome.advance(11_000);
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [] });
+  assert.equal(chrome.gets().length, 3, 'after a minute: one more check');
+});
+
+test('a restarted worker remembers that QTS answered: no extra fetch while reading a job', async () => {
+  const state = {};
+  const first = worker({ server: server(state) });
+  await first.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
+  // Chrome stops the idle worker; a new one starts 40 s later with the same IndexedDB.
+  const second = worker({ server: server(state), settings: first.settings, start: first.now() + 40_000 });
+  const reply = await second.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [k(1)] });
+  assert.deepEqual(reply.skipped, [k(1)]);
+  assert.equal(second.gets().length, 0, 'no fetch after the restart');
+});
+
+test('a batch cut off by closing Chrome is finished on the next start, or dropped when QTS refuses it', async () => {
+  for (const refuse of [false, true]) {
+    const state = {};
+    const before = worker({ server: server(state) });
+    await before.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
+    await before.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(6, 'clicked')] });
+    assert.equal(before.posts().length, 0, 'Chrome closes before the 10 s batch');
+    state.refusePosts = refuse;
+    const after = worker({ server: server(state), settings: before.settings, start: before.now() + 3_600_000 });
+    await after.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [k(6)] });
+    await after.advance(10_000);
+    assert.deepEqual(plain(after.posts().map((post) => post.body.add.map((pair) => pair.title))), [['Job 6']], 'sent once on the next start');
+    state.refusePosts = false;
+    await after.advance(61_000);
+    const shown = await after.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'panel', marks: [], keys: [k(6)] });
+    assert.deepEqual(shown.skipped, refuse ? [] : [k(6)], refuse ? 'refused: dropped from this Chrome too' : 'confirmed');
+    assert.equal(after.settings.get('linkedinSkipsMirrorV2').unconfirmed.length, 0, 'nothing left unconfirmed');
+  }
+});
+
+test('turned off by the Super Admin: re-checked every 10 minutes, or from the panel after 30 s', async () => {
+  const state = { disabled: true };
+  const chrome = worker({ server: server(state) });
+  assert.equal((await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] })).state, 'admin-off');
+  for (let minute = 0; minute < 5; minute += 1) { await chrome.advance(60_000); await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [] }); }
+  assert.equal(chrome.gets().length, 1, 'five minutes on LinkedIn: no re-check');
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'panel', marks: [], keys: [] });
+  assert.equal(chrome.gets().length, 2, 'the panel re-checks');
+  state.disabled = false;
+  await chrome.advance(10 * 60_000 + 1);
+  const on = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [k(1)] });
+  assert.deepEqual(on.skipped, [k(1)], 'turned back on: within 10 minutes');
 });

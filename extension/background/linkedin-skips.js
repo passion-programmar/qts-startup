@@ -7,6 +7,11 @@
 // opens or the Manager returns to the tab). Save: a panel Skip / Un-skip at once; clicks and
 // LinkedIn's own labels in one batch every 10 s or 25 marks, and when the Manager leaves the tab. A
 // batch QTS does not take is dropped and its cards go back to normal.
+// Calls are bounded: after a failed check QTS is not asked again for 60 s; "QTS last answered" is
+// kept in the mirror, so a worker Chrome restarted (it stops idle workers after ~30 s) does not
+// fetch again; a batch cut off by closing Chrome is finished (or dropped) on the next start, so the
+// mirror never keeps a mark QTS does not have; with the Super Admin's switch off it re-checks every
+// 10 minutes (30 s from the panel).
 (function initLinkedInSkips(global) {
   const MIRROR_KEY = 'linkedinSkipsMirrorV2';
   const FRESH_MS = 10 * 60_000;
@@ -15,29 +20,33 @@
   const BATCH_MS = 10_000;
   const BATCH_MAX = 25;
   const POST_MAX = 200;
+  const RETRY_MS = 60_000;
 
   let mirror = null; // { managerId, cursor, pulledAt, disabled, skips: Map, removed: Set, seen: Map }
   let loading = null;
   let pulling = null;
-  const pending = new Map(); // key -> mark waiting for the next batch
+  let failedPullAt = 0;
+  const pending = new Map(); // key -> mark waiting for the next batch (also kept as mirror.unconfirmed)
   let batchTimer = null;
 
   const store = () => global.__qtsScannerDocumentStore;
   const now = () => Date.now();
 
-  /** QTS answered within the last 2 minutes, and nothing failed since. */
+  /** QTS answered within the last 2 minutes, and nothing failed since (this worker's calls, or the mirror's note). */
   function reachable() {
-    const answered = Number(global.__qtsServerAnsweredAt) || 0;
-    const failed = Number(global.__qtsServerFailedAt) || 0;
+    const answered = Math.max(Number(global.__qtsServerAnsweredAt) || 0, Number(mirror?.answeredAt) || 0);
+    const failed = Math.max(Number(global.__qtsServerFailedAt) || 0, Number(mirror?.failedAt) || 0);
     return now() - answered < REACH_MS && answered >= failed;
   }
+  const noteAnswered = () => { if (mirror) mirror.answeredAt = Math.max(now(), Number(global.__qtsServerAnsweredAt) || 0); };
+  const noteFailed = () => { if (mirror) mirror.failedAt = now(); };
 
   async function managerId() {
     const user = await global.__qtsAccountAuth?.readWorkerSessionUser?.().catch(() => null);
     return user?.role === 'manager' && typeof user.id === 'string' ? user.id : null;
   }
 
-  const empty = (manager) => ({ managerId: manager, cursor: null, pulledAt: 0, disabled: false, skips: new Map(), removed: new Set(), seen: new Map() });
+  const empty = (manager) => ({ managerId: manager, cursor: null, pulledAt: 0, disabled: false, answeredAt: 0, failedAt: 0, skips: new Map(), removed: new Set(), seen: new Map(), unconfirmed: new Map() });
 
   // The mirror belongs to one Manager: another one signed in starts from an empty list.
   async function load() {
@@ -47,9 +56,11 @@
     loading = (async () => {
       const saved = (await store().getSetting(MIRROR_KEY).catch(() => null))?.value;
       mirror = saved && saved.managerId === manager
-        ? { ...saved, skips: new Map(saved.skips), removed: new Set(saved.removed), seen: new Map(saved.seen) }
+        ? { ...saved, skips: new Map(saved.skips), removed: new Set(saved.removed), seen: new Map(saved.seen), unconfirmed: new Map(saved.unconfirmed || []) }
         : empty(manager);
+      // A batch cut off (Chrome closed, or this worker stopped) waits to be finished once QTS answers.
       pending.clear();
+      for (const [key, item] of mirror.unconfirmed) pending.set(key, item);
       return mirror;
     })();
     try { return await loading; } finally { loading = null; }
@@ -59,7 +70,8 @@
     if (!mirror) return;
     await store().putSetting(MIRROR_KEY, {
       managerId: mirror.managerId, cursor: mirror.cursor, pulledAt: mirror.pulledAt, disabled: mirror.disabled,
-      skips: [...mirror.skips], removed: [...mirror.removed], seen: [...mirror.seen],
+      answeredAt: mirror.answeredAt, failedAt: mirror.failedAt,
+      skips: [...mirror.skips], removed: [...mirror.removed], seen: [...mirror.seen], unconfirmed: [...mirror.unconfirmed],
     }).catch(() => {});
   }
 
@@ -85,10 +97,19 @@
         const was = mirror.disabled;
         Object.assign(mirror, empty(mirror.managerId), { disabled: true, pulledAt: now() });
         pending.clear();
+        failedPullAt = 0;
+        noteAnswered();
         await save();
         return was ? 'same' : 'changed';
       }
-      if (reply?.success !== true) return 'failed';
+      if (reply?.success !== true) {
+        failedPullAt = now();
+        noteFailed();
+        await save();
+        return 'failed';
+      }
+      failedPullAt = 0;
+      noteAnswered();
       const wasDisabled = mirror.disabled;
       mirror.disabled = false;
       if (reply.full) { mirror.skips.clear(); mirror.removed.clear(); mirror.seen.clear(); }
@@ -121,15 +142,23 @@
     await load();
     if (!mirror.managerId) return { state: 'signed-out', changed: false };
     const age = now() - mirror.pulledAt;
-    const due = !mirror.pulledAt || age > FRESH_MS || ((reason === 'panel' || reason === 'return') && age > NUDGE_MS);
+    const nudged = (reason === 'panel' || reason === 'return') && age > NUDGE_MS;
+    const due = !mirror.pulledAt || age > FRESH_MS || nudged;
+    // Turned off by the Super Admin: re-checked every 10 minutes (or from the panel after 30 s).
+    if (mirror.disabled && !due) return { state: 'admin-off', changed: false };
     let changed = false;
     if (due || !reachable()) {
+      // After a failed check QTS is not asked again for a minute: the page just stays paused.
+      if (failedPullAt && now() - failedPullAt < RETRY_MS) return { state: 'server-down', changed: false };
       const result = await pull();
       if (result === 'failed') return { state: 'server-down', changed: false };
       changed = result === 'changed';
     }
     if (mirror.disabled) return { state: 'admin-off', changed };
-    return { state: reachable() ? 'ok' : 'server-down', changed };
+    if (!reachable()) return { state: 'server-down', changed };
+    // A batch left from before (Chrome closed mid-batch) is finished now that QTS answers.
+    if (pending.size && batchTimer == null) scheduleFlush();
+    return { state: 'ok', changed };
   }
 
   const validItems = (items) => (Array.isArray(items) ? items : [])
@@ -156,9 +185,14 @@
     const batch = [...pending.values()];
     pending.clear();
     const reply = await workerApiRequest('POST', '/api/extension/linkedin-skips', { add: batch.map(toServer) }).catch(() => null);
-    if (reply?.success === true) return true;
+    for (const item of batch) mirror.unconfirmed.delete(item.key);
+    if (reply?.success === true) {
+      noteAnswered();
+      await save();
+      return true;
+    }
     for (const item of batch) mirror.skips.delete(item.key);
-    if (reply?.disabled) { mirror.disabled = true; } else { global.__qtsServerFailedAt = now(); }
+    if (reply?.disabled) { mirror.disabled = true; } else { global.__qtsServerFailedAt = now(); noteFailed(); }
     await save();
     await tellLinkedInTabs();
     return false;
@@ -194,10 +228,11 @@
         if (reply?.disabled) mirror.disabled = true;
         return { ok: false, error: reply?.message || 'QTS could not be reached; the skip-list is paused.' };
       }
+      noteAnswered();
       await save();
       return { ok: true, added: fresh.length };
     }
-    for (const item of fresh) pending.set(item.key, item);
+    for (const item of fresh) { pending.set(item.key, item); mirror.unconfirmed.set(item.key, item); }
     await save();
     scheduleFlush();
     return { ok: true, added: fresh.length };
@@ -207,9 +242,10 @@
   async function unskip(items) {
     const removed = validItems(items);
     if (!removed.length) return { ok: true, removed: 0 };
-    for (const item of removed) pending.delete(item.key);
+    for (const item of removed) { pending.delete(item.key); mirror.unconfirmed.delete(item.key); }
     const reply = await workerApiRequest('POST', '/api/extension/linkedin-skips', { remove: removed.map(toServer) }).catch(() => null);
     if (reply?.success !== true) return { ok: false, error: reply?.message || 'QTS could not be reached; the skip-list is paused.' };
+    noteAnswered();
     for (const item of removed) { mirror.skips.delete(item.key); mirror.removed.add(item.key); }
     await save();
     return { ok: true, removed: removed.length };
