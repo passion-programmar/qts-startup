@@ -8,16 +8,28 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import { DetailsCard } from "@/app/interviews/interview-details";
+import { InterviewHoverCard, type Hovered } from "@/app/interviews/interview-hover-card";
 import type { InterviewRecord } from "@/app/interviews/interview-dialog";
 import { categoryColors, colorOf, type CategoryColor } from "@/app/interviews/category-colors";
 import { stepLabel } from "@/server/interviews/interview-values";
 import { interviewsHref, type InterviewsQuery } from "@/server/interviews/interviews-query";
-import { timeRange, weekdayOf, zonedDay, zonedMoment, zonedTime, zoneShortName } from "@/server/interviews/zone-time";
+import { weekdayOf, zonedDay, zonedMoment, zonedTime, zoneShortName } from "@/server/interviews/zone-time";
 
 const HOUR_HEIGHT = 48;
 const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type Colors = Map<string, CategoryColor>;
+type HoverHandler = (record: InterviewRecord | null, element?: HTMLElement) => void;
+
+/** Pointer and keyboard focus show a round's hover card; leaving hides it. */
+function hoverProps(record: InterviewRecord, onHover: HoverHandler) {
+  return {
+    onMouseEnter: (event: React.MouseEvent<HTMLElement>) => onHover(record, event.currentTarget),
+    onMouseLeave: () => onHover(null),
+    onFocus: (event: React.FocusEvent<HTMLElement>) => onHover(record, event.currentTarget),
+    onBlur: () => onHover(null),
+  };
+}
 
 /** What a round shows in the calendar: caller - step - job title - company - account. */
 function roundLine(record: InterviewRecord): string {
@@ -95,13 +107,18 @@ export function InterviewCalendar({
   const [selected, setSelected] = useState<InterviewRecord | null>(null);
   // A round shown in the details card follows its newest version after a save.
   const shown = selected ? records.find((record) => record.id === selected.id) ?? null : null;
+  // The round under the pointer (or focused), for its hover card; gone once a round is opened.
+  const [hovered, setHovered] = useState<Hovered | null>(null);
+  const hover: HoverHandler = (record, element) => setHovered(record && element ? { record, rect: element.getBoundingClientRect() } : null);
+  const open = (record: InterviewRecord) => { setHovered(null); setSelected(record); };
 
   return (
     <>
       <CategoryKey colors={colors} records={records} />
       {mode === "month"
-        ? <MonthGrid colors={colors} days={days} month={month} onOpen={setSelected} query={query} records={records} zone={settings.timeZone} />
-        : <TimeGrid colors={colors} days={days} onOpen={setSelected} query={query} records={records} />}
+        ? <MonthGrid colors={colors} days={days} month={month} onHover={hover} onOpen={open} query={query} records={records} zone={settings.timeZone} />
+        : <TimeGrid colors={colors} days={days} onHover={hover} onOpen={open} query={query} records={records} />}
+      {hovered && !selected && <InterviewHoverCard color={colorOf(colors, hovered.record.category)} hovered={hovered} key={hovered.record.id} />}
       {selected && <DetailsCard onClose={() => setSelected(null)} record={shown ?? selected} />}
     </>
   );
@@ -123,7 +140,7 @@ function CategoryKey({ colors, records }: { colors: Colors; records: InterviewRe
   );
 }
 
-function TimeGrid({ colors, days, records, onOpen, query }: { colors: Colors; days: string[]; records: InterviewRecord[]; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
+function TimeGrid({ colors, days, records, onHover, onOpen, query }: { colors: Colors; days: string[]; records: InterviewRecord[]; onHover: HoverHandler; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
   const { settings, today } = useInterviewChoices();
   const zone = settings.timeZone;
   const second = settings.secondTimeZone;
@@ -168,7 +185,7 @@ function TimeGrid({ colors, days, records, onOpen, query }: { colors: Colors; da
             );
           })}
         </div>
-        <div className="max-h-[70vh] overflow-y-auto" ref={scrollRef}>
+        <div className="max-h-[70vh] overflow-y-auto" onScroll={() => onHover(null)} ref={scrollRef}>
           <div className="relative grid" style={{ gridTemplateColumns: columns, height: 24 * HOUR_HEIGHT }}>
             {second && (
               <div className="relative">
@@ -201,10 +218,16 @@ function TimeGrid({ colors, days, records, onOpen, query }: { colors: Colors; da
                       key={entry.record.id}
                       onClick={() => onOpen(entry.record)}
                       style={{ backgroundColor: color.background, color: color.text, top: entry.top, height: entry.height, left: `calc(${(entry.lane / entry.lanes) * 100}% + 2px)`, width: `calc(${100 / entry.lanes}% - 4px)` }}
-                      title={`${roundLine(entry.record)}\n${timeRange(entry.record, zone)} · ${entry.record.category ?? "No category"}`}
+                      {...hoverProps(entry.record, onHover)}
                       type="button"
                     >
-                      <span className={`block break-words font-semibold ${crossedOut ? "line-through" : ""}`}>{roundLine(entry.record)}</span>
+                      {/* As many whole lines as the block has room for, the last one ending in "…". */}
+                      <span
+                        className={`break-words font-semibold ${crossedOut ? "line-through" : ""}`}
+                        style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: Math.max(1, Math.floor((entry.height - 4) / 14)), overflow: "hidden" }}
+                      >
+                        {roundLine(entry.record)}
+                      </span>
                     </button>
                   );
                 })}
@@ -223,7 +246,7 @@ function TimeGrid({ colors, days, records, onOpen, query }: { colors: Colors; da
   );
 }
 
-function MonthGrid({ colors, days, month, records, zone, onOpen, query }: { colors: Colors; days: string[]; month: string; records: InterviewRecord[]; zone: string; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
+function MonthGrid({ colors, days, month, records, zone, onHover, onOpen, query }: { colors: Colors; onHover: HoverHandler; days: string[]; month: string; records: InterviewRecord[]; zone: string; onOpen: (record: InterviewRecord) => void; query: InterviewsQuery }) {
   const { today } = useInterviewChoices();
   const byDay = useMemo(() => {
     const map = new Map<string, InterviewRecord[]>();
@@ -255,7 +278,7 @@ function MonthGrid({ colors, days, month, records, zone, onOpen, query }: { colo
               </Link>
               <div className="space-y-0.5">
                 {dayRecords.slice(0, 3).map((record) => (
-                  <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-110" key={record.id} onClick={() => onOpen(record)} style={{ backgroundColor: colorOf(colors, record.category).background, color: colorOf(colors, record.category).text }} title={`${roundLine(record)}\n${timeRange(record, zone)} · ${record.category ?? "No category"}`} type="button">
+                  <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-110" key={record.id} onClick={() => onOpen(record)} style={{ backgroundColor: colorOf(colors, record.category).background, color: colorOf(colors, record.category).text }} {...hoverProps(record, onHover)} type="button">
                     <span className="tabular-nums opacity-90">{zonedTime(new Date(record.startsAt), zone)}</span>
                     <span className="truncate font-medium">{roundLine(record)}</span>
                   </button>
