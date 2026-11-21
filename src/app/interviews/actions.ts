@@ -186,15 +186,13 @@ export async function searchBidChoicesAction(words: string): Promise<BidChoice[]
   return searchBidChoices(manager.id, typeof words === "string" ? words : "");
 }
 
-/** Saves the Manager's calendar settings: time zone, second time zone and default length. */
+/** Saves the Manager's calendar settings: second time zone and default length (the main zone is always CET). */
 export async function saveInterviewSettingsAction(_state: RecordActionState, formData: FormData): Promise<RecordActionState> {
   const manager = await requireUser();
   if (manager.role !== "manager") return { error: "Manager access is required.", success: null };
-  const timeZone = text(formData, "timeZone", 64);
   const secondTimeZone = text(formData, "secondTimeZone", 64);
-  if (!isTimeZone(timeZone)) return { error: "Choose a time zone.", success: null };
   if (secondTimeZone && !isTimeZone(secondTimeZone)) return { error: "Choose a known second time zone, or None.", success: null };
-  const value = parseInterviewSettings({ timeZone, secondTimeZone: secondTimeZone || null, defaultMinutes: Number(text(formData, "defaultMinutes", 4)) });
+  const value = parseInterviewSettings({ secondTimeZone: secondTimeZone || null, defaultMinutes: Number(text(formData, "defaultMinutes", 4)) });
   const now = new Date();
   await db.insert(settings).values({ key: interviewSettingsKey(manager.id), value, updatedByUserId: manager.id })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedByUserId: manager.id, updatedAt: now } });

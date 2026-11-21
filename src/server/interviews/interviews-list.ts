@@ -119,12 +119,9 @@ export async function readInterviewSettings(managerId: string): Promise<Intervie
   return row ? parseInterviewSettings(row.value) : defaultInterviewSettings;
 }
 
-/**
- * How many rounds start today in the Manager's zone, for the sidebar: one query that reads the zone
- * from the settings as well.
- */
+/** How many rounds start today in CET (every Manager's zone), for the sidebar. */
 export async function countTodayInterviews(managerId: string): Promise<number> {
-  const zone = sql`coalesce((select ${settings.value}->>'timeZone' from ${settings} where ${settings.key} = ${interviewSettingsKey(managerId)}), ${defaultInterviewSettings.timeZone})`;
+  const zone = defaultInterviewSettings.timeZone;
   const dayStart = sql`(date_trunc('day', now() at time zone ${zone}) at time zone ${zone})`;
   const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(interviews)
     .where(and(

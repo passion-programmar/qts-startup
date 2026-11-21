@@ -77,6 +77,10 @@ test("settings: unknown values fall back to CET, no second zone, 60 minutes", ()
   assert.deepEqual(parseInterviewSettings({ timeZone: "Europe/Berlin", secondTimeZone: "Europe/Berlin", defaultMinutes: 45 }), { timeZone: "Europe/Berlin", secondTimeZone: null, defaultMinutes: 45 });
 });
 
+test("settings: the main zone is always CET, even when another one was saved earlier", () => {
+  assert.deepEqual(parseInterviewSettings({ timeZone: "Asia/Tokyo", secondTimeZone: "Europe/Bucharest", defaultMinutes: 30 }), { timeZone: "Europe/Berlin", secondTimeZone: "Europe/Bucharest", defaultMinutes: 30 });
+});
+
 test("zone wall clock ↔ moment, summer time included", () => {
   // 15 Nov: Romania is UTC+2, Central Europe UTC+1, New York UTC−5.
   assert.equal(zonedMoment("2026-11-16", "12:00", "Europe/Bucharest").toISOString(), "2026-11-16T10:00:00.000Z");

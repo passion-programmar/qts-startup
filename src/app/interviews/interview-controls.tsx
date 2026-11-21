@@ -281,7 +281,6 @@ export function CalendarToolbar({ query, title, previous, next }: { query: Inter
 export function TimeSettingsButton() {
   const { settings } = useInterviewChoices();
   const [open, setOpen] = useState(false);
-  const [zone, setZone] = useState(settings.timeZone);
   const [second, setSecond] = useState(settings.secondTimeZone ?? "");
   const [state, formAction, saving] = useActionState(async (previous: RecordActionState, formData: FormData) => {
     const outcome = await saveInterviewSettingsAction(previous, formData);
@@ -294,7 +293,7 @@ export function TimeSettingsButton() {
     <>
       <button
         className="inline-flex h-10 items-center gap-2 rounded-control border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-        onClick={() => { setZone(settings.timeZone); setSecond(settings.secondTimeZone ?? ""); setOpen(true); }}
+        onClick={() => { setSecond(settings.secondTimeZone ?? ""); setOpen(true); }}
         title="Time settings"
         type="button"
       >
@@ -310,13 +309,13 @@ export function TimeSettingsButton() {
             </header>
             <div className="space-y-4 p-5">
               <div>
-                <label className={labelClass} htmlFor="settings-zone">Time zone</label>
-                <ZoneSelect id="settings-zone" name="timeZone" onChange={setZone} value={zone} />
-                <p className="mt-1.5 text-xs text-slate-500">The calendar, the lists and the Add window show and take times in this zone.</p>
+                <span className={labelClass}>Time zone</span>
+                <p className="flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700">{zoneLabel(settings.timeZone)}</p>
+                <p className="mt-1.5 text-xs text-slate-500">Interviews are always saved and shown in CET. The Add window can still take a time in another zone (e.g. Japan); it is changed to CET when saved.</p>
               </div>
               <div>
                 <label className={labelClass} htmlFor="settings-second-zone">Second time zone</label>
-                <ZoneSelect allowNone id="settings-second-zone" name="secondTimeZone" onChange={setSecond} value={second === zone ? "" : second} />
+                <ZoneSelect allowNone id="settings-second-zone" name="secondTimeZone" onChange={setSecond} value={second === settings.timeZone ? "" : second} />
                 <p className="mt-1.5 text-xs text-slate-500">Shown beside the first one, e.g. the company&apos;s zone.</p>
               </div>
               <div>

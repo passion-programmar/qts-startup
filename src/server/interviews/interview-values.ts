@@ -247,13 +247,16 @@ export type InterviewSettings = { timeZone: string; secondTimeZone: string | nul
 export const defaultInterviewSettings: InterviewSettings = { timeZone: CET_ZONE, secondTimeZone: null, defaultMinutes: 60 };
 export const interviewSettingsKey = (managerId: string) => `interview-settings:${managerId}`;
 
-/** Saved settings, with anything missing or unknown set to the default. */
+/**
+ * Saved settings, with anything missing or unknown set to the default. The main zone is always CET
+ * for every Manager (a zone saved earlier is ignored); only the second zone can be chosen.
+ */
 export function parseInterviewSettings(value: unknown): InterviewSettings {
   const saved = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const minutes = Number(saved.defaultMinutes);
   return {
-    timeZone: isTimeZone(saved.timeZone) ? saved.timeZone : defaultInterviewSettings.timeZone,
-    secondTimeZone: isTimeZone(saved.secondTimeZone) && saved.secondTimeZone !== saved.timeZone ? saved.secondTimeZone : null,
+    timeZone: CET_ZONE,
+    secondTimeZone: isTimeZone(saved.secondTimeZone) && saved.secondTimeZone !== CET_ZONE ? saved.secondTimeZone : null,
     defaultMinutes: (interviewLengths as readonly number[]).includes(minutes) ? minutes : defaultInterviewSettings.defaultMinutes,
   };
 }
