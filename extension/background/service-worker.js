@@ -6108,8 +6108,52 @@ async function openDownloadedFolder(folderPath) {
   const pattern = folder.split('/').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]');
   const found = await chrome.downloads.search({ filenameRegex: `${pattern}[\\\\/]`, orderBy: ['-startTime'] }).catch(() => []);
   const download = found.find((item) => item.exists !== false && item.state === 'complete');
-  if (!download) return { ok: false, notHere: true, error: 'This Chrome did not download that folder.' };
-  chrome.downloads.show(download.id);
+  if (download) {
+    chrome.downloads.show(download.id);
+    return { ok: true };
+  }
+  return openFolderFromSharedPdfs(folder);
+}
+
+/**
+ * Any Chrome on this PC opens a résumé folder, also one another Chrome saved (Chrome shows only files
+ * it downloaded itself): the résumé is read through the Apply PDFs folder and saved again onto the
+ * very same file (identical bytes, "overwrite"), which this Chrome may then show in Explorer. The
+ * next click finds it in this Chrome's downloads at once.
+ */
+async function openFolderFromSharedPdfs(folder) {
+  const saved = await self.__qtsScannerDocumentStore.getSetting(self.__qtsApplyLocalPdfs.SETTING_KEY).catch(() => null);
+  const found = await self.__qtsApplyLocalPdfs.readFolderPdf(saved?.value || null, folder).catch(() => null);
+  if (!found?.bytes) {
+    return {
+      ok: false,
+      notHere: Boolean(found?.missing),
+      error: found?.error || 'The résumé could not be read from QTS_Resume on this PC.',
+    };
+  }
+  const downloadId = await chrome.downloads.download({
+    url: `data:application/pdf;base64,${self.__qtsApplyPdf.toBase64(found.bytes)}`,
+    filename: `${folder}/${found.name}`,
+    conflictAction: 'overwrite',
+    saveAs: false,
+  }).catch(() => null);
+  if (downloadId == null) return { ok: false, error: 'Chrome could not open the résumé folder.' };
+  const done = await new Promise((resolve) => {
+    const finish = (value) => { clearTimeout(timer); chrome.downloads.onChanged.removeListener(changed); resolve(value); };
+    const changed = (delta) => {
+      if (delta.id !== downloadId || !delta.state?.current) return;
+      if (delta.state.current === 'complete') finish(true);
+      if (delta.state.current === 'interrupted') finish(false);
+    };
+    const timer = setTimeout(() => finish(false), 15000);
+    chrome.downloads.onChanged.addListener(changed);
+    chrome.downloads.search({ id: downloadId }).then(([item]) => {
+      if (item?.state === 'complete') finish(true);
+      if (item?.state === 'interrupted') finish(false);
+    }).catch(() => {});
+  });
+  if (!done) return { ok: false, error: 'Chrome could not open the résumé folder.' };
+  chrome.downloads.show(downloadId);
   return { ok: true };
 }
 

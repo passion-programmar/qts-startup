@@ -3,9 +3,10 @@
 import { Copy, FolderOpen } from "lucide-react";
 import { useState } from "react";
 
-// A résumé folder that opens in Windows Explorer: the QTS extension in this Chrome finds the résumé
-// it downloaded there and shows it. In a Chrome that did not save it, the page says which one did
-// and offers to copy the path. With a label, the button shows only that and the path is its tooltip.
+// A résumé folder that opens in Windows Explorer from any Chrome on this PC: the QTS extension shows
+// the résumé it downloaded there, or (saved by another Chrome) reads it through its Apply PDFs folder
+// access and shows it. A folder not on this PC, or no access, says so and offers to copy the path.
+// With a label, the button shows only that and the path is its tooltip.
 export function OpenFolderButton({ folder, savedOn, label }: { folder: string; savedOn: string | null; label?: string }) {
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -18,7 +19,7 @@ export function OpenFolderButton({ folder, savedOn, label }: { folder: string; s
     setPending(false);
     if (result.ok) return;
     setMessage(result.notHere
-      ? `Saved ${savedOn ? `on ${savedOn}` : "by another Chrome"}; open it there, or copy the path.`
+      ? `Not on this PC${savedOn ? ` (saved on ${savedOn})` : ""}; open it there, or copy the path.`
       : result.error || "Open this page in a Chrome with the QTS extension.");
   }
 

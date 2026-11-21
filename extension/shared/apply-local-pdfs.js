@@ -113,12 +113,48 @@
     return { ok: true, deleted, missing };
   }
 
+  // A job folder's résumé (else its first PDF), read through the saved folder: any Chrome on this PC
+  // with read access to QTS_Resume finds it, whichever Chrome downloaded it. folderPath is
+  // Downloads-relative ("QTS_Resume/<manager>/<candidate>/<job>"). { name, bytes } or { error }.
+  async function readFolderPdf(directoryHandle, folderPath) {
+    if (!directoryHandle || typeof directoryHandle.queryPermission !== 'function') {
+      return { needsAccess: true, error: 'Choose the QTS_Resume folder in Apply PDFs folder first.' };
+    }
+    if (await directoryHandle.queryPermission({ mode: 'read' }) !== 'granted') {
+      return { needsAccess: true, error: 'Allow access to QTS_Resume in Apply PDFs folder.' };
+    }
+    let segments;
+    try {
+      segments = relativePathSegments(directoryHandle, `${String(folderPath || '').replace(/\\/g, '/').replace(/\/+$/, '')}/x.pdf`);
+    } catch {
+      return { error: 'The résumé folder path is invalid.' };
+    }
+    segments.pop();
+    let folder = directoryHandle;
+    try {
+      for (const segment of segments) folder = await folder.getDirectoryHandle(segment);
+    } catch {
+      return { missing: true, error: 'This résumé folder is not on this PC.' };
+    }
+    const pdfs = [];
+    for await (const [name, handle] of folder.entries()) {
+      if (handle.kind === 'file' && /\.pdf$/i.test(name) && !/[\\/\u0000-\u001f]/.test(name)) pdfs.push([name, handle]);
+    }
+    pdfs.sort(([left], [right]) => Number(/_Cover_Letter\.pdf$/i.test(left)) - Number(/_Cover_Letter\.pdf$/i.test(right)) || left.localeCompare(right));
+    if (!pdfs.length) return { missing: true, error: 'No résumé PDF is in this folder on this PC.' };
+    const [name, handle] = pdfs[0];
+    const bytes = new Uint8Array(await (await handle.getFile()).arrayBuffer());
+    if (!bytes.length) return { missing: true, error: `The résumé "${name}" is empty.` };
+    return { name, bytes };
+  }
+
   global.__qtsApplyLocalPdfs = Object.freeze({
     SETTING_KEY,
     safePathSegments,
     relativePathSegments,
     readApplyDocuments,
     deleteJobFiles,
+    readFolderPdf,
   });
   if (typeof module !== 'undefined' && module.exports) module.exports = global.__qtsApplyLocalPdfs;
 })(typeof self !== 'undefined' ? self : globalThis);
