@@ -98,6 +98,7 @@ function loadManagers() {
       canManageTextHighlights: users.canManageTextHighlights,
       canManagePageExclusions: users.canManagePageExclusions,
       canManageJobDetectionUrlRules: users.canManageJobDetectionUrlRules,
+      canUseLinkedInSkips: users.canUseLinkedInSkips,
       useGeminiMatching: users.useGeminiMatching,
       canUseApply: users.canUseApply,
       applyAiMode: users.applyAiMode,
@@ -134,7 +135,7 @@ function TabIntro({ title, children }: { title: string; children: ReactNode }) {
 // Apply is explained by its own three choices, above these groups.
 const MEANING_GROUPS = [
   { title: "Get JD and ChatGPT", settings: ["geminiMatching", "chatGptUrl"] },
-  { title: "Extension tools", settings: ["textHighlights", "pageExclusions", "jobDetectionUrls"] },
+  { title: "Extension tools", settings: ["textHighlights", "pageExclusions", "jobDetectionUrls", "linkedinSkips"] },
 ] as const;
 
 export async function ManagersTab() {
@@ -177,12 +178,13 @@ export async function ManagersTab() {
       <PaginatedTable
         columns={[
           { label: "Manager", className: "w-[14%]" },
-          { label: MANAGER_SETTINGS.apply.column, className: "w-[19%]" },
-          { label: MANAGER_SETTINGS.geminiMatching.column, className: "w-[10%]" },
-          { label: MANAGER_SETTINGS.chatGptUrl.column, className: "w-[24%]" },
-          { label: MANAGER_SETTINGS.textHighlights.column, className: "w-[11%]" },
-          { label: MANAGER_SETTINGS.pageExclusions.column, className: "w-[11%]" },
-          { label: MANAGER_SETTINGS.jobDetectionUrls.column, className: "w-[11%]" },
+          { label: MANAGER_SETTINGS.apply.column, className: "w-[17%]" },
+          { label: MANAGER_SETTINGS.geminiMatching.column, className: "w-[9%]" },
+          { label: MANAGER_SETTINGS.chatGptUrl.column, className: "w-[19%]" },
+          { label: MANAGER_SETTINGS.textHighlights.column, className: "w-[10%]" },
+          { label: MANAGER_SETTINGS.pageExclusions.column, className: "w-[10%]" },
+          { label: MANAGER_SETTINGS.jobDetectionUrls.column, className: "w-[10%]" },
+          { label: MANAGER_SETTINGS.linkedinSkips.column, className: "w-[11%]" },
         ]}
         emptyMessage="No active Managers"
         rows={managerRows.map((manager) => {
@@ -198,6 +200,7 @@ export async function ManagersTab() {
               <ManagerSettingSwitch key="text-highlights" managerId={manager.id} managerName={managerName} on={manager.canManageTextHighlights} setting="textHighlights" />,
               <ManagerSettingSwitch key="page-exclusions" managerId={manager.id} managerName={managerName} on={manager.canManagePageExclusions} setting="pageExclusions" />,
               <ManagerSettingSwitch key="job-detection-urls" managerId={manager.id} managerName={managerName} on={manager.canManageJobDetectionUrlRules} setting="jobDetectionUrls" />,
+              <ManagerSettingSwitch key="linkedin-skips" managerId={manager.id} managerName={managerName} on={manager.canUseLinkedInSkips} setting="linkedinSkips" />,
             ],
           };
         })}

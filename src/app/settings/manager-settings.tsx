@@ -8,6 +8,7 @@ import {
   updateManagerChatGptUrlAction,
   updateManagerGeminiMatchingAction,
   updateManagerJobDetectionUrlAccessAction,
+  updateManagerLinkedInSkipsAction,
   updateManagerPageExclusionAccessAction,
   updateManagerTextHighlightAccessAction,
   type PromptActionState,
@@ -99,6 +100,7 @@ const CONTROLS: Record<SwitchSetting, {
   textHighlights: { action: updateManagerTextHighlightAccessAction, field: "enabled", onValue: "true", offValue: "false" },
   pageExclusions: { action: updateManagerPageExclusionAccessAction, field: "enabled", onValue: "true", offValue: "false" },
   jobDetectionUrls: { action: updateManagerJobDetectionUrlAccessAction, field: "enabled", onValue: "true", offValue: "false" },
+  linkedinSkips: { action: updateManagerLinkedInSkipsAction, field: "enabled", onValue: "true", offValue: "false" },
 };
 
 // One setting of one Manager: it saves as soon as it is switched, and only a failure adds text,

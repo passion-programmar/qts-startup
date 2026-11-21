@@ -12,7 +12,7 @@ const action = "async(_state,data)=>{window.saved.push(Object.fromEntries(data))
 
 test("each Manager switch sends its opposite value, and Apply-dependent ones wait for Apply", { skip: !chrome, timeout: 60000 }, async () => {
   const mocks: Record<string, string> = {
-    "@/app/settings/actions": ["updateManagerApplyAction", "updateManagerChatGptUrlAction", "updateManagerGeminiMatchingAction", "updateManagerJobDetectionUrlAccessAction", "updateManagerPageExclusionAccessAction", "updateManagerTextHighlightAccessAction"]
+    "@/app/settings/actions": ["updateManagerApplyAction", "updateManagerChatGptUrlAction", "updateManagerGeminiMatchingAction", "updateManagerJobDetectionUrlAccessAction", "updateManagerLinkedInSkipsAction", "updateManagerPageExclusionAccessAction", "updateManagerTextHighlightAccessAction"]
       .map((name) => `export const ${name}=${action};`).join(""),
     "@/app/settings/prompt-forms": "import {createElement} from 'react';export const ActionFeedback=({state})=>state.error||state.success?createElement('p',{role:'alert'},state.error||state.success):null;",
   };

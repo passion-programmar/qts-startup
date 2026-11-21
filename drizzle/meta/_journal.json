@@ -722,6 +722,13 @@
       "when": 1795272967005,
       "tag": "0102_linkedin_skips",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1795277400516,
+      "tag": "0103_linkedin_skips_switch_location",
+      "breakpoints": true
     }
   ]
 }

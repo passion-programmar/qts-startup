@@ -67,6 +67,15 @@ export const MANAGER_SETTINGS = {
     onMeaning: "The Manager keeps their own list under URL Settings in the extension.",
     offMeaning: "That list is hidden.",
   },
+  linkedinSkips: {
+    column: "LinkedIn skip-list",
+    on: "On",
+    off: "Off",
+    icon: ScanSearch,
+    summary: "On LinkedIn's job search, jobs this Manager has already seen look faded with a struck title.",
+    onMeaning: "Clicked jobs, LinkedIn's Viewed / Saved / Applied and the Manager's bids and saved jobs are marked.",
+    offMeaning: "LinkedIn looks as usual; nothing is read or saved there.",
+  },
   jobDetectionUrls: {
     column: "Blocked URLs",
     on: "Can edit",
