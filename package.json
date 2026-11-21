@@ -28,7 +28,7 @@
     "jose": "^6.2.12",
     "lucide-react": "^1.59.0",
     "mailparser": "3.14.1",
-    "next": "16.4.2",
+    "next": "16.4.6",
     "pdf-lib": "^1.17.1",
     "puppeteer-core": "25.11.0",
     "react": "19.3.0",
@@ -52,7 +52,7 @@
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.25.12",
     "eslint": "^9",
-    "eslint-config-next": "16.4.2",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"
