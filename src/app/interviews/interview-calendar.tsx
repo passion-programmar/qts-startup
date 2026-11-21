@@ -13,7 +13,7 @@ import type { InterviewRecord } from "@/app/interviews/interview-dialog";
 import { categoryColors, colorOf, type CategoryColor } from "@/app/interviews/category-colors";
 import { isEndedResult, resultLabel, resultLook, stepLabel } from "@/server/interviews/interview-values";
 import { interviewsHref, type InterviewsQuery } from "@/server/interviews/interviews-query";
-import { weekdayOf, zonedDay, zonedMoment, zonedTime, zoneShortName } from "@/server/interviews/zone-time";
+import { weekdayOf, zonedDay, zonedMoment, zonedTime, zonedTime12, zoneShortName } from "@/server/interviews/zone-time";
 
 const HOUR_HEIGHT = 48;
 const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -191,7 +191,7 @@ function TimeGrid({ colors, days, records, onHover, onOpen, query }: { colors: C
               <div className="relative">
                 {hours.map((hour) => hour > 0 && (
                   <span className="absolute right-1.5 -translate-y-1/2 text-[10px] text-slate-400" key={hour} style={{ top: hour * HOUR_HEIGHT }}>
-                    {zonedTime(zonedMoment(days[0] ?? today, `${String(hour).padStart(2, "0")}:00`, zone), second)}
+                    {zonedTime12(zonedMoment(days[0] ?? today, `${String(hour).padStart(2, "0")}:00`, zone), second).replace(":00 ", " ")}
                   </span>
                 ))}
               </div>
@@ -199,7 +199,7 @@ function TimeGrid({ colors, days, records, onHover, onOpen, query }: { colors: C
             <div className="relative">
               {hours.map((hour) => hour > 0 && (
                 <span className="absolute right-1.5 -translate-y-1/2 text-[10px] text-slate-500" key={hour} style={{ top: hour * HOUR_HEIGHT }}>
-                  {String(hour).padStart(2, "0")}:00
+ {hour < 12 ? "AM" : "PM"}
                 </span>
               ))}
             </div>
@@ -279,7 +279,7 @@ function MonthGrid({ colors, days, month, records, zone, onHover, onOpen, query 
               <div className="space-y-0.5">
                 {dayRecords.slice(0, 3).map((record) => (
                   <button className="flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left text-[11px] font-medium hover:brightness-110" key={record.id} onClick={() => onOpen(record)} style={blockLook(colorOf(colors, record.category), record.result)} {...hoverProps(record, onHover)} type="button">
-                    <ResultTag result={record.result} /><span className="tabular-nums opacity-90">{zonedTime(new Date(record.startsAt), zone)}</span>
+                    <ResultTag result={record.result} /><span className="whitespace-nowrap tabular-nums opacity-90">{zonedTime12(new Date(record.startsAt), zone)}</span>
                     <span className="truncate font-medium">{roundLine(record)}</span>
                   </button>
                 ))}

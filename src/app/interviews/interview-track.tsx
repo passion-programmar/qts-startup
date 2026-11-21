@@ -8,7 +8,7 @@ import { loadTrackAction } from "@/app/interviews/actions";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import { summarizeTrack, type InterviewRecord } from "@/server/interviews/interview-record";
 import { interviewSteps, resultLabel } from "@/server/interviews/interview-values";
-import { zonedDay, zonedTime } from "@/server/interviews/zone-time";
+import { zonedDay, zonedTime12 } from "@/server/interviews/zone-time";
 
 const shortMonths = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -54,7 +54,7 @@ export function TrackLine({ trackId, currentId, onOpen }: { trackId: string; cur
             {round && (
               <span className="mt-0.5 block text-[10px] leading-tight text-slate-500">
                 {resultLabel(round.result)}<br />
-                {shortDay(zonedDay(new Date(round.startsAt), settings.timeZone))} {zonedTime(new Date(round.startsAt), settings.timeZone)}
+                {shortDay(zonedDay(new Date(round.startsAt), settings.timeZone))} {zonedTime12(new Date(round.startsAt), settings.timeZone)}
               </span>
             )}
           </>

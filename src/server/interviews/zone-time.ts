@@ -160,7 +160,20 @@ export function minutesBetween(start: Date, end: Date): number {
   return Math.round((end.getTime() - start.getTime()) / 60000);
 }
 
-/** "15:00–16:00": a round's start and end in the zone. */
+/** "HH:MM" (24-hour, as stored and sent) as people read it: "1:15 PM", "12:00 AM". Anything else is returned as it is. */
+export function to12h(time: string): string {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time);
+  if (!match) return time;
+  const hour = Number(match[1]) % 24;
+  return `${hour % 12 || 12}:${match[2]} ${hour < 12 ? "AM" : "PM"}`;
+}
+
+/** The moment's time in the zone as people read it, "1:15 PM". */
+export function zonedTime12(moment: Date, zone: string): string {
+  return to12h(zonedTime(moment, zone));
+}
+
+/** "12:45 PM–1:15 PM": a round's start and end in the zone. */
 export function timeRange(round: { startsAt: string | Date; endsAt: string | Date }, zone: string): string {
-  return `${zonedTime(new Date(round.startsAt), zone)}–${zonedTime(new Date(round.endsAt), zone)}`;
+  return `${zonedTime12(new Date(round.startsAt), zone)}–${zonedTime12(new Date(round.endsAt), zone)}`;
 }

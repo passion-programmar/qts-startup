@@ -27,7 +27,7 @@ import {
   timeToMinutes,
   type InterviewStep,
 } from "@/server/interviews/interview-values";
-import { weekdayOf, zonedDay, zonedMoment, zonedTime, zoneShortName } from "@/server/interviews/zone-time";
+import { weekdayOf, zonedDay, zonedMoment, zonedTime, zonedTime12, zoneShortName } from "@/server/interviews/zone-time";
 
 export type { InterviewRecord } from "@/server/interviews/interview-record";
 import type { InterviewRecord } from "@/server/interviews/interview-record";
@@ -104,7 +104,7 @@ export function InterviewDialog({
     .map((other) => {
       const to = zonedMoment(day, end, entryZone);
       const otherDay = zonedDay(from, other);
-      return `${zoneShortName(other, from)}: ${zonedTime(from, other)}–${zonedTime(to, other)}${otherDay !== day ? ` (${readableDay(otherDay)})` : ""}`;
+      return `${zoneShortName(other, from)}: ${zonedTime12(from, other)}–${zonedTime12(to, other)}${otherDay !== day ? ` (${readableDay(otherDay)})` : ""}`;
     })
     .join(" · ") : "";
   const [state, formAction, saving] = useActionState(async (previous: RecordActionState, formData: FormData) => {

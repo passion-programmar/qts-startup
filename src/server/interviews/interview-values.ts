@@ -1,4 +1,4 @@
-import { CET_ZONE, isTimeZone } from "./zone-time";
+import { CET_ZONE, isTimeZone, to12h } from "./zone-time";
 
 // Interview steps and results, their labels and colours, and the form checks. No server imports, so
 // the page, the window and the tests share them.
@@ -148,8 +148,18 @@ export function interviewCountdown(startsAt: string, endsAt: string, now: number
   return { phase, fill: Math.min(Math.max(1 - remaining / COUNTDOWN_WINDOW, 0), 1), text: `in ${spanText(Math.ceil(remaining / MINUTE))}` };
 }
 
-/** A typed time, read loosely: "9" → 09:00, "930" / "9.30" / "9:30" → 09:30, "1430" → 14:30; "" when not a time. */
+/** A typed time, read loosely: "9" → 09:00, "930" / "9.30" / "9:30" → 09:30, "1430" → 14:30, "2pm" / "2:30 PM" → 14:00 / 14:30; "" when not a time. */
 export function parseTypedTime(text: string): string {
+  // "1pm", "1:30 PM", "130pm", "12 am": the 12-hour clock, read into 24-hour "HH:MM".
+  const twelve = /^(\d{1,4}(?:[:.]\d{2})?)\s*([ap])\.?\s*m?\.?$/i.exec(text.trim());
+  if (twelve?.[1] && twelve[2]) {
+    const base = parseTypedTime(twelve[1]);
+    if (!base) return "";
+    const hour = Number(base.slice(0, 2));
+    if (hour < 1 || hour > 12) return "";
+    const pm = twelve[2].toLowerCase() === "p";
+    return `${String((hour % 12) + (pm ? 12 : 0)).padStart(2, "0")}${base.slice(2)}`;
+  }
   const trimmed = text.trim();
   if (/^\d{1,4}$/.test(trimmed)) {
     return trimmed.length <= 2
@@ -188,7 +198,7 @@ export type TimeOption = { value: string; label: string };
 
 /** The start list: every 15 minutes of the day. */
 export function startTimeOptions(): TimeOption[] {
-  return Array.from({ length: 96 }, (_, index) => minutesToTime(index * 15)).map((value) => ({ value, label: value }));
+  return Array.from({ length: 96 }, (_, index) => minutesToTime(index * 15)).map((value) => ({ value, label: to12h(value) }));
 }
 
 /** The end list: every 15 minutes after the start, each with its length; the day's list without a start. */
@@ -198,7 +208,7 @@ export function endTimeOptions(start: string): TimeOption[] {
   const options: TimeOption[] = [];
   for (let total = from + 15; total <= LAST_MINUTE; total += 15) {
     const value = minutesToTime(total);
-    options.push({ value, label: `${value} (${lengthLabel(total - from)})` });
+    options.push({ value, label: `${to12h(value)} (${lengthLabel(total - from)})` });
   }
   return options;
 }

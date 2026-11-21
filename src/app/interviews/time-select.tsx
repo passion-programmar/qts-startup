@@ -1,9 +1,11 @@
 "use client";
 
-// A time box like Google Calendar's: a list every 15 minutes opens under it, and any time can still
-// be typed ("9", "930", "14:10"). The list scrolls to the chosen time, or the next one after it.
+// A time box like Google Calendar's: shows AM/PM, a list every 15 minutes opens under it, and any time
+// can still be typed ("2pm", "2:30 PM", "930", "14:10"). The list scrolls to the chosen time, or the
+// next one after it. The form gets the time as 24-hour "HH:MM" from a hidden field.
 import { useEffect, useId, useRef, useState } from "react";
 import { parseTypedTime, type TimeOption } from "@/server/interviews/interview-values";
+import { to12h } from "@/server/interviews/zone-time";
 
 export function TimeSelect({
   id,
@@ -67,11 +69,9 @@ export function TimeSelect({
         aria-expanded={open}
         aria-label={label}
         autoComplete="off"
-        className="h-10 w-[5.5rem] rounded-lg border border-slate-200 bg-white px-3 text-center text-sm tabular-nums text-slate-800 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+        className="h-10 w-[6.5rem] rounded-lg border border-slate-200 bg-white px-3 text-center text-sm tabular-nums text-slate-800 focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
         id={id}
-        inputMode="numeric"
-        maxLength={5}
-        name={name}
+        maxLength={8}
         onBlur={() => { commit(); setOpen(false); }}
         onChange={(event) => { setDraft(event.target.value); if (!open) show(); }}
         onClick={() => { if (!open) show(); }}
@@ -94,14 +94,15 @@ export function TimeSelect({
             setOpen(false);
           }
         }}
-        pattern="([01][0-9]|2[0-3]):[0-5][0-9]"
-        placeholder="HH:MM"
+        placeholder="9:00 AM"
         required={required}
         role="combobox"
-        title="24-hour time, e.g. 14:30"
+        title="Time with AM or PM, e.g. 2:30 PM (2pm, 230pm and 14:30 also work)"
         type="text"
-        value={draft ?? value}
+        value={draft ?? to12h(value)}
       />
+      {/* The form sends the time as 24-hour "HH:MM", whatever the box shows. */}
+      <input name={name} type="hidden" value={value} />
       {open && options.length > 0 && (
         <ul
           className="absolute left-0 top-full z-50 mt-1 max-h-60 min-w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl"

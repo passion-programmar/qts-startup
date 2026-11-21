@@ -126,10 +126,10 @@ test("time lists like Google Calendar: starts every 15 min, ends with their leng
   assert.equal(starts.length, 96);
   assert.deepEqual([starts[0]?.value, starts[36]?.value, starts.at(-1)?.value], ["00:00", "09:00", "23:45"]);
   const ends = endTimeOptions("14:00");
-  assert.deepEqual(ends.slice(0, 4).map((option) => option.label), ["14:15 (15 mins)", "14:30 (30 mins)", "14:45 (45 mins)", "15:00 (1 hr)"]);
-  assert.equal(ends.find((option) => option.value === "21:30")?.label, "21:30 (7.5 hrs)");
+  assert.deepEqual(ends.slice(0, 4).map((option) => option.label), ["2:15 PM (15 mins)", "2:30 PM (30 mins)", "2:45 PM (45 mins)", "3:00 PM (1 hr)"]);
+  assert.equal(ends.find((option) => option.value === "21:30")?.label, "9:30 PM (7.5 hrs)");
   assert.equal(ends.at(-1)?.value, "23:45");
-  assert.equal(endTimeOptions("14:10")[0]?.label, "14:25 (15 mins)");
+  assert.equal(endTimeOptions("14:10")[0]?.label, "2:25 PM (15 mins)");
   assert.equal(endTimeOptions("").length, 96);
   assert.equal(lengthLabel(75), "1.25 hrs");
   assert.equal(lengthLabel(120), "2 hrs");
@@ -176,4 +176,20 @@ test("countdown: fills over the last day, colours by how close, live progress, t
   assert.equal(at("2026-11-16T13:59:30Z").text, "in 1 min");
   assert.deepEqual(at("2026-11-16T14:25:00Z"), { phase: "live", fill: 25 / 60, text: "Live · 25 of 60 min" });
   assert.deepEqual(at("2026-11-16T15:00:00Z"), { phase: "done", fill: 1, text: "Done" });
+});
+
+test("AM / PM: shown in 12-hour, typed either way, stored as 24-hour", async () => {
+  const { parseTypedTime, startTimeOptions } = await import("./interview-values");
+  const { to12h, timeRange } = await import("./zone-time");
+  assert.deepEqual([to12h("00:00"), to12h("09:05"), to12h("12:00"), to12h("13:15"), to12h("23:45")], ["12:00 AM", "9:05 AM", "12:00 PM", "1:15 PM", "11:45 PM"]);
+  assert.equal(startTimeOptions()[52]?.label, "1:00 PM");
+  assert.equal(startTimeOptions()[52]?.value, "13:00");
+  assert.equal(parseTypedTime("2pm"), "14:00");
+  assert.equal(parseTypedTime("2:30 PM"), "14:30");
+  assert.equal(parseTypedTime("230p"), "14:30");
+  assert.equal(parseTypedTime("12am"), "00:00");
+  assert.equal(parseTypedTime("12 PM"), "12:00");
+  assert.equal(parseTypedTime("9:15 a.m."), "09:15");
+  assert.equal(parseTypedTime("13pm"), "");
+  assert.equal(timeRange({ startsAt: "2026-11-23T11:45:00Z", endsAt: "2026-11-23T12:15:00Z" }, "Europe/Berlin"), "12:45 PM–1:15 PM");
 });
