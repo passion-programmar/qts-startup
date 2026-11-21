@@ -7,6 +7,7 @@ import { InterviewChoicesProvider } from "@/app/interviews/interview-context";
 import { InterviewCalendar } from "@/app/interviews/interview-calendar";
 import { InterviewCountdown } from "@/app/interviews/interview-countdown";
 import { TrackStepCell } from "@/app/interviews/interview-details";
+import { lastStepIndex } from "@/app/interviews/interview-track";
 import { TracksFilters } from "@/app/interviews/interview-controls";
 import { summarizeTrack, toInterviewRecord, type InterviewRecord } from "@/server/interviews/interview-record";
 import { AddInterviewButton, CalendarToolbar, InterviewRowActions, InterviewsFilters, TimeSettingsButton } from "@/app/interviews/interview-controls";
@@ -170,6 +171,7 @@ export default async function InterviewsPage({
               rows={jobs.tracks.map((track, index) => {
                 const rounds = track.rounds.map(toInterviewRecord);
                 const { byStep, latest } = summarizeTrack(rounds);
+                const lastWithRound = lastStepIndex(byStep);
                 return {
                   id: track.trackId,
                   cells: [
@@ -181,7 +183,7 @@ export default async function InterviewsPage({
                         <span className="block text-[11px] font-normal text-slate-500">{latest.jobTitle}</span>
                       </a>
                     ) : "—",
-                    ...interviewSteps.map((step) => <TrackStepCell count={byStep[step.key]?.count ?? 0} key={step.key} round={byStep[step.key] ?? null} />),
+                    ...interviewSteps.map((step, stepIndex) => <TrackStepCell count={byStep[step.key]?.count ?? 0} key={step.key} round={byStep[step.key] ?? null} skipped={stepIndex < lastWithRound} />),
                     latest ? <TrackStatus key="status" latest={latest} /> : "—",
                   ],
                 };

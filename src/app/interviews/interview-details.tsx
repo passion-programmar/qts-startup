@@ -131,10 +131,10 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
 }
 
 /** A step's cell in the By job table: its latest round's mark and day; clicking opens the round. */
-export function TrackStepCell({ round, count }: { round: InterviewRecord | null; count: number }) {
+export function TrackStepCell({ round, count, skipped = false }: { round: InterviewRecord | null; count: number; skipped?: boolean }) {
   const { settings } = useInterviewChoices();
   const [open, setOpen] = useState(false);
-  if (!round) return <span className="text-slate-300">–</span>;
+  if (!round) return skipped ? <span className="text-[11px] italic text-slate-400" title="The company went to a later step">Skipped</span> : <span className="text-slate-300">–</span>;
   const start = new Date(round.startsAt);
   return (
     <>

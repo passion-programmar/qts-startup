@@ -2,7 +2,7 @@
 
 // A job's track: Intro → Tech → Final → Offer, each step with how its latest round went. The rounds
 // load when the line is shown; clicking a step opens that round when the parent allows it.
-import { Ban, Check, Circle, X } from "lucide-react";
+import { Ban, Check, Circle, Redo2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { loadTrackAction } from "@/app/interviews/actions";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
@@ -36,17 +36,21 @@ export function TrackLine({ trackId, currentId, onOpen }: { trackId: string; cur
 
   if (!rounds) return <p className="text-xs text-slate-500">Loading the track…</p>;
   const { byStep } = summarizeTrack(rounds);
+  // A step with no round but a later step that has one was skipped (e.g. Intro → Final).
+  const lastWithRound = lastStepIndex(byStep);
   return (
     <ol aria-label="Track" className="flex items-start">
       {interviewSteps.map((step, index) => {
         const round = byStep[step.key];
         const current = round?.id === currentId;
+        const skipped = !round && index < lastWithRound;
         const content = (
           <>
             <span className={`flex items-center gap-1 text-xs font-semibold ${round ? "text-slate-800" : "text-slate-400"} ${current ? "underline decoration-2 underline-offset-4" : ""}`}>
-              {round ? <ResultMark result={round.result} /> : <Circle aria-hidden="true" className="size-3.5 text-slate-300" />}
-              {step.label}{round && round.count > 1 ? ` ×${round.count}` : ""}
+              {round ? <ResultMark result={round.result} /> : skipped ? <Redo2 aria-hidden="true" className="size-3.5 text-slate-400" /> : <Circle aria-hidden="true" className="size-3.5 text-slate-300" />}
+              <span className={skipped ? "line-through decoration-slate-400" : ""}>{step.label}</span>{round && round.count > 1 ? ` ×${round.count}` : ""}
             </span>
+            {skipped && <span className="mt-0.5 block text-[10px] italic leading-tight text-slate-400">Skipped</span>}
             {round && (
               <span className="mt-0.5 block text-[10px] leading-tight text-slate-500">
                 {resultLabel(round.result)}<br />
@@ -68,4 +72,11 @@ export function TrackLine({ trackId, currentId, onOpen }: { trackId: string; cur
       })}
     </ol>
   );
+}
+
+/** The index of the last step that has a round (-1 when none): steps before it without a round were skipped. */
+export function lastStepIndex(byStep: Partial<Record<string, unknown>>): number {
+  let last = -1;
+  interviewSteps.forEach((step, index) => { if (byStep[step.key]) last = index; });
+  return last;
 }

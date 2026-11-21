@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarPlus, ChevronLeft, ChevronRight, ExternalLink, ListPlus, MoreHorizontal, Pencil, Plus, Settings, Trash2, X } from "lucide-react";
+import { CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, ListPlus, MoreHorizontal, Pencil, Plus, Settings, Trash2, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -81,6 +81,55 @@ function followUpOf(record: InterviewRecord, result: InterviewResult): FollowUp 
   return next ? { step: next, label: `Next step (${stepLabel(next)})`, tone: result === "passed" ? "go" : "plain" } : null;
 }
 
+type StepChoice = { step: InterviewStep; label: string; again: boolean };
+
+/**
+ * What can be added after a round: the same step on a new date (the company asked again), then every
+ * later step, so a company that goes Intro → Final or straight to Offer is handled the same way.
+ */
+function stepChoicesOf(record: InterviewRecord): StepChoice[] {
+  const index = interviewSteps.findIndex((step) => step.key === record.step);
+  return [
+    { step: record.step, label: `New date (${stepLabel(record.step)})`, again: true },
+    ...interviewSteps.slice(index + 1).map((step) => ({ step: step.key, label: `${step.label}${step.key === nextInterviewStep(record.step) ? "" : " (skip ahead)"}`, again: false })),
+  ];
+}
+
+/** "+ Add step ▾": a small list of the same step again and every later step; picking one opens the Add window. */
+function AddStepMenu({ choices, tone, onPick }: { choices: StepChoice[]; tone: keyof typeof followUpClasses; onPick: (step: InterviewStep) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); setOpen(false); } };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape, true);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape, true); };
+  }, [open]);
+  // After Rejected / No-show / Cancelled the new date comes first; otherwise the next step does.
+  const ordered = tone === "again" ? choices : [...choices.filter((choice) => !choice.again), ...choices.filter((choice) => choice.again)];
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button aria-expanded={open} aria-haspopup="menu" className={`inline-flex h-8 items-center gap-1.5 rounded-control border px-2.5 text-xs font-semibold ${followUpClasses[tone]}`} onClick={() => setOpen((value) => !value)} type="button">
+        <Plus aria-hidden="true" className="size-3.5" /> Add step <ChevronDown aria-hidden="true" className="size-3.5" />
+      </button>
+      {open && (
+        <div className="absolute bottom-10 left-0 z-30 w-52 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
+          {ordered.map((choice, index) => (
+            <div key={choice.step}>
+              {index > 0 && ordered[index - 1]?.again !== choice.again && <div aria-hidden="true" className="my-1 border-t border-slate-100" />}
+              <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50" onClick={() => { setOpen(false); onPick(choice.step); }} role="menuitem" type="button">
+                {choice.again ? <CalendarPlus aria-hidden="true" className="size-3.5 text-orange-600" /> : <ListPlus aria-hidden="true" className="size-3.5 text-indigo-600" />} {choice.label}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * A round's result picker, its follow-up (next step or new date), Edit and Delete: Open job and
  * Delete in a ⋯ menu in the tables, or everything on one line (inline) in the details card, most used
@@ -152,11 +201,7 @@ export function InterviewRowActions({ record, onDone, inline = false, lead }: { 
       <Pencil aria-hidden="true" className="size-3.5" />
     </button>
   );
-  const followUpButton = followUp && (
-    <button className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-xs font-semibold ${followUpClasses[followUp.tone]}`} onClick={() => setAdding(followUp.step)} type="button">
-      {followUp.tone === "again" ? <CalendarPlus aria-hidden="true" className="size-3.5" /> : <ListPlus aria-hidden="true" className="size-3.5" />} {followUp.label}
-    </button>
-  );
+  const followUpButton = <AddStepMenu choices={stepChoicesOf(record)} onPick={setAdding} tone={followUp?.tone ?? "plain"} />;
 
   return (
     <div className={`flex flex-col items-start gap-1.5 ${inline ? "w-full" : ""}`}>
@@ -201,11 +246,11 @@ export function InterviewRowActions({ record, onDone, inline = false, lead }: { 
           </button>
           {menuOpen && (
             <div className="absolute right-0 top-9 z-30 w-48 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" role="menu">
-              {followUp && (
-                <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50" onClick={() => { setMenuOpen(false); setAdding(followUp.step); }} role="menuitem" type="button">
-                  {followUp.tone === "again" ? <CalendarPlus aria-hidden="true" className="size-3.5" /> : <ListPlus aria-hidden="true" className="size-3.5" />} {followUp.label}
+              {stepChoicesOf(record).map((choice) => (
+                <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50" key={choice.step} onClick={() => { setMenuOpen(false); setAdding(choice.step); }} role="menuitem" type="button">
+                  {choice.again ? <CalendarPlus aria-hidden="true" className="size-3.5" /> : <ListPlus aria-hidden="true" className="size-3.5" />} {choice.label}
                 </button>
-              )}
+              ))}
               {record.jobUrl && (
                 <a className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50" href={record.jobUrl} onClick={() => setMenuOpen(false)} rel="noreferrer" role="menuitem" target="_blank">
                   <ExternalLink aria-hidden="true" className="size-3.5" /> Open job
