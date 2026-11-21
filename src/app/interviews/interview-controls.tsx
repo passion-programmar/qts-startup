@@ -61,8 +61,13 @@ export function AddInterviewButton({ startBid }: { startBid: BidChoice | null })
   );
 }
 
-/** A round's result picker, Edit, and the ⋯ menu (Add next step, Open job, Delete). */
-export function InterviewRowActions({ record, onDone }: { record: InterviewRecord; onDone?: () => void }) {
+const inlineButton = "inline-flex h-8 items-center gap-1.5 rounded-control border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50";
+
+/**
+ * A round's result picker, Edit, and Add next step / Open job / Delete: in a ⋯ menu in the tables,
+ * or as buttons on the same line (inline) where there is room, like the details card.
+ */
+export function InterviewRowActions({ record, onDone, inline = false }: { record: InterviewRecord; onDone?: () => void; inline?: boolean }) {
   const { settings } = useInterviewChoices();
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState<InterviewStep | null>(null);
@@ -112,7 +117,7 @@ export function InterviewRowActions({ record, onDone }: { record: InterviewRecor
 
   return (
     <div className="flex flex-col items-start gap-1.5">
-      <div className="flex items-center gap-1.5">
+      <div className={`flex items-center gap-1.5 ${inline ? "flex-wrap" : ""}`}>
         <label className="sr-only" htmlFor={`result-${record.id}`}>Result</label>
         <select
           className={`h-8 rounded-full px-2 text-[11px] font-semibold ring-1 ring-inset focus:outline-none focus:ring-2 focus:ring-indigo-300 ${resultClasses[result]}`}
@@ -126,6 +131,32 @@ export function InterviewRowActions({ record, onDone }: { record: InterviewRecor
         <button aria-label={`Edit ${record.company} ${stepLabel(record.step)}`} className="inline-flex size-8 items-center justify-center rounded-control border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setEditing(true)} title="Edit" type="button">
           <Pencil aria-hidden="true" className="size-3.5" />
         </button>
+        {inline ? (
+          <>
+            {next && (
+              <button className={inlineButton} onClick={() => setAdding(next)} type="button">
+                <ListPlus aria-hidden="true" className="size-3.5" /> Add next step ({stepLabel(next)})
+              </button>
+            )}
+            {record.jobUrl && (
+              <a className={inlineButton} href={record.jobUrl} rel="noreferrer" target="_blank">
+                <ExternalLink aria-hidden="true" className="size-3.5" /> Open job
+              </a>
+            )}
+            <form action={deleteAction}>
+              <input name="id" type="hidden" value={record.id} />
+              <ConfirmButton
+                className="inline-flex h-8 items-center gap-1.5 rounded-control border border-rose-200 bg-rose-50 px-2.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                confirmLabel="Delete interview"
+                description={<>This deletes the {stepLabel(record.step)} round with {record.company} on {zonedDay(new Date(record.startsAt), settings.timeZone)}. The bid stays.</>}
+                disabled={deleting}
+                title="Delete this interview?"
+              >
+                {deleting ? <LoadingIcon className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />} Delete
+              </ConfirmButton>
+            </form>
+          </>
+        ) : (
         <div className="relative" ref={menuRef}>
           <button aria-expanded={menuOpen} aria-haspopup="menu" aria-label="More actions" className="inline-flex size-8 items-center justify-center rounded-control border border-slate-200 bg-white text-slate-600 hover:bg-slate-50" onClick={() => setMenuOpen((open) => !open)} title="More" type="button">
             <MoreHorizontal aria-hidden="true" className="size-4" />
@@ -157,6 +188,7 @@ export function InterviewRowActions({ record, onDone }: { record: InterviewRecor
             </div>
           )}
         </div>
+        )}
       </div>
       {(resultError || deleteState.error) && <p className="max-w-48 text-[11px] text-rose-700" role="alert">{resultError || deleteState.error}</p>}
       {askNext && (

@@ -4,6 +4,7 @@
 // zones, its track (click another step to see that round), and Join, result, Edit and the ⋯ menu.
 import { ExternalLink, Video, X } from "lucide-react";
 import { useState } from "react";
+import { categoryColors, colorOf } from "@/app/interviews/category-colors";
 import { useInterviewChoices } from "@/app/interviews/interview-context";
 import { InterviewCountdown } from "@/app/interviews/interview-countdown";
 import { InterviewRowActions } from "@/app/interviews/interview-controls";
@@ -13,6 +14,19 @@ import { resultLabel, stepClasses, stepLabel, type InterviewStep } from "@/serve
 import { timeRange, weekdayOf, zonedDay, zoneShortName } from "@/server/interviews/zone-time";
 
 const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const fullWeekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Today", "Tomorrow", "In 3 days", "Yesterday", "5 days ago", with a colour for each. */
+function relativeDay(day: string, today: string): { text: string; tone: string } {
+  const diff = today ? Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000) : Number.NaN;
+  if (Number.isNaN(diff)) return { text: day, tone: "bg-slate-100 text-slate-600" };
+  if (diff === 0) return { text: "Today", tone: "bg-amber-400 text-amber-950" };
+  if (diff === 1) return { text: "Tomorrow", tone: "bg-blue-600 text-white" };
+  if (diff > 1) return { text: `In ${diff} days`, tone: "bg-blue-100 text-blue-800" };
+  if (diff === -1) return { text: "Yesterday", tone: "bg-slate-200 text-slate-700" };
+  return { text: `${-diff} days ago`, tone: "bg-slate-200 text-slate-700" };
+}
 export const stepDotClasses: Record<InterviewStep, string> = {
   intro: "bg-slate-500",
   tech: "bg-blue-600",
@@ -21,30 +35,57 @@ export const stepDotClasses: Record<InterviewStep, string> = {
 };
 
 export function DetailsCard({ record, onClose }: { record: InterviewRecord; onClose: () => void }) {
-  const { settings, today } = useInterviewChoices();
+  const { settings, today, categories } = useInterviewChoices();
   // Another round of the track, when one was clicked on the Track line.
   const [opened, setOpened] = useState<InterviewRecord | null>(null);
   const shown = opened ?? record;
   const zone = settings.timeZone;
+  const second = settings.secondTimeZone;
   const start = new Date(shown.startsAt);
   const day = zonedDay(start, zone);
+  const minutes = Math.round((new Date(shown.endsAt).getTime() - start.getTime()) / 60000);
+  const color = colorOf(categoryColors(categories), shown.category);
+  const relative = relativeDay(day, today);
   return (
     <div aria-labelledby="interview-details-title" aria-modal="true" className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/40 p-4" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }} onKeyDown={(event) => {
         // Escape in a window opened from the card (Edit) closes that window, not the card.
         if (event.key === "Escape" && (event.target as HTMLElement).closest("[role='dialog']") === event.currentTarget) onClose();
       }} role="dialog">
-      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-line bg-card p-5 shadow-2xl">
+      <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-line bg-card p-5 shadow-2xl">
         <div className="flex items-start gap-3">
-          <span aria-hidden="true" className={`mt-1.5 size-3.5 shrink-0 rounded ${stepDotClasses[shown.step]}`} />
+          <span aria-hidden="true" className="mt-1.5 size-3.5 shrink-0 rounded" style={{ backgroundColor: color.background }} />
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold text-slate-900" id="interview-details-title">{shown.company} · {stepLabel(shown.step)}</h2>
-            <p className="text-sm text-slate-600">{weekdayNames[weekdayOf(day)]}, {day} · {timeRange(shown, zone)} {zoneShortName(zone, start)}</p>
-            {settings.secondTimeZone && <p className="text-xs text-slate-500">{zonedDay(start, settings.secondTimeZone)} · {timeRange(shown, settings.secondTimeZone)} {zoneShortName(settings.secondTimeZone, start)}</p>}
-            {/* Today's rounds only: the countdown to the start, then its progress. */}
-            {day === today && <InterviewCountdown className="mt-2" endsAt={shown.endsAt} startsAt={shown.startsAt} />}
           </div>
           <button aria-label="Close" autoFocus className="flex size-8 items-center justify-center rounded-lg hover:bg-slate-100" onClick={onClose} type="button"><X className="size-4" /></button>
         </div>
+        {/* When: a calendar tile in the category's colour, then the time large, the second zone, and how far away it is. */}
+        <section aria-label="When" className="mt-3 flex items-stretch gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="flex w-16 shrink-0 flex-col items-center justify-center rounded-lg py-1.5 shadow-sm" style={{ backgroundColor: color.background, color: color.text }}>
+            <span className="text-[11px] font-semibold uppercase tracking-wider opacity-90">{monthNames[Number(day.slice(5, 7)) - 1]}</span>
+            <span className="text-2xl font-bold leading-none tabular-nums">{Number(day.slice(8))}</span>
+            <span className="mt-0.5 text-[11px] font-semibold uppercase tracking-wider opacity-90">{weekdayNames[weekdayOf(day)]}</span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-slate-800">{fullWeekdayNames[weekdayOf(day)]}, {Number(day.slice(8))} {monthNames[Number(day.slice(5, 7)) - 1]} {day.slice(0, 4)}</span>
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${relative.tone}`}>{relative.text}</span>
+            </div>
+            <p className="mt-1 flex flex-wrap items-baseline gap-x-2">
+              <span className="text-2xl font-bold tabular-nums text-slate-900">{timeRange(shown, zone).replace("–", " – ")}</span>
+              <span className="rounded-md bg-indigo-600 px-1.5 py-0.5 text-[11px] font-bold text-white">{zoneShortName(zone, start)}</span>
+              <span className="text-xs text-slate-500">{minutes} min</span>
+            </p>
+            {second && (
+              <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+                {timeRange(shown, second).replace("–", " – ")} <span className="font-semibold">{zoneShortName(second, start)}</span>
+                {zonedDay(start, second) !== day && ` · ${zonedDay(start, second)}`}
+              </p>
+            )}
+            {/* Today's rounds only: the countdown to the start, then its progress. */}
+            {day === today && <InterviewCountdown className="mt-2" endsAt={shown.endsAt} startsAt={shown.startsAt} />}
+          </div>
+        </section>
         <section className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Track</h3>
           <TrackLine currentId={shown.id} onOpen={setOpened} trackId={shown.trackId} />
@@ -66,7 +107,7 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
               <Video aria-hidden="true" className="size-3.5" /> Join
             </a>
           )}
-          <InterviewRowActions key={shown.id} onDone={onClose} record={shown} />
+          <InterviewRowActions inline key={shown.id} onDone={onClose} record={shown} />
         </div>
       </div>
     </div>
