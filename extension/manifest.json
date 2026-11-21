@@ -27,6 +27,11 @@
       "matches": ["<all_urls>"],
       "js": ["content/qts-site-bridge.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.linkedin.com/jobs/*"],
+      "js": ["shared/title-company-key.js", "content/linkedin-skip.js"],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [

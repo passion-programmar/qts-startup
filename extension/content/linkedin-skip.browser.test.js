@@ -1,0 +1,142 @@
+// LinkedIn skip-list on a copy of LinkedIn's live job-card structure (2026-11-21): hashed classes,
+// componentkey "job-card-component-ref-<id>", title lines + Dismiss aria-label, company next line,
+// state labels. Served at a linkedin.com address by request interception: real LinkedIn is never used.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const CHROME = [process.env.QTS_CHROME, 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].find((p) => p && fs.existsSync(p));
+const root = path.join(__dirname, '..', '..');
+const { computeTitleCompanyKey } = require(path.join(root, 'extension', 'shared', 'title-company-key.js'));
+
+const card = ({ id, title, company, location = 'Poland (Remote)', state = null, verified = false, broken = false }) => `
+<div data-display-contents="true"><div><div data-display-contents="true">
+  <div class="cfsjj4 cfsjkl cfsjk2" componentkey="job-card-component-ref-${id}">
+    <div class="cfsg3i">
+      <p class="cfsa1"><span>${verified ? `${title} (Verified job)` : title}</span></p>
+      ${verified ? `<p class="cfsa2"><span aria-hidden="true">${title}</span></p>` : ''}
+      <p class="cfsa3"><span>${company}</span></p>
+      <p class="cfsa4"><span>${location}</span></p>
+      <ul class="cfsa5">${state ? `<li>${state}</li><li>·</li>` : '<li>Posted 1 day ago</li><li>·</li>'}<li>Promoted</li></ul>
+      ${broken ? '' : `<button class="cfsb" aria-label="Dismiss ${title} job">✕</button>`}
+    </div>
+  </div>
+</div></div></div>`;
+
+const PAGE1 = [
+  { id: '4490425819', title: 'Senior DevOps Engineer (Azure+AWS)', company: 'N-iX', state: 'Viewed', verified: true },
+  { id: '4492410414', title: 'Senior Site Reliability Engineer - AI/GPU', company: 'TechShack', state: 'Applied' },
+  { id: '4491500626', title: 'Site Reliability Engineer II', company: 'Akamai Technologies' }, // a QTS bid
+  { id: '4492930672', title: 'Senior Kubernetes & Reliability Engineer', company: 'Verda' },
+  { id: '4484283569', title: 'Staff DevOps Engineer', company: 'Bloomreach' },
+  { id: '4491927331', title: 'Senior Cloud Engineer', company: 'FP Markets', location: 'Cyprus (Remote)' },
+];
+const PAGE2 = [
+  { id: '4499000001', title: 'Senior DevOps Engineer', company: 'Bloomreach' },
+  { id: '4499000002', title: 'Site Reliability Engineer II', company: 'Akamai Technologies' }, // same job, new id
+  { id: '4499000003', title: 'Senior DevOps Engineer', company: 'MC Engineering', location: 'Italy (Remote)' },
+];
+const list = (cards) => `<main><section aria-label="results">${cards.map(card).join('')}</section><div id="detail">Job details</div></main>`;
+
+async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs/search-results/?currentJobId=4490425819', known = [], signedIn = true }) {
+  const page = await browser.newPage();
+  await page.setRequestInterception(true);
+  page.on('request', (request) => (request.url().startsWith('https://www.linkedin.com/')
+    ? request.respond({ status: 200, contentType: 'text/html', body: `<!doctype html><html><body>${list(cards)}</body></html>` })
+    : request.abort()));
+  await page.goto(url);
+  await page.evaluate(({ known, signedIn }) => {
+    // A fake worker: the Manager's skip-list (bids, saved jobs, marks) and the messages sent to it.
+    window.calls = [];
+    window.skipSet = new Set(known);
+    window.listeners = { message: new Set(), storage: new Set() };
+    const events = (key) => ({ addListener: (fn) => window.listeners[key].add(fn), removeListener: (fn) => window.listeners[key].delete(fn) });
+    window.chrome = {
+      runtime: { id: 'test', onMessage: events('message'), sendMessage: async (message) => {
+        window.calls.push(message);
+        if (message.type === 'QTS_LINKEDIN_SKIPS_MATCH') {
+          for (const mark of message.marks) window.skipSet.add(mark.key);
+          return { ok: true, skipped: message.keys.filter((key) => window.skipSet.has(key)) };
+        }
+        if (message.type === 'QTS_LINKEDIN_SKIPS_MARK') { for (const item of message.items) window.skipSet.add(item.key); return { ok: true, added: 1 }; }
+        if (message.type === 'QTS_LINKEDIN_SKIPS_UNSKIP') { for (const item of message.items) window.skipSet.delete(item.key); return { ok: true, removed: 1 }; }
+        return { ok: false };
+      } },
+      storage: { onChanged: events('storage'), local: { get: async () => ({ authExpiresAt: signedIn ? Date.now() + 3600000 : 0 }) } },
+    };
+    window.htmlBefore = document.querySelector('main').innerHTML;
+    // What is painted: the outlined cards (style rules) and the coloured text (highlight ranges).
+    window.painted = () => {
+      const rules = [...document.adoptedStyleSheets].flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText));
+      const outlined = rules.map((text) => /job-card-component-ref-(\d+)/.exec(text)?.[1]).filter(Boolean);
+      const texts = [...(CSS.highlights.get('qts-linkedin-skip') || [])].map((range) => range.toString());
+      return { outlined, texts };
+    };
+  }, { known, signedIn });
+  await page.addScriptTag({ path: path.join(root, 'extension', 'shared', 'title-company-key.js') });
+  await page.addScriptTag({ path: path.join(root, 'extension', 'content', 'linkedin-skip.js') });
+  await page.waitForFunction(() => window.__qtsLinkedInSkip?.status().state !== 'starting');
+  return page;
+}
+
+const sorted = (values) => [...values].sort();
+
+test('seen cards are outlined and their title and company coloured; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
+  const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
+  try {
+    const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
+    const page = await openSearch(browser, { cards: PAGE1, known });
+    await page.waitForFunction(() => window.painted().outlined.length === 3);
+    const painted = await page.evaluate(() => window.painted());
+    // Viewed (LinkedIn), Applied (LinkedIn), and the QTS bid; the three new jobs are left as they are.
+    assert.deepEqual(sorted(painted.outlined), sorted(['4490425819', '4492410414', '4491500626']));
+    assert.deepEqual(sorted(painted.texts), sorted(['Senior DevOps Engineer (Azure+AWS)', 'N-iX', 'Senior Site Reliability Engineer - AI/GPU', 'TechShack', 'Site Reliability Engineer II', 'Akamai Technologies']));
+    // LinkedIn's own labels were sent as marks with their source.
+    const marks = await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_MATCH').flatMap((call) => call.marks));
+    assert.deepEqual(marks.map((mark) => [mark.title, mark.source]).sort(), [['Senior DevOps Engineer (Azure+AWS)', 'viewed'], ['Senior Site Reliability Engineer - AI/GPU', 'applied']]);
+    assert.equal(await page.evaluate(() => document.querySelector('main').innerHTML === window.htmlBefore), true, 'page HTML unchanged');
+    assert.deepEqual(await page.evaluate(() => window.__qtsLinkedInSkip.status()), { state: 'ok', total: 6, readable: 6, seen: 3 });
+
+    // A click on a new card: marked at once, sent as "clicked".
+    await page.click('[componentkey="job-card-component-ref-4492930672"] p');
+    await page.waitForFunction(() => window.painted().outlined.includes('4492930672'));
+    const clicked = await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_MARK').map((call) => call.items[0]));
+    assert.deepEqual(clicked.map(({ title, company, source }) => [title, company, source]), [['Senior Kubernetes & Reliability Engineer', 'Verda', 'clicked']]);
+
+    // Next page: LinkedIn changes the address and redraws the list. The same job under a new id is
+    // still recognised (title + company), and different jobs with the same title stay apart.
+    await page.evaluate((html) => {
+      history.pushState({}, '', '/jobs/search-results/?currentJobId=4499000001&start=25');
+      document.querySelector('section').innerHTML = html;
+    }, PAGE2.map(card).join(''));
+    await page.waitForFunction(() => window.__qtsLinkedInSkip.status().total === 3 && window.painted().outlined.length === 1);
+    assert.deepEqual((await page.evaluate(() => window.painted())).outlined, ['4499000002']);
+
+    // Skip, then un-skip, the selected job (currentJobId).
+    assert.equal((await page.evaluate(() => window.__qtsLinkedInSkip.skipSelected())).ok, true);
+    await page.waitForFunction(() => window.painted().outlined.includes('4499000001'));
+    assert.equal((await page.evaluate(() => window.__qtsLinkedInSkip.unskipSelected())).ok, true);
+    await page.waitForFunction(() => !window.painted().outlined.includes('4499000001'));
+    assert.deepEqual(await page.evaluate(() => window.__qtsLinkedInSkip.selected()), { title: 'Senior DevOps Engineer', company: 'Bloomreach', skipped: false });
+  } finally { await browser.close(); }
+});
+
+test('a layout QTS cannot read pauses the feature; signed out paints nothing', { skip: !CHROME, timeout: 60000 }, async () => {
+  const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
+  try {
+    const broken = PAGE1.map((item, index) => ({ ...item, broken: index > 0 }));
+    const paused = await openSearch(browser, { cards: broken });
+    await paused.waitForFunction(() => window.__qtsLinkedInSkip.status().state === 'paused');
+    assert.deepEqual(await paused.evaluate(() => window.painted()), { outlined: [], texts: [] });
+    assert.deepEqual(await paused.evaluate(() => window.__qtsLinkedInSkip.status()), { state: 'paused', total: 6, readable: 1, seen: 0 });
+
+    const signedOut = await openSearch(browser, { cards: PAGE1, signedIn: false });
+    await signedOut.waitForFunction(() => window.__qtsLinkedInSkip.status().state === 'signed-out');
+    assert.deepEqual(await signedOut.evaluate(() => window.painted()), { outlined: [], texts: [] });
+    assert.equal(await signedOut.evaluate(() => window.calls.length), 0, 'nothing asked while signed out');
+
+    const elsewhere = await openSearch(browser, { cards: PAGE1, url: 'https://www.linkedin.com/jobs/view/4490425819/' });
+    await elsewhere.waitForFunction(() => window.__qtsLinkedInSkip.status().state === 'not-search');
+    assert.equal(await elsewhere.evaluate(() => window.calls.length), 0, 'only search pages are read');
+  } finally { await browser.close(); }
+});

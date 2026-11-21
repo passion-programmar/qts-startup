@@ -46,7 +46,8 @@ importScripts(
   'auto-apply-api.js',
   'auto-apply-runner.js',
   'auto-apply-checklist.js',
-  'verification-mail.js'
+  'verification-mail.js',
+  'linkedin-skips.js'
 );
 
 function isExtractablePageUrl(url) {
