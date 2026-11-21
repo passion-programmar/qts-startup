@@ -97,6 +97,16 @@ async function initializeQtsPageLauncher() {
     .stat-label { display: flex; align-items: center; gap: 6px; overflow: hidden; color: #8b9ab3; font: 650 11px/1 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
     .stat-label::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; }
     .stat-value { color: #f8fafc; font: 750 22px/1 Inter, ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+    /* Loading: a soft shimmer where a number will be; the number fades in when it arrives. */
+    @keyframes qts-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+    @keyframes qts-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .is-loading { display: inline-block; color: transparent !important; border-radius: 6px; background: linear-gradient(90deg, #1a2438 25%, #2a3752 50%, #1a2438 75%); background-size: 200% 100%; animation: qts-shimmer 1.2s ease-in-out infinite; }
+    .stat-value.is-loading { width: 34px; height: 22px; }
+    .ready.is-loading { width: 54px; height: 12px; vertical-align: -1px; }
+    .stat-value.fresh, .ready.fresh { animation: qts-fade-in .25s ease-out; }
+    .stats.failed { cursor: pointer; }
+    .stats.failed .stat-value { color: #fbbf24; font-size: 17px; }
+    .stats.failed:hover { border-color: #fbbf24; }
     .stat.urls .stat-label::before { background: #fcd34d; }
     .stat.jobs .stat-label::before { background: #e2e8f0; }
     .stat.applied .stat-label::before { background: #60a5fa; }
@@ -333,6 +343,7 @@ async function initializeQtsPageLauncher() {
     .outcome-actions button:disabled { opacity: .6; cursor: progress; }
     .outcome-auto { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: #64748b; font-size: 12px; cursor: pointer; }
     @media (prefers-reduced-motion: reduce) {
+      .is-loading, .stat-value.fresh, .ready.fresh { animation: none; }
       .main, .action, .launcher, .sign-in-form iframe { transition: none; }
       .main { animation: none !important; }
     }
@@ -560,6 +571,9 @@ async function initializeQtsPageLauncher() {
     const previous = select.value;
     select.replaceChildren(new Option('Loading accounts…', ''));
     select.options[0].disabled = true;
+    // The "N ready" counts shimmer until the accounts arrive (or fail).
+    candidate.loading = true;
+    renderCandidate();
     const entry = { promise: null, expiresAt: Infinity };
     const request = (async () => {
       const [reply, stored] = await Promise.all([
@@ -570,6 +584,7 @@ async function initializeQtsPageLauncher() {
       if (!reply?.ok) throw new Error(reply?.error || 'Could not load accounts.');
       candidate.accounts = Array.isArray(reply.accounts) ? reply.accounts : [];
       candidate.loaded = true;
+      candidate.loading = false;
       select.replaceChildren(new Option(candidate.accounts.length ? 'All accounts' : 'No accounts', ''));
       // Grouped under each account's category (A–Z), the accounts by name within it.
       const groups = new Map();
@@ -608,6 +623,7 @@ async function initializeQtsPageLauncher() {
     })().catch((error) => {
       if (version !== accountsVersion) return;
       if (accountsRequest === entry) accountsRequest = null;
+      candidate.loading = false;
       select.replaceChildren(new Option('Could not load accounts — focus to retry', ''));
       select.options[0].disabled = true;
       renderCandidate();
@@ -828,7 +844,13 @@ async function initializeQtsPageLauncher() {
       : `${account ? '' : 'Every account: '}${counts.generation} to generate · ${counts.apply} to apply · ${counts.auto_apply} for Auto Apply`;
     for (const mode of WORK_MODES) {
       const ready = menu.querySelector(`[data-action="${mode}"] .ready`);
-      if (ready) ready.textContent = candidate.loaded ? `${counts[mode]} ready` : '';
+      if (ready) {
+        const loading = !candidate.loaded && candidate.loading === true;
+        const text = candidate.loaded ? `${counts[mode]} ready` : '';
+        if (text && ready.textContent !== text) { ready.classList.remove('fresh'); void ready.offsetWidth; ready.classList.add('fresh'); }
+        ready.textContent = text;
+        ready.classList.toggle('is-loading', loading);
+      }
       updateWorkPicker(mode);
     }
   }
@@ -1810,10 +1832,27 @@ async function initializeQtsPageLauncher() {
   function showCountsProblem(message) {
     stats.title = message ? `Today's counts could not be read: ${message}` : '';
   }
+  const countValues = () => [...stats.querySelectorAll('.stat-value')];
+  const countsShown = () => countValues().every((value) => /^\d+$/.test(value.textContent));
+  // Loading: shimmer, unless numbers already show (a refresh keeps them, so nothing flickers).
+  function showCountsLoading() {
+    stats.classList.remove('failed');
+    if (countsShown()) return;
+    for (const value of countValues()) { value.textContent = ''; value.classList.add('is-loading'); }
+  }
+  function showCountsFailed(message) {
+    showCountsProblem(message);
+    if (countsShown()) return;
+    stats.classList.add('failed');
+    stats.title = `Today's counts could not be read: ${message} Click to try again.`;
+    for (const value of countValues()) { value.classList.remove('is-loading'); value.textContent = '⚠'; }
+  }
+  stats.addEventListener('click', () => { if (stats.classList.contains('failed')) refreshDailyCounts(); });
   function refreshDailyCounts({ retry = false } = {}) {
     if (!active) return;
     if (!launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
     if (!retry) countsRetries = 0;
+    showCountsLoading();
     clearTimeout(countsTimer);
     const wait = retry ? COUNTS_RETRY_MS : Math.max(0, countsAskedAt + 5000 - Date.now());
     countsTimer = setTimeout(async () => {
@@ -1828,13 +1867,21 @@ async function initializeQtsPageLauncher() {
         if (countsRetries < COUNTS_MAX_RETRIES) {
           countsRetries += 1;
           refreshDailyCounts({ retry: true });
+        } else {
+          showCountsFailed(message);
         }
         return;
       }
       countsRetries = 0;
       showCountsProblem('');
+      stats.classList.remove('failed');
       for (const key of ['urls', 'jobs', 'applied']) {
-        stats.querySelector(`.stat.${key} .stat-value`).textContent = String(Number(reply[key]) || 0);
+        const value = stats.querySelector(`.stat.${key} .stat-value`);
+        const text = String(Number(reply[key]) || 0);
+        const changed = value.textContent !== text;
+        value.classList.remove('is-loading');
+        value.textContent = text;
+        if (changed) { value.classList.remove('fresh'); void value.offsetWidth; value.classList.add('fresh'); }
       }
     }, wait);
   }

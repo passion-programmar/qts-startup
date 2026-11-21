@@ -281,6 +281,21 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => window.__qtsPageLauncher.toggleFromToolbar());
     await page.waitForFunction(previous => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length > previous, {}, firstOpenCountRequests);
     await page.waitForFunction(() => [...window.testRoot.querySelectorAll('.stats .stat-value')].map(value => value.textContent).join(',') === '1,2,3');
+    // Loading states: a shimmer while the counts load, a warning after the retries fail (click to
+    // retry), the numbers again once they arrive; numbers already shown stay during a refresh.
+    await page.evaluate(() => {
+      window.failDailyCounts = true;
+      window.__qtsPageLauncher.setOpen(false);
+      for (const value of window.testRoot.querySelectorAll('.stats .stat-value')) value.textContent = '–';
+    });
+    await new Promise(resolve => setTimeout(resolve, 5200));
+    await page.evaluate(() => window.__qtsPageLauncher.setOpen(true));
+    assert.equal(await page.evaluate(() => window.testRoot.querySelectorAll('.stats .stat-value.is-loading').length), 3, 'shimmer while loading');
+    await page.waitForFunction(() => window.testRoot.querySelector('.stats').classList.contains('failed'), { timeout: 20000 });
+    assert.equal(await page.evaluate(() => [...window.testRoot.querySelectorAll('.stats .stat-value')].map(value => value.textContent).join(',')), '⚠,⚠,⚠');
+    await page.evaluate(() => { window.failDailyCounts = false; window.testRoot.querySelector('.stats').click(); });
+    await page.waitForFunction(() => [...window.testRoot.querySelectorAll('.stats .stat-value')].map(value => value.textContent).join(',') === '1,2,3', { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.testRoot.querySelector('.stats').classList.contains('failed')), false);
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); }
 });
