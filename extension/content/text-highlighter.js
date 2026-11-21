@@ -25,6 +25,17 @@ async function startPageTextHighlighter() {
   let finishBodyWait = null;
   let sharedRulesRequestUrl = '';
   const excluded = 'script,style,noscript,textarea,option,[contenteditable="true"],[data-qts-text-highlight]';
+  // The browser paints the highlights (CSS Custom Highlight API): the page's HTML is never changed.
+  // Each rule is one named Highlight with its colours (one ::highlight() style); its ranges cover
+  // that rule's matches. rangesByNode keeps each text node's ranges, to redo or drop them.
+  const HIGHLIGHT_PREFIX = 'qts-text-highlight-';
+  const highlightStyle = new CSSStyleSheet();
+  let styleAdopted = false;
+  let highlightNames = [];
+  let highlightByRuleId = new Map();
+  let ruleById = new Map();
+  const rangesByNode = new Map();
+  let prunePending = false;
 
   function contextAvailable() {
     try { return !disposed && Boolean(chrome.runtime?.id); }
@@ -42,7 +53,9 @@ async function startPageTextHighlighter() {
     document.removeEventListener('visibilitychange', onVisibility);
     try { chrome.storage.onChanged.removeListener(onStorage); } catch { /* The extension was reloaded. */ }
     try { chrome.runtime.onMessage.removeListener(onMessage); } catch { /* The extension was reloaded. */ }
-    unwrapHighlights();
+    clearHighlights();
+    removeHighlightStyle();
+    unwrapLegacyMarks();
     currentRules = [];
     ruleMatcher = null;
     jobPageCheck = null;
@@ -84,7 +97,8 @@ async function startPageTextHighlighter() {
     return bodyWait;
   }
 
-  function unwrapHighlights() {
+  // An earlier version wrapped matches in <mark> elements: any left on the page become plain text again.
+  function unwrapLegacyMarks() {
     const marks = document.querySelectorAll('mark[data-qts-text-highlight]');
     for (const mark of marks) {
       const parent = mark.parentNode;
@@ -92,6 +106,52 @@ async function startPageTextHighlighter() {
       mark.replaceWith(...mark.childNodes);
       parent.normalize();
     }
+  }
+
+  function adoptHighlightStyle() {
+    if (styleAdopted) return;
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, highlightStyle];
+    styleAdopted = true;
+  }
+
+  function removeHighlightStyle() {
+    if (!styleAdopted) return;
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== highlightStyle);
+    styleAdopted = false;
+  }
+
+  function clearHighlights() {
+    for (const name of highlightNames) CSS.highlights.delete(name);
+    highlightNames = [];
+    highlightByRuleId = new Map();
+    ruleById = new Map();
+    rangesByNode.clear();
+  }
+
+  function forgetNode(textNode) {
+    const entries = rangesByNode.get(textNode);
+    if (!entries) return;
+    for (const { ruleId, range } of entries) highlightByRuleId.get(ruleId)?.delete(range);
+    rangesByNode.delete(textNode);
+  }
+
+  // Text the page removed: its ranges go too.
+  function pruneDetached() {
+    for (const textNode of [...rangesByNode.keys()]) if (!textNode.isConnected) forgetNode(textNode);
+  }
+
+  /** What is highlighted now, in page order: { id, text, textColor, backgroundColor } (for tests and checks). */
+  function highlightedMatches() {
+    const found = [];
+    for (const [textNode, entries] of rangesByNode) {
+      if (!textNode.isConnected) continue;
+      for (const { ruleId, range } of entries) found.push({ ruleId, range });
+    }
+    found.sort((left, right) => left.range.compareBoundaryPoints(Range.START_TO_START, right.range));
+    return found.map(({ ruleId, range }) => {
+      const rule = ruleById.get(ruleId) || {};
+      return { id: ruleId, text: range.toString(), textColor: rule.textColor, backgroundColor: rule.backgroundColor };
+    });
   }
 
   function escapeRegExp(value) {
@@ -110,36 +170,28 @@ async function startPageTextHighlighter() {
     return { pattern, byText };
   }
 
+  // The same matching as before; each match becomes a range in its rule's highlight.
   function highlightTextNode(textNode) {
+    forgetNode(textNode);
     const source = textNode.nodeValue;
     const parent = textNode.parentElement;
     if (!source || !parent || parent.closest(excluded)) return;
     const { pattern, byText } = ruleMatcher;
     pattern.lastIndex = 0;
     let match;
-    let cursor = 0;
-    let matched = false;
-    const fragment = document.createDocumentFragment();
+    const entries = [];
     while ((match = pattern.exec(source))) {
       const rule = byText.get(match[0].toLowerCase());
       if (!rule) continue;
-      if (match.index > cursor) {
-        fragment.append(document.createTextNode(source.slice(cursor, match.index)));
-      }
-      const mark = document.createElement('mark');
-      mark.dataset.qtsTextHighlight = rule.id;
-      mark.textContent = match[0];
-      mark.style.color = rule.textColor;
-      mark.style.backgroundColor = rule.backgroundColor;
-      mark.style.boxDecorationBreak = 'clone';
-      fragment.append(mark);
-      cursor = pattern.lastIndex;
-      matched = true;
+      const highlight = highlightByRuleId.get(rule.id);
+      if (!highlight) continue;
+      const range = new Range();
+      range.setStart(textNode, match.index);
+      range.setEnd(textNode, match.index + match[0].length);
+      highlight.add(range);
+      entries.push({ ruleId: rule.id, range });
     }
-    if (matched) {
-      if (cursor < source.length) fragment.append(document.createTextNode(source.slice(cursor)));
-      textNode.replaceWith(fragment);
-    }
+    if (entries.length) rangesByNode.set(textNode, entries);
   }
 
   function highlightWithin(root) {
@@ -161,23 +213,33 @@ async function startPageTextHighlighter() {
     }
   }
 
-  // Our own DOM edits must not be observed, or every highlight would trigger another pass.
-  function withoutObserving(change) {
-    observer.disconnect();
-    try {
-      change();
-    } finally {
-      observePage();
-    }
-  }
-
+  // Highlighting changes nothing in the page, so the watcher never sees its own work.
   function applyRules(rules) {
     if (!document.body) return;
     observer.disconnect();
     pendingNodes.clear();
-    unwrapHighlights();
+    unwrapLegacyMarks();
+    clearHighlights();
     ruleMatcher = buildRuleMatcher(rules);
-    withoutObserving(() => highlightWithin(document.body));
+    if (!ruleMatcher) {
+      removeHighlightStyle();
+      return;
+    }
+    const styles = [];
+    rules.forEach((rule, index) => {
+      const name = `${HIGHLIGHT_PREFIX}${index}`;
+      const highlight = new Highlight();
+      CSS.highlights.set(name, highlight);
+      highlightNames.push(name);
+      highlightByRuleId.set(rule.id, highlight);
+      ruleById.set(rule.id, rule);
+      // Colours are checked #rrggbb values (normalizeRule), so they are safe in the style text.
+      styles.push(`::highlight(${name}) { color: ${rule.textColor}; background-color: ${rule.backgroundColor}; }`);
+    });
+    highlightStyle.replaceSync(styles.join('\n'));
+    adoptHighlightStyle();
+    highlightWithin(document.body);
+    observePage();
   }
 
   function queueChangedNodes(records) {
@@ -185,8 +247,9 @@ async function startPageTextHighlighter() {
     for (const record of records) {
       if (record.type === 'characterData') pendingNodes.add(record.target);
       else for (const node of record.addedNodes) pendingNodes.add(node);
+      if (record.removedNodes?.length) prunePending = true;
     }
-    if (pendingNodes.size && batchTimer == null) {
+    if ((pendingNodes.size || prunePending) && batchTimer == null) {
       batchTimer = setTimeout(highlightChangedNodes, TEXT_HIGHLIGHT_BATCH_MS);
     }
   }
@@ -196,9 +259,11 @@ async function startPageTextHighlighter() {
     batchTimer = null;
     const nodes = [...pendingNodes];
     pendingNodes.clear();
-    withoutObserving(() => {
-      for (const node of nodes) highlightWithin(node);
-    });
+    if (prunePending) {
+      prunePending = false;
+      pruneDetached();
+    }
+    for (const node of nodes) highlightWithin(node);
   }
 
   // Hidden, the page is not watched at all; shown again, it is highlighted once and watched again.
@@ -268,7 +333,7 @@ async function startPageTextHighlighter() {
     }
   }
 
-  globalThis.__qtsPageTextHighlighter = { refresh, alive: contextAvailable };
+  globalThis.__qtsPageTextHighlighter = { refresh, alive: contextAvailable, highlights: highlightedMatches };
   function onStorage(changes, area) {
     if (
       area === 'local' &&

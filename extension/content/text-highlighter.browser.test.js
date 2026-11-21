@@ -37,9 +37,20 @@ test('highlights an already-open job page after sign-in and fetches rules when t
       window.authExpiresAt=Date.now()+3600000;
       for(const listener of window.listeners.storage)listener({authExpiresAt:{newValue:window.authExpiresAt}},'local');
     });
-    await page.waitForFunction(()=>document.querySelector('mark[data-qts-text-highlight="python"]'));
+    await page.waitForFunction(()=>window.__qtsPageTextHighlighter.highlights().some(match=>match.id==='python'));
     assert.equal(await page.evaluate(()=>window.globalRuleRequests),1);
-    assert.equal(await page.evaluate(()=>document.querySelector('mark[data-qts-text-highlight="python"]').style.backgroundColor),'rgb(255, 255, 0)');
+    assert.equal(await page.evaluate(()=>window.__qtsPageTextHighlighter.highlights()[0].backgroundColor),'#ffff00');
+    // Painted by the browser: one named highlight with the rule's colours; the page's HTML is unchanged.
+    const painted=await page.evaluate(()=>({
+      ranges:CSS.highlights.get('qts-text-highlight-0')?.size,
+      style:[...document.adoptedStyleSheets].flatMap(sheet=>[...sheet.cssRules].map(rule=>rule.cssText)).find(text=>text.includes('qts-text-highlight-0'))||'',
+      html:document.querySelector('main').innerHTML,
+    }));
+    assert.equal(painted.ranges,1);
+    assert.match(painted.style,/::highlight\(qts-text-highlight-0\)/);
+    assert.match(painted.style,/background-color: rgb\(255, 255, 0\)/);
+    assert.match(painted.style,/color: rgb\(17, 34, 51\)/);
+    assert.equal(painted.html,'<p>Python engineering experience.</p>');
   }finally{await browser.close();}
 });
 
@@ -62,19 +73,21 @@ test('highlighter marks job-page text, skips editable content, watches additions
     });
     await page.addScriptTag({path:path.resolve('extension/shared/text-highlighting.js')});
     await page.addScriptTag({path:path.resolve('extension/content/text-highlighter.js')});
-    await page.waitForFunction(()=>document.querySelectorAll('mark[data-qts-text-highlight]').length===2);
+    await page.waitForFunction(()=>window.__qtsPageTextHighlighter.highlights().length===2);
     const initial=await page.evaluate(()=>({
-      marks:[...document.querySelectorAll('mark[data-qts-text-highlight]')].map(mark=>({
-        id:mark.dataset.qtsTextHighlight,text:mark.textContent,color:mark.style.color,background:mark.style.backgroundColor,
+      marks:window.__qtsPageTextHighlighter.highlights().map(match=>({
+        id:match.id,text:match.text,color:match.textColor,background:match.backgroundColor,
       })),
+      html:document.querySelector('main').innerHTML,
       input:document.querySelector('input').value,
       editable:document.querySelector('[contenteditable]').textContent,
       text:document.querySelector('main').textContent,
     }));
     assert.deepEqual(initial.marks,[
-      {id:'python',text:'Python',color:'rgb(17, 34, 51)',background:'rgb(255, 255, 0)'},
-      {id:'test',text:'testing',color:'rgb(255, 255, 255)',background:'rgb(0, 136, 0)'},
+      {id:'python',text:'Python',color:'#112233',background:'#ffff00'},
+      {id:'test',text:'testing',color:'#ffffff',background:'#008800'},
     ]);
+    assert.equal(initial.html,'<p>Python services and testing.</p><input value="Python"><div contenteditable="true">Python</div>','the page HTML is untouched');
     assert.equal(initial.input,'Python');
     assert.equal(initial.editable,'Python');
     assert.match(initial.text,/Python services and testing\./);
@@ -84,7 +97,7 @@ test('highlighter marks job-page text, skips editable content, watches additions
       paragraph.textContent='Python added dynamically.';
       document.querySelector('main').append(paragraph);
     });
-    await page.waitForFunction(()=>document.querySelectorAll('mark[data-qts-text-highlight="python"]').length===2);
+    await page.waitForFunction(()=>window.__qtsPageTextHighlighter.highlights().filter(match=>match.id==='python').length===2);
     await page.evaluate(()=>{
       const key=window.__qtsTextHighlighting.getGlobalStorageKey();
       window.rules=[
@@ -92,9 +105,14 @@ test('highlighter marks job-page text, skips editable content, watches additions
       ];
       for(const listener of window.listeners.storage)listener({[key]:{newValue:window.rules}},'local');
     });
-    await page.waitForFunction(()=>document.querySelector('mark[data-qts-text-highlight="dynamic"]')?.textContent==='dynamically');
-    assert.equal(await page.evaluate(()=>document.querySelectorAll('mark[data-qts-text-highlight="python"],mark[data-qts-text-highlight="test"]').length),0);
+    await page.waitForFunction(()=>window.__qtsPageTextHighlighter.highlights().some(match=>match.id==='dynamic'&&match.text==='dynamically'));
+    assert.equal(await page.evaluate(()=>window.__qtsPageTextHighlighter.highlights().filter(match=>['python','test'].includes(match.id)).length),0);
     assert.equal(await page.evaluate(()=>document.querySelector('main').textContent.includes('Python added dynamically.')),true);
+    // Text the page changes or removes: its highlights follow.
+    await page.evaluate(()=>{ document.querySelector('main p:last-child').textContent='Changed dynamically twice, dynamically.'; });
+    await page.waitForFunction(()=>window.__qtsPageTextHighlighter.highlights().filter(match=>match.id==='dynamic').length===2);
+    await page.evaluate(()=>{ document.querySelector('main p:last-child').remove(); });
+    await page.waitForFunction(()=>window.__qtsPageTextHighlighter.highlights().length===0);
     await browser.close();
   }finally{await browser.close();}
 });
@@ -117,7 +135,7 @@ test('highlighter cleans up invalidated contexts and still reports real failures
         }}}};
       });
       await page.addScriptTag({path:path.resolve('extension/content/text-highlighter.js')});
-      await page.waitForSelector('mark[data-qts-text-highlight]');
+      await page.waitForFunction(()=>window.__qtsPageTextHighlighter?.highlights().length>0);
       await page.evaluate(mode=>{
         document.querySelector('main').append(Object.assign(document.createElement('p'),{textContent:'Python added later.'}));
         if(mode==='missing-id')window.chrome.runtime.id=undefined;
@@ -132,7 +150,7 @@ test('highlighter cleans up invalidated contexts and still reports real failures
         const state=await page.evaluate(async()=>{
           const reads=window.reads;window.dispatchEvent(new Event('popstate'));window.dispatchEvent(new Event('hashchange'));
           await window.__qtsPageTextHighlighter.refresh();
-          return {reads,after:window.reads,marks:document.querySelectorAll('mark[data-qts-text-highlight]').length,
+          return {reads,after:window.reads,marks:window.__qtsPageTextHighlighter.highlights().length+[...CSS.highlights.keys()].filter(name=>name.startsWith('qts-text-highlight-')).length,
             storage:window.listeners.storage.size,message:window.listeners.message.size,text:document.querySelector('main').textContent};
         });
         assert.equal(state.after,state.reads);assert.equal(state.marks,0);

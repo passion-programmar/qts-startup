@@ -40,6 +40,20 @@ const PAGES = {
 // The check's tries end about 10 s after a page opens (GET_JD_DETECTION_ATTEMPTS).
 const WHOLE_CHECK_MS = 11000;
 
+// The colour on screen at the first highlighted word's corner (RGB), or null when nothing is highlighted.
+async function paintedColour(page) {
+  const box = await page.evaluate(() => {
+    const entry = [...CSS.highlights].find(([name, highlight]) => name.startsWith('qts-text-highlight-') && highlight.size);
+    const range = entry && [...entry[1]][0];
+    const rect = range?.getBoundingClientRect();
+    return rect && rect.width > 6 ? { x: rect.x + 2, y: rect.y + 2, width: 2, height: 2 } : null;
+  });
+  if (!box) return null;
+  const png = await page.screenshot({ clip: box });
+  const { data } = await require('sharp')(png).raw().toBuffer({ resolveWithObject: true });
+  return [data[0], data[1], data[2]];
+}
+
 async function visit(pathname, { getJdMode = null, watchMs = WHOLE_CHECK_MS } = {}) {
   const calls = [];
   const server = http.createServer(async (req, res) => {
@@ -100,7 +114,9 @@ async function visit(pathname, { getJdMode = null, watchMs = WHOLE_CHECK_MS } = 
       readings: count('/shared/job-page-detection.js'),
       extractors: count('/content/extractors/'),
       panelWatch: count('/content/job-panel-watch.js'),
-      highlights: await page.evaluate(() => document.querySelectorAll('mark[data-qts-text-highlight]').length),
+      // Painted by the browser (CSS Custom Highlight API): the ranges of QTS's named highlights.
+      highlights: await page.evaluate(() => [...CSS.highlights].filter(([name]) => name.startsWith('qts-text-highlight-')).reduce((sum, [, highlight]) => sum + highlight.size, 0)),
+      painted: await paintedColour(page),
       detectedJobs: (await control.evaluate(() => chrome.storage.local.get('detectedJobs'))).detectedJobs,
       calls,
     };
@@ -120,6 +136,8 @@ test('a job page is read once and highlighted, and the old capture path no longe
   const result = await visit('/job', { watchMs: 6000 });
   assert.equal(result.readings, 1);
   assert.ok(result.highlights > 0, 'the rule is highlighted on the job page');
+  // Really painted on screen in the rule's background colour (the style comes from the extension).
+  assert.ok(result.painted && result.painted.every((value, index) => Math.abs(value - [0xff, 0xee, 0x58][index]) <= 6), `painted ${JSON.stringify(result.painted)}`);
   assert.equal(result.extractors, 0, 'no job extractors injected');
   assert.equal(result.panelWatch, 0, 'no job panel watcher injected');
   assert.equal(result.detectedJobs, undefined, 'no captured job saved');
