@@ -114,7 +114,8 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
           {shown.comment && (<><dt className="text-slate-500">Comment</dt><dd className="whitespace-pre-line break-words text-slate-800">{shown.comment}</dd></>)}
         </dl>
         {/* One line: Join, result, next step or new date, then Edit and Delete apart at the end. No Join once the round has ended. */}
-        <div className="mt-4 overflow-x-auto border-t border-slate-100 pt-4">
+        {/* No overflow clipping here: the Add step list opens upward over the card. */}
+        <div className="mt-4 border-t border-slate-100 pt-4">
           <InterviewRowActions
             inline
             key={shown.id}
