@@ -435,8 +435,8 @@ async function initializeQtsPageLauncher() {
   const stats = document.createElement('div');
   stats.className = 'stats';
   for (const [key, label, title] of [
-    ['urls', 'New URLs', 'New jobs added today: each job once, however many candidates got it'],
-    ['jobs', 'Job rows', 'Job rows added today: one per candidate'],
+    ['urls', 'New', 'New jobs added today: each job once, however many candidates got it'],
+    ['jobs', 'Job', 'Job rows added today: one per candidate'],
     ['applied', 'Applied', 'Applications submitted today'],
   ]) {
     const tile = document.createElement('div');
@@ -1209,7 +1209,7 @@ async function initializeQtsPageLauncher() {
   }
 
   function setOpen(open) {
-    if (!open) clearTimeout(countsTimer);
+    if (!open) { clearTimeout(countsTimer); keepCountsFresh(false); }
     // Opened without catching up first (the Sign In card, a test): it catches up now.
     if (open && panelStale) catchUpPanel().catch(() => {});
     // The Custom cards (this Chrome's pasted jobs) as they are now.
@@ -1715,7 +1715,10 @@ async function initializeQtsPageLauncher() {
     const stored = await chrome.storage.local.get(['authExpiresAt']);
     const expiresAt = Number(stored.authExpiresAt) || 0;
     const signedIn = expiresAt > Date.now();
+    const wasSignedIn = launcher.classList.contains('signed-in');
     launcher.classList.toggle('signed-in', signedIn);
+    // Signed in just after the panel opened: read today's counts now.
+    if (signedIn && !wasSignedIn) refreshDailyCounts();
     menu.classList.toggle('signed-out', !signedIn);
     button.dataset.sessionAction = signedIn ? 'sign_out' : 'sign_in';
     button.setAttribute('aria-label', signedIn ? 'Sign Out' : 'Sign In');
@@ -1789,28 +1792,52 @@ async function initializeQtsPageLauncher() {
     }
   }
 
-  // Today's counts, read while the panel is open: when it opens, and (at most every 5 seconds)
-  // after a job is saved or an application changes.
+  // Today's counts, read while the panel is open: when it opens, when the sign-in is known (it can
+  // come just after opening), every minute, and (at most every 5 seconds) after a job is saved or an
+  // application changes. A failed read is tried again a few seconds later (3 times), so the tiles
+  // never stay on "–" because of one slow or failed answer.
   let countsAskedAt = 0;
   let countsTimer = null;
-  function refreshDailyCounts() {
+  let countsRetries = 0;
+  let countsEvery = null;
+  const COUNTS_REFRESH_MS = 60_000;
+  const COUNTS_RETRY_MS = 3_000;
+  const COUNTS_MAX_RETRIES = 3;
+  function showCountsProblem(message) {
+    stats.title = message ? `Today's counts could not be read: ${message}` : '';
+  }
+  function refreshDailyCounts({ retry = false } = {}) {
     if (!active) return;
     if (!launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
+    if (!retry) countsRetries = 0;
     clearTimeout(countsTimer);
-    const wait = Math.max(0, countsAskedAt + 5000 - Date.now());
+    const wait = retry ? COUNTS_RETRY_MS : Math.max(0, countsAskedAt + 5000 - Date.now());
     countsTimer = setTimeout(async () => {
       if (!active || !launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
       countsAskedAt = Date.now();
       const reply = await chrome.runtime.sendMessage({ type: 'QTS_DAILY_COUNTS' })
-        .catch((error) => ({ ok: false, error }));
+        .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       if (!reply?.ok) {
-        console.warn('[QTS launcher] Could not refresh daily counts:', reply?.error || reply?.message || 'Unknown error.');
+        const message = String(reply?.error || reply?.message || 'Unknown error.');
+        console.warn('[QTS launcher] Could not refresh daily counts:', message);
+        showCountsProblem(message);
+        if (countsRetries < COUNTS_MAX_RETRIES) {
+          countsRetries += 1;
+          refreshDailyCounts({ retry: true });
+        }
         return;
       }
+      countsRetries = 0;
+      showCountsProblem('');
       for (const key of ['urls', 'jobs', 'applied']) {
         stats.querySelector(`.stat.${key} .stat-value`).textContent = String(Number(reply[key]) || 0);
       }
     }, wait);
+  }
+  // While the panel is open the counts stay fresh; closed, nothing is asked.
+  function keepCountsFresh(open) {
+    clearInterval(countsEvery);
+    countsEvery = open ? setInterval(() => refreshDailyCounts(), COUNTS_REFRESH_MS) : null;
   }
 
   // Each Generation job running at once keeps its state in its own key (the first one the original key).
@@ -2186,6 +2213,7 @@ async function initializeQtsPageLauncher() {
     // While Apply is on, a page with saved jobs offers its accounts ("Apply this page").
     if (opening) showApplyPick().catch(() => {});
     if (opening) refreshDailyCounts();
+    keepCountsFresh(opening);
     if (opening) loadAllWorkAccounts();
     if (opening) syncTextHighlightAction(true).catch(() => {});
     // A Get JD notice hidden earlier shows again beside the panel (the orange dot stands for it).

@@ -287,7 +287,7 @@ export async function updateOwnGenerationParallelLimitAction(
     return { ...emptyState, error: "Only Managers can change their Generation concurrency." };
   }
   const rawLimit = formData.get("generationParallelLimit");
-  const parallelLimit = typeof rawLimit === "string" && /^d+$/.test(rawLimit) ? Number(rawLimit) : NaN;
+  const parallelLimit = typeof rawLimit === "string" && /^\d+$/.test(rawLimit.trim()) ? Number(rawLimit.trim()) : NaN;
   if (!Number.isInteger(parallelLimit) || parallelLimit < 1 || parallelLimit > MAX_GENERATION_PARALLEL_LIMIT) {
     return { ...emptyState, error: `Choose a whole number from 1 to ${MAX_GENERATION_PARALLEL_LIMIT}.` };
   }
