@@ -1,5 +1,5 @@
-// The worker's LinkedIn skip-list: cache, pulls, marks, un-skips and the offline outbox, with a fake
-// QTS server and a fake IndexedDB store. Nothing leaves this machine.
+// The worker's LinkedIn skip-list with a fake clock, a fake QTS server and a fake IndexedDB store:
+// server required, fetch rules, batched saves, immediate panel actions, the Super Admin's switch.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,118 +8,144 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, 'linkedin-skips.js'), 'utf8');
 const LINKEDIN = { url: 'https://www.linkedin.com/jobs/search-results/', tab: { id: 7 } };
+const k = (n) => `job ${n}|company ${n}`;
+const item = (n, source, location = 'Poland (Remote)') => ({ key: k(n), title: `Job ${n}`, company: `Company ${n}`, location, source });
+const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function worker({ manager = 'manager-1', server }) {
+function worker({ server }) {
   const settings = new Map();
-  const alarms = new Set();
   const requests = [];
-  const sentToTabs = [];
+  const timers = [];
   let listener = null;
+  let clock = Date.parse('2026-11-21T12:00:00Z');
   const context = vm.createContext({
-    console, URL, setTimeout,
-    workerApiRequest: async (method, url, body) => { requests.push({ method, url, body }); return server(method, url, body); },
+    console, URL,
+    Date: class extends Date { static now() { return clock; } },
+    setTimeout: (fn, ms) => { timers.push({ fn, at: clock + ms }); return timers.length; },
+    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
     chrome: {
       runtime: { onMessage: { addListener: (fn) => { listener = fn; } } },
-      alarms: { create: async (name) => alarms.add(name), clear: async (name) => alarms.delete(name), onAlarm: { addListener: () => {} } },
-      tabs: { sendMessage: async (tabId, message) => sentToTabs.push([tabId, message.type]) },
+      tabs: { query: async () => [], sendMessage: async () => {} },
     },
   });
   context.self = context;
+  // Like shared/api-worker.js: every answer (or failure) is noted.
+  context.workerApiRequest = async (method, url, body) => {
+    requests.push({ method, url, body });
+    const reply = await server(method, url, body);
+    if (reply.success || reply.disabled) context.__qtsServerAnsweredAt = clock; else context.__qtsServerFailedAt = clock;
+    return reply;
+  };
   context.__qtsScannerDocumentStore = {
     getSetting: async (key) => (settings.has(key) ? { key, value: structuredClone(settings.get(key)) } : undefined),
     putSetting: async (key, value) => { settings.set(key, structuredClone(value)); },
   };
-  context.__qtsAccountAuth = { readWorkerSessionUser: async () => (context.manager ? { id: context.manager, role: 'manager' } : null) };
-  context.manager = manager;
+  context.__qtsAccountAuth = { readWorkerSessionUser: async () => ({ id: 'manager-1', role: 'manager' }) };
   vm.runInContext(source, context);
-  const ask = (message, sender = LINKEDIN) => new Promise((resolve) => listener(message, sender, resolve));
-  return { ask, requests, alarms, settings, sentToTabs, setManager: (id) => { context.manager = id; } };
+  const ask = (message, sender = LINKEDIN) => new Promise((resolve) => listener(message, sender, resolve)).then(plain);
+  const advance = async (ms) => {
+    clock += ms;
+    for (const timer of timers) if (timer.fn && timer.at <= clock) { const fn = timer.fn; timer.fn = null; fn(); }
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  return { ask, requests, advance, gets: () => requests.filter((r) => r.method === 'GET'), posts: () => requests.filter((r) => r.method === 'POST') };
 }
 
-const k = (n) => `job ${n}|company ${n}`;
-const item = (n, source) => ({ key: k(n), title: `Job ${n}`, company: `Company ${n}`, source });
+const fullList = { success: true, full: true, cursor: 'c1', skips: [{ key: k(1), removed: false, source: 'saved', location: 'Slovakia (Remote)', at: '2026-11-20T10:00:00.000Z' }, { key: k(3), removed: true, source: 'manual', location: null, at: '2026-11-20T10:00:00.000Z' }],
+  seen: [{ key: k(2), source: 'qts_applied', location: 'Cracow (Remote)', at: '2026-11-19T10:00:00.000Z' }, { key: k(3), source: 'qts_saved', location: null, at: '2026-11-19T10:00:00.000Z' }] };
+const noChanges = { success: true, full: false, cursor: 'c2', skips: [], seen: [] };
+const okServer = () => (method) => (method === 'GET' ? (okServer.first ? (okServer.first = false, fullList) : noChanges) : { success: true });
 
-test('the first look waits for the full list; bids and saved jobs count, an un-skip beats them', async () => {
-  const chrome = worker({ server: (method, url) => (method === 'GET'
-    ? { success: true, full: !url.includes('since='), cursor: '2026-11-21T10:00:00.000Z', skips: [{ key: k(1), removed: false }, { key: k(3), removed: true }], seen: [k(2), k(3)] }
-    : { success: true }) });
-  const reply = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: true, marks: [], keys: [k(1), k(2), k(3), k(4)] });
-  // 1 marked, 2 a bid or saved job, 3 a bid the Manager un-skipped, 4 new.
-  assert.deepEqual(JSON.parse(JSON.stringify(reply)), { ok: true, skipped: [k(1), k(2)] });
-  assert.equal(chrome.requests[0].url, '/api/extension/linkedin-skips', 'first look: the full list');
+test('first look fetches the full list; bids count, an un-skip beats them; "seen before" comes from the mirror', async () => {
+  const chrome = worker({ server: (method, url) => (method === 'GET' ? (url.includes('since=') ? noChanges : fullList) : { success: true }) });
+  const reply = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [k(1), k(2), k(3), k(4)] });
+  assert.deepEqual(reply, { ok: true, state: 'ok', changed: true, skipped: [k(1), k(2)] });
+  assert.equal(chrome.gets()[0].url, '/api/extension/linkedin-skips');
+  assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_INFO', key: k(2) }), { ok: true, skipped: true, info: { source: 'qts_applied', location: 'Cracow (Remote)', at: '2026-11-19T10:00:00.000Z' } });
 });
 
-test('later looks ask only for changes, at most once a minute, and tell the page when something changed', async () => {
-  let round = 0;
-  const chrome = worker({ server: (method, url) => {
-    if (method !== 'GET') return { success: true };
-    round += 1;
-    return round === 1
-      ? { success: true, full: true, cursor: 'c1', skips: [], seen: [] }
-      : { success: true, full: false, cursor: 'c2', skips: [{ key: k(5), removed: false }], seen: [], url };
-  } });
-  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: true, marks: [], keys: [] });
-  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: true, marks: [], keys: [] });
-  assert.equal(chrome.requests.filter((r) => r.method === 'GET').length, 1, 'within a minute: no second pull');
+test('paging never fetches; 10 minutes later it does; the panel or a return fetch if over 30 s old', async () => {
+  const chrome = worker({ server: (method, url) => (method === 'GET' ? (url.includes('since=') ? noChanges : fullList) : { success: true }) });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
+  for (let page = 0; page < 5; page += 1) { await chrome.advance(20_000); await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [] }); }
+  assert.equal(chrome.gets().length, 1, 'five pages within 2 minutes: no fetch');
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'panel', marks: [], keys: [] });
+  assert.equal(chrome.gets().length, 2, 'the panel opened, last fetch over 30 s old');
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'panel', marks: [], keys: [] });
+  assert.equal(chrome.gets().length, 2, 'again within 30 s: no fetch');
+  await chrome.advance(10 * 60_000 + 1);
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [] });
+  assert.equal(chrome.gets().length, 3, '10 minutes: a fetch of changes');
+  assert.match(chrome.gets()[2].url, /since=c2/);
 });
 
-test('LinkedIn labels never bring back an un-skipped pair; a click does; marks reach QTS in one batch', async () => {
-  const posts = [];
-  const chrome = worker({ server: (method, url, body) => {
-    if (method === 'GET') return { success: true, full: true, cursor: 'c', skips: [{ key: k(1), removed: true }], seen: [] };
-    posts.push(body); return { success: true };
-  } });
-  const auto = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: true, marks: [item(1, 'viewed'), item(2, 'saved')], keys: [k(1), k(2)] });
-  assert.deepEqual(auto.skipped, [k(2)], 'the un-skipped pair stays un-skipped despite LinkedIn\'s "Viewed"');
-  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(1, 'clicked')] });
-  const after = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: false, marks: [], keys: [k(1), k(2)] });
-  assert.deepEqual(after.skipped, [k(1), k(2)], 'the click marks it again');
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  const sent = posts.flatMap((body) => body.add || []);
-  assert.deepEqual(sent.map((pair) => [pair.title, pair.source]), [['Job 2', 'saved'], ['Job 1', 'clicked']]);
-  assert.ok(sent.every((pair) => !('key' in pair)), 'only title, company and source are sent');
+test('server required: QTS unreachable pauses everything; nothing is matched or kept', async () => {
+  let up = true;
+  const chrome = worker({ server: (method, url) => (!up ? { success: false, message: 'Cannot connect to the server.' } : method === 'GET' ? (url.includes('since=') ? noChanges : fullList) : { success: true }) });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
+  up = false;
+  await chrome.advance(3 * 60_000); // QTS last answered over 2 minutes ago
+  assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [item(9, 'viewed')], keys: [k(1)] }), { ok: false, state: 'server-down' });
+  assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(9, 'clicked')] }), { ok: false, state: 'server-down' });
+  up = true;
+  const back = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [k(1), k(9)] });
+  assert.deepEqual(back.skipped, [k(1)], 'resumes; the mark made while down was never kept');
 });
 
-test('offline: marks wait in the outbox and a retry is planned; once QTS answers they are sent and cleared', async () => {
-  let online = false;
-  const posts = [];
-  const chrome = worker({ server: (method, url, body) => {
-    if (method === 'GET') return { success: true, full: true, cursor: 'c', skips: [], seen: [] };
-    if (!online) return { success: false, message: 'Cannot connect to the server.' };
-    posts.push(body); return { success: true };
-  } });
-  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(9, 'clicked')] });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.ok(chrome.alarms.has('qts-linkedin-skips-retry'));
-  assert.equal(chrome.settings.get('linkedinSkipsOutboxV1').add.length, 1, 'kept for later');
-  const stillSkipped = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: false, marks: [], keys: [k(9)] });
-  assert.deepEqual(stillSkipped.skipped, [k(9)], 'highlighted while offline');
-  online = true;
-  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: true, marks: [], keys: [] });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(posts.flatMap((body) => body.add).map((pair) => pair.title), ['Job 9']);
-  assert.equal(chrome.settings.get('linkedinSkipsOutboxV1').add.length, 0);
-  assert.equal(chrome.alarms.has('qts-linkedin-skips-retry'), false);
+test('clicks and labels are saved in one batch (10 s, 25 marks, or on leaving); known jobs are not sent again', async () => {
+  const chrome = worker({ server: (method, url) => (method === 'GET' ? (url.includes('since=') ? noChanges : fullList) : { success: true }) });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [item(1, 'saved'), item(5, 'viewed')], keys: [k(5)] });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(6, 'clicked')] });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(7, 'clicked')] });
+  assert.equal(chrome.posts().length, 0, 'nothing sent yet');
+  const shown = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [k(5), k(6), k(7)] });
+  assert.deepEqual(shown.skipped, [k(5), k(6), k(7)], 'shown at once');
+  await chrome.advance(10_000);
+  assert.equal(chrome.posts().length, 1, 'one batch after 10 s');
+  assert.deepEqual(plain(chrome.posts()[0].body.add.map((pair) => [pair.title, pair.source, pair.location])), [['Job 5', 'viewed', 'Poland (Remote)'], ['Job 6', 'clicked', 'Poland (Remote)'], ['Job 7', 'clicked', 'Poland (Remote)']]);
+  // Leaving the tab sends what waits at once; 25 marks do too.
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(8, 'clicked')] });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_FLUSH' });
+  assert.equal(chrome.posts().length, 2);
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: Array.from({ length: 25 }, (_, n) => item(100 + n, 'viewed')), keys: [] });
+  await chrome.advance(1);
+  assert.equal(chrome.posts().length, 3, '25 marks: sent without waiting');
 });
 
-test('un-skip is sent as a removal; another Manager starts from an empty list; only LinkedIn pages may ask', async () => {
-  const posts = [];
-  const chrome = worker({ server: (method, url, body) => {
-    if (method === 'GET') return { success: true, full: true, cursor: 'c', skips: [{ key: k(1), removed: false }], seen: [] };
-    posts.push(body); return { success: true };
-  } });
-  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: true, marks: [], keys: [] });
-  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_UNSKIP', items: [item(1, 'manual')] });
-  assert.deepEqual((await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: false, marks: [], keys: [k(1)] })).skipped, []);
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(posts.flatMap((body) => body.remove || []).map((pair) => pair.title), ['Job 1']);
+test('a batch QTS does not take is dropped: its cards go back to normal and the skip-list pauses', async () => {
+  let accept = true;
+  const chrome = worker({ server: (method, url) => (method === 'GET' ? (url.includes('since=') ? noChanges : fullList) : accept ? { success: true } : { success: false, message: 'Server error', _httpStatus: 500 }) });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
+  accept = false;
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(6, 'clicked')] });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_FLUSH' });
+  const after = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [k(6)] });
+  // The failed save also counts as QTS not answering: paused until it answers again (a fetch succeeds).
+  assert.ok(after.state === 'server-down' || (after.ok && after.skipped.length === 0), JSON.stringify(after));
+  accept = true;
+  const resumed = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'panel', marks: [], keys: [k(6)] });
+  assert.deepEqual(resumed.skipped, [], 'the dropped mark is not kept');
+});
 
-  chrome.setManager('manager-2');
-  const other = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: false, marks: [], keys: [k(1)] });
-  assert.deepEqual(other.skipped, []);
-  chrome.setManager(null);
-  assert.equal((await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh: true, marks: [], keys: [] })).signedOut, true);
+test('the panel\'s Skip and Un-skip are saved at once; a refusal changes nothing', async () => {
+  let accept = true;
+  const chrome = worker({ server: (method, url) => (method === 'GET' ? (url.includes('since=') ? noChanges : fullList) : accept ? { success: true } : { success: false, message: 'Server error', _httpStatus: 500 }) });
+  await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
+  assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', immediate: true, items: [item(4, 'manual')] }), { ok: true, added: 1 });
+  assert.equal(chrome.posts().length, 1, 'sent at once');
+  assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_UNSKIP', items: [item(2, 'manual')] }), { ok: true, removed: 1 });
+  assert.deepEqual(plain(chrome.posts()[1].body.remove.map((pair) => pair.title)), ['Job 2']);
+  assert.deepEqual((await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [k(2), k(4)] })).skipped, [k(4)], 'a bid can be un-skipped');
+  accept = false;
+  const refused = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_UNSKIP', items: [item(4, 'manual')] });
+  assert.equal(refused.ok, false);
+});
 
+test('the Super Admin\'s switch turns it off; only LinkedIn pages may ask', async () => {
+  const chrome = worker({ server: (method) => (method === 'GET' ? { success: false, disabled: true, message: 'Turned off' } : { success: true }) });
+  assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [item(1, 'viewed')], keys: [k(1)] }), { ok: false, state: 'admin-off' });
+  assert.equal(chrome.posts().length, 0);
   const outside = await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(2, 'clicked')] }, { url: 'https://example.com/', tab: { id: 1 } });
   assert.equal(outside.ok, false);
 });

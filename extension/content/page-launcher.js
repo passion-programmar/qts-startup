@@ -125,6 +125,9 @@ async function initializeQtsPageLauncher() {
     .li-skip-action { align-self: flex-start; padding: 6px 10px; border: 1px solid #334155; border-radius: 9px; background: #0b1322; color: #e2e8f0; font: 650 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
     .li-skip-action:hover { border-color: #f59e0b; }
     .li-skip-action:disabled { opacity: .55; cursor: default; }
+    .li-skip-before { color: #fcd34d; font: 600 11.5px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .li-skip-before .other { color: #fb923c; }
+    .li-skip-switch:disabled { opacity: .45; cursor: not-allowed; }
     .menu-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding: 14px 14px 18px; scrollbar-color: #34425a transparent; scrollbar-width: thin; }
     .menu-list > * { flex-shrink: 0; }
     .label-top { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: #7d8ba3; font-size: 10.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
@@ -488,8 +491,22 @@ async function initializeQtsPageLauncher() {
   const liSkipHead = Object.assign(document.createElement('div'), { className: 'li-skip-head' });
   liSkipHead.append(Object.assign(document.createElement('span'), { className: 'li-skip-title', textContent: 'Skip-list' }), liSkipCount, liSkipSwitch);
   const liSkipSelected = Object.assign(document.createElement('div'), { className: 'li-skip-selected' });
+  const liSkipBefore = Object.assign(document.createElement('div'), { className: 'li-skip-before', hidden: true });
   const liSkipAction = Object.assign(document.createElement('button'), { type: 'button', className: 'li-skip-action' });
-  liSkip.append(liSkipHead, liSkipSelected, liSkipAction);
+  const liSkipCopy = Object.assign(document.createElement('button'), { type: 'button', className: 'li-skip-action', textContent: 'Copy report', hidden: true, title: 'Copies what QTS reads on this page, to send so the skip-list can be fixed' });
+  liSkip.append(liSkipHead, liSkipSelected, liSkipBefore, liSkipAction, liSkipCopy);
+  const LI_SKIP_SOURCES = {
+    clicked: 'Opened before', viewed: 'Viewed on LinkedIn', saved: 'Saved on LinkedIn', applied: 'Applied on LinkedIn',
+    manual: 'Skipped by you', qts_applied: 'Applied in QTS', qts_saved: 'Saved in QTS',
+  };
+  const liSkipAgo = (at) => {
+    const minutes = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 60000));
+    if (!Number.isFinite(minutes)) return '';
+    if (minutes < 60) return `${minutes || 1} min ago`;
+    const hours = Math.round(minutes / 60);
+    return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
+  };
+  let liSkipBeforeKey = '';
   menuList.append(liSkipLabel, liSkip);
 
   function renderLinkedInSkip() {
@@ -500,22 +517,53 @@ async function initializeQtsPageLauncher() {
     liSkipLabel.hidden = !show;
     if (!show) return;
     const on = status.state !== 'off';
-    liSkipSwitch.setAttribute('aria-checked', String(on));
-    liSkipCount.classList.toggle('warn', status.state === 'paused');
+    liSkipSwitch.setAttribute('aria-checked', String(on && status.state !== 'admin-off'));
+    liSkipSwitch.disabled = status.state === 'admin-off';
+    liSkipCount.classList.toggle('warn', ['paused', 'server-down', 'admin-off'].includes(status.state));
     liSkipCount.textContent = status.state === 'off' ? 'Off'
       : status.state === 'paused' ? "Paused: LinkedIn's layout changed"
-        : status.state === 'starting' ? 'Reading…'
-          : `${status.seen} of ${status.total} here already seen`;
-    liSkipCount.title = status.state === 'paused' ? `Only ${status.readable} of ${status.total} job cards could be read, so nothing is marked.` : '';
+        : status.state === 'server-down' ? 'QTS server not reachable – paused'
+          : status.state === 'admin-off' ? 'Turned off by your Super Admin'
+            : status.state === 'starting' ? 'Reading…'
+              : `${status.seen} of ${status.total} here already seen`;
+    liSkipCount.title = status.state === 'paused' ? `Only ${status.readable} of ${status.total} job cards could be read, so nothing is marked.`
+      : status.state === 'server-down' ? 'The skip-list runs only while QTS answers. It resumes by itself.' : '';
+    liSkipCopy.hidden = status.state !== 'paused';
     const selected = status.state === 'ok' ? api.selected() : null;
     liSkipSelected.hidden = !selected;
     liSkipAction.hidden = !selected;
-    if (!selected) return;
+    if (!selected) { liSkipBefore.hidden = true; liSkipBeforeKey = ''; return; }
     liSkipSelected.textContent = `${selected.title} · ${selected.company}`;
     liSkipSelected.title = liSkipSelected.textContent;
     liSkipAction.textContent = selected.skipped ? 'Un-skip this job' : 'Skip this job';
     liSkipAction.dataset.skip = selected.skipped ? 'unskip' : 'skip';
+    // "Seen before": how, where and when (asked once per selected job).
+    const beforeKey = `${selected.title}|${selected.company}|${selected.skipped}`;
+    if (!selected.skipped) { liSkipBefore.hidden = true; liSkipBeforeKey = beforeKey; return; }
+    if (beforeKey === liSkipBeforeKey) return;
+    liSkipBeforeKey = beforeKey;
+    api.seenBefore().then((info) => {
+      if (liSkipBeforeKey !== beforeKey) return;
+      liSkipBefore.replaceChildren();
+      if (!info) { liSkipBefore.hidden = true; return; }
+      const parts = [LI_SKIP_SOURCES[info.source] || 'Seen before', info.location, liSkipAgo(info.at)].filter(Boolean);
+      liSkipBefore.append(`Seen before · ${parts.join(' · ')}`);
+      if (info.location && selected.location && info.location !== selected.location) {
+        liSkipBefore.append(Object.assign(document.createElement('span'), { className: 'other', textContent: ' · other location now' }));
+      }
+      liSkipBefore.hidden = false;
+    }).catch(() => { liSkipBefore.hidden = true; });
   }
+  liSkipCopy.addEventListener('click', async () => {
+    const text = globalThis.__qtsLinkedInSkip?.report?.();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Report copied: paste it to the QTS developer.', 'success');
+    } catch {
+      showToast('The report could not be copied.', 'error');
+    }
+  });
   liSkipSwitch.addEventListener('click', async () => {
     const on = liSkipSwitch.getAttribute('aria-checked') === 'true';
     await chrome.storage.local.set({ qtsLinkedInSkipOn: !on }).catch(() => {});
@@ -536,6 +584,8 @@ async function initializeQtsPageLauncher() {
     clearInterval(liSkipTimer);
     liSkipTimer = null;
     if (!open || !/(^|\.)linkedin\.com$/i.test(location.hostname)) return;
+    // Opening the panel brings the latest list (if the last fetch is over 30 s old).
+    globalThis.__qtsLinkedInSkip?.refresh?.('panel')?.then?.(renderLinkedInSkip).catch?.(() => {});
     renderLinkedInSkip();
     liSkipTimer = setInterval(renderLinkedInSkip, 1500);
   }

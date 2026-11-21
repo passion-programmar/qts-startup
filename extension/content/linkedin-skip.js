@@ -6,6 +6,9 @@
 // page (2026-11-21): the card's componentkey "job-card-component-ref-<id>", the title in its Dismiss
 // button's aria-label (and as a text line), the company as the next line. LinkedIn's class names are
 // hashed and never used. When fewer than half the cards read cleanly, the feature pauses itself.
+// QTS's server is required (the worker decides): without it, or with the Super Admin's switch off,
+// nothing is painted. Paging uses the worker's mirror; it fetches on load, on return to the tab
+// after a while, and when the panel opens. Leaving the tab sends the waiting marks.
 (function initLinkedInSkip() {
   if (globalThis.__qtsLinkedInSkip?.alive?.()) return;
   const keyOf = globalThis.__qtsTitleCompanyKey?.computeTitleCompanyKey;
@@ -20,6 +23,7 @@
   const HIGHLIGHT = 'qts-linkedin-skip';             // the whole card's text: faded
   const TITLE_HIGHLIGHT = 'qts-linkedin-skip-title';  // the title: struck through, amber
   const BATCH_MS = 400;
+  const RETURN_AFTER_MS = 2 * 60_000;
 
   const style = new CSSStyleSheet();
   let styleAdopted = false;
@@ -28,7 +32,8 @@
   let reported = new Set();  // card ids whose LinkedIn label was already sent
   let status = { state: 'starting', total: 0, readable: 0, seen: 0 };
   let timer = null;
-  let lookedAtUrl = '';
+  let nextReason = 'load';   // why the next look may fetch: load, return, panel (paging never does)
+  let hiddenAt = 0;
   let disposed = false;
 
   const alive = () => { try { return !disposed && Boolean(chrome.runtime?.id); } catch { return false; } };
@@ -50,7 +55,9 @@
     const key = keyOf(title, company);
     if (!key) return null;
     const label = text.find((line) => STATES[line]);
-    return { id, el, key, title, company, state: label ? STATES[label] : null };
+    const place = text[at + 2] || '';
+    const location = place && !NOT_COMPANY.test(place) && !STATES[place] ? place : '';
+    return { id, el, key, title, company, location, state: label ? STATES[label] : null };
   }
 
   function adoptStyle() {
@@ -126,22 +133,24 @@
       return;
     }
     cards = read;
-    status = { state: 'ok', total: elements.length, readable: read.length, seen: status.seen };
-    const refresh = lookedAtUrl !== location.href;
-    lookedAtUrl = location.href;
+    const reason = nextReason;
+    nextReason = undefined;
     const marks = read.filter((card) => card.state && !reported.has(card.id))
-      .map(({ key, title, company, state }) => ({ key, title, company, source: state }));
+      .map(({ key, title, company, location, state }) => ({ key, title, company, location, source: state }));
     const reply = await chrome.runtime.sendMessage({
-      type: 'QTS_LINKEDIN_SKIPS_MATCH', refresh, marks, keys: [...new Set(read.map((card) => card.key))],
+      type: 'QTS_LINKEDIN_SKIPS_MATCH', reason, marks, keys: [...new Set(read.map((card) => card.key))],
     }).catch(() => null);
     if (!alive()) { dispose(); return; }
-    if (reply?.ok) {
-      for (const card of read) if (card.state) reported.add(card.id);
-      skipped = new Set(reply.skipped);
-    } else if (reply?.signedOut) {
-      status = { ...status, state: 'signed-out' };
+    if (!reply?.ok) {
+      // QTS not reachable, the Super Admin's switch off, or signed out: LinkedIn as usual.
       skipped = new Set();
+      clearPaint();
+      status = { state: reply?.state || 'server-down', total: elements.length, readable: read.length, seen: 0 };
+      return;
     }
+    for (const card of read) if (card.state) reported.add(card.id);
+    skipped = new Set(reply.skipped);
+    status = { state: 'ok', total: elements.length, readable: read.length, seen: 0 };
     paint();
   }
 
@@ -156,10 +165,14 @@
     if (!el) return;
     const card = readCard(el);
     if (!card) return;
+    if (status.state !== 'ok') return;
     if (!cards.some((known) => known.id === card.id)) cards.push(card);
+    const wasSkipped = skipped.has(card.key);
     skipped.add(card.key);
     paint();
-    chrome.runtime.sendMessage({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [{ key: card.key, title: card.title, company: card.company, source: 'clicked' }] }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [{ key: card.key, title: card.title, company: card.company, location: card.location, source: 'clicked' }] })
+      .then((reply) => { if (!reply?.ok && !wasSkipped) { skipped.delete(card.key); paint(); schedule(0); } })
+      .catch(() => {});
   }
 
   /** The job shown on the right (currentJobId), read from its card in the list. */
@@ -174,9 +187,13 @@
     if (!card) return { ok: false, error: 'Select a job in the list first.' };
     const reply = await chrome.runtime.sendMessage({
       type: skip ? 'QTS_LINKEDIN_SKIPS_MARK' : 'QTS_LINKEDIN_SKIPS_UNSKIP',
-      items: [{ key: card.key, title: card.title, company: card.company, source: 'manual' }],
+      immediate: true,
+      items: [{ key: card.key, title: card.title, company: card.company, location: card.location, source: 'manual' }],
     }).catch(() => null);
-    if (!reply?.ok) return { ok: false, error: reply?.error || 'QTS could not change the skip-list.' };
+    if (!reply?.ok) {
+      if (reply?.state) schedule(0);
+      return { ok: false, error: reply?.error || (reply?.state === 'admin-off' ? 'Your Super Admin turned the LinkedIn skip-list off.' : 'QTS could not be reached; the skip-list is paused.') };
+    }
     if (skip) skipped.add(card.key); else skipped.delete(card.key);
     paint();
     return { ok: true, title: card.title, company: card.company };
@@ -190,7 +207,14 @@
     if (area === 'local' && (changes.authExpiresAt || changes.qtsLinkedInSkipOn)) schedule(0);
   }
   const onPopState = () => schedule(50);
-  const onVisibility = () => { if (!document.hidden) schedule(50); };
+  // Leaving the tab sends the waiting marks now; coming back after a while fetches the latest list.
+  const flushNow = () => { chrome.runtime.sendMessage({ type: 'QTS_LINKEDIN_SKIPS_FLUSH' }).catch(() => {}); };
+  const onVisibility = () => {
+    if (document.hidden) { hiddenAt = Date.now(); flushNow(); return; }
+    if (hiddenAt && Date.now() - hiddenAt > RETURN_AFTER_MS) nextReason = 'return';
+    schedule(50);
+  };
+  const onPageHide = () => flushNow();
 
   function dispose() {
     if (disposed) return;
@@ -201,6 +225,7 @@
     document.removeEventListener('click', onClick, true);
     window.removeEventListener('popstate', onPopState);
     document.removeEventListener('visibilitychange', onVisibility);
+    window.removeEventListener('pagehide', onPageHide);
     try { chrome.runtime.onMessage.removeListener(onMessage); } catch { /* reloaded */ }
     try { chrome.storage.onChanged.removeListener(onStorage); } catch { /* reloaded */ }
   }
@@ -208,6 +233,7 @@
   document.addEventListener('click', onClick, { capture: true, passive: true });
   window.addEventListener('popstate', onPopState);
   document.addEventListener('visibilitychange', onVisibility);
+  window.addEventListener('pagehide', onPageHide);
   chrome.runtime.onMessage.addListener(onMessage);
   chrome.storage.onChanged.addListener(onStorage);
   const startObserving = () => {
@@ -217,13 +243,39 @@
   };
   startObserving();
 
+  /** How the selected job was seen before: { source, location, at }, or null (asks the worker's mirror). */
+  async function seenBefore() {
+    const card = selectedCard();
+    if (!card || !skipped.has(card.key)) return null;
+    const reply = await chrome.runtime.sendMessage({ type: 'QTS_LINKEDIN_SKIPS_INFO', key: card.key }).catch(() => null);
+    return reply?.ok && reply.info ? reply.info : null;
+  }
+
+  /** For "Copy report" when paused: what each card reads as (like the DevTools report), no page changes. */
+  function report() {
+    const elements = [...document.querySelectorAll(CARD)];
+    return JSON.stringify({
+      path: location.pathname,
+      start: new URLSearchParams(location.search).get('start'),
+      status,
+      cards: elements.slice(0, 25).map((el) => {
+        const text = lines(el);
+        const dismiss = el.querySelector('button[aria-label^="Dismiss "]')?.getAttribute('aria-label') || null;
+        return { id: (el.getAttribute('componentkey') || '').slice(CARD_PREFIX.length), dismiss, lines: text.slice(0, 10), readsAs: readCard(el) ? 'ok' : 'unreadable' };
+      }),
+    }, null, 2);
+  }
+
   globalThis.__qtsLinkedInSkip = Object.freeze({
     alive,
-    /** { state: ok | paused | off | signed-out | not-search | starting, total, readable, seen } */
+    /** { state: ok | paused | off | signed-out | server-down | admin-off | not-search | starting, total, readable, seen } */
     status: () => ({ ...status }),
-    selected: () => { const card = selectedCard(); return card ? { title: card.title, company: card.company, skipped: skipped.has(card.key) } : null; },
+    selected: () => { const card = selectedCard(); return card ? { title: card.title, company: card.company, location: card.location, skipped: skipped.has(card.key) } : null; },
+    seenBefore,
     skipSelected: () => setSelected(true),
     unskipSelected: () => setSelected(false),
-    refresh: () => look(),
+    /** The panel opened: fetch the latest list if the last fetch is over 30 s old. */
+    refresh: (reason) => { if (reason) nextReason = reason; return look(); },
+    report,
   });
 })();

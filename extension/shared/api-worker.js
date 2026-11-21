@@ -144,6 +144,9 @@ async function workerApiRequest(method, path, body, options = {}) {
     }
     if (!response.ok && data.success !== false) data.success = false;
     data._httpStatus = response.status;
+    // When QTS last answered (or last failed): features that need the server ask this instead of calling it.
+    if (response.status < 500) qtsRoot.__qtsServerAnsweredAt = Date.now();
+    else qtsRoot.__qtsServerFailedAt = Date.now();
     if (response.status === 401) {
       const auth = qtsRoot.__qtsAccountAuth;
       await auth?.handleAuthExpired?.();
@@ -153,6 +156,7 @@ async function workerApiRequest(method, path, body, options = {}) {
     }
     return data;
   } catch (error) {
+    qtsRoot.__qtsServerFailedAt = Date.now();
     if (error?.name === 'TimeoutError') return { success: false, message: 'The QTS server did not answer in time.' };
     return { success: false, message: 'Cannot connect to the server.' };
   }
