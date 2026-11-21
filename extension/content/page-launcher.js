@@ -100,7 +100,7 @@ async function initializeQtsPageLauncher() {
     /* Loading: a soft shimmer where a number will be; the number fades in when it arrives. */
     @keyframes qts-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
     @keyframes qts-fade-in { from { opacity: 0; } to { opacity: 1; } }
-    .is-loading { display: inline-block; color: transparent !important; border-radius: 6px; background: linear-gradient(90deg, #1a2438 25%, #2a3752 50%, #1a2438 75%); background-size: 200% 100%; animation: qts-shimmer 1.2s ease-in-out infinite; }
+    .is-loading { display: inline-block; color: transparent !important; border-radius: 6px; background: linear-gradient(90deg, #1a2438 25%, #2a3752 50%, #1a2438 75%); background-size: 200% 100%; animation: qts-shimmer 1.2s ease-in-out 25; /* at most ~30 s: loading ends sooner, and the panel has no endless animations */ }
     .stat-value.is-loading { width: 34px; height: 22px; }
     .ready.is-loading { width: 54px; height: 12px; vertical-align: -1px; }
     .stat-value.fresh, .ready.fresh { animation: qts-fade-in .25s ease-out; }
@@ -680,10 +680,15 @@ async function initializeQtsPageLauncher() {
       if (reply.notice) custom.notice = reply.notice;
       else if (reply.generation === 'waiting') custom.notice = 'Waiting: Generation starts here when Apply / Auto Apply stops.';
     }
-    renderCustom();
-    // While a résumé is being made, the cards look again every 8 seconds (only with the panel shown).
+    // Only the cards and the row's counts: the form is left alone, so a JD being typed keeps its
+    // place and focus while the cards update.
+    renderCustomCardsOnly();
+    // While a résumé is being made, the cards look again every 8 seconds (only with the panel shown);
+    // a failed one waits for the server's retry and is not looked at again and again.
     clearTimeout(custom.timer);
-    if (custom.jobs.some((job) => !job.ready)) custom.timer = setTimeout(() => { if (launcher.classList.contains('open')) loadCustomJobs(); }, 8000);
+    if (custom.jobs.some((job) => !job.ready && job.generationStatus !== 'failed')) {
+      custom.timer = setTimeout(() => { if (launcher.classList.contains('open')) loadCustomJobs(); }, 8000);
+    }
   }
 
   function customField(label, node) {
@@ -823,9 +828,15 @@ async function initializeQtsPageLauncher() {
 
   function renderCustom() {
     if (!customUi) return;
+    renderCustomForm();
+    renderCustomCardsOnly();
+  }
+
+  /** The row's label and counts, and the cards; the form is not rebuilt. */
+  function renderCustomCardsOnly() {
+    if (!customUi) return;
     customUi.tag.textContent = custom.open ? 'Close' : '+ New';
     customUi.detail.textContent = custom.jobs.length ? `${custom.jobs.length} waiting · ${custom.jobs.filter((job) => job.ready).length} ready` : '';
-    renderCustomForm();
     renderCustomCards();
   }
 

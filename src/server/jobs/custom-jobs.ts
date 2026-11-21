@@ -63,14 +63,14 @@ export async function createCustomJob(managerId: string, browserId: string, inpu
     description: input.description,
     location: null, employmentType: null, workplaceType: null, salary: null, jobReason: null,
     managerId, candidateId: input.candidateId,
+    // Kind, note and this Chrome are saved with the row itself: no other Chrome can claim it first.
+    custom: { kind: input.kind, note: input.note || null, pinnedBrowserId: browserId },
   });
   if (saved.status !== "saved") {
     return { ok: false as const, reason: saved.status === "applied"
       ? "This candidate already applied to this job (it is on the Bids page)."
       : "This job is already in this candidate's Jobs list." };
   }
-  await db.update(jobs).set({ customKind: input.kind, customNote: input.note || null, pinnedBrowserId: browserId, updatedAt: new Date() })
-    .where(and(eq(jobs.id, saved.jobId), eq(jobs.managerId, managerId)));
   return { ok: true as const, jobId: saved.jobId };
 }
 

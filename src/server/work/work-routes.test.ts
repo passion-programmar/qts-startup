@@ -140,6 +140,8 @@ test("both claim routes reject invalid/empty selections rather than using the wh
 });
 test("Apply forwards exact selection to the existing claim helper and preserves unscoped actions", async () => {
   const scope = { candidateId, jobIds: [jobId] };
+  // Auto Apply is on for this Manager (the Super Admin switch; off answers 403).
+  fixture.rows = [[{ autoApplyApi: true }]];
   assert.equal((await apply(claim(scope, "auto_apply"))).status, 200); assert.deepEqual(fixture.claims[0][3], scope);
   assert.deepEqual(fixture.claims[0][4], { autoApply: true });
   await apply(claim()); assert.equal(fixture.claims[1][3], undefined);

@@ -6160,7 +6160,12 @@ async function handleCustomJob(msg) {
   }
   const jobs = Array.isArray(result.jobs) ? result.jobs : [];
   // Jobs still without a résumé (new, or waiting for Apply to end) are made now when they can be.
-  const waiting = jobs.filter((job) => !job.ready && job.generationStatus !== 'processing').map((job) => job.id);
+  // A failed one is left to the server's own retries (10 min, 30 min, …): starting a run for it on
+  // every 8-second look would only start and stop Generation again and again. A new job always counts.
+  const waiting = jobs
+    .filter((job) => !job.ready && job.generationStatus !== 'processing'
+      && (job.generationStatus !== 'failed' || (op === 'create' && job.id === result.jobId)))
+    .map((job) => job.id);
   const started = (op === 'create' || op === 'list') ? await generateCustomJobs(waiting) : { state: 'none' };
   if (started.error) notice = started.error;
   return { ok: true, jobs, generation: started.state, ...(notice ? { notice } : {}) };

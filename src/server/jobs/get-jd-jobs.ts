@@ -52,6 +52,9 @@ type NewGetJdJob = GetJdJobIdentity & {
   autoSavedByGetJd?: boolean;
   // The main site the job was found on (src/server/jobs/source-site.ts).
   sourceSiteUrl?: string | null;
+  // Custom (the launcher's pasted job): saved in the same insert, so the row is never, even for a
+  // moment, an ordinary job another Chrome could claim before it is pinned to this one.
+  custom?: { kind: string; note: string | null; pinnedBrowserId: string } | null;
 };
 
 /**
@@ -305,13 +308,15 @@ export async function insertGetJdJob(
        INSERT INTO jobs (
          relation_id, job_key, title_company_key, job_url, job_title, company,
          description, page_text, location, employment_type, workplace_type, salary,
-         job_reason, auto_saved_by_get_jd, manager_id, candidate_id, date, status, source_site_url
+         job_reason, auto_saved_by_get_jd, manager_id, candidate_id, date, status, source_site_url,
+         custom_kind, custom_note, pinned_browser_id
        )
        SELECT
          m.relation_id, $1::text, $2::text, $8::text, $4::text, $5::text,
          m.description, CASE WHEN m.description IS NULL THEN m.page_text END,
          m.location, m.employment_type, m.workplace_type, m.salary,
-         $15::text, $16::boolean, $7::uuid, $6::uuid, $17::date, 'todo', $18::text
+         $15::text, $16::boolean, $7::uuid, $6::uuid, $17::date, 'todo', $18::text,
+         $19::text, $20::text, $21::uuid
          FROM merged m
         WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE candidate_id = $6 AND ${SAME_JOB_SQL})
        ON CONFLICT DO NOTHING
@@ -331,6 +336,9 @@ export async function insertGetJdJob(
         job.autoSavedByGetJd ?? false,
         recordDate,
         job.sourceSiteUrl ?? null,
+        job.custom?.kind ?? null,
+        job.custom?.note ?? null,
+        job.custom?.pinnedBrowserId ?? null,
       ],
     ),
     // Fill empty shared details on the job's other rows; a new description clears page_text.
