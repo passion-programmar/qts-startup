@@ -1,5 +1,10 @@
 import type { GenerationJob } from "@/server/generation/manager-prompt";
 
+// Résumés one Chrome generates at once (Manager Settings, "Concurrent Generation"); each job has its
+// own ChatGPT tab. 1 is the old one-at-a-time behaviour.
+export const MAX_GENERATION_PARALLEL_LIMIT = 5;
+export const DEFAULT_GENERATION_PARALLEL_LIMIT = 1;
+
 const limits = {
   jobUrl: 2048,
   jobTitle: 500,

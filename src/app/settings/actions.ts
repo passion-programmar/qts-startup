@@ -28,6 +28,7 @@ import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { DEFAULT_CHATGPT_URL, normalizeChatGptUrl } from "@/server/chatgpt/chatgpt-url";
 import { MAX_AUTO_APPLY_PARALLEL_LIMIT } from "@/server/apply/apply-values";
+import { MAX_GENERATION_PARALLEL_LIMIT } from "@/server/generation/generation-values";
 import { getJdSkipSitesSettingKey, parseGetJdSkipSites } from "@/server/get-jd/skip-sites-values";
 
 export type PromptActionState = {
@@ -274,6 +275,39 @@ export async function updateOwnAutoApplyParallelLimitAction(
   }
   revalidatePath("/settings");
   return { error: null, success: `Apply and Auto Apply will open up to ${parallelLimit} jobs at once.` };
+}
+
+// How many résumés each of the Manager's Chromes generates at once (each in its own ChatGPT tab).
+export async function updateOwnGenerationParallelLimitAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") {
+    return { ...emptyState, error: "Only Managers can change their Generation concurrency." };
+  }
+  const rawLimit = formData.get("generationParallelLimit");
+  const parallelLimit = typeof rawLimit === "string" && /^d+$/.test(rawLimit) ? Number(rawLimit) : NaN;
+  if (!Number.isInteger(parallelLimit) || parallelLimit < 1 || parallelLimit > MAX_GENERATION_PARALLEL_LIMIT) {
+    return { ...emptyState, error: `Choose a whole number from 1 to ${MAX_GENERATION_PARALLEL_LIMIT}.` };
+  }
+  try {
+    const [manager] = await db.update(users)
+      .set({ generationParallelLimit: parallelLimit, updatedAt: new Date() })
+      .where(and(eq(users.id, actor.id), eq(users.role, "manager"), isNull(users.blockedAt)))
+      .returning({ id: users.id });
+    if (!manager) return { ...emptyState, error: "Your active Manager account was not found." };
+  } catch (error) {
+    logPromptActionFailure("updating Generation concurrency", error);
+    return { ...emptyState, error: "Generation concurrency could not be saved." };
+  }
+  revalidatePath("/settings");
+  return {
+    error: null,
+    success: parallelLimit === 1
+      ? "Generation will write one résumé at a time in each Chrome."
+      : `Generation will write up to ${parallelLimit} résumés at once in each Chrome.`,
+  };
 }
 
 export async function updateManagerApplyAction(

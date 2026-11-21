@@ -1,7 +1,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { OwnChatGptUrlForm, OwnAutoApplyParallelLimitForm } from "@/app/settings/prompt-forms";
+import { OwnChatGptUrlForm, OwnAutoApplyParallelLimitForm, OwnGenerationParallelLimitForm } from "@/app/settings/prompt-forms";
 import { users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/session";
@@ -28,6 +28,7 @@ export default async function SettingsPage({
   if (currentUser.role === "manager") {
     const [manager] = await db.select({
       autoApplyParallelLimit: users.autoApplyParallelLimit,
+      generationParallelLimit: users.generationParallelLimit,
       chatGptUrl: users.chatGptUrl,
     })
       .from(users).where(and(eq(users.id, currentUser.id), isNull(users.blockedAt))).limit(1);
@@ -35,7 +36,7 @@ export default async function SettingsPage({
     return (
       <main className="mx-auto max-w-3xl py-1">
         <PageHeader
-          description="Set your ChatGPT Project URL and choose how many Auto Apply forms each Chrome can work on together."
+          description="Set your ChatGPT Project URL and choose how many Apply forms and résumés each Chrome can work on together."
           title="Your settings"
         />
         <SettingsCard title="ChatGPT Project URL" summary="Choose where your ChatGPT conversations open">
@@ -43,6 +44,12 @@ export default async function SettingsPage({
         </SettingsCard>
         <SettingsCard summary={`${manager.autoApplyParallelLimit} jobs at once`} title="Concurrent jobs">
           <OwnAutoApplyParallelLimitForm parallelLimit={manager.autoApplyParallelLimit} />
+        </SettingsCard>
+        <SettingsCard
+          summary={manager.generationParallelLimit === 1 ? "1 résumé at a time" : `${manager.generationParallelLimit} résumés at once`}
+          title="Concurrent Generation"
+        >
+          <OwnGenerationParallelLimitForm parallelLimit={manager.generationParallelLimit} />
         </SettingsCard>
       </main>
     );

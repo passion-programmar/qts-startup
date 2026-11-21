@@ -6,6 +6,7 @@ import { getExtensionManager } from "@/lib/extension-auth";
 import { MIN_WORK_EXTENSION_VERSION } from "@/server/apply/apply-values";
 import { resolveExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { generationFree, generationHeld, holdUntil } from "@/server/generation/generation-hold";
+import { DEFAULT_GENERATION_PARALLEL_LIMIT, MAX_GENERATION_PARALLEL_LIMIT } from "@/server/generation/generation-values";
 import { effectiveJobDescription, hasEffectiveJobDescription } from "@/server/jobs/job-description";
 import { hasEligibleExperienceCount } from "@/server/work/work-eligibility";
 import { readWorkSelection } from "@/server/work/work-selection";
@@ -58,8 +59,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     // a job not completed, with no résumé and no live hold, is ready, whatever an older release wrote.
     const now = new Date();
 
-    // Each Chrome processes one job at a time; an extension that sends no Chrome identity keeps the
-    // older rule of one job per Manager.
+    // Each Chrome holds up to the Manager's "Concurrent Generation" number of jobs at once (each in its
+    // own ChatGPT tab). An extension that does not say it runs several (parallel: true) keeps one job
+    // per Chrome, and one that sends no Chrome identity keeps the older rule of one job per Manager.
     const browser = await resolveExtensionBrowser(manager.id, request);
     if (browser && !browser.canTakeWork) {
       return NextResponse.json(
@@ -68,18 +70,23 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
     const sameChrome = browser ? [eq(jobs.generationBrowserId, browser.id)] : [];
+    const runsSeveral = Boolean(browser) && (body as Record<string, unknown>).parallel === true;
+    const heldByThisChrome = () => and(eq(jobs.managerId, manager.id), generationHeld(now), ...sameChrome);
 
-    const [activeJob] = await db
-        .select({ id: jobs.id })
-        .from(jobs)
-        .where(and(
-          eq(jobs.managerId, manager.id),
-          generationHeld(now),
-          ...sameChrome,
-        ))
+    // One read: the jobs this Chrome holds now and the Manager's number.
+    const [capacity] = await db
+        .select({
+          held: sql<number>`(select count(*)::int from ${jobs} where ${heldByThisChrome()})`,
+          configured: users.generationParallelLimit,
+        })
+        .from(users)
+        .where(eq(users.id, manager.id))
         .limit(1);
-    if (activeJob) {
-      return NextResponse.json({ success: true, job: null, processing: true });
+    const parallelLimit = runsSeveral
+      ? Math.min(Math.max(Number(capacity?.configured) || DEFAULT_GENERATION_PARALLEL_LIMIT, 1), MAX_GENERATION_PARALLEL_LIMIT)
+      : 1;
+    if ((Number(capacity?.held) || 0) >= parallelLimit) {
+      return NextResponse.json({ success: true, job: null, processing: true, parallelLimit });
     }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -120,7 +127,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           .orderBy(...(browser ? [sql`(${jobs.pinnedBrowserId} = ${browser.id}) desc nulls last`] : []), asc(jobs.createdAt), asc(jobs.id))
           .limit(1);
         if (!candidate) {
-          return NextResponse.json({ success: true, job: null });
+          return NextResponse.json({ success: true, job: null, parallelLimit });
         }
 
         const [claimed] = await db
@@ -139,22 +146,19 @@ export async function POST(request: Request): Promise<NextResponse> {
           ))
           .returning({ id: jobs.id });
         if (!claimed) {
-          const [anotherActiveJob] = await db
-            .select({ id: jobs.id })
+          // Another claim took this job first: count again, then try the next one.
+          const [heldAgain] = await db
+            .select({ held: sql<number>`count(*)::int` })
             .from(jobs)
-            .where(and(
-              eq(jobs.managerId, manager.id),
-              generationHeld(now),
-              ...sameChrome,
-            ))
-            .limit(1);
-          if (anotherActiveJob) {
-            return NextResponse.json({ success: true, job: null, processing: true });
+            .where(heldByThisChrome());
+          if ((Number(heldAgain?.held) || 0) >= parallelLimit) {
+            return NextResponse.json({ success: true, job: null, processing: true, parallelLimit });
           }
           continue;
         }
         return NextResponse.json({
           success: true,
+          parallelLimit,
           job: {
             id: candidate.id,
             jobUrl: candidate.jobUrl,
@@ -169,7 +173,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           },
         });
     }
-    return NextResponse.json({ success: true, job: null });
+    return NextResponse.json({ success: true, job: null, parallelLimit });
   } catch (error) {
     console.error("Could not claim queued Generation job.", error);
     return NextResponse.json(

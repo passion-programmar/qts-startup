@@ -108,6 +108,8 @@ export const users = pgTable(
     // Separate from Get JD matching and the assisted Apply AI choice; off means nothing changes.
     autoApplyApi: boolean("auto_apply_api").default(false).notNull(),
     autoApplyParallelLimit: integer("auto_apply_parallel_limit").default(2).notNull(),
+    // Résumés one Chrome of this Manager generates at once (each in its own ChatGPT tab); 1 = one at a time.
+    generationParallelLimit: integer("generation_parallel_limit").default(1).notNull(),
     chatGptUrl: text("chatgpt_url").default("https://chatgpt.com/").notNull(),
     // Apply clicks Submit itself when on (Super Admin, per Manager); a bid still waits for the Manager's Yes.
     autoSubmit: boolean("auto_submit").default(false).notNull(),
@@ -151,6 +153,7 @@ export const users = pgTable(
       .where(sql`${table.role} = 'super_admin'`),
     check("users_apply_review_mode_check", sql`${table.applyReviewMode} in ('every_step', 'before_submit')`),
     check("users_auto_apply_parallel_limit_check", sql`${table.autoApplyParallelLimit} between 1 and 10`),
+    check("users_generation_parallel_limit_check", sql`${table.generationParallelLimit} between 1 and 5`),
     check("users_deleted_candidate_inactive_check", sql`${table.deletedAt} is null or (${table.role} = 'account' and ${table.blockedAt} is not null)`),
     check(
       "users_parent_matches_role_check",

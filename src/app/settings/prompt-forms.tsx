@@ -8,6 +8,7 @@ import {
   saveGlobalPromptAction,
   updateOwnChatGptUrlAction,
   updateOwnAutoApplyParallelLimitAction,
+  updateOwnGenerationParallelLimitAction,
   type PromptActionState,
 } from "@/app/settings/actions";
 
@@ -233,6 +234,39 @@ export function OwnAutoApplyParallelLimitForm({ parallelLimit }: { parallelLimit
           type="number"
         />
         <span className="text-xs text-slate-500">1–10 jobs across Apply and Auto Apply · default 2</span>
+      </div>
+      <ActionFeedback state={state} />
+      <button
+        className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+        disabled={isPending}
+        type="submit"
+      >
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Check className="size-3.5" />}
+        {isPending ? "Saving..." : "Save concurrency"}
+      </button>
+    </form>
+  );
+}
+
+export function OwnGenerationParallelLimitForm({ parallelLimit }: { parallelLimit: number }) {
+  const [state, formAction, isPending] = useActionState(updateOwnGenerationParallelLimitAction, initialState);
+  return (
+    <form action={formAction} className="space-y-3">
+      <label className="block text-xs font-semibold text-slate-700" htmlFor="generation-parallel-limit">
+        Résumés generated at a time
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          className="h-10 w-24 rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100"
+          defaultValue={parallelLimit}
+          id="generation-parallel-limit"
+          max={5}
+          min={1}
+          name="generationParallelLimit"
+          required
+          type="number"
+        />
+        <span className="text-xs text-slate-500">1–5 jobs per Chrome, each in its own ChatGPT tab · default 1</span>
       </div>
       <ActionFeedback state={state} />
       <button

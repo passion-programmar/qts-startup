@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD COLUMN "generation_parallel_limit" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_generation_parallel_limit_check" CHECK ("users"."generation_parallel_limit" between 1 and 5);
