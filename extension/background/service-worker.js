@@ -6162,8 +6162,10 @@ async function handleCustomJob(msg) {
   // Jobs still without a résumé (new, or waiting for Apply to end) are made now when they can be.
   // A failed one is left to the server's own retries (10 min, 30 min, …): starting a run for it on
   // every 8-second look would only start and stop Generation again and again. A new job always counts.
+  // Every Chrome shows every custom job, but only the Chrome it was pasted in starts Generation for
+  // it here; any Chrome already running Generation takes custom jobs first anyway (server order).
   const waiting = jobs
-    .filter((job) => !job.ready && job.generationStatus !== 'processing'
+    .filter((job) => job.here !== false && !job.ready && job.generationStatus !== 'processing' && !job.makingIn
       && (job.generationStatus !== 'failed' || (op === 'create' && job.id === result.jobId)))
     .map((job) => job.id);
   const started = (op === 'create' || op === 'list') ? await generateCustomJobs(waiting) : { state: 'none' };

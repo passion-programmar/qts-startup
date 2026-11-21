@@ -1,5 +1,6 @@
 import "server-only";
 import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { bids, extensionBrowsers, jobs, profiles, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { resumeFolderOf, workTypeOf } from "@/server/apply/apply-values";
@@ -74,25 +75,45 @@ export async function createCustomJob(managerId: string, browserId: string, inpu
   return { ok: true as const, jobId: saved.jobId };
 }
 
-/** This Chrome's custom jobs still waiting (newest first), for the launcher's Custom cards. */
+// The Chrome a custom job was pasted in, and the one writing its résumé now.
+const madeIn = alias(extensionBrowsers, "custom_made_in");
+const makingIn = alias(extensionBrowsers, "custom_making_in");
+
+/**
+ * Every custom job of the Manager still waiting, for the Custom cards in each of their Chromes (all
+ * on one PC, so the PDFs are in the same QTS_Resume): this Chrome's first, then the newest. Each says
+ * where it was pasted ("made in") and, while its résumé is written, which Chrome is writing it.
+ */
 export async function listCustomJobs(managerId: string, browserId: string) {
   const rows = await db.select({
     id: jobs.id, kind: jobs.customKind, note: jobs.customNote, url: jobs.jobUrl, title: jobs.jobTitle, company: jobs.company,
     candidateId: jobs.candidateId, firstName: profiles.firstName, lastName: profiles.lastName,
     generationStatus: jobs.generationStatus, generationError: jobs.generationError,
     resumeLocalPath: jobs.resumeLocalPath, coverLetterText: jobs.coverLetterText, createdAt: jobs.createdAt,
+    pinnedBrowserId: jobs.pinnedBrowserId, madeInName: madeIn.name,
+    making: generationHeldSql(), makingInName: makingIn.name,
   }).from(jobs)
     .innerJoin(profiles, eq(profiles.userId, jobs.candidateId))
-    .where(and(eq(jobs.managerId, managerId), isNotNull(jobs.customKind), eq(jobs.pinnedBrowserId, browserId)))
-    .orderBy(desc(jobs.createdAt))
+    .leftJoin(madeIn, eq(madeIn.id, jobs.pinnedBrowserId))
+    .leftJoin(makingIn, eq(makingIn.id, jobs.generationBrowserId))
+    .where(and(eq(jobs.managerId, managerId), isNotNull(jobs.customKind)))
+    .orderBy(sql`(${jobs.pinnedBrowserId} = ${browserId}) desc nulls last`, desc(jobs.createdAt))
     .limit(50);
-  return rows.map((row) => ({
-    ...row,
-    url: isRecruiterUrl(row.url) ? "" : row.url,
-    candidate: [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
-    ready: Boolean(row.resumeLocalPath),
-    resumeFolder: row.resumeLocalPath ? resumeFolderOf(row.resumeLocalPath) : "",
-  }));
+  return rows.map(({ pinnedBrowserId, making, makingInName, madeInName, ...row }) => {
+    const here = pinnedBrowserId === browserId;
+    return {
+      ...row,
+      url: isRecruiterUrl(row.url) ? "" : row.url,
+      candidate: [row.firstName, row.lastName].filter(Boolean).join(" ") || "Candidate",
+      ready: Boolean(row.resumeLocalPath),
+      resumeFolder: row.resumeLocalPath ? resumeFolderOf(row.resumeLocalPath) : "",
+      // This Chrome pasted it (it starts Generation for it when free); else the Chrome that did.
+      here,
+      madeIn: here ? "" : madeInName || "another Chrome",
+      // While a résumé is being written: the Chrome writing it ("" when none is).
+      makingIn: !row.resumeLocalPath && making ? makingInName || "a Chrome" : "",
+    };
+  });
 }
 
 /**

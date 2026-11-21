@@ -678,7 +678,7 @@ async function initializeQtsPageLauncher() {
       custom.jobs = reply.jobs || [];
       custom.loaded = true;
       if (reply.notice) custom.notice = reply.notice;
-      else if (reply.generation === 'waiting') custom.notice = 'Waiting: Generation starts here when Apply / Auto Apply stops.';
+      else if (reply.generation === 'waiting') custom.notice = 'Waiting: a Chrome running Generation writes it first; otherwise Generation starts here when Apply / Auto Apply stops.';
     }
     // Only the cards and the row's counts: the form is left alone, so a JD being typed keeps its
     // place and focus while the cards update.
@@ -765,7 +765,7 @@ async function initializeQtsPageLauncher() {
     Object.assign(customDraft, { title: '', company: '', description: '', url: '', note: '' });
     custom.open = false;
     custom.jobs = reply.jobs || custom.jobs;
-    custom.notice = reply.notice || (reply.generation === 'waiting' ? 'Waiting: Generation starts here when Apply / Auto Apply stops.' : '');
+    custom.notice = reply.notice || (reply.generation === 'waiting' ? 'Waiting: a Chrome running Generation writes it first; otherwise Generation starts here when Apply / Auto Apply stops.' : '');
     renderCustom();
     loadCustomJobs();
   }
@@ -795,7 +795,11 @@ async function initializeQtsPageLauncher() {
         Object.assign(document.createElement('span'), { className: 'custom-kind', textContent: job.kind === 'recruiter' ? 'Recruiter' : 'Easy Apply' }),
       );
       card.append(head, Object.assign(document.createElement('div'), { className: 'custom-card-who', textContent: job.candidate + (job.note ? ` · ${job.note}` : '') }));
-      const status = job.ready ? 'Résumé ready' : job.generationStatus === 'failed' ? `Résumé failed${job.generationError ? `: ${job.generationError}` : ''}` : 'Making the résumé…';
+      // Every Chrome shows every custom job: one pasted in another Chrome says where.
+      const madeIn = job.madeIn ? ` · made in ${job.madeIn}` : '';
+      const status = job.ready ? `Résumé ready${madeIn}`
+        : job.generationStatus === 'failed' ? `Résumé failed${job.generationError ? `: ${job.generationError}` : ''}${madeIn}`
+          : job.makingIn ? `Making the résumé in ${job.makingIn}…${madeIn}` : `Making the résumé…${madeIn}`;
       card.append(Object.assign(document.createElement('div'), { className: `custom-card-status${job.ready ? ' good' : job.generationStatus === 'failed' ? ' bad' : ''}`, textContent: status }));
       const buttons = Object.assign(document.createElement('div'), { className: 'custom-buttons' });
       if (job.ready && job.resumeFolder) {
