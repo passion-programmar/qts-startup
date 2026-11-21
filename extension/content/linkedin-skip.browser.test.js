@@ -38,21 +38,33 @@ const PAGE2 = [
 ];
 const list = (cards) => `<main><section aria-label="results">${cards.map(card).join('')}</section><div id="detail">Job details</div></main>`;
 
-async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs/search-results/?currentJobId=4490425819', known = [], signedIn = true }) {
+async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs/search-results/?currentJobId=4490425819', known = [], signedIn = true, panel = false }) {
   const page = await browser.newPage();
   await page.setRequestInterception(true);
   page.on('request', (request) => (request.url().startsWith('https://www.linkedin.com/')
     ? request.respond({ status: 200, contentType: 'text/html', body: `<!doctype html><html><body>${list(cards)}</body></html>` })
     : request.abort()));
   await page.goto(url);
-  await page.evaluate(({ known, signedIn }) => {
+  await page.evaluate(({ known, signedIn, panel }) => {
+    // The QTS panel's shadow root, to look inside it.
+    const attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function attachShadow(options) { const shadow = attach.call(this, options); if (this.hasAttribute('data-qts-page-launcher')) window.panelRoot = shadow; return shadow; };
     // A fake worker: the Manager's skip-list (bids, saved jobs, marks) and the messages sent to it.
     window.calls = [];
+    window.store = { authExpiresAt: signedIn ? Date.now() + 3600000 : 0, authToken: 'test', qtsSessionUser: { id: 'manager', role: 'manager' } };
     window.skipSet = new Set(known);
     window.listeners = { message: new Set(), storage: new Set() };
     const events = (key) => ({ addListener: (fn) => window.listeners[key].add(fn), removeListener: (fn) => window.listeners[key].delete(fn) });
     window.chrome = {
-      runtime: { id: 'test', onMessage: events('message'), sendMessage: async (message) => {
+      runtime: { id: 'test', getURL: (file) => `https://extension.test/${file}`, onMessage: events('message'), sendMessage: async (message) => {
+        if (panel && !String(message.type || '').startsWith('QTS_LINKEDIN_SKIPS')) {
+          // The panel's own start-up questions.
+          if (message.type === 'QTS_GET_LAUNCHER_STATE') return { ok: true, active: true };
+          if (message.type === 'CHECK_EXTENSION_PAGE_ALLOWED') return { ok: true, excluded: false };
+          if (message.type === 'GET_MANAGER_EXTENSION_FEATURES') return { ok: true, features: {} };
+          if (message.type === 'QTS_DAILY_COUNTS') return { ok: true, urls: 0, jobs: 0, applied: 0 };
+          return { ok: true };
+        }
         window.calls.push(message);
         if (message.type === 'QTS_LINKEDIN_SKIPS_MATCH') {
           for (const mark of message.marks) window.skipSet.add(mark.key);
@@ -62,7 +74,14 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
         if (message.type === 'QTS_LINKEDIN_SKIPS_UNSKIP') { for (const item of message.items) window.skipSet.delete(item.key); return { ok: true, removed: 1 }; }
         return { ok: false };
       } },
-      storage: { onChanged: events('storage'), local: { get: async () => ({ authExpiresAt: signedIn ? Date.now() + 3600000 : 0 }) } },
+      storage: { onChanged: events('storage'), local: {
+        get: async (keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map((key) => [key, window.store[key]])),
+        set: async (values) => {
+          Object.assign(window.store, values);
+          const changes = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { newValue: value }]));
+          for (const listener of window.listeners.storage) listener(changes, 'local');
+        },
+      } },
     };
     window.htmlBefore = document.querySelector('main').innerHTML;
     // What is painted: the outlined cards (style rules) and the coloured text (highlight ranges).
@@ -72,9 +91,13 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
       const texts = [...(CSS.highlights.get('qts-linkedin-skip') || [])].map((range) => range.toString());
       return { outlined, texts };
     };
-  }, { known, signedIn });
+  }, { known, signedIn, panel });
   await page.addScriptTag({ path: path.join(root, 'extension', 'shared', 'title-company-key.js') });
   await page.addScriptTag({ path: path.join(root, 'extension', 'content', 'linkedin-skip.js') });
+  if (panel) {
+    await page.addScriptTag({ path: path.join(root, 'extension', 'content', 'page-launcher.js') });
+    await page.waitForFunction(() => Boolean(window.__qtsPageLauncher));
+  }
   await page.waitForFunction(() => window.__qtsLinkedInSkip?.status().state !== 'starting');
   return page;
 }
@@ -138,5 +161,40 @@ test('a layout QTS cannot read pauses the feature; signed out paints nothing', {
     const elsewhere = await openSearch(browser, { cards: PAGE1, url: 'https://www.linkedin.com/jobs/view/4490425819/' });
     await elsewhere.waitForFunction(() => window.__qtsLinkedInSkip.status().state === 'not-search');
     assert.equal(await elsewhere.evaluate(() => window.calls.length), 0, 'only search pages are read');
+  } finally { await browser.close(); }
+});
+
+test('the QTS panel on LinkedIn shows the count, Skip / Un-skip for the selected job, and the switch', { skip: !CHROME, timeout: 60000 }, async () => {
+  const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
+  try {
+    const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
+    const page = await openSearch(browser, { cards: PAGE1, known, panel: true });
+    await page.waitForFunction(() => window.painted().outlined.length === 3);
+    await page.evaluate(() => window.__qtsPageLauncher.setOpen(true));
+    const section = () => page.evaluate(() => {
+      const root = window.panelRoot;
+      const box = root.querySelector('.li-skip');
+      return {
+        shown: Boolean(box) && !box.hidden,
+        count: root.querySelector('.li-skip-count')?.textContent,
+        selected: root.querySelector('.li-skip-selected')?.hidden ? null : root.querySelector('.li-skip-selected')?.textContent,
+        action: root.querySelector('.li-skip-action')?.hidden ? null : root.querySelector('.li-skip-action')?.textContent,
+        on: root.querySelector('.li-skip-switch')?.getAttribute('aria-checked'),
+      };
+    });
+    await page.waitForFunction(() => window.panelRoot?.querySelector('.li-skip') && !window.panelRoot.querySelector('.li-skip').hidden);
+    assert.deepEqual(await section(), { shown: true, count: '3 of 6 here already seen', selected: 'Senior DevOps Engineer (Azure+AWS) · N-iX', action: 'Un-skip this job', on: 'true' });
+
+    // Un-skip the selected job from the panel: its outline goes, the button turns into Skip.
+    await page.evaluate(() => window.panelRoot.querySelector('.li-skip-action').click());
+    await page.waitForFunction(() => !window.painted().outlined.includes('4490425819'));
+    await page.waitForFunction(() => window.panelRoot.querySelector('.li-skip-action').textContent === 'Skip this job');
+    assert.equal(await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_UNSKIP').length), 1);
+
+    // The switch: off removes every outline, on brings them back.
+    await page.evaluate(() => window.panelRoot.querySelector('.li-skip-switch').click());
+    await page.waitForFunction(() => window.painted().outlined.length === 0 && window.panelRoot.querySelector('.li-skip-count').textContent === 'Off');
+    await page.evaluate(() => window.panelRoot.querySelector('.li-skip-switch').click());
+    await page.waitForFunction(() => window.painted().outlined.length === 2);
   } finally { await browser.close(); }
 });

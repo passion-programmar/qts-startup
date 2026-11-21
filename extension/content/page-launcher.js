@@ -110,6 +110,21 @@ async function initializeQtsPageLauncher() {
     .stat.urls .stat-label::before { background: #fcd34d; }
     .stat.jobs .stat-label::before { background: #e2e8f0; }
     .stat.applied .stat-label::before { background: #60a5fa; }
+    /* LinkedIn skip-list (LinkedIn's job search only): its switch, the count, Skip / Un-skip. */
+    .li-skip { display: flex; flex-direction: column; gap: 8px; padding: 11px 12px; border: 1px solid #1f2a40; border-radius: 14px; background: #111a2d; }
+    .li-skip[hidden], .li-skip [hidden] { display: none !important; }
+    .li-skip-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .li-skip-title { flex: none; color: #e2e8f0; font: 700 13px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
+    .li-skip-count { flex: 1; min-width: 0; overflow: hidden; color: #8b9ab3; font: 600 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+    .li-skip-count.warn { color: #fbbf24; }
+    .li-skip-switch { position: relative; flex: none; width: 34px; height: 20px; border: 0; border-radius: 999px; background: #334155; cursor: pointer; transition: background .15s ease; }
+    .li-skip-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #f8fafc; transition: transform .15s ease; }
+    .li-skip-switch[aria-checked="true"] { background: #f59e0b; }
+    .li-skip-switch[aria-checked="true"]::after { transform: translateX(14px); }
+    .li-skip-selected { overflow: hidden; color: #8b9ab3; font: 500 11.5px/1.35 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+    .li-skip-action { align-self: flex-start; padding: 6px 10px; border: 1px solid #334155; border-radius: 9px; background: #0b1322; color: #e2e8f0; font: 650 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+    .li-skip-action:hover { border-color: #f59e0b; }
+    .li-skip-action:disabled { opacity: .55; cursor: default; }
     .menu-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding: 14px 14px 18px; scrollbar-color: #34425a transparent; scrollbar-width: thin; }
     .menu-list > * { flex-shrink: 0; }
     .label-top { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: #7d8ba3; font-size: 10.5px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
@@ -461,6 +476,69 @@ async function initializeQtsPageLauncher() {
     stats.append(tile);
   }
   menuList.append(Object.assign(document.createElement('div'), { className: 'label-top', textContent: 'Today' }), stats);
+
+  // LinkedIn skip-list (content/linkedin-skip.js, same extension world) on LinkedIn's job search:
+  // how many cards on this page are already seen, its switch, and Skip / Un-skip for the job shown.
+  const liSkipLabel = Object.assign(document.createElement('div'), { className: 'label-top', textContent: 'LinkedIn', hidden: true });
+  const liSkip = Object.assign(document.createElement('div'), { className: 'li-skip', hidden: true });
+  const liSkipCount = Object.assign(document.createElement('span'), { className: 'li-skip-count' });
+  const liSkipSwitch = Object.assign(document.createElement('button'), { type: 'button', className: 'li-skip-switch', title: 'Outline the job cards you have already seen' });
+  liSkipSwitch.setAttribute('role', 'switch');
+  liSkipSwitch.setAttribute('aria-label', 'LinkedIn skip-list');
+  const liSkipHead = Object.assign(document.createElement('div'), { className: 'li-skip-head' });
+  liSkipHead.append(Object.assign(document.createElement('span'), { className: 'li-skip-title', textContent: 'Skip-list' }), liSkipCount, liSkipSwitch);
+  const liSkipSelected = Object.assign(document.createElement('div'), { className: 'li-skip-selected' });
+  const liSkipAction = Object.assign(document.createElement('button'), { type: 'button', className: 'li-skip-action' });
+  liSkip.append(liSkipHead, liSkipSelected, liSkipAction);
+  menuList.append(liSkipLabel, liSkip);
+
+  function renderLinkedInSkip() {
+    const api = globalThis.__qtsLinkedInSkip;
+    const status = api?.alive?.() ? api.status() : null;
+    const show = Boolean(status) && !['not-search', 'signed-out'].includes(status.state);
+    liSkip.hidden = !show;
+    liSkipLabel.hidden = !show;
+    if (!show) return;
+    const on = status.state !== 'off';
+    liSkipSwitch.setAttribute('aria-checked', String(on));
+    liSkipCount.classList.toggle('warn', status.state === 'paused');
+    liSkipCount.textContent = status.state === 'off' ? 'Off'
+      : status.state === 'paused' ? "Paused: LinkedIn's layout changed"
+        : status.state === 'starting' ? 'Reading…'
+          : `${status.seen} of ${status.total} here already seen`;
+    liSkipCount.title = status.state === 'paused' ? `Only ${status.readable} of ${status.total} job cards could be read, so nothing is marked.` : '';
+    const selected = status.state === 'ok' ? api.selected() : null;
+    liSkipSelected.hidden = !selected;
+    liSkipAction.hidden = !selected;
+    if (!selected) return;
+    liSkipSelected.textContent = `${selected.title} · ${selected.company}`;
+    liSkipSelected.title = liSkipSelected.textContent;
+    liSkipAction.textContent = selected.skipped ? 'Un-skip this job' : 'Skip this job';
+    liSkipAction.dataset.skip = selected.skipped ? 'unskip' : 'skip';
+  }
+  liSkipSwitch.addEventListener('click', async () => {
+    const on = liSkipSwitch.getAttribute('aria-checked') === 'true';
+    await chrome.storage.local.set({ qtsLinkedInSkipOn: !on }).catch(() => {});
+    setTimeout(renderLinkedInSkip, 300);
+  });
+  liSkipAction.addEventListener('click', async () => {
+    const api = globalThis.__qtsLinkedInSkip;
+    if (!api) return;
+    liSkipAction.disabled = true;
+    const result = liSkipAction.dataset.skip === 'unskip' ? await api.unskipSelected() : await api.skipSelected();
+    liSkipAction.disabled = false;
+    if (!result?.ok) showToast(result?.error || 'QTS could not change the skip-list.', 'error');
+    renderLinkedInSkip();
+  });
+  // While the panel is open on LinkedIn the section follows the page (cards, selection) every 1.5 s.
+  let liSkipTimer = null;
+  function keepLinkedInSkipFresh(open) {
+    clearInterval(liSkipTimer);
+    liSkipTimer = null;
+    if (!open || !/(^|\.)linkedin\.com$/i.test(location.hostname)) return;
+    renderLinkedInSkip();
+    liSkipTimer = setInterval(renderLinkedInSkip, 1500);
+  }
 
   // One candidate for Generation, Apply and Auto Apply; each mode keeps its own job list for it.
   const WORK_MODES = ['generation', 'apply', 'auto_apply'];
@@ -1261,6 +1339,7 @@ async function initializeQtsPageLauncher() {
     // read now, alongside the candidate lists, and every minute while it stays open.
     if (open) refreshDailyCounts();
     keepCountsFresh(open);
+    keepLinkedInSkipFresh(open);
     menu.hidden = !open;
     host.toggleAttribute('data-menu-open', open);
     document.documentElement?.setAttribute('data-qts-menu-docked', open ? 'true' : 'false');
