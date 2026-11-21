@@ -190,6 +190,7 @@ async function initializeQtsPageLauncher() {
     .custom-card-title { overflow: hidden; color: #f1f5f9; font: 700 12.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
     .custom-kind { flex: none; padding: 2px 7px; border: 1px solid #34425a; border-radius: 999px; color: #d8b4fe; font: 700 10px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
     .custom-card-who { overflow: hidden; color: #8b9ab3; font: 500 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+    .custom-card-name { color: #f1f5f9; font-weight: 800; font-size: 12.5px; }
     .custom-card-status { color: #a5b4fc; font: 600 11.5px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; }
     .custom-card-status.good { color: #6ee7b7; }
     .custom-card-status.bad { color: #fca5a5; }
@@ -794,7 +795,11 @@ async function initializeQtsPageLauncher() {
         Object.assign(document.createElement('span'), { className: 'custom-card-title', textContent: `${job.company} · ${job.title}`, title: job.note || '' }),
         Object.assign(document.createElement('span'), { className: 'custom-kind', textContent: job.kind === 'recruiter' ? 'Recruiter' : 'Easy Apply' }),
       );
-      card.append(head, Object.assign(document.createElement('div'), { className: 'custom-card-who', textContent: job.candidate + (job.note ? ` · ${job.note}` : '') }));
+      // The account's name in bold, so each card's candidate is seen at a glance; the note after it.
+      const who = Object.assign(document.createElement('div'), { className: 'custom-card-who', title: job.candidate + (job.note ? ` · ${job.note}` : '') });
+      who.append(Object.assign(document.createElement('strong'), { className: 'custom-card-name', textContent: job.candidate }));
+      if (job.note) who.append(document.createTextNode(` · ${job.note}`));
+      card.append(head, who);
       // Every Chrome shows every custom job: one pasted in another Chrome says where.
       const madeIn = job.madeIn ? ` · made in ${job.madeIn}` : '';
       const status = job.ready ? `Résumé ready${madeIn}`
