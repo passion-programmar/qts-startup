@@ -111,6 +111,26 @@ test("Generation claim keeps selected candidate/job filters alongside existing e
   assert.match(query.sql, /blocked_at/); assert.match(query.sql, /resume_local_path/); assert.match(query.sql, /experiences/);
   assert.doesNotMatch(query.sql, /jd_matching/);
 });
+// Concurrent Generation: one read gives the jobs this Chrome holds and the Manager's number.
+const generationClaim = (body: Record<string, unknown>) => new Request("http://localhost/api/extension/generation/claim", { method: "POST", body: JSON.stringify(body) });
+test("Concurrent Generation: a Chrome holds up to the Manager's number of jobs; older extensions keep one", async () => {
+  // Holding 2 of 3: the claim goes on (no ready job here) and says the number.
+  fixture.rows = [[{ held: 2, configured: 3 }]];
+  let body = await (await generation(generationClaim({ parallel: true }))).json();
+  assert.equal(body.parallelLimit, 3); assert.equal(body.processing, undefined); assert.equal(body.job, null);
+  // Holding 3 of 3: nothing more for this Chrome now.
+  fixture.rows = [[{ held: 3, configured: 3 }]];
+  body = await (await generation(generationClaim({ parallel: true }))).json();
+  assert.deepEqual([body.processing, body.parallelLimit, body.job], [true, 3, null]);
+  // An extension that does not run several (no parallel flag) keeps one job per Chrome.
+  fixture.rows = [[{ held: 1, configured: 3 }]];
+  body = await (await generation(generationClaim({}))).json();
+  assert.deepEqual([body.processing, body.parallelLimit], [true, 1]);
+  // A number out of range is held to 1–5.
+  fixture.rows = [[{ held: 0, configured: 9 }]];
+  body = await (await generation(generationClaim({ parallel: true }))).json();
+  assert.equal(body.parallelLimit, 5);
+});
 test("both claim routes reject invalid/empty selections rather than using the whole queue", async () => {
   for (const handler of [generation, apply]) {
     assert.equal((await handler(claim({ candidateId, jobIds: [] }))).status, 400);

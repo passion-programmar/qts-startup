@@ -79,12 +79,49 @@ test('Generation opens the Manager URL and closes only its previous QTS tab', as
         remove: async id => { removed.push(id); },
       },
     },
+    generationLaneChatTabs: new Map(),
   });
-  const functionStart = serviceWorkerSource.indexOf('async function acquireGenerationChatGptTab()');
+  const functionStart = serviceWorkerSource.indexOf('async function acquireGenerationChatGptTab(');
   const functionEnd = serviceWorkerSource.indexOf('// A step card in the corner of the ChatGPT tab', functionStart);
   vm.runInContext(serviceWorkerSource.slice(functionStart, functionEnd), context);
 
   const tab = await context.acquireGenerationChatGptTab();
   assert.equal(tab.url, 'https://chatgpt.com/g/manager-project');
   assert.deepEqual(removed, [3]);
+});
+
+test('Concurrent Generation: a lane opening its ChatGPT tab never closes another lane\'s tab', async () => {
+  const removed = [];
+  const generationLaneChatTabs = new Map([[0, 3], [1, 4]]);
+  const context = vm.createContext({
+    getManagerChatGptUrl: async () => 'https://chatgpt.com/g/manager-project',
+    currentWorkWindowId: async () => 5,
+    showGenerationChatGptTab: async () => 1,
+    isChatGptHostUrl: value => value.includes('chatgpt.com'),
+    tabOwnership: { markTab: async () => {}, ownerOf: async id => ([3, 4, 6].includes(id) ? 'generation' : null) },
+    chrome: {
+      tabs: {
+        create: async options => ({ id: 7, ...options }),
+        query: async () => [
+          { id: 3, windowId: 5, url: 'https://chatgpt.com/g/manager-project' },
+          { id: 4, windowId: 5, url: 'https://chatgpt.com/g/manager-project' },
+          { id: 6, windowId: 5, url: 'https://chatgpt.com/g/manager-project' },
+          { id: 7, windowId: 5, url: 'https://chatgpt.com/g/manager-project' },
+        ],
+        remove: async id => { removed.push(id); },
+      },
+    },
+    generationLaneChatTabs,
+  });
+  const functionStart = serviceWorkerSource.indexOf('async function acquireGenerationChatGptTab(');
+  const functionEnd = serviceWorkerSource.indexOf('// A step card in the corner of the ChatGPT tab', functionStart);
+  vm.runInContext(serviceWorkerSource.slice(functionStart, functionEnd), context);
+
+  // Lane 2 opens tab 7: lanes 0 and 1 keep tabs 3 and 4; only the stray QTS tab 6 closes.
+  await context.acquireGenerationChatGptTab(2);
+  assert.deepEqual(removed, [6]);
+  // Lane 0 replacing its own tab may close its old one (3), still never lane 1's (4).
+  removed.length = 0;
+  await context.acquireGenerationChatGptTab(0);
+  assert.deepEqual(removed, [3, 6]);
 });

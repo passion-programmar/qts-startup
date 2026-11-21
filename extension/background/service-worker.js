@@ -93,6 +93,17 @@ const GET_JD_NOTIFICATION_STATE_KEY = 'qtsGetJdNotificationState';
 const MAX_GET_JD_PROFILE_SELECTION = 100;
 const ACTIVE_GENERATION_JOB_KEY = 'qtsActiveGenerationJobId';
 const GENERATION_BROWSER_STATE_KEY = 'qtsGenerationBrowserState';
+// Concurrent Generation: a Chrome writes up to the Manager's number of résumés at once, one "lane"
+// per job, each with its own pinned ChatGPT tab. Lane 0 keeps the keys above, so one job at a time
+// (the default) works and is stored exactly as before; lanes 1–4 add ":<lane>" to them.
+const GENERATION_MAX_LANES = 5;
+const generationLaneJobKey = (lane = 0) => (lane ? `${ACTIVE_GENERATION_JOB_KEY}:${lane}` : ACTIVE_GENERATION_JOB_KEY);
+const generationLaneStateKey = (lane = 0) => (lane ? `${GENERATION_BROWSER_STATE_KEY}:${lane}` : GENERATION_BROWSER_STATE_KEY);
+const GENERATION_LANE_JOB_KEYS = Array.from({ length: GENERATION_MAX_LANES }, (_, lane) => generationLaneJobKey(lane));
+const GENERATION_LANE_STATE_KEYS = Array.from({ length: GENERATION_MAX_LANES }, (_, lane) => generationLaneStateKey(lane));
+/** The job ids the lanes of this Chrome are generating, from stored values (at most one per lane). */
+const generationLaneJobIds = (stored) => GENERATION_LANE_JOB_KEYS
+  .map((key) => stored?.[key]).filter((jobId) => typeof jobId === 'string' && jobId);
 const GENERATION_NOTICE_KEY = 'qtsGenerationNotice';
 const GENERATION_QUEUE_RUN_KEY = 'qtsGenerationQueueRun';
 const GENERATION_PENDING_CANCEL_KEY = 'qtsPendingGenerationCancel';
@@ -116,7 +127,8 @@ const getJdNavigation = self.__qtsPageActivity.createNavigationMonitor({
 });
 const generationInFlightTabs = new Set();
 const generationCancellationByTab = new Map();
-let generationQueueInFlight = false;
+// The lanes running in this worker (0 = the first; more join when the claim says the Manager runs several).
+const generationLanesInFlight = new Set();
 let generationCancellationRequest = null;
 const generationHeartbeatOkAt = new Map();
 // The server lease lasts 20 minutes, so brief heartbeat outages are safe to ride out.
@@ -3899,15 +3911,17 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
 
   // Generation's progress lives in one place: its browser state, shown by the QTS panel's
   // Generation row (and the tab's dot) in every tab, never as messages on the job page.
-  async function showGenerationPageStatus(_jobTabId, message, type = 'info') {
-    await updateGenerationBrowserState({ message: String(message || ''), messageType: type }).catch(() => {});
+  async function showGenerationPageStatus(_jobTabId, message, type = 'info', lane = 0) {
+    await updateGenerationBrowserState({ message: String(message || ''), messageType: type }, lane).catch(() => {});
   }
 
-  async function updateGenerationBrowserState(values) {
-    const stored = await chrome.storage.local.get(GENERATION_BROWSER_STATE_KEY);
-    const current = stored[GENERATION_BROWSER_STATE_KEY];
+  // Each lane keeps its own state (lane 0 the original key, which the panel and recovery read first).
+  async function updateGenerationBrowserState(values, lane = 0) {
+    const key = generationLaneStateKey(lane);
+    const stored = await chrome.storage.local.get(key);
+    const current = stored[key];
     await chrome.storage.local.set({
-      [GENERATION_BROWSER_STATE_KEY]: {
+      [key]: {
         ...(current && typeof current === 'object' ? current : {}),
         ...values,
         browserSession: await self.__qtsAutoApply.browserSession(),
@@ -3924,13 +3938,14 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     });
   }
 
-  async function clearGenerationBrowserState(generationId = '') {
+  async function clearGenerationBrowserState(generationId = '', lane = 0) {
+    const key = generationLaneStateKey(lane);
     if (generationId) {
-      const stored = await chrome.storage.local.get(GENERATION_BROWSER_STATE_KEY);
-      const current = stored[GENERATION_BROWSER_STATE_KEY];
+      const stored = await chrome.storage.local.get(key);
+      const current = stored[key];
       if (current?.generationId && current.generationId !== generationId) return;
     }
-    await chrome.storage.local.remove(GENERATION_BROWSER_STATE_KEY);
+    await chrome.storage.local.remove(key);
   }
 
   async function notifyGenerationManager(message) {
@@ -3987,7 +4002,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   // Generation works in the Manager's current window: a pinned ChatGPT tab, in front while
   // Generation runs, and the job pages it opens next to it in the background. shownBefore: the tab
   // the Manager was on.
-  async function acquireGenerationChatGptTab() {
+  // The ChatGPT tab each running lane works in: opening a tab for one lane never closes another's.
+  const generationLaneChatTabs = new Map();
+  async function acquireGenerationChatGptTab(lane = 0) {
+    const otherLaneTabs = new Set([...generationLaneChatTabs].filter(([other]) => other !== lane).map(([, tabId]) => tabId));
     const chatGptUrl = await getManagerChatGptUrl();
     const created = await chrome.tabs.create({
       windowId: await currentWorkWindowId(),
@@ -4004,6 +4022,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       if (
         tab.id != null &&
         tab.id !== created.id &&
+        !otherLaneTabs.has(tab.id) &&
         isChatGptHostUrl(tab.url || tab.pendingUrl || '') &&
         await tabOwnership.ownerOf(tab.id, tab.windowId) === 'generation'
       ) {
@@ -4435,6 +4454,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   // (the full task, since a new chat has no earlier turns) is sent in a fresh pinned tab; chatTab
   // is the queue's own record, so the queue goes on with (and later closes) the new tab.
   async function askGenerationChatGpt(chatTab, prompt, generationId, active, freshTabPrompt = prompt) {
+    const lane = chatTab.lane ?? 0;
     for (let attempt = 0; ; attempt += 1) {
       try {
         const [counted] = await chrome.scripting.executeScript({
@@ -4443,9 +4463,13 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           args: [generationId],
         }).catch(() => [{ result: 0 }]);
         const sentBefore = Number(counted?.result) || 0;
-        await updateGenerationBrowserState({ phase: 'sending_prompt' });
-        await sendGenerationPromptWithRecovery(chatTab.id, attempt > 0 ? freshTabPrompt : prompt);
-        await updateGenerationBrowserState({ phase: 'waiting_for_response' });
+        await updateGenerationBrowserState({ phase: 'sending_prompt' }, lane);
+        // Sending needs the tab in front: lanes take turns (a few seconds each); writing runs at once.
+        await inGenerationSendTurn(async () => {
+          if (generationLanesInFlight.size > 1) await bringTabToFront(chatTab.id);
+          await sendGenerationPromptWithRecovery(chatTab.id, attempt > 0 ? freshTabPrompt : prompt);
+        });
+        await updateGenerationBrowserState({ phase: 'waiting_for_response' }, lane);
         return await waitForGenerationAnswer(chatTab.id, generationId, active, sentBefore + 1);
       } catch (error) {
         active.local();
@@ -4455,9 +4479,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         await sleep(1500);
         active.local();
         await chrome.tabs.remove(chatTab.id).catch(() => {});
-        const created = await acquireGenerationChatGptTab();
+        const created = await acquireGenerationChatGptTab(lane);
         chatTab.id = created.id;
-        await updateGenerationBrowserState({ chatTabId: chatTab.id, phase: 'opening_chatgpt' });
+        generationLaneChatTabs.set(lane, chatTab.id);
+        await updateGenerationBrowserState({ chatTabId: chatTab.id, phase: 'opening_chatgpt' }, lane);
         await ensureChatGptReady(chatTab.id);
       }
     }
@@ -4466,16 +4491,26 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   // How long each part of one Generation job took (measured to find what to speed up): the queue
   // marks the start, ChatGPT ready and the files; runGenerationForTab marks the answer and its save.
   // The finished job's times show on the ChatGPT card and the last 30 stay in qtsGenerationTimings.
-  let generationTiming = null;
-  const markGeneration = (point) => { if (generationTiming && !generationTiming[point]) generationTiming[point] = Date.now(); };
+  const generationTimings = new Map();
+  const markGeneration = (point, lane = 0) => {
+    const timing = generationTimings.get(lane);
+    if (timing && !timing[point]) timing[point] = Date.now();
+  };
+  // One lane at a time puts a prompt into ChatGPT (the tab must be in front for that).
+  let generationSendQueue = Promise.resolve();
+  function inGenerationSendTurn(work) {
+    const turn = generationSendQueue.then(work, work);
+    generationSendQueue = turn.catch(() => {});
+    return turn;
+  }
   // "9s", "1:18": short, for the card's chips.
   const secondsText = (ms) => {
     const seconds = Math.max(0, Math.round(ms / 1000));
     return seconds >= 60 ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : `${seconds}s`;
   };
-  async function finishGenerationTiming(chatTabId) {
-    const timing = generationTiming;
-    generationTiming = null;
+  async function finishGenerationTiming(chatTabId, lane = 0) {
+    const timing = generationTimings.get(lane);
+    generationTimings.delete(lane);
     if (!timing?.start || !timing.files) return;
     const span = (from, to) => (timing[from] && timing[to] ? timing[to] - timing[from] : null);
     const parts = { openChatGpt: span('start', 'ready'), chatGpt: span('ready', 'answered'), save: span('answered', 'saved'), files: span('saved', 'files'), total: timing.files - timing.start };
@@ -4496,6 +4531,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       throw new Error('Generation requires a saved candidate Job. Run Get JD and save candidates first.');
     }
     if (!Number.isInteger(pinnedChatTab?.id)) throw new Error('Generation needs the pinned ChatGPT tab.');
+    const lane = pinnedChatTab.lane ?? 0;
     const cancellationKey = jobTabId ?? queuedJob.id;
     if (generationInFlightTabs.has(cancellationKey)) {
       throw new Error('Generation is already running for this job.');
@@ -4518,9 +4554,9 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         // A new job starts with no message: the last job's (or failure's) is not carried over.
         message: '',
         messageType: 'info',
-      });
+      }, lane);
       await ensureQueuedGenerationIsActive(queuedJob.id);
-      await showGenerationPageStatus(jobTabId, 'Preparing the prompt from the saved job and candidate profile...');
+      await showGenerationPageStatus(jobTabId, 'Preparing the prompt from the saved job and candidate profile...', 'info', lane);
       // The company may be empty (Get JD leaves an unknown company empty): the letter then goes
       // to the Hiring Manager. A job needs its URL, title and description.
       if (
@@ -4562,13 +4598,13 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       );
       if (!generationPrompt) throw new Error('QTS could not create a task-specific Generation prompt.');
       ensureGenerationIsActive(cancellationKey, cancellationToken);
-      await showGenerationPageStatus(jobTabId, 'Opening ChatGPT and sending the Generation prompt...');
+      await showGenerationPageStatus(jobTabId, 'Opening ChatGPT and sending the Generation prompt...', 'info', lane);
 
       await updateGenerationBrowserState({
         phase: 'opening_chatgpt',
         generationId,
         chatTabId: pinnedChatTab.id,
-      });
+      }, lane);
       // The queue opened the pinned ChatGPT conversation before starting this job.
       chatTab = pinnedChatTab;
       ensureGenerationIsActive(cancellationKey, cancellationToken);
@@ -4576,15 +4612,15 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         local: () => ensureGenerationIsActive(cancellationKey, cancellationToken),
         server: () => ensureQueuedGenerationIsActive(queuedJob.id),
       };
-      await showGenerationPageStatus(jobTabId, 'ChatGPT is generating the résumé and cover letter...');
+      await showGenerationPageStatus(jobTabId, 'ChatGPT is generating the résumé and cover letter...', 'info', lane);
       let responseText = await askGenerationChatGpt(chatTab, generationPrompt, generationId, active);
-      markGeneration('answered');
+      markGeneration('answered', lane);
 
       // An answer QTS cannot use gets one follow-up in the same chat that says why.
       for (let followUps = 0; ; followUps += 1) {
         active.local();
         await active.server();
-        await updateGenerationBrowserState({ phase: 'validating_response' });
+        await updateGenerationBrowserState({ phase: 'validating_response' }, lane);
         await showGenerationChatGptStep(chatTab.id, '5/6 · Checking the answer', 'Reading the JSON and saving it to QTS...');
         const responseJson = self.__qtsGenerationChatGpt?.extractJsonObject?.(responseText) || null;
         const saved = responseJson
@@ -4601,7 +4637,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             ? `ChatGPT's answer could not be used: ${saved.message}`
             : saved.message || 'QTS could not save the Generation result.');
         }
-        await showGenerationPageStatus(jobTabId, 'Asking ChatGPT to correct its answer...');
+        await showGenerationPageStatus(jobTabId, 'Asking ChatGPT to correct its answer...', 'info', lane);
         await showGenerationChatGptStep(
           chatTab.id,
           '5/6 · Asking ChatGPT to correct its answer',
@@ -4616,11 +4652,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         // A fresh tab (after a ChatGPT error) has no earlier turns: it gets the whole task again.
         responseText = await askGenerationChatGpt(chatTab, followUp, generationId, active, generationPrompt);
       }
-      await updateGenerationBrowserState({ phase: 'response_saved' });
-      markGeneration('saved');
+      await updateGenerationBrowserState({ phase: 'response_saved' }, lane);
+      markGeneration('saved', lane);
       await showGenerationChatGptStep(chatTab.id, '6/6 · Answer saved', 'Making the résumé and cover-letter PDFs and downloading them...', 'success');
       const message = 'Generation completed and saved with the JD.';
-      await showGenerationPageStatus(jobTabId, message, 'success');
+      await showGenerationPageStatus(jobTabId, message, 'success', lane);
       return { ok: true, status: 'generation', message, generationId, parsed: true, chatTabId: chatTab.id };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Generation failed.';
@@ -4651,6 +4687,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         jobTabId,
         message,
         isGenerationCancelled(error) ? 'info' : 'error',
+        lane,
       );
       throw error;
     } finally {
@@ -4903,12 +4940,13 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
   }
 
-  async function reportQueuedGenerationDelivered(jobTabId) {
-    await updateGenerationBrowserState({ phase: 'completed' });
+  async function reportQueuedGenerationDelivered(jobTabId, lane = 0) {
+    await updateGenerationBrowserState({ phase: 'completed' }, lane);
     await showGenerationPageStatus(
       jobTabId,
       'Generation complete. Resume, cover letter, and JD text were downloaded.',
       'success',
+      lane,
     );
   }
 
@@ -4937,13 +4975,11 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     }
   }
 
-  async function recoverInterruptedGeneration() {
-    const stored = await chrome.storage.local.get([
-      ACTIVE_GENERATION_JOB_KEY,
-      GENERATION_BROWSER_STATE_KEY,
-      EXTENSION_STATUS_KEY,
-    ]);
-    const jobId = stored[ACTIVE_GENERATION_JOB_KEY];
+  async function recoverInterruptedGeneration(lane = 0) {
+    const jobKey = generationLaneJobKey(lane);
+    const stateKey = generationLaneStateKey(lane);
+    const stored = await chrome.storage.local.get([jobKey, stateKey, EXTENSION_STATUS_KEY]);
+    const jobId = stored[jobKey];
     if (typeof jobId !== 'string' || !jobId) return;
     // No run is in flight, so a previous service-worker instance stopped mid-job.
     const cancelRequested = stored[EXTENSION_STATUS_KEY] === 'cancel';
@@ -4955,13 +4991,32 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
     if (!recovered.success && ![404, 409].includes(recovered._httpStatus)) {
       throw new Error(recovered.message || 'Interrupted Generation cleanup will retry automatically.');
     }
-    await closeInterruptedGenerationTabs(stored[GENERATION_BROWSER_STATE_KEY]);
-    await chrome.storage.local.remove([ACTIVE_GENERATION_JOB_KEY, GENERATION_BROWSER_STATE_KEY]);
+    await closeInterruptedGenerationTabs(stored[stateKey]);
+    await chrome.storage.local.remove([jobKey, stateKey]);
   }
 
+  // Concurrent Generation. The claim answer says how many jobs this Manager runs at once in each
+  // Chrome (Settings, "Concurrent Generation"; 1 unless set, and 1 from a server that does not say).
+  let generationParallelLimit = 1;
+  // Set while the first lane is being started (recovery runs first), so two wake-ups start one run.
+  let generationDispatching = false;
+  // Shared by the lanes of one run: the Manager's tab before ChatGPT was shown (the last lane to end
+  // shows it again) and the jobs finished, for the one notice when the run goes idle.
+  let generationTabBefore = null;
+  let generationCompletedInRun = 0;
+
+  /**
+   * Starts Generation in this Chrome: with nothing running, interrupted jobs are recovered and lane 0
+   * starts (exactly the old one-job loop); its claims then add lanes up to the Manager's number.
+   * While lanes run, a call (the alarm, a new custom job) only fills free lanes.
+   */
   async function processQueuedGenerationJobs() {
-    if (generationQueueInFlight) return;
-    generationQueueInFlight = true;
+    if (generationLanesInFlight.size) {
+      await startFreeGenerationLanes();
+      return;
+    }
+    if (generationDispatching) return;
+    generationDispatching = true;
     try {
       if ((await chrome.storage.local.get(GENERATION_PENDING_CANCEL_KEY))[GENERATION_PENDING_CANCEL_KEY]) {
         await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: 'cancel' });
@@ -4972,17 +5027,37 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
       if ((await chrome.storage.local.get(EXTENSION_STATUS_KEY))[EXTENSION_STATUS_KEY] === 'cancel') {
         await self.__qtsAutoApply?.recoverStoppedRuns?.();
       }
-      await recoverInterruptedGeneration();
+      // No lane is running here, so a job any lane still records was left by an earlier worker.
+      for (let lane = 0; lane < GENERATION_MAX_LANES; lane += 1) await recoverInterruptedGeneration(lane);
     } catch (error) {
       console.error('[QTS Generation] Could not recover an interrupted job:', error);
-      generationQueueInFlight = false;
+      generationDispatching = false;
       return; // Keep its recovery record and retry on the alarm before claiming another job.
     }
+    generationLanesInFlight.add(0);
+    generationDispatching = false;
+    generationTabBefore = null;
+    generationCompletedInRun = 0;
+    await runGenerationLane(0);
+  }
+
+  /** Lanes up to the Manager's number that are not running yet start now (each claims its own job). */
+  async function startFreeGenerationLanes() {
+    const runs = [];
+    const lanes = Math.min(Math.max(generationParallelLimit, 1), GENERATION_MAX_LANES);
+    for (let lane = 0; lane < lanes; lane += 1) {
+      if (generationLanesInFlight.has(lane)) continue;
+      generationLanesInFlight.add(lane);
+      runs.push(runGenerationLane(lane));
+    }
+    await Promise.all(runs);
+  }
+
+  /** One lane: claims a job, writes it in its own ChatGPT tab, saves the files, then claims the next. */
+  async function runGenerationLane(lane) {
+    const jobKey = generationLaneJobKey(lane);
     let runId = '';
     let chatTab = null;
-    // The Manager's tab before ChatGPT was shown, shown again when this run ends.
-    let tabBeforeChatGpt = null;
-    let completedCount = 0;
     let shouldStop = false;
     try {
       const storedRun = await chrome.storage.local.get(GENERATION_QUEUE_RUN_KEY);
@@ -5017,6 +5092,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           'POST',
           '/api/extension/generation/claim',
           {
+            // This extension runs several jobs at once when the Manager's setting allows it.
+            parallel: true,
             ...(scope?.mode === 'generation' ? { selection: scope } : {}),
             ...(waitingJobIds.length ? { excludedJobIds: waitingJobIds } : {}),
           },
@@ -5035,16 +5112,20 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           }
           return;
         }
+        const limit = Number(claim.parallelLimit);
+        if (Number.isInteger(limit) && limit >= 1) generationParallelLimit = Math.min(limit, GENERATION_MAX_LANES);
         if (!claim.job) {
           // Several Chromes share the queue, so Generation stays on and checks again on its
           // 30-second alarm (less often when idle) instead of turning itself off; Cancel or Stop
-          // all turns it off.
-          if (completedCount) {
+          // all turns it off. Only the last lane still running speaks for the run.
+          if (generationLanesInFlight.size > 1) return;
+          if (generationCompletedInRun) {
             // Work just ended: the idle back-off counts from now.
             await self.__qtsIdlePacing.noteActivity();
             await notifyGenerationManager(
-              `Generation finished ${completedCount} job(s). It stays on and takes new jobs as they are saved.`,
+              `Generation finished ${generationCompletedInRun} job(s). It stays on and takes new jobs as they are saved.`,
             );
+            generationCompletedInRun = 0;
           } else {
             const idle = await chrome.storage.local.get(GENERATION_IDLE_NOTICE_KEY);
             if (!idle[GENERATION_IDLE_NOTICE_KEY]) {
@@ -5058,6 +5139,10 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         }
         await chrome.storage.local.remove(GENERATION_IDLE_NOTICE_KEY);
         await self.__qtsIdlePacing.noteActivity();
+        // More jobs at once allowed than lanes running: the free lanes start and claim their own.
+        if (generationParallelLimit > generationLanesInFlight.size) {
+          startFreeGenerationLanes().catch((error) => console.error('[QTS Generation] Could not start another lane:', error));
+        }
         const queuedJob = claim.job;
         // Generation opens no job page; its steps show on the ChatGPT tab's card.
         const jobTabId = null;
@@ -5074,37 +5159,41 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           ) {
             throw new Error('QTS returned an invalid queued job.');
           }
-          await chrome.storage.local.set({ [ACTIVE_GENERATION_JOB_KEY]: queuedJob.id });
+          await chrome.storage.local.set({ [jobKey]: queuedJob.id });
           const statusBeforePageOpen = await chrome.storage.local.get(EXTENSION_STATUS_KEY);
           if (statusBeforePageOpen[EXTENSION_STATUS_KEY] !== 'generation') {
             throw generationCancelledError();
           }
-          generationTiming = { jobId: queuedJob.id, start: Date.now() };
+          generationTimings.set(lane, { jobId: queuedJob.id, start: Date.now() });
           // ChatGPT first: one pinned conversation serves up to ten jobs, then a fresh tab.
           const tabStillOpen = chatTab && await chrome.tabs.get(chatTab.id).then(() => true, () => false);
-          generationTiming.reusedTab = Boolean(tabStillOpen && chatTab.jobs < GENERATION_JOBS_PER_CHATGPT_TAB);
+          generationTimings.get(lane).reusedTab = Boolean(tabStillOpen && chatTab.jobs < GENERATION_JOBS_PER_CHATGPT_TAB);
           if (!tabStillOpen || chatTab.jobs >= GENERATION_JOBS_PER_CHATGPT_TAB) {
             if (tabStillOpen) await chrome.tabs.remove(chatTab.id).catch(() => {});
-            const created = await acquireGenerationChatGptTab();
-            chatTab = { id: created.id, jobs: 0 };
+            generationLaneChatTabs.delete(lane);
+            const created = await acquireGenerationChatGptTab(lane);
+            chatTab = { id: created.id, jobs: 0, lane };
+            generationLaneChatTabs.set(lane, chatTab.id);
             // The first job remembers the tab to return to when Generation ends.
-            tabBeforeChatGpt ??= created.shownBefore;
-            await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
+            generationTabBefore ??= created.shownBefore;
+            await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' }, lane);
             await ensureChatGptReady(chatTab.id);
           } else {
             // Reuse the same conversation so the configured GPT and project context remain active.
-            tabBeforeChatGpt ??= await showGenerationChatGptTab(chatTab.id);
-            await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' });
+            generationTabBefore ??= await showGenerationChatGptTab(chatTab.id);
+            await updateGenerationBrowserState({ jobId: queuedJob.id, chatTabId: chatTab.id, phase: 'opening_chatgpt' }, lane);
             await ensureChatGptReady(chatTab.id);
           }
-          markGeneration('ready');
-          // Still in front while ChatGPT writes, if the Manager looked at another tab meanwhile.
+          markGeneration('ready', lane);
+          // Still in front while ChatGPT writes, if the Manager looked at another tab meanwhile
+          // (with several lanes, each one's tab comes to the front for its own prompt).
           await bringTabToFront(chatTab.id);
           // No job page is opened: the prompt uses the saved job (description, title, company).
           const result = await runGenerationForTab(jobTabId, queuedJob, chatTab);
+          generationLaneChatTabs.set(lane, chatTab.id);
           generationId = result.generationId;
           answerSaved = true;
-          await updateGenerationBrowserState({ phase: 'downloading' });
+          await updateGenerationBrowserState({ phase: 'downloading' }, lane);
           // The PDFs are printed in a hidden tab of the ChatGPT window, out of the Manager's way.
           const printWindowId = (await getTab(chatTab.id))?.windowId;
           const downloadedPdfPaths = await downloadQueuedGenerationFiles(
@@ -5123,22 +5212,22 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           if (!finalized.success) {
             throw new Error(finalized.message || 'QTS could not finish the queued job.');
           }
-          await reportQueuedGenerationDelivered(jobTabId);
+          await reportQueuedGenerationDelivered(jobTabId, lane);
           await clearGenerationRetry(queuedJob.id);
-          markGeneration('files');
-          await finishGenerationTiming(chatTab.id);
+          markGeneration('files', lane);
+          await finishGenerationTiming(chatTab.id, lane);
           chatTab.jobs += 1;
-          completedCount += 1;
+          generationCompletedInRun += 1;
         } catch (error) {
-          generationTiming = null;
+          generationTimings.delete(lane);
           let handledError = error;
           const serverStatus = await readQueuedGenerationStatus(queuedJob.id);
           if (serverStatus === 'completed') {
             // Finalize committed even though its response was lost; keep the delivered files.
-            await reportQueuedGenerationDelivered(jobTabId);
+            await reportQueuedGenerationDelivered(jobTabId, lane);
             await clearGenerationRetry(queuedJob.id);
             if (answerSaved && chatTab) chatTab.jobs += 1;
-            completedCount += 1;
+            generationCompletedInRun += 1;
             continue;
           }
           if (serverStatus && !['processing', 'failed'].includes(serverStatus)) {
@@ -5146,6 +5235,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
           }
           const reason = handledError instanceof Error ? handledError.message : 'Generation failed.';
           chatTab = await handleQueuedGenerationFailureTab(chatTab, answerSaved, reason);
+          if (!chatTab) generationLaneChatTabs.delete(lane);
           // Without a status answer, a sent finalize may have committed, so the files might be the delivery.
           const deliveryUnknown = finalizeAttempted && !serverStatus;
           if (downloadIds.length > 0 && !deliveryUnknown) {
@@ -5182,7 +5272,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             await updateGenerationBrowserState({
               message: `Generation could not finish ${queuedJob.jobTitle || 'a job'}: ${reason} It will retry automatically at ${generationRetryTime(retryAt)}; other jobs continue meanwhile.`,
               messageType: 'warn',
-            });
+            }, lane);
             await sleep(3000);
           } else {
             await workerApiRequest(
@@ -5202,6 +5292,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
               jobTabId,
               reason,
               isGenerationCancelled(handledError) ? 'info' : 'error',
+              lane,
             );
           }
         } finally {
@@ -5214,17 +5305,14 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
             }
           }
           try {
-            await clearGenerationBrowserState();
+            await clearGenerationBrowserState('', lane);
           } catch (error) {
             console.error('[QTS Generation] Could not clear its browser state:', error);
           }
           try {
-            const activeGeneration = await chrome.storage.local.get([
-              EXTENSION_STATUS_KEY,
-              ACTIVE_GENERATION_JOB_KEY,
-            ]);
-            if (activeGeneration[ACTIVE_GENERATION_JOB_KEY] === queuedJob.id) {
-              await chrome.storage.local.remove(ACTIVE_GENERATION_JOB_KEY);
+            const activeGeneration = await chrome.storage.local.get(jobKey);
+            if (activeGeneration[jobKey] === queuedJob.id) {
+              await chrome.storage.local.remove(jobKey);
             }
           } catch (storageError) {
             console.error('[QTS Generation] Could not clear the active queue status:', storageError);
@@ -5239,23 +5327,30 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         }
       }
     } finally {
-      generationQueueInFlight = false;
+      generationLanesInFlight.delete(lane);
+      generationLaneChatTabs.delete(lane);
+      const lastLane = generationLanesInFlight.size === 0;
       if (chatTab) {
-        await returnToTab(chatTab.id, tabBeforeChatGpt);
+        // The last lane to end shows the Manager's tab again; the others only close their own tab.
+        if (lastLane) {
+          await returnToTab(chatTab.id, generationTabBefore);
+          generationTabBefore = null;
+        }
         await chrome.tabs.remove(chatTab.id).catch(() => {});
       }
-      try {
-        const current = await chrome.storage.local.get([
-          EXTENSION_STATUS_KEY,
-          ACTIVE_GENERATION_JOB_KEY,
-          GENERATION_QUEUE_RUN_KEY,
-        ]);
-        await finishWorkCancellation();
-        if (current[EXTENSION_STATUS_KEY] !== 'generation' && current[GENERATION_QUEUE_RUN_KEY]) {
-          await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
+      if (lastLane) {
+        try {
+          const current = await chrome.storage.local.get([
+            EXTENSION_STATUS_KEY,
+            GENERATION_QUEUE_RUN_KEY,
+          ]);
+          await finishWorkCancellation();
+          if (current[EXTENSION_STATUS_KEY] !== 'generation' && current[GENERATION_QUEUE_RUN_KEY]) {
+            await chrome.storage.local.remove(GENERATION_QUEUE_RUN_KEY);
+          }
+        } catch (error) {
+          console.error('[QTS Generation] Could not finalize queue-run state:', error);
         }
-      } catch (error) {
-        console.error('[QTS Generation] Could not finalize queue-run state:', error);
       }
     }
   }
@@ -6419,10 +6514,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       if (action === 'sign_out') {
-        const activeGeneration = await chrome.storage.local.get(ACTIVE_GENERATION_JOB_KEY);
-        const activeJobId = activeGeneration[ACTIVE_GENERATION_JOB_KEY];
-        if (typeof activeJobId === 'string' && activeJobId) {
-          // Return the running job to the queue while the token can still authorize the request.
+        const activeGeneration = await chrome.storage.local.get(GENERATION_LANE_JOB_KEYS);
+        for (const activeJobId of generationLaneJobIds(activeGeneration)) {
+          // Return each running job to the queue while the token can still authorize the request.
           const released = await workerApiRequest(
             'POST',
             '/api/extension/generation/release',
@@ -6943,8 +7037,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'QTS_SHOW_GENERATION') {
     (async () => {
-      const state = (await chrome.storage.local.get(GENERATION_BROWSER_STATE_KEY))[GENERATION_BROWSER_STATE_KEY];
-      const tab = Number.isInteger(state?.chatTabId) ? await getTab(state.chatTabId) : null;
+      const states = await chrome.storage.local.get(GENERATION_LANE_STATE_KEYS);
+      const laneTabIds = GENERATION_LANE_STATE_KEYS.map((key) => states[key]?.chatTabId).filter(Number.isInteger);
+      const wanted = Number.isInteger(msg.chatTabId) && laneTabIds.includes(msg.chatTabId) ? [msg.chatTabId] : laneTabIds;
+      let tab = null;
+      for (const tabId of wanted) {
+        tab = await getTab(tabId);
+        if (tab) break;
+      }
       if (!tab) return { ok: false, error: 'The ChatGPT tab for this job is no longer open.' };
       await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
       await chrome.tabs.update(tab.id, { active: true });
@@ -7895,11 +7995,11 @@ async function stopWorkSlotLocally(clearSelection = false) {
 
 // Release an idle cancelled slot immediately; active queues call this after cleanup.
 async function finishWorkCancellation() {
-  if (generationQueueInFlight || generationInFlightTabs.size
+  if (generationLanesInFlight.size || generationInFlightTabs.size
     || self.__qtsApplyRunner?.isQueueRunning?.() || self.__qtsApplyRunner?.isBusy?.()
     || self.__qtsAutoApply?.isRunning?.()) return;
-  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
-  if (stored[EXTENSION_STATUS_KEY] === 'cancel' && !stored[ACTIVE_GENERATION_JOB_KEY]) {
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ...GENERATION_LANE_JOB_KEYS]);
+  if (stored[EXTENSION_STATUS_KEY] === 'cancel' && !generationLaneJobIds(stored).length) {
     if (!(await flushGenerationCancellation()).success) return;
     if (await self.__qtsAutoApply?.recoverStoppedRuns?.() === false) return;
     await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
@@ -7959,8 +8059,8 @@ async function notifyWorkStopped(message) {
 
 /** Work running in this Chrome: a Generation job, a Cancel being finished, or an application. */
 async function isWorkBusy() {
-  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
-  return Boolean(stored[ACTIVE_GENERATION_JOB_KEY])
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ...GENERATION_LANE_JOB_KEYS]);
+  return generationLaneJobIds(stored).length > 0
     || stored[EXTENSION_STATUS_KEY] === 'cancel'
     || self.__qtsApplyRunner?.isBusy?.() === true;
 }
@@ -8029,9 +8129,9 @@ async function checkForWorkNow() {
 }
 
 async function syncGenerationQueueAlarm() {
-  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ACTIVE_GENERATION_JOB_KEY]);
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ...GENERATION_LANE_JOB_KEYS]);
   const status = stored[EXTENSION_STATUS_KEY];
-  if (status === 'generation' || status === 'cancel' || stored[ACTIVE_GENERATION_JOB_KEY]) {
+  if (status === 'generation' || status === 'cancel' || generationLaneJobIds(stored).length) {
     if (!(await chrome.alarms.get(GENERATION_QUEUE_ALARM))) {
       await chrome.alarms.create(GENERATION_QUEUE_ALARM, {
         delayInMinutes: 0.5,
@@ -8055,7 +8155,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     // A mode change reaches QTS at once instead of on the next heartbeat.
     if (changes[EXTENSION_STATUS_KEY] || changes[GET_JD_ON_KEY]) sendBrowserHeartbeat().catch(() => {});
   }
-  if (!(changes[EXTENSION_STATUS_KEY] || changes[ACTIVE_GENERATION_JOB_KEY])) return;
+  if (!(changes[EXTENSION_STATUS_KEY] || GENERATION_LANE_JOB_KEYS.some((key) => changes[key]))) return;
   syncGenerationQueueAlarm().catch((error) => {
     console.error('[QTS Generation] Could not update the queue alarm:', error);
   });

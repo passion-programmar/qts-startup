@@ -9,7 +9,7 @@ const source = fs.readFileSync(path.join(__dirname, '../background/service-worke
 const helpers = source.slice(source.indexOf('  function validateApplicationDownloadFiles('),
   source.indexOf('  function waitForQueuedDownload('));
 const delivery = source.slice(source.indexOf('          const result = await runGenerationForTab('),
-  source.indexOf('          completedCount += 1;') + '          completedCount += 1;'.length);
+  source.indexOf('          generationCompletedInRun += 1;') + '          generationCompletedInRun += 1;'.length);
 const failureTab = source.slice(source.indexOf('  async function handleQueuedGenerationFailureTab('),
   source.indexOf('  function waitForQueuedDownload('));
 
@@ -68,7 +68,9 @@ function pipeline({ printError = false, technicalFailure = false, interrupted = 
     reportQueuedGenerationDelivered: async () => events.push('delivered'),
     clearGenerationRetry: async (id) => events.push(`retry-cleared:${id}`),
     jobTabId: null, queuedJob: { id: 'job-id' }, chatTab: { id: 1, jobs: 1 },
-    downloadIds: [], generationId: '', finalizeAttempted: false, completedCount: 0,
+    downloadIds: [], generationId: '', finalizeAttempted: false, generationCompletedInRun: 0,
+    // Concurrent Generation: this block runs in lane 0; timing marks are measuring only.
+    lane: 0, generationLaneChatTabs: new Map(), markGeneration: () => {}, finishGenerationTiming: async () => {},
   };
   vm.createContext(context);
   vm.runInContext(helpers, context);

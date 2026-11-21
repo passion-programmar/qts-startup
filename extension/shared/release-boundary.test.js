@@ -375,7 +375,7 @@ test('Generation launcher shows a document icon and can cancel an active run', (
     serviceWorker.indexOf('async function runGenerationForTab'),
   );
   assert.ok(askSource.includes('await chrome.tabs.remove(chatTab.id)'));
-  assert.ok(askSource.includes('const created = await acquireGenerationChatGptTab();'));
+  assert.ok(askSource.includes('const created = await acquireGenerationChatGptTab(lane);'));
   assert.ok(askSource.includes('chatTab.id = created.id;'));
   assert.equal(askSource.includes('chrome.tabs.reload'), false);
   assert.ok(serviceWorker.includes('await runGenerationForTab(jobTabId, queuedJob, chatTab);'));
@@ -427,7 +427,12 @@ test('Generation launcher shows a document icon and can cancel an active run', (
   assert.ok(claimRoute.includes('generationFree(now)'));
   assert.equal(claimRoute.includes('generationAttemptCount'), false);
   assert.equal(claimRoute.includes('generationStatus: "processing"'), false);
-  assert.ok(claimRoute.includes('if (activeJob)'));
+  // Concurrent Generation: a Chrome holds up to the Manager's number of jobs, and an extension that
+  // does not say it runs several (parallel: true) still gets one job at a time.
+  assert.ok(claimRoute.includes('(body as Record<string, unknown>).parallel === true'));
+  assert.ok(claimRoute.includes('configured: users.generationParallelLimit'));
+  assert.ok(claimRoute.includes('>= parallelLimit'));
+  assert.ok(serviceWorker.includes('parallel: true,'));
 });
 
 test('Generation records nothing until the files are downloaded: a failed, cancelled or interrupted job stays ready', () => {

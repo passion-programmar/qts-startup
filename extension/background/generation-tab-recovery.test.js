@@ -16,6 +16,8 @@ test('closing the Generation ChatGPT tab retries in a fresh tab with the complet
     acquireGenerationChatGptTab: async () => ({ id: 2 }),
     sendGenerationPromptWithRecovery: async (id, prompt) => { sent.push({ id, prompt }); if (id === 1) throw Error('No tab with id: 1'); },
     waitForGenerationAnswer: async () => 'synthetic response',
+    // Concurrent Generation: the lanes running and each lane's ChatGPT tab (one lane here).
+    generationLaneChatTabs: new Map(), generationLanesInFlight: new Set([0]), bringTabToFront: async () => {},
   });
   vm.runInContext(source.slice(start, end), context);
   const tab = { id: 1 };

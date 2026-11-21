@@ -1813,6 +1813,9 @@ async function initializeQtsPageLauncher() {
     }, wait);
   }
 
+  // Each Generation job running at once keeps its state in its own key (the first one the original key).
+  const GENERATION_LANE_STATE_KEYS = ['qtsGenerationBrowserState', ...[1, 2, 3, 4].map((lane) => `qtsGenerationBrowserState:${lane}`)];
+
   // Generation's steps, as its browser state names them (6 in all).
   const GENERATION_STEPS = {
     preparing_prompt: [1, 'Preparing the prompt'],
@@ -1828,7 +1831,7 @@ async function initializeQtsPageLauncher() {
   // generation or apply). Each running mode turns its own button into its own Cancel.
   async function syncModeActions() {
     const stored = await chrome.storage.local.get([
-      'qtsExtensionStatus', 'qtsGetJdOn', 'qtsGenerationBrowserState', 'qtsGenerationNotice', 'qtsApplyState',
+      'qtsExtensionStatus', 'qtsGetJdOn', ...GENERATION_LANE_STATE_KEYS, 'qtsGenerationNotice', 'qtsApplyState',
       'qtsApplyKind', 'qtsAutoApplyState', 'qtsGetJdNotificationState', 'authExpiresAt', 'qtsSessionUser',
     ]);
     const workStatus = stored.qtsExtensionStatus;
@@ -1877,8 +1880,10 @@ async function initializeQtsPageLauncher() {
         goLabel: 'Open page ›', open: { type: 'QTS_OPEN_GET_JD_RESULT', operationId: entry.operationId },
       };
     })]);
-    // Generation's latest step (with its job) or notice, whichever is newer.
-    const state = stored.qtsGenerationBrowserState || {};
+    // Generation's latest step (with its job) or notice, whichever is newer. Several jobs at once
+    // (Concurrent Generation): one state per lane, each job with its own card.
+    const laneStates = GENERATION_LANE_STATE_KEYS.map((key) => stored[key]).filter((entry) => entry && typeof entry === 'object');
+    const state = [...laneStates].sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))[0] || {};
     const notice = stored.qtsGenerationNotice || {};
     const fromState = state.message ? { text: state.message, type: state.messageType, at: Date.parse(state.updatedAt) || 0, job: true } : null;
     const latest = [
@@ -1890,21 +1895,29 @@ async function initializeQtsPageLauncher() {
     let generationCards = [];
     if (rows.generation.active || latest?.type === 'error') {
       rows.generation.chip = latest?.type === 'error' ? ['Failed', 'failed'] : ['Running', 'on'];
-      if (state.jobId && (jobFailed || (rows.generation.active && step))) {
-        // The job it writes (or the one that failed) in a card under the row.
-        generationCards = [{
-          name: state.candidateName,
-          company: state.company,
-          title: state.jobTitle,
-          status: jobFailed ? state.message : `${step[0]}/6 · ${step[1]}`,
-          statusType: jobFailed ? 'error' : '',
-          progress: jobFailed ? null : step[0] / 6,
-          open: { type: 'QTS_SHOW_GENERATION' },
+      // The jobs being written (or the one that failed) as cards under the row, oldest lane first.
+      const laneCards = laneStates.map((laneState) => {
+        const laneStep = GENERATION_STEPS[laneState.phase];
+        const laneFailed = laneState === state && jobFailed;
+        if (!laneState.jobId || !(laneFailed || (rows.generation.active && laneStep))) return null;
+        return {
+          name: laneState.candidateName,
+          company: laneState.company,
+          title: laneState.jobTitle,
+          status: laneFailed ? laneState.message : `${laneStep[0]}/6 · ${laneStep[1]}`,
+          statusType: laneFailed ? 'error' : '',
+          progress: laneFailed ? null : laneStep[0] / 6,
+          open: { type: 'QTS_SHOW_GENERATION', ...(Number.isInteger(laneState.chatTabId) ? { chatTabId: laneState.chatTabId } : {}) },
           openTitle: 'Show the ChatGPT tab writing it',
-        }];
+        };
+      }).filter(Boolean);
+      if (laneCards.length) {
+        generationCards = laneCards;
         rows.generation.detail = jobFailed
           ? ['This job failed: see why below.', 'error']
-          : ['Writing the résumé and cover letter, one job at a time.', ''];
+          : laneCards.length > 1
+            ? [`Writing ${laneCards.length} résumés and cover letters at once.`, '']
+            : ['Writing the résumé and cover letter, one job at a time.', ''];
       } else {
         rows.generation.detail = latest ? [latest.text, latest.type === 'error' ? 'error' : ''] : ['Looking for the next ready job.', ''];
       }
@@ -2215,7 +2228,7 @@ async function initializeQtsPageLauncher() {
         playActivation();
       }
     }
-    if (changes.qtsExtensionStatus || changes.qtsGetJdOn || changes.qtsGenerationBrowserState
+    if (changes.qtsExtensionStatus || changes.qtsGetJdOn || GENERATION_LANE_STATE_KEYS.some((key) => changes[key])
       || changes.qtsGenerationNotice || changes.qtsApplyState || changes.qtsApplyKind || changes.qtsAutoApplyState
       || changes.qtsGetJdNotificationState || changes.authExpiresAt || changes.qtsSessionUser) refreshModeActions();
     // An application ended (submitted or not): APPLY may have changed.
