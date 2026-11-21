@@ -57,17 +57,17 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
         <div className="flex items-start gap-3">
           <span aria-hidden="true" className="mt-1.5 size-3.5 shrink-0 rounded" style={{ backgroundColor: color.background }} />
           <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-semibold text-slate-900" id="interview-details-title">{shown.company} · {stepLabel(shown.step)}</h2>
+            <h2 className="flex flex-wrap items-center gap-x-2 gap-y-1 text-lg font-semibold text-slate-900" id="interview-details-title">
+              {shown.company} · {stepLabel(shown.step)}
+              {/* The result as a small coloured badge beside the title. */}
+              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide" role="status" style={{ backgroundColor: look.background, color: look.text }}>
+                <span aria-hidden="true">{look.symbol}</span> {resultLabel(shown.result)}
+              </span>
+            </h2>
+            {/* Only a round that ended gets a one-line hint: the company may still offer a new date. */}
+            {ended && <p className="mt-0.5 text-xs text-slate-500">{look.hint}</p>}
           </div>
           <button aria-label="Close" autoFocus className="flex size-8 items-center justify-center rounded-lg hover:bg-slate-100" onClick={onClose} type="button"><X className="size-4" /></button>
-        </div>
-        {/* The result as a strong banner, so Rejected or Cancelled is seen at once; the hint says what to do next. */}
-        <div className="mt-3 flex items-center gap-3 rounded-xl px-3.5 py-2.5 shadow-sm" role="status" style={{ backgroundColor: look.background, color: look.text }}>
-          <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-black/15 text-base font-bold">{look.symbol}</span>
-          <div className="min-w-0">
-            <p className="text-sm font-bold uppercase tracking-wider">{resultLabel(shown.result)}</p>
-            <p className="text-xs opacity-90">{look.hint}</p>
-          </div>
         </div>
         {/* When: a calendar tile in the category's colour, then the time large, the second zone, and how far away it is. */}
         <section aria-label="When" className="mt-3 flex items-stretch gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
