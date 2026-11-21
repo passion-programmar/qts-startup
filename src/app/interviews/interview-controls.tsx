@@ -117,7 +117,7 @@ export function InterviewRowActions({ record, onDone, inline = false }: { record
 
   return (
     <div className="flex flex-col items-start gap-1.5">
-      <div className={`flex items-center gap-1.5 ${inline ? "flex-wrap" : ""}`}>
+      <div className="flex items-center gap-1.5">
         <label className="sr-only" htmlFor={`result-${record.id}`}>Result</label>
         <select
           className={`h-8 rounded-full px-2 text-[11px] font-semibold ring-1 ring-inset focus:outline-none focus:ring-2 focus:ring-indigo-300 ${resultClasses[result]}`}
@@ -138,11 +138,7 @@ export function InterviewRowActions({ record, onDone, inline = false }: { record
                 <ListPlus aria-hidden="true" className="size-3.5" /> Add next step ({stepLabel(next)})
               </button>
             )}
-            {record.jobUrl && (
-              <a className={inlineButton} href={record.jobUrl} rel="noreferrer" target="_blank">
-                <ExternalLink aria-hidden="true" className="size-3.5" /> Open job
-              </a>
-            )}
+            {/* No Open job here: the card's job title already opens the job. */}
             <form action={deleteAction}>
               <input name="id" type="hidden" value={record.id} />
               <ConfirmButton

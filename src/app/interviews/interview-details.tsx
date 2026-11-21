@@ -101,7 +101,8 @@ export function DetailsCard({ record, onClose }: { record: InterviewRecord; onCl
           <dt className="text-slate-500">Step</dt><dd><span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${stepClasses[shown.step]}`}>{stepLabel(shown.step)}</span> <span className="text-xs text-slate-500">{resultLabel(shown.result)}</span></dd>
           {shown.comment && (<><dt className="text-slate-500">Comment</dt><dd className="whitespace-pre-line break-words text-slate-800">{shown.comment}</dd></>)}
         </dl>
-        <div className="mt-4 flex flex-wrap items-start gap-2 border-t border-slate-100 pt-4">
+        {/* Join, result, Edit, Add next step and Delete on one line. */}
+        <div className="mt-4 flex items-start gap-1.5 overflow-x-auto border-t border-slate-100 pt-4">
           {shown.meetingLink && new Date(shown.endsAt) > new Date() && (
             <a className="inline-flex h-8 items-center gap-1.5 rounded-control bg-emerald-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700" href={shown.meetingLink} rel="noreferrer" target="_blank">
               <Video aria-hidden="true" className="size-3.5" /> Join
