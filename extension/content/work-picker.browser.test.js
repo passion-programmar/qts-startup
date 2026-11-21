@@ -275,6 +275,12 @@ test('account job pickers show compact links, full URL tooltips, independent sel
     await page.evaluate(() => window.__qtsPageLauncher.setOpen(false));
     await new Promise(resolve => setTimeout(resolve, 250));
     assert.equal(await page.evaluate(() => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length), firstOpenCountRequests, 'closing cancels a delayed count refresh');
+    // Opened from the toolbar icon (or a shortcut), not the page button: the counts come too.
+    await page.evaluate(() => { for (const value of window.testRoot.querySelectorAll('.stats .stat-value')) value.textContent = '–'; });
+    await new Promise(resolve => setTimeout(resolve, 5200));
+    await page.evaluate(() => window.__qtsPageLauncher.toggleFromToolbar());
+    await page.waitForFunction(previous => window.calls.filter(message => message.type === 'QTS_DAILY_COUNTS').length > previous, {}, firstOpenCountRequests);
+    await page.waitForFunction(() => [...window.testRoot.querySelectorAll('.stats .stat-value')].map(value => value.textContent).join(',') === '1,2,3');
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); }
 });

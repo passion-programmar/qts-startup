@@ -1215,6 +1215,10 @@ async function initializeQtsPageLauncher() {
     // The Custom cards (this Chrome's pasted jobs) as they are now.
     if (open && customUi && launcher.classList.contains('signed-in')) loadCustomJobs().catch(() => {});
     launcher.classList.toggle('open', open);
+    // Today's counts belong to every way the panel opens (its button, the toolbar icon, a shortcut):
+    // read now, alongside the candidate lists, and every minute while it stays open.
+    if (open) refreshDailyCounts();
+    keepCountsFresh(open);
     menu.hidden = !open;
     host.toggleAttribute('data-menu-open', open);
     document.documentElement?.setAttribute('data-qts-menu-docked', open ? 'true' : 'false');
@@ -2212,8 +2216,6 @@ async function initializeQtsPageLauncher() {
     if (opening) chrome.runtime.sendMessage({ type: 'QTS_ACTIVITY' }).catch(() => {});
     // While Apply is on, a page with saved jobs offers its accounts ("Apply this page").
     if (opening) showApplyPick().catch(() => {});
-    if (opening) refreshDailyCounts();
-    keepCountsFresh(opening);
     if (opening) loadAllWorkAccounts();
     if (opening) syncTextHighlightAction(true).catch(() => {});
     // A Get JD notice hidden earlier shows again beside the panel (the orange dot stands for it).
