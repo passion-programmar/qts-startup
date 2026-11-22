@@ -193,6 +193,37 @@
   const hasWords = (text) => /\p{L}{2}/u.test(String(text || ''));
   const worded = (text) => (hasWords(text) ? text : '');
 
+  /**
+   * A fieldset's legend when it names only this question: a fieldset holding other questions is a
+   * section ("2. Profile", "3.Questions" on Pinpoint), and its title is no question's. '' otherwise.
+   */
+  function ownLegendText(control) {
+    const fieldset = control.closest('fieldset');
+    const legend = fieldset?.querySelector(':scope > legend') || fieldset?.querySelector('legend');
+    if (!legend || !textOf(legend) || sectionFieldset(fieldset, control)) return '';
+    return textOf(legend);
+  }
+
+  /** A fieldset holding other questions than this control's (a page section), not this question's own. */
+  function sectionFieldset(fieldset, control) {
+    if (!fieldset) return false;
+    const name = control.getAttribute?.('name');
+    return [...fieldset.querySelectorAll(FIELD_CONTROLS)].some((other) => other !== control && !other.contains(control)
+      && other.type !== 'hidden' && isShown(other) && !(name && other.getAttribute?.('name') === name));
+  }
+
+  /**
+   * The <label for> of a choice pair whose boxes add a suffix to its id (Rails/Pinpoint: label for
+   * "…_boolean_answer", boxes "…_boolean_answer_true" / "…_false"). Null when none.
+   */
+  function prefixLabel(control) {
+    const id = control.id || '';
+    const stem = id.replace(/_[^_]+$/, '');
+    if (!stem || stem === id) return null;
+    const label = control.getRootNode().querySelector?.(`label[for="${CSS.escape(stem)}"]`);
+    return label && !label.contains(control) && textOf(label) ? label : null;
+  }
+
   function labelFor(control) {
     const root = control.getRootNode();
     // aria-labelledby first, as browsers name a field: a wrapping <label> may hold only an icon's
@@ -212,7 +243,9 @@
     if (ariaLabel) return ariaLabel;
     const component = worded(componentLabel(control));
     if (component) return component;
-    const legend = worded(textOf(control.closest('fieldset')?.querySelector('legend')));
+    const prefixed = worded(textOf(prefixLabel(control)));
+    if (prefixed) return prefixed;
+    const legend = worded(ownLegendText(control));
     if (legend) return legend;
     // A question block: the nearest worded text before the control that is its own: never another
     // field's <label for>, never text holding a field, and with no other field between the text and
@@ -295,11 +328,13 @@
   function drawnRequired(control) {
     const own = control.id ? control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`) : null;
     const group = control.closest?.('fieldset, [role="radiogroup"], [role="group"]');
-    const heading = group?.querySelector(':scope > label, :scope > legend') || null;
+    // A section's fieldset (holding other questions) says nothing about this one.
+    const heading = group && !(group.matches('fieldset') && sectionFieldset(group, control)) ? group.querySelector(':scope > label, :scope > legend') : null;
     const drawn = (element, part) => { try { return String(getComputedStyle(element, part).content || ''); } catch { return ''; } };
-    return [own, heading].some((label) => label && !label.contains(control) && (
-      (/(^|[\s_-])required([\s_-]|$)/i.test(String(label.className || '')) && !/not[-_]?required|optional/i.test(String(label.className || '')))
-      || /[*✱]/.test(drawn(label, '::after')) || /[*✱]/.test(drawn(label, '::before'))));
+    const marked = (element) => (/(^|[\s_-])required([\s_-]|$)/i.test(String(element.className || '')) && !/not[-_]?required|optional/i.test(String(element.className || '')))
+      || /[*✱]/.test(drawn(element, '::after')) || /[*✱]/.test(drawn(element, '::before'));
+    return [own, heading, prefixLabel(control)].some((label) => label && !label.contains(control)
+      && (marked(label) || [...label.querySelectorAll('span, strong, em, abbr')].some(marked)));
   }
 
   /** A <label for> styled "required" (Rails forms draw its asterisk with CSS). */
@@ -326,8 +361,12 @@
    * ("SVGs not supported by this browser.").
    */
   function declaredGroupName(element) {
-    const group = element.closest('[role="radiogroup"], [role="group"], fieldset')
+    let group = element.closest('[role="radiogroup"], [role="group"], fieldset')
       || element.querySelector?.('[role="radiogroup"], [role="group"], fieldset');
+    // A section's fieldset (it holds other questions) does not name this group.
+    if (group?.matches('fieldset') && sectionFieldset(group, group.contains(element) && element.matches?.(FIELD_CONTROLS) ? element : group.querySelector(FIELD_CONTROLS) || element)) {
+      group = element.closest('[role="radiogroup"], [role="group"]');
+    }
     if (!group) return { text: '', group: null };
     const root = group.getRootNode();
     const text = [
@@ -1077,9 +1116,10 @@
   }
 
   function labelForGroup(control) {
-    const fieldset = control.closest('fieldset');
-    const legend = fieldset?.querySelector('legend');
-    if (legend && textOf(legend)) return textOf(legend);
+    const legendText = ownLegendText(control);
+    if (legendText) return legendText;
+    const prefixed = prefixLabel(control);
+    if (prefixed) return textOf(prefixed);
     const group = control.closest('[role="radiogroup"], [role="group"]');
     if (group?.getAttribute('aria-labelledby')) {
       const text = textOf(group.getRootNode().getElementById?.(group.getAttribute('aria-labelledby')));
@@ -1750,8 +1790,10 @@
     return { ok: Boolean(start) && cleanText(shown).includes(start), value: shown.slice(0, 2000) };
   }
 
-  // A file's name as a site shows it once attached ("Radu_Star_CV.pdf"), not an allowed-types note (".pdf").
-  const SHOWN_FILE_NAME = /[\p{L}\p{N}_()-][\p{L}\p{N}_ ()-]*\.(pdf|docx?|rtf|odt|txt)\b/iu;
+  // A file's name as a site shows it once attached ("Radu_Star_CV.pdf"), not an allowed-types note
+  // (".pdf", "(.pdf, .doc)", "Accepted file formats are .pdf and .docx" on Pinpoint): a letter, digit,
+  // _ or - right before the extension.
+  const SHOWN_FILE_NAME = /(?:[\p{L}\p{N}_()-][\p{L}\p{N}_ ()-]*)?[\p{L}\p{N}_)-]\.(pdf|docx?|rtf|odt|txt)\b/iu;
 
   // Never use a common parent containing a sibling upload as attachment evidence.
   function uploadControls(scope) {
@@ -4157,7 +4199,7 @@
     const wrapping = control.closest('label');
     if (wrapping && hasWords(textOf(wrapping))) return wrapping;
     const legend = control.closest('fieldset')?.querySelector('legend');
-    if (legend && hasWords(textOf(legend))) return legend;
+    if (legend && hasWords(textOf(legend)) && ownLegendText(control)) return legend;
     const before = (element, later) => Boolean(element.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
     for (let node = control.parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
       const fieldsHere = [...node.querySelectorAll(FIELD_CONTROLS)].filter((other) => other !== control && other.type !== 'hidden' && isShown(other));

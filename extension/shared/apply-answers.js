@@ -13,7 +13,7 @@
   const PERSONAL_FACT = /authori[sz]|\bsponsor|\bvisa\b|citizen|nationality|right to work|work permit|permanent resident|relocat|security clearance|criminal|date of birth|\bage\b|over 18|gender|veteran|disab|\brace\b|ethnic/i;
   const WORK_RIGHT_QUESTION = /\b(legally )?(authori[sz]ed|eligible|entitled|permitted|allowed|right) to (work|be employed)\b|\bwork (authori[sz]ation|permit|visa)\b|\bright to work\b/i;
   // Auto Apply: a question that asks the candidate to agree to, consent to, or attest something.
-  const LEGAL_QUESTION = /\b(agree|consent|acknowledge|accept|privacy (policy|notice)|terms (and conditions|of (use|service))|above[- ]mentioned terms|certif(?:y|ication)|attest(ation)?|i have read|data processing|gdpr|confirm that (everything|all|the information)|true and (your own|complete|accurate)|electronic signature)\b/i;
+  const LEGAL_QUESTION = /\b(agree|consent|acknowledge|accept|privacy (policy|notice)|terms (and conditions|of (use|service))|above[- ]mentioned terms|certif(?:y|ication)|attest(ation)?|i have read|data processing|process(?:ing)? (?:of )?(?:your |my )?personal (?:information|data)|personal (?:information|data) processing|gdpr|confirm that (everything|all|the information)|true and (your own|complete|accurate)|electronic signature)\b/i;
   // Questions about salary, notice or start date, and sponsorship, for the profile rules and for
   // Super Admin's reusable answers on the same topics.
   const SALARY_QUESTION = /salary|compensation|financial expectations?|remuneration|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b|stawk|wynagrodzeni/;
