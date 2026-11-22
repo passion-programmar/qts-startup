@@ -1,6 +1,6 @@
 // LinkedIn skip-list on LinkedIn's job search: cards whose (title, company) the Manager has already
 // seen (clicked, labelled Viewed / Saved / Applied by LinkedIn, applied or saved in QTS) show inverted:
-// the card's text white on black at 70% (rgba 0.7: ::highlight takes no opacity), its title struck through. Only the CSS Custom Highlight API paints it (text ranges and
+// the card's text white on black at 70% (rgba 0.7: ::highlight takes no opacity). Only the CSS Custom Highlight API paints it (text ranges and
 // their ::highlight colours): LinkedIn's HTML is never changed, no style rule names its elements,
 // nothing is hidden or clicked. Cards are read only through hooks confirmed on the live
 // page (2026-11-21): the card's componentkey "job-card-component-ref-<id>", the title in its Dismiss
@@ -22,8 +22,8 @@
   // Lines that are never a company (seen on live cards).
   const NOT_COMPANY = /^(?:viewed|saved|applied|promoted|easy apply|actively reviewing applicants|be an early applicant|posted\b.*|\d+\s+(?:second|minute|hour|day|week|month)s?\s+ago|.*\b(?:alumni|connections?)\b.*\bwork(?:s)? here)$/i;
   const LOCATION_LINE = /\((?:remote|hybrid|on-?site)\)$/i;
-  const HIGHLIGHT = 'qts-linkedin-skip';             // the whole card's text: white on black
-  const TITLE_HIGHLIGHT = 'qts-linkedin-skip-title';  // the title: white on black, struck through
+  const HIGHLIGHT = 'qts-linkedin-skip';             // the whole card's text: white on 70% black
+  const OLD_TITLE_HIGHLIGHT = 'qts-linkedin-skip-title'; // an earlier version's title strike, cleared
   const BATCH_MS = 400;
   const RETURN_AFTER_MS = 2 * 60_000;
 
@@ -74,43 +74,28 @@
 
   function clearPaint() {
     CSS.highlights.delete(HIGHLIGHT);
-    CSS.highlights.delete(TITLE_HIGHLIGHT);
+    CSS.highlights.delete(OLD_TITLE_HIGHLIGHT);
     if (styleAdopted) {
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== style);
       styleAdopted = false;
     }
   }
 
-  // Every skipped card: its whole text white on black (one range over the card), its title also
-  // struck through (a range over each title line, painted on top). Only highlight names get styles: no rule
-  // names LinkedIn's elements, and the page is untouched.
-  style.replaceSync([
-    `::highlight(${HIGHLIGHT}) { color: #ffffff; background-color: rgba(0, 0, 0, 0.7); }`,
-    // The title adds only the strike: a second background would stack and look darker than 70%.
-    `::highlight(${TITLE_HIGHLIGHT}) { color: #ffffff; text-decoration: line-through; text-decoration-thickness: 2px; text-decoration-color: #ffffff; }`,
-  ].join('\n'));
+  // Every skipped card: its whole text white on 70% black (one range over the card). Only the
+  // highlight name gets a style: no rule names LinkedIn's elements, and the page is untouched.
+  style.replaceSync(`::highlight(${HIGHLIGHT}) { color: #ffffff; background-color: rgba(0, 0, 0, 0.7); }`);
   function paint() {
     const seen = cards.filter((card) => skipped.has(card.key));
     status = { ...status, seen: seen.length };
     if (!seen.length) { clearPaint(); return; }
-    const faded = new Highlight();
-    const titles = new Highlight();
-    titles.priority = 1;
+    const marked = new Highlight();
     for (const card of seen) {
       const whole = new Range();
       whole.selectNodeContents(card.el);
-      faded.add(whole);
-      const walker = document.createTreeWalker(card.el, NodeFilter.SHOW_TEXT);
-      while (walker.nextNode()) {
-        const node = walker.currentNode;
-        if ((node.nodeValue || '').trim() !== card.title) continue;
-        const range = new Range();
-        range.selectNodeContents(node);
-        titles.add(range);
-      }
+      marked.add(whole);
     }
-    CSS.highlights.set(HIGHLIGHT, faded);
-    CSS.highlights.set(TITLE_HIGHLIGHT, titles);
+    CSS.highlights.delete(OLD_TITLE_HIGHLIGHT);
+    CSS.highlights.set(HIGHLIGHT, marked);
     adoptStyle();
   }
 

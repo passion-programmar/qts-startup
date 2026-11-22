@@ -93,12 +93,13 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
       } },
     };
     window.htmlBefore = document.querySelector('main').innerHTML;
-    // What is painted: the faded cards (one highlight range per card) and the struck titles.
+    // What is painted: the marked cards (one highlight range per card) and the texts they cover.
     window.painted = () => {
       const card = (range) => range.startContainer.closest?.('[componentkey]') || range.startContainer.parentElement?.closest('[componentkey]');
-      const marked = [...(CSS.highlights.get('qts-linkedin-skip') || [])].map((range) => card(range)?.getAttribute('componentkey').replace('job-card-component-ref-', '')).filter(Boolean);
-      const titles = [...(CSS.highlights.get('qts-linkedin-skip-title') || [])].map((range) => range.toString());
-      return { marked, titles };
+      const ranges = [...(CSS.highlights.get('qts-linkedin-skip') || [])];
+      const marked = ranges.map((range) => card(range)?.getAttribute('componentkey').replace('job-card-component-ref-', '')).filter(Boolean);
+      const titles = ranges.map((range) => range.toString().replace(/\s+/g, ' ').trim()).filter(Boolean).map((text) => text.split(' (Verified job)')[0]);
+      return { marked, titles: marked.length ? titles : [] };
     };
     window.styleRules = () => [...document.adoptedStyleSheets].flatMap((sheet) => [...sheet.cssRules].map((rule) => rule.cssText));
   }, { known, signedIn, panel });
@@ -114,7 +115,7 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
 
 const sorted = (values) => [...values].sort();
 
-test('seen cards are red with a struck title (with or without the verified badge), painted only by highlights; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
+test('seen cards are white on 70% black (with or without the verified badge), painted only by one highlight; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
   const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
   try {
     const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
@@ -123,14 +124,21 @@ test('seen cards are red with a struck title (with or without the verified badge
     const painted = await page.evaluate(() => window.painted());
     // Viewed (LinkedIn), Applied (LinkedIn), and the QTS bid; the three new jobs are left as they are.
     assert.deepEqual(sorted(painted.marked), sorted(['4490425819', '4492410414', '4491500626']));
-    // Unique titles: a card without the verified badge has its title twice (screen-reader + visible copy).
-    assert.deepEqual(sorted(new Set(painted.titles)), sorted(['Senior DevOps Engineer (Azure+AWS)', 'Senior Site Reliability Engineer - AI/GPU', 'Site Reliability Engineer II']));
-    // Only highlight names are styled: no rule names LinkedIn's elements.
+    // Each marked card's range covers its whole text, title included (no separate title strike).
+    for (const title of ['Senior DevOps Engineer (Azure+AWS)', 'Senior Site Reliability Engineer - AI/GPU', 'Site Reliability Engineer II']) {
+      assert.ok(painted.titles.some((text) => text.startsWith(title)), title);
+    }
+    assert.equal(await page.evaluate(() => CSS.highlights.has('qts-linkedin-skip-title')), false, 'no strike-through highlight');
+    // Only the highlight name is styled: no rule names LinkedIn's elements, no strike-through.
     const rules = await page.evaluate(() => window.styleRules());
-    assert.ok(rules.length === 2 && rules.every((rule) => rule.startsWith('::highlight(qts-linkedin-skip')), rules.join(' | '));
-    // On screen: black at 70% over LinkedIn's white page (about rgb 77, 77, 77).
+    assert.ok(rules.length === 1 && rules[0].startsWith('::highlight(qts-linkedin-skip)') && !rules[0].includes('line-through'), rules.join(' | '));
+    // On screen: black at 70% over LinkedIn's white page (about rgb 77, 77, 77), behind the title text.
     const box = await page.evaluate(() => {
-      const range = [...CSS.highlights.get('qts-linkedin-skip-title')][0];
+      const el = document.querySelector('[componentkey="job-card-component-ref-4492410414"]');
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode() && !walker.currentNode.nodeValue.trim()) { /* skip spaces */ }
+      const range = new Range();
+      range.selectNodeContents(walker.currentNode);
       const rect = range.getBoundingClientRect();
       return { x: rect.x + 2, y: rect.y + 2, width: 2, height: 2 };
     });
