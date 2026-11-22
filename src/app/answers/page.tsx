@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
-import { MessageSquareText } from "lucide-react";
 import { redirect } from "next/navigation";
-import { ManagerAnswers } from "@/app/profile/manager-answers";
-import { Card, CardHeader } from "@/app/ui/card";
+import { AnswersList, type AnswerRow } from "@/app/answers/answers-list";
 import { PageHeader } from "@/app/ui/page-header";
 import { requireUser } from "@/lib/session";
+import { alternativesOf } from "@/server/apply/answer-variant-forms";
 import { listManagerAnswers } from "@/server/apply/manager-answers";
 
 export const instant = false;
@@ -13,28 +12,25 @@ export const metadata: Metadata = {
   title: "Answers | QTS",
 };
 
-// The Manager's reusable answers, added and edited by hand here: Apply and Auto Apply fill the
-// questions they match on every application.
+// The Manager's reusable answers, kept by hand: one line per question with all its answers. Every
+// answer is for all candidates and every job; Apply and Auto Apply fill each question they match.
 export default async function AnswersPage() {
   const user = await requireUser();
   if (user.role !== "manager") redirect("/");
-  const rows = await listManagerAnswers(user.id);
+  const rows: AnswerRow[] = (await listManagerAnswers(user.id)).map((row) => ({
+    id: row.id,
+    version: row.version,
+    question: row.questionText,
+    answers: [row.answer, ...alternativesOf(row.variants ?? []).filter((other) => other.toLowerCase() !== row.answer.toLowerCase())],
+  }));
 
   return (
-    <main className="mx-auto max-w-3xl space-y-5 py-1">
+    <main className="mx-auto max-w-5xl py-1">
       <PageHeader
-        description="Answers you write once for your candidates. Apply and Auto Apply fill every question they match."
+        description="Write a question once with its answers. Apply and Auto Apply fill it for every candidate and job. The first answer is the main one; the others are tried when a form's choices need different words."
         title="Answers"
       />
-      <Card>
-        <CardHeader
-          className="mb-6 border-b border-line-soft pb-4"
-          description="Add a question and its answer, then Save. Write the answer as forms show it (for a choice, the choice's own words)."
-          icon={<MessageSquareText />}
-          title="Reusable answers"
-        />
-        <ManagerAnswers rows={rows} />
-      </Card>
+      <AnswersList rows={rows} />
     </main>
   );
 }
