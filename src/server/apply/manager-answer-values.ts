@@ -64,7 +64,17 @@ export function correctionKey(question: string): string {
 const IDENTITY_QUESTION = /\b(?:city|town|location|located|where (?:do|are) you (?:live|living|based|reside)|place of residence|name|surname|e-?mail|phone|mobile|telephone|address|street|postcode|postal|zip|linkedin|github|portfolio|website|gender|sex|race|ethnic\w*|veteran|disabilit\w*|orientation|pronouns?|age|dob|birth\w*|nationalit\w*|citizenship|passport|tax|national insurance|social security)\b/i;
 const MANAGER_NEVER = /\b(?:privacy|terms|conditions|consent|attest\w*|certif\w*|data processing|background check)\b|\b(?:this|that|our|the)\s+(?:company|employer|role|position|job|product|service|team)\b/i;
 
+/**
+ * The question without a trailing "for this role / position / job" ("What are your salary
+ * expectations for this role?"): those words do not make a general question company-specific.
+ */
+export function withoutThisRole(question: string): string {
+  return String(question).replace(/\s+(?:for|in|at|of)\s+(?:this|the)\s+(?:role|position|job|opening|vacancy)\b/gi, "").trim();
+}
+
 export function canShareQuestion(question: string, normalApply = false): boolean {
+  const general = withoutThisRole(question);
+  if (general !== String(question).trim()) return canShareQuestion(general, normalApply);
   if (normalApply) {
     const found = semantics.recognize(question);
     if (found?.blocked) return false;

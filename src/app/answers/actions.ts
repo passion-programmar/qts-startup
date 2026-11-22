@@ -44,7 +44,13 @@ export async function saveAnswerAction(input: { id?: string; version?: string; q
   if (typeof answers === "string") return { ok: false, message: answers };
   const parsed = parseCorrection({ question: input?.question, answer: answers[0], kind: "text" }, { normalApply: true });
   if (typeof parsed === "string") return { ok: false, message: parsed };
-  if (!canShareQuestion(parsed.questionText, true)) return { ok: false, message: "This is a personal fact: keep it in the candidate's profile instead." };
+  if (!canShareQuestion(parsed.questionText, true)) {
+    // Which kind of question it is, so the message says what to do.
+    const companySpecific = /\b(?:this|that|our)\s+(?:company|employer|product|service|team)\b|\bwhy (?:do you want|are you interested|would you like)\b/i.test(parsed.questionText);
+    return { ok: false, message: companySpecific
+      ? "This question is about one company, so it cannot be one answer for every job. Leave it to Ask AI or answer it on that job."
+      : "This is a fact about each candidate (name, contact, location, nationality, diversity…): it comes from the candidate's profile, not from Answers." };
+  }
   const editing = input.id !== undefined;
   if (editing && (!isUuid(input.id) || typeof input.version !== "string" || !VERSION.test(input.version))) return { ok: false, message: CHANGED };
   try {
