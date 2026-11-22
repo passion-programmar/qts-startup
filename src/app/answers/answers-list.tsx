@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { deleteAnswerAction, saveAnswerAction } from "@/app/answers/actions";
 import { Button } from "@/app/ui/button";
@@ -56,6 +57,7 @@ function QuestionEditor({ row, suggestions, onDone }: { row?: AnswerRow; suggest
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState("");
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
   const save = () => {
     const typed = draft.replace(/\s+/g, " ").trim();
     const all = typed && !answers.some((answer) => answer.toLowerCase() === typed.toLowerCase()) ? [...answers, typed] : answers;
@@ -65,6 +67,8 @@ function QuestionEditor({ row, suggestions, onDone }: { row?: AnswerRow; suggest
       const result = await saveAnswerAction({ ...(row ? { id: row.id, version: row.version } : {}), question, answers: all });
       if (!result.ok) { setMessage(result.message); return; }
       setMessage("");
+      // The list is read again at once, so the saved question shows without a reload.
+      router.refresh();
       if (row) onDone?.();
       else { setQuestion(""); setAnswers([]); setDraft(""); }
     });
@@ -90,6 +94,7 @@ function QuestionRow({ row }: { row: AnswerRow }) {
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState("");
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
   if (editing) return <li className="bg-primary-soft/40 px-4 py-2.5"><QuestionEditor onDone={() => setEditing(false)} row={row} suggestions={[]} /></li>;
   return (
     <li className="group grid gap-x-4 gap-y-1 px-4 py-2.5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] md:items-center">
@@ -108,6 +113,7 @@ function QuestionRow({ row }: { row: AnswerRow }) {
           onConfirm={() => startTransition(async () => {
             const result = await deleteAnswerAction({ id: row.id, version: row.version });
             setMessage(result.ok ? "" : result.message);
+            if (result.ok) router.refresh();
           })}
           title="Delete this question?"
           trigger={null}
