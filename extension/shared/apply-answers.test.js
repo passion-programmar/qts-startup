@@ -1212,3 +1212,21 @@ test('current company and job title come from the profile\'s current job; "most 
   assert.equal(before.ai.find((entry) => entry.field.id === 'Current company')?.check, undefined);
   assert.equal(before.ai.find((entry) => entry.field.id === 'Most recent company')?.check?.value, 'Cloudway SRL');
 });
+
+test('a saved question matches the form whatever its required mark (Lever writes ✱); an exact saved text answer is filled without AI', () => {
+  const saved = [
+    { questionKey: answers.normalizeQuestionKey('Do you currently hold any roles in the public administration?'), questionText: 'Do you currently hold any roles in the public administration?', answer: 'No', scope: 'manager', variants: [] },
+    { questionKey: answers.normalizeQuestionKey('If no, what kind of visa or work permit allows you to work in these countries?'), questionText: 'If no, what kind of visa or work permit allows you to work in these countries?', answer: 'Not applicable. EU citizen.', scope: 'manager', variants: [] },
+  ];
+  for (const mark of ['✱', '*', '＊', '∗']) {
+    assert.equal(answers.normalizeQuestionKey(`Do you currently hold any roles in the public administration? ${mark}`), saved[0].questionKey, mark);
+  }
+  const boxes = [
+    { id: 'p', label: 'Do you currently hold any roles in the public administration? ✱', kind: 'radio', required: true, options: ['Yes', 'No'] },
+    { id: 'w', label: 'If no, what kind of visa or work permit allows you to work in these countries? ✱', kind: 'text', required: true },
+  ];
+  const plan = answers.planApiFields(boxes, { firstName: 'Ana' }, saved, {});
+  const check = (id) => plan.ai.find((entry) => entry.field.id === id)?.check?.value;
+  assert.equal(check('p'), 'No');
+  assert.equal(check('w'), 'Not applicable. EU citizen.');
+});

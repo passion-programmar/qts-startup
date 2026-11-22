@@ -51,8 +51,9 @@
       .toLowerCase()
       .replace(/\(\s*(optional|required)\s*\)/g, ' ')
       // "Notice period:* Required" (Teamtailor's screen-reader word after the mark) is not the question.
-      .replace(/[*✱]\s*(optional|required)\s*$/, ' ')
-      .replace(/[*:?!.,;"'()[\]{}]/g, ' ')
+      .replace(/[*✱＊∗⁎]\s*(optional|required)\s*$/, ' ')
+      // Required marks in any shape (Lever writes "✱"), so a saved question matches the form's.
+      .replace(/[*✱＊∗⁎:?!.,;"'()[\]{}]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 300);
@@ -2378,10 +2379,11 @@
         plan.code.push({ field, answer });
         continue;
       }
-      // A Yes/No question its meaning and direction answer (a saved fact, or the profile's own):
+      // A Yes/No question its meaning and direction answer (a saved fact, or the profile's own), or a
+      // text box whose exact question the Manager saved an answer for (typed as saved):
       // filled on Alt+F like a profile fact, no AI. The AI is only asked about it on Ask AI.
       const exactSaved = (savedAnswers || []).some((row) => row.questionKey === normalizeQuestionKey(field.label));
-      const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exactSaved && answer.fact === 'answer'));
+      const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exactSaved && (answer.fact === 'answer' || !hasOptions(field))));
       // The saved answer in this box's form: this job site's own form first, else the form that fits
       // (an option, a number). A profile fact stays the profile's.
       if (answer?.source !== 'profile') {
@@ -2409,7 +2411,7 @@
         sent = rest;
       }
       const exact = (savedAnswers || []).some((row) => row.questionKey === normalizeQuestionKey(field.label));
-      const known = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exact && answer.fact === 'answer'));
+      const known = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exact && (answer.fact === 'answer' || !hasOptions(field))));
       plan.ai.push({ field: sent, ...(known ? { check: answer } : {}), ...(lacking.has(field.id) ? { lacking: lacking.get(field.id) } : {}) });
     }
     return plan;

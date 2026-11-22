@@ -304,30 +304,29 @@ test('"Questions on this page" lists every question with status and source; a cl
     // Copy gives what QTS knows for the empty box, without jumping to it.
     await panel.click('.q-copy', 'Copy');
     assert.deepEqual(await panel.copied(), ['ana@example.com']);
-    // Save answer in the row: the editor starts with what QTS knows; the Manager picks the level and saves.
+    // Save answer in the row: the editor starts with what QTS knows; one level (all candidates, every job).
     await panel.click('.q-copy', 'Save answer');
     const shadow = () => 'document.querySelector("[data-qts-apply-assist]").shadowRoot';
     assert.equal(await page.evaluate(`${shadow()}.querySelector('.q-editor textarea').value`), 'ana@example.com');
     await page.evaluate(`(() => { const root = ${shadow()};
-      const text = root.querySelector('.q-editor textarea'); text.value = 'radu@example.com'; text.dispatchEvent(new Event('input'));
-      const level = root.querySelectorAll('.q-editor select')[0]; level.value = 'candidate'; level.dispatchEvent(new Event('change')); })()`);
+      const text = root.querySelector('.q-editor textarea'); text.value = 'radu@example.com'; text.dispatchEvent(new Event('input')); })()`);
     await panel.click('.q-save', 'Save and fill');
     const saved = (await panel.sent()).find((message) => message.action === 'save_question_answer');
     // The row says it was saved, and where.
-    assert.match(await panel.text(), /Saved for This candidate and filled/);
+    assert.match(await panel.text(), /Saved for All my candidates and filled/);
     assert.deepEqual({ fieldId: saved.fieldId, question: saved.question, answer: saved.answer, level: saved.level, kind: saved.kind },
-      { fieldId: ids[1].id, question: ids[1].label.replace(/\s*\*\s*$/, '').replace(/:\s*$/, ''), answer: 'radu@example.com', level: 'candidate', kind: 'text' });
+      { fieldId: ids[1].id, question: ids[1].label.replace(/\s*\*\s*$/, '').replace(/:\s*$/, ''), answer: 'radu@example.com', level: 'manager', kind: 'text' });
   });
 });
 
-test('a box the Manager changed: the panel opens, shows the change and saves it at the chosen level only on click', { skip }, async () => {
+test('a box the Manager changed: the panel opens, shows the change and saves it for all candidates only on click', { skip }, async () => {
   await withPanel(FORM, STATE, async (page, panel) => {
     const ids = await page.evaluate(() => globalThis.__qtsApplyForm.panelQuestions().map((entry) => ({ id: entry.id, label: entry.label })));
     // The Manager hid the panel, then changed a box on the site.
     await panel.click('.hide');
     assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-assist]').shadowRoot.querySelector('.panel').hidden), true);
     const questions = [{ id: ids[1].id, label: ids[1].label, kind: 'text', required: true, value: 'Masters', status: 'page',
-      edit: { before: '', levels: ['manager', 'candidate', 'application'] } }];
+      edit: { before: '', levels: ['manager'] } }];
     await page.evaluate((next) => globalThis.__qtsApplyAssist.render(next), { ...STATE, questions, questionsPrompt: { id: ids[1].id, at: Date.now() } });
     const shown = await page.evaluate(() => {
       const root = document.querySelector('[data-qts-apply-assist]').shadowRoot;
@@ -339,10 +338,10 @@ test('a box the Manager changed: the panel opens, shows the change and saves it 
     assert.match(text, /1 change not saved yet/);
     // Nothing is sent until a level is clicked.
     assert.equal((await panel.sent()).filter((message) => message.action === 'save_question_answer').length, 0);
-    await panel.click('.q-level', 'This candidate');
+    await panel.click('.q-level', 'All my candidates');
     const saved = (await panel.sent()).find((message) => message.action === 'save_question_answer');
-    assert.deepEqual({ answer: saved.answer, level: saved.level, fieldId: saved.fieldId }, { answer: 'Masters', level: 'candidate', fieldId: ids[1].id });
-    assert.match(await panel.text(), /Saved for This candidate/);
+    assert.deepEqual({ answer: saved.answer, level: saved.level, fieldId: saved.fieldId }, { answer: 'Masters', level: 'manager', fieldId: ids[1].id });
+    assert.match(await panel.text(), /Saved for All my candidates/);
   });
 });
 
