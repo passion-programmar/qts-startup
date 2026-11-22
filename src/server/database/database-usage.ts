@@ -561,8 +561,11 @@ export async function cleanUpNow(byHand: boolean): Promise<CleanupResult> {
   await run("get_jd_page_checks", "expired", 0);
   await run("apply_question_memory", "older", QUESTION_MEMORY_DAYS);
   removed.gemini_api_call_logs = await removeOldGeminiApiCallLogs();
-  // LinkedIn skip-list rows nobody touched for 90 days.
-  removed.linkedin_skips = await removeOldLinkedInSkips();
+  // LinkedIn skip-list rows nobody touched for 90 days. Guarded: the skip-list never stops the clean-up.
+  removed.linkedin_skips = await removeOldLinkedInSkips().catch((error: unknown) => {
+    console.error("Removing old LinkedIn skip-list rows failed; the clean-up goes on.", error instanceof Error ? error.message : error);
+    return 0;
+  });
   const size = await readDatabaseSize();
 
   const at = new Date().toISOString();
