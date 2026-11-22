@@ -17,6 +17,8 @@
   const CARD = '[componentkey^="job-card-component-ref-"]';
   const CARD_PREFIX = 'job-card-component-ref-';
   const STATES = { Viewed: 'viewed', Saved: 'saved', Applied: 'applied' };
+  // LinkedIn's label line: "Viewed", "Saved", "Applied", also with words after it ("Applied 2 days ago").
+  const STATE_LINE = /^(Viewed|Saved|Applied)\b/;
   // Lines that are never a company (seen on live cards).
   const NOT_COMPANY = /^(?:viewed|saved|applied|promoted|easy apply|actively reviewing applicants|be an early applicant|posted\b.*|\d+\s+(?:second|minute|hour|day|week|month)s?\s+ago|.*\b(?:alumni|connections?)\b.*\bwork(?:s)? here)$/i;
   const LOCATION_LINE = /\((?:remote|hybrid|on-?site)\)$/i;
@@ -50,13 +52,17 @@
     const at = text.indexOf(title);
     // Cross-check: the title must also be one of the card's visible lines.
     if (at < 0) return null;
-    const company = text[at + 1] || '';
+    // A card without LinkedIn's verified badge repeats its title line (screen-reader copy + visible
+    // copy): the company is the first line after the title lines.
+    let next = at + 1;
+    while (next < text.length && text[next] === title) next += 1;
+    const company = text[next] || '';
     if (!company || company === title || NOT_COMPANY.test(company) || LOCATION_LINE.test(company)) return null;
     const key = keyOf(title, company);
     if (!key) return null;
-    const label = text.find((line) => STATES[line]);
-    const place = text[at + 2] || '';
-    const location = place && !NOT_COMPANY.test(place) && !STATES[place] ? place : '';
+    const label = text.map((line) => STATE_LINE.exec(line)?.[1]).find(Boolean);
+    const place = text[next + 1] || '';
+    const location = place && !NOT_COMPANY.test(place) && !STATE_LINE.test(place) ? place : '';
     return { id, el, key, title, company, location, state: label ? STATES[label] : null };
   }
 
@@ -93,9 +99,10 @@
       const whole = new Range();
       whole.selectNodeContents(card.el);
       faded.add(whole);
-      for (const node of card.el.querySelectorAll('*')) {
-        if (node.children.length) continue;
-        if ((node.innerText || node.textContent || '').trim() !== card.title) continue;
+      const walker = document.createTreeWalker(card.el, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if ((node.nodeValue || '').trim() !== card.title) continue;
         const range = new Range();
         range.selectNodeContents(node);
         titles.add(range);
@@ -201,6 +208,8 @@
 
   const observer = new MutationObserver(() => { if (alive()) schedule(); else dispose(); });
   function onMessage(message) {
+    // After a batch QTS did not take, the worker says "changed": LinkedIn's labels are sent again.
+    if (message?.type === 'QTS_LINKEDIN_SKIPS_CHANGED') reported = new Set();
     if (message?.type === 'QTS_PAGE_URL_CHANGED' || message?.type === 'QTS_LINKEDIN_SKIPS_CHANGED') schedule(50);
   }
   function onStorage(changes, area) {

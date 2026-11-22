@@ -14,7 +14,9 @@ const card = ({ id, title, company, location = 'Poland (Remote)', state = null, 
   <div class="cfsjj4 cfsjkl cfsjk2" componentkey="job-card-component-ref-${id}">
     <div class="cfsg3i">
       <p class="cfsa1"><span>${verified ? `${title} (Verified job)` : title}</span></p>
-      ${verified ? `<p class="cfsa2"><span aria-hidden="true">${title}</span></p>` : ''}
+      ${verified
+        ? `<p class="cfsa2"><span aria-hidden="true">${title}<svg width="12" height="12" aria-label="Verified"><rect width="12" height="12"></rect></svg></span></p>`
+        : `<p class="cfsa2"><span aria-hidden="true">${title}</span></p>`}
       <p class="cfsa3"><span>${company}</span></p>
       <p class="cfsa4"><span>${location}</span></p>
       <ul class="cfsa5">${state ? `<li>${state}</li><li>·</li>` : '<li>Posted 1 day ago</li><li>·</li>'}<li>Promoted</li></ul>
@@ -112,7 +114,7 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
 
 const sorted = (values) => [...values].sort();
 
-test('seen cards look faded with a struck amber title, painted only by highlights; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
+test('seen cards are red with a struck title (with or without the verified badge), painted only by highlights; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
   const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
   try {
     const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
@@ -121,7 +123,8 @@ test('seen cards look faded with a struck amber title, painted only by highlight
     const painted = await page.evaluate(() => window.painted());
     // Viewed (LinkedIn), Applied (LinkedIn), and the QTS bid; the three new jobs are left as they are.
     assert.deepEqual(sorted(painted.marked), sorted(['4490425819', '4492410414', '4491500626']));
-    assert.deepEqual(sorted(painted.titles), sorted(['Senior DevOps Engineer (Azure+AWS)', 'Senior Site Reliability Engineer - AI/GPU', 'Site Reliability Engineer II']));
+    // Unique titles: a card without the verified badge has its title twice (screen-reader + visible copy).
+    assert.deepEqual(sorted(new Set(painted.titles)), sorted(['Senior DevOps Engineer (Azure+AWS)', 'Senior Site Reliability Engineer - AI/GPU', 'Site Reliability Engineer II']));
     // Only highlight names are styled: no rule names LinkedIn's elements.
     const rules = await page.evaluate(() => window.styleRules());
     assert.ok(rules.length === 2 && rules.every((rule) => rule.startsWith('::highlight(qts-linkedin-skip')), rules.join(' | '));
