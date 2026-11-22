@@ -12,7 +12,7 @@ const action = "async(_state,data)=>{window.saved.push(Object.fromEntries(data))
 
 test("each Manager switch sends its opposite value, and Apply-dependent ones wait for Apply", { skip: !chrome, timeout: 60000 }, async () => {
   const mocks: Record<string, string> = {
-    "@/app/settings/actions": ["updateManagerApplyAction", "updateManagerChatGptUrlAction", "updateManagerGeminiMatchingAction", "updateManagerJobDetectionUrlAccessAction", "updateManagerLinkedInSkipsAction", "updateManagerPageExclusionAccessAction", "updateManagerTextHighlightAccessAction"]
+    "@/app/settings/actions": ["updateManagerApplyAction", "updateManagerChatGptUrlAction", "updateManagerGeminiMatchingAction", "updateManagerJobDetectionUrlAccessAction", "updateManagerLinkedInSkipsAction", "updateManagerPageExclusionAccessAction", "updateManagerRemoteCompaniesAction", "updateManagerTextHighlightAccessAction"]
       .map((name) => `export const ${name}=${action};`).join(""),
     "@/app/settings/prompt-forms": "import {createElement} from 'react';export const ActionFeedback=({state})=>state.error||state.success?createElement('p',{role:'alert'},state.error||state.success):null;",
   };
@@ -30,6 +30,7 @@ test("each Manager switch sends its opposite value, and Apply-dependent ones wai
         h(ManagerSettingSwitch,{...base,setting:'aiMode',on:false}),
         h(ManagerSettingSwitch,{...base,setting:'reviewMode',on:true}),
         h(ManagerSettingSwitch,{...base,setting:'autoApplyApi',on:false,disabledReason:'Turn Apply on first'}),
+        h(ManagerSettingSwitch,{...base,setting:'remoteCompanies',on:false}),
         h(ManagerChatGptUrlCell,{...base,chatGptUrl:'https://chatgpt.com/'}),
       ));` },
     plugins: [{ name: "fixtures", setup(builder) {
@@ -84,5 +85,9 @@ test("each Manager switch sends its opposite value, and Apply-dependent ones wai
     await page.waitForFunction(() => !document.querySelector('[aria-label="Apply for Bob: Off"]')?.hasAttribute("disabled"));
     await click("Apply for Bob: Off", 7);
     assert.deepEqual((await saved())[6], { managerId: "m2", applyChoice: "off" });
+
+    // Remote companies starts off; switching it on sends "true" to its own action.
+    await click("Remote companies for Ann", 8);
+    assert.deepEqual((await saved())[7], { managerId: "m1", enabled: "true" });
   } finally { await browser.close(); }
 });

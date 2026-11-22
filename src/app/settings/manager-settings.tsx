@@ -10,6 +10,7 @@ import {
   updateManagerJobDetectionUrlAccessAction,
   updateManagerLinkedInSkipsAction,
   updateManagerPageExclusionAccessAction,
+  updateManagerRemoteCompaniesAction,
   updateManagerTextHighlightAccessAction,
   type PromptActionState,
 } from "@/app/settings/actions";
@@ -101,6 +102,7 @@ const CONTROLS: Record<SwitchSetting, {
   pageExclusions: { action: updateManagerPageExclusionAccessAction, field: "enabled", onValue: "true", offValue: "false" },
   jobDetectionUrls: { action: updateManagerJobDetectionUrlAccessAction, field: "enabled", onValue: "true", offValue: "false" },
   linkedinSkips: { action: updateManagerLinkedInSkipsAction, field: "enabled", onValue: "true", offValue: "false" },
+  remoteCompanies: { action: updateManagerRemoteCompaniesAction, field: "enabled", onValue: "true", offValue: "false" },
 };
 
 // One setting of one Manager: it saves as soon as it is switched, and only a failure adds text,

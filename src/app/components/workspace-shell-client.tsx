@@ -9,6 +9,7 @@ import {
   Database,
   FileCheck2,
   FileText,
+  Globe,
   Headset,
   X,
   LayoutDashboard,
@@ -45,6 +46,7 @@ type NavigationItem = { label: string; href: string; icon: typeof Users };
 const overviewItem: NavigationItem = { label: "Overview", href: "/", icon: LayoutDashboard };
 const peopleItem: NavigationItem = { label: "People", href: "/users", icon: Users };
 const profileItem: NavigationItem = { label: "My profile", href: "/profile", icon: UserRound };
+const remoteCompaniesItem: NavigationItem = { label: "Remote companies", href: "/remote-companies", icon: Globe };
 
 // Pages that show without the sidebar even when signed in: the resume preview is loaded in a frame.
 const barePaths = new Set(["/login", "/resume-template"]);
@@ -53,12 +55,15 @@ export function WorkspaceShellClient({
   user,
   alert,
   counts = {},
+  remoteCompanies = false,
   children,
 }: {
   user: StaffSession;
   alert?: ReactNode;
   // A number shown beside a menu item, by its address (e.g. today's interviews).
   counts?: Record<string, number>;
+  // Remote companies is in the menu: the Super Admin, or a Manager the Super Admin turned it on for.
+  remoteCompanies?: boolean;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -103,6 +108,7 @@ export function WorkspaceShellClient({
       ? [
           overviewItem,
           { label: "Jobs", href: "/jobs", icon: BriefcaseBusiness },
+          ...(remoteCompanies ? [remoteCompaniesItem] : []),
           { label: "Bids", href: "/bids", icon: FileCheck2 },
           { label: "Interviews", href: "/interviews", icon: CalendarClock },
           { label: "Resume", href: "/pdf", icon: FileText },
@@ -110,7 +116,7 @@ export function WorkspaceShellClient({
         ]
       : user.role === "admin"
         ? [overviewItem, peopleItem, { label: "Callers", href: "/callers", icon: Headset }]
-        : [overviewItem, peopleItem];
+        : [overviewItem, peopleItem, ...(remoteCompanies ? [remoteCompaniesItem] : [])];
   const adminItems: NavigationItem[] =
     user.role === "super_admin"
       ? [

@@ -101,6 +101,8 @@ export const users = pgTable(
       .notNull(),
     // Super Admin's per-Manager switch for the LinkedIn skip-list: off until the Super Admin turns it on.
     canUseLinkedInSkips: boolean("can_use_linkedin_skips").default(false).notNull(),
+    // Super Admin's per-Manager switch for the Remote companies page: off until the Super Admin turns it on.
+    canViewRemoteCompanies: boolean("can_view_remote_companies").default(false).notNull(),
     // Super Admin assigns Gemini candidate matching per Manager; others use general Get JD.
     useGeminiMatching: boolean("use_gemini_matching").default(false).notNull(),
     // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
@@ -1314,6 +1316,38 @@ export const linkedinSkips = pgTable(
     uniqueIndex("linkedin_skips_manager_key_unique").on(table.managerId, table.skipKey),
     index("linkedin_skips_manager_updated_at_index").on(table.managerId, table.updatedAt),
     check("linkedin_skips_source_check", sql`${table.source} in ('clicked', 'viewed', 'saved', 'applied', 'manual')`),
+  ],
+);
+
+// Remote companies: every fully remote job QTS has seen (saved as a job or applied as a bid), one
+// row per company and role across all Managers. Only the database writes it: triggers on jobs and
+// bids (migration 0105, guarded so a job or bid save never fails) and that migration's one-time
+// backfill. Rows are never deleted, so they outlive the daily jobs clean-up. company_key and
+// title_key are the two halves of computeTitleCompanyKey's "title|company" (src/server/jobs/job-key.ts).
+export const remoteCompanyJobs = pgTable(
+  "remote_company_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyKey: text("company_key").notNull(),
+    titleKey: text("title_key").notNull(),
+    // As last seen: "N-iX", "Senior DevOps Engineer".
+    company: text("company").notNull(),
+    jobTitle: text("job_title").notNull(),
+    // Where the job was said to be, each once ("Slovakia (Remote)", "Remote"); at most 30.
+    places: text("places").array().default(sql`'{}'::text[]`).notNull(),
+    // How many times it was saved as a job, and applied as a bid, in QTS.
+    jobCount: integer("job_count").default(0).notNull(),
+    bidCount: integer("bid_count").default(0).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("remote_company_jobs_company_title_unique").on(table.companyKey, table.titleKey),
+    index("remote_company_jobs_last_seen_at_index").on(table.lastSeenAt),
   ],
 );
 

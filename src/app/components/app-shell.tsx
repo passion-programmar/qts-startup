@@ -5,6 +5,7 @@ import { WorkspaceShellClient } from "@/app/components/workspace-shell-client";
 import { dismissAlertsAction } from "@/app/settings/database-usage/actions";
 import { getCurrentUser } from "@/lib/session";
 import { countTodayInterviews } from "@/server/interviews/interviews-list";
+import { canViewRemoteCompanies } from "@/server/remote-companies/remote-companies";
 import { appLevels, readSavedState } from "@/server/database/database-usage";
 import { levelRank, quotasToAlert } from "@/server/database/database-usage-values";
 
@@ -22,10 +23,12 @@ export async function AppShell({ children }: { children: ReactNode }) {
   // Super Admin is warned on every page when a database quota passes a level, from what the last
   // Check quota or clean-up saved (no measuring here). Dismiss hides it until a level gets worse.
   // A Manager sees today's interview count beside Interviews (one small indexed count). It updates
-  // when a page reloads or an interview is saved.
-  const [state, todayInterviews] = await Promise.all([
+  // when a page reloads or an interview is saved. Remote companies shows for a Manager the Super
+  // Admin turned it on for (one small lookup at the same time; a failure only hides the item).
+  const [state, todayInterviews, remoteCompanies] = await Promise.all([
     user.role === "super_admin" ? readSavedState().catch(() => null) : null,
     user.role === "manager" ? countTodayInterviews(user.id).catch(() => 0) : 0,
+    user.role === "manager" ? canViewRemoteCompanies(user).catch(() => false) : user.role === "super_admin",
   ]);
   const levels = state ? appLevels(state) : {};
   const alerts = state ? quotasToAlert(levels, state.dismissed) : [];
@@ -49,7 +52,7 @@ export async function AppShell({ children }: { children: ReactNode }) {
   ) : null;
 
   return (
-    <WorkspaceShellClient alert={alert} counts={{ "/interviews": todayInterviews }} user={user}>
+    <WorkspaceShellClient alert={alert} counts={{ "/interviews": todayInterviews }} remoteCompanies={remoteCompanies} user={user}>
       {children}
     </WorkspaceShellClient>
   );

@@ -1,4 +1,4 @@
-import { Ban, Bot, Brain, ClipboardCheck, Highlighter, Link2, MousePointerClick, Power, ScanSearch, Tags, type LucideIcon } from "lucide-react";
+import { Ban, Bot, Brain, ClipboardCheck, Globe, Highlighter, Link2, MousePointerClick, Power, ScanSearch, Tags, type LucideIcon } from "lucide-react";
 
 type ManagerSetting = {
   column: string;
@@ -72,9 +72,18 @@ export const MANAGER_SETTINGS = {
     on: "On",
     off: "Off",
     icon: ScanSearch,
-    summary: "On LinkedIn's job search, jobs this Manager has already seen look faded with a struck title.",
+    summary: "On LinkedIn's job search, the title of a job this Manager has already seen is white on dark.",
     onMeaning: "Clicked jobs, LinkedIn's Viewed / Saved / Applied and the Manager's bids and saved jobs are marked.",
     offMeaning: "LinkedIn looks as usual; nothing is read or saved there.",
+  },
+  remoteCompanies: {
+    column: "Remote companies",
+    on: "On",
+    off: "Off",
+    icon: Globe,
+    summary: "A web page listing every company with fully remote jobs that any Manager saved or applied to in QTS.",
+    onMeaning: "The page is in the Manager's menu; they see all companies, not only their own.",
+    offMeaning: "The page and its menu item are hidden.",
   },
   jobDetectionUrls: {
     column: "Blocked URLs",

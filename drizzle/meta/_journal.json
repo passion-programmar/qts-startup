@@ -736,6 +736,13 @@
       "when": 1795337002961,
       "tag": "0104_linkedin_skips_default_off",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1795338482308,
+      "tag": "0105_remote_companies",
+      "breakpoints": true
     }
   ]
 }

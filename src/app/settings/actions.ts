@@ -588,6 +588,40 @@ export async function updateManagerPageExclusionAccessAction(
   };
 }
 
+// The Super Admin's switch for one Manager's Remote companies page (and its menu item).
+export async function updateManagerRemoteCompaniesAction(
+  _previousState: PromptActionState,
+  formData: FormData,
+): Promise<PromptActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "super_admin") {
+    return { ...emptyState, error: "Only Super Admin can assign page permissions." };
+  }
+  const managerId = readText(formData, "managerId", 36);
+  const enabledValue = formData.get("enabled");
+  if (!isUuid(managerId) || (enabledValue !== "true" && enabledValue !== "false")) {
+    return { ...emptyState, error: "Select a valid Manager and permission value." };
+  }
+  try {
+    const [manager] = await db
+      .update(users)
+      .set({ canViewRemoteCompanies: enabledValue === "true", updatedAt: new Date() })
+      .where(and(eq(users.id, managerId), eq(users.role, "manager"), isNull(users.blockedAt)))
+      .returning({ id: users.id });
+    if (!manager) return { ...emptyState, error: "That active Manager was not found." };
+  } catch (error) {
+    logPromptActionFailure("updating Remote companies access", error);
+    return { ...emptyState, error: "The Manager's Remote companies page could not be updated." };
+  }
+  revalidatePath("/settings");
+  return {
+    error: null,
+    success: enabledValue === "true"
+      ? "The Remote companies page was turned on for the Manager."
+      : "The Remote companies page was turned off for the Manager.",
+  };
+}
+
 export async function updateManagerLinkedInSkipsAction(
   _previousState: PromptActionState,
   formData: FormData,
