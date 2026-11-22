@@ -4938,7 +4938,8 @@ async function useOfferedAnswer(msg, sender) {
  */
 // What the Manager may save after changing a box (decisions 2026-11-07): never a profile fact (the
 // profile changes only on the Profile page), never generated content (cover letter, PDFs), agreements,
-// marketing, files or passwords; a question about this company or role only for this job.
+// marketing, files or passwords. A question about this company or role is not saved: a later job is
+// another one (no "this job" level; a site's own wording goes with "Save for this site").
 const NOT_SAVED_QUESTION = /\b(agree|consent|privacy|terms|acknowledg|attest|certif|newsletter|marketing|cover letter|resume|résumé|cv)\b/i;
 const COMPANY_QUESTION = /\b(this|that|our|the)\s+(company|employer|role|position|job|product|service|team)\b|\bwhy (do you want|are you interested|would you like)\b|\bjoin us\b/i;
 function savePromptFor(question, plannedSource, company) {
@@ -4947,7 +4948,9 @@ function savePromptFor(question, plannedSource, company) {
   if (plannedSource === 'profile' || meaning?.profileKey) return { note: 'Profile facts change only on the Profile page. This value stays on this application.' };
   if (['documents', 'consent', 'ai'].includes(plannedSource) || NOT_SAVED_QUESTION.test(question.label)) return null;
   const companyNamed = company && company.length > 2 && question.label.toLowerCase().includes(company.toLowerCase());
-  return { levels: COMPANY_QUESTION.test(question.label) || companyNamed ? ['application'] : ['manager', 'candidate', 'application'] };
+  if (COMPANY_QUESTION.test(question.label) || companyNamed) return null;
+  // One level: a reusable answer is for every candidate and every job.
+  return { levels: ['manager'] };
 }
 
 async function refreshAssistQuestions(tabId, assistant, force = false, editedIds = []) {
@@ -5066,7 +5069,7 @@ async function refreshAssistQuestions(tabId, assistant, force = false, editedIds
     && !assistant.fillingTabs?.has(tabId)
     && !(row.kind === 'textarea' && !self.__qtsAnswerMeaning?.asksYesNo?.(row.label, row.options || []))
     && !/\b(gender|sex|race|ethnic\w*|veteran|disabilit\w*|orientation|pronouns?|transgender|captcha|verification code)\b/i.test(row.label)
-    && savePromptFor(row, plan?.answers?.[row.id]?.source || null, application?.job?.company || '')?.levels?.length === 3);
+    && savePromptFor(row, plan?.answers?.[row.id]?.source || null, application?.job?.company || '')?.levels?.length);
   // (Unanswered questions are no longer sent anywhere: reusable answers are added by hand on the Manager page.)
   for (const row of unanswered) assistant.reportedUnanswered.add(row.label);
   // A new change to save: the panel opens and shows that question.

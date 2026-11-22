@@ -1,5 +1,5 @@
 "use client";
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useState } from "react";
 import { manageAnswer } from "./manager-answer-actions";
 import { AnswerForms } from "./answer-forms";
 import type { AnswerVariant } from "@/server/apply/manager-answer-values";
@@ -21,7 +21,7 @@ const STARTER: [string, string][] = [
   ["nonCompete", "Are you subject to a non-compete agreement?"], ["relatives", "Do you have relatives working at the company?"],
   ["futureConsent", "Do you consent to us keeping your data for future job opportunities?"],
 ];
-const LEVELS: Record<string, string> = { manager: "All my candidates", candidate: "This candidate", application: "This job" };
+// One level: every reusable answer is for all candidates and every job (no candidate or job level).
 const LANGUAGE_LEVELS = ["Native", "C2", "C1", "B2", "B1", "A2", "A1"];
 const topicOf = (question: string) => meaning.topicOf(question)?.id ?? null;
 
@@ -30,15 +30,10 @@ const topicOf = (question: string) => meaning.topicOf(question)?.id ?? null;
 export function ManagerAnswers({ rows }: { rows: Row[] }) {
   const duplicates = new Set(identity.duplicateGroups(rows).flat().map((row) => row.id));
   const [search, setSearch] = useState("");
-  const [level, setLevel] = useState("all");
-  const [candidate, setCandidate] = useState("all");
   const [preset, setPreset] = useState({ question: "", key: 0 });
-  const candidates = useMemo(() => [...new Map(rows.filter((row) => row.candidateId).map((row) => [row.candidateId as string, row.candidateName || "Candidate"])).entries()], [rows]);
   const answered = new Set(rows.filter((row) => row.scope === "manager").map((row) => topicOf(row.questionText)).filter(Boolean));
   const empty = STARTER.filter(([topic]) => !answered.has(topic));
-  const shown = rows.filter((row) => (level === "all" || row.scope === level)
-    && (candidate === "all" || row.candidateId === candidate || (candidate !== "all" && row.scope === "manager" && level === "all"))
-    && (!search.trim() || `${row.questionText} ${row.answer} ${row.variants.map((variant) => variant.questionText || "").join(" ")}`.toLowerCase().includes(search.trim().toLowerCase())));
+  const shown = rows.filter((row) => (!search.trim() || `${row.questionText} ${row.answer} ${row.variants.map((variant) => variant.questionText || "").join(" ")}`.toLowerCase().includes(search.trim().toLowerCase())));
   // One group per meaning; inside it, all candidates first, then each candidate's and each job's own answer.
   const groups = new Map<string, Row[]>();
   for (const row of shown) {
@@ -72,14 +67,6 @@ export function ManagerAnswers({ rows }: { rows: Row[] }) {
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <input aria-label="Search answers" placeholder="Search questions, answers, wordings…" value={search} onChange={(event) => setSearch(event.target.value)}
         className="min-w-56 flex-1 rounded-lg border border-slate-200 p-2" />
-      <select aria-label="Level" value={level} onChange={(event) => setLevel(event.target.value)} className="rounded-lg border border-slate-200 p-2">
-        <option value="all">All levels</option>
-        {Object.entries(LEVELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select>
-      {candidates.length > 0 && <select aria-label="Candidate" value={candidate} onChange={(event) => setCandidate(event.target.value)} className="rounded-lg border border-slate-200 p-2">
-        <option value="all">All candidates</option>
-        {candidates.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-      </select>}
       <span className="text-slate-500">{shown.length} of {rows.length} answers</span>
     </div>
 

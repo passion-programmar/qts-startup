@@ -193,7 +193,8 @@
   let promptSeenAt = 0;
   let scrollToQuestion = null;
   const CHOICE_KINDS = ['select', 'radio', 'combobox', 'menu'];
-  const LEVEL_CHOICES = [['manager', 'All my candidates'], ['candidate', 'This candidate'], ['application', 'This job']];
+  // One level: every reusable answer is for all candidates and every job.
+  const LEVEL_CHOICES = [['manager', 'All my candidates']];
   // Where the panel was scrolled, kept on every redraw; a card just opened is brought to the top.
   let scrollTop = 0;
   let bringToTop = null;

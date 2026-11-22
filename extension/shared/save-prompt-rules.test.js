@@ -30,10 +30,10 @@ test('generated content, agreements, marketing, files and passwords are never of
   assert.equal(prompt('Something an AI wrote', 'ai'), null);
 });
 
-test('a question about this company or role is saved only for this job; others at every level', () => {
-  assert.deepEqual([...prompt('Why do you want to join Kraken?').levels], ['application']);
-  assert.deepEqual([...prompt('What attracts you to this role?').levels], ['application']);
-  assert.deepEqual([...prompt('Have you used a Kraken product in the last six months?').levels], ['application']);
-  assert.deepEqual([...prompt('What is your highest level of education?', null, 'select').levels], ['manager', 'candidate', 'application']);
-  assert.deepEqual([...prompt('Which remote collaboration tools have you used?', null, 'checkbox-group').levels], ['manager', 'candidate', 'application']);
+test('a question about this company or role is not saved; others are saved for all candidates and every job', () => {
+  assert.equal(prompt('Why do you want to join Kraken?'), null);
+  assert.equal(prompt('What attracts you to this role?'), null);
+  assert.equal(prompt('Have you used a Kraken product in the last six months?'), null);
+  assert.deepEqual([...prompt('What is your highest level of education?', null, 'select').levels], ['manager']);
+  assert.deepEqual([...prompt('Which remote collaboration tools have you used?', null, 'checkbox-group').levels], ['manager']);
 });
