@@ -2063,6 +2063,8 @@
     return allElements().filter((entry) => isShown(entry) && !entry.contains(element) && (
       entry.getAttribute('role') === 'option'
       || /(^|\s)(pac-item|dropdown-location|location-result|autocomplete-item|suggestion)/i.test(entry.className || '')
+      // react-select's choices (Pinpoint): <div class="react-select__option"> with no option role.
+      || /(^|\s)[\w-]*select__option(\s|$)/i.test(entry.className || '')
     )).filter((entry) => (ownList ? ownList.contains(entry) : !entry.hasAttribute(SEEN_ATTRIBUTE)))
       .filter((entry) => answerable(itemText(entry)));
   }

@@ -858,7 +858,8 @@ async function realPasteText(tabId, text) {
     await realCharacter(tabId, last);
   }
 }
-const firstWordOf = (text) => String(text).trim().split(/[\s,;/]+/)[0] || '';
+// Up to the first space, comma or bracket: "C1(Fluent)" searches "C1" (Pinpoint lists "C1 (Fluent)").
+const firstWordOf = (text) => String(text).trim().split(/[\s,;/()[\]]+/).filter(Boolean)[0] || '';
 
 /** One answer into a suggestion box: { ok } or { ok: false, error, pickYourself, choices }. */
 async function realSuggestionOne(tabId, field, wanted) {

@@ -59,6 +59,20 @@
       .slice(0, 300);
   }
 
+  /**
+   * The same question: the same key, or one is the other with words added at the end ("Are you
+   * comfortable working under a B2B contract" / "… as a form of employment"), the shorter having 5+ words.
+   */
+  function sameQuestion(savedKey, formKey) {
+    if (!savedKey || !formKey) return false;
+    if (savedKey === formKey) return true;
+    const [shorter, longer] = savedKey.length <= formKey.length ? [savedKey, formKey] : [formKey, savedKey];
+    return shorter.split(' ').length >= 5 && longer.startsWith(`${shorter} `);
+  }
+
+  /** An answer and a choice compared without case, spaces or punctuation: "C1(Fluent)" is "C1 (Fluent)". */
+  const squashText = (value) => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
   function labelOf(field) {
     return String(field.label || '')
       .replace(/[*✱]\s*(optional|required)\s*$/i, ' ')
@@ -873,7 +887,7 @@
         }
       }
     }
-    const exactRow = aboutSomeoneElse ? null : (savedAnswers || []).find((row) => row.questionKey === normalizeQuestionKey(field.label));
+    const exactRow = aboutSomeoneElse ? null : (savedAnswers || []).find((row) => sameQuestion(row.questionKey, normalizeQuestionKey(field.label)));
     if (exactRow && !candidate.factRows?.has(exactRow)) return reusableAnswer(field, exactRow);
     // 1. Super Admin's reusable answers for their topics (right to work, employment type, ...);
     //    salary, notice, and sponsorship answers already stand in for the profile's facts.
@@ -1183,7 +1197,7 @@
   function matchSavedAnswer(field, savedRows, { sameMeaning = false } = {}) {
     const rows = savedRows || [];
     const key = normalizeQuestionKey(field.label);
-    const exact = rows.find((row) => row.questionKey === key);
+    const exact = rows.find((row) => row.questionKey === key) || rows.find((row) => sameQuestion(row.questionKey, key));
     if (exact) return exact;
     const words = questionWords(field.label, sameMeaning);
     if (!words.size) return null;
@@ -1924,13 +1938,15 @@
     // Only some of a list's choices known (sample searches, a datalist): one of them, or the AI's own
     // wording, which filling then searches for.
     if (hasOptions(field) && field.optionsPartial) {
-      const known = (wanted) => field.options.find((entry) => String(entry).trim().toLowerCase() === wanted.toLowerCase()) ?? wanted;
+      const known = (wanted) => field.options.find((entry) => String(entry).trim().toLowerCase() === wanted.toLowerCase())
+        ?? field.options.find((entry) => squashText(entry) && squashText(entry) === squashText(wanted)) ?? wanted;
       if (field.multiple) return { ok: true, value: text.split(/\s*\|\s*/).filter(Boolean).map(known) };
       return { ok: true, value: known(text) };
     }
     if (hasOptions(field)) {
       const find = (wanted) => field.options.find((entry) => String(entry).trim() === wanted)
-        ?? field.options.find((entry) => String(entry).trim().toLowerCase() === wanted.toLowerCase());
+        ?? field.options.find((entry) => String(entry).trim().toLowerCase() === wanted.toLowerCase())
+        ?? field.options.find((entry) => squashText(entry) && squashText(entry) === squashText(wanted));
       // A tick-box group or a "select all that apply" list may take several choices, separated by " | ".
       if (field.kind === 'checkbox-group' || field.multiple) {
         const parts = text.split(/\s*\|\s*/).filter(Boolean);
@@ -2335,8 +2351,8 @@
    */
   function siteFormAnswer(field, savedAnswers, siteKey = '') {
     const key = correctionKey(field.label);
-    const rows = (savedAnswers || []).filter((row) => correctionKey(row.questionText) === key
-      || formsOf(row).some((form) => form.questionText && correctionKey(form.questionText) === key));
+    const rows = (savedAnswers || []).filter((row) => sameQuestion(correctionKey(row.questionText), key)
+      || formsOf(row).some((form) => form.questionText && sameQuestion(correctionKey(form.questionText), key)));
     for (const scope of ['application', 'candidate', 'manager']) {
       for (const row of rows.filter((entry) => entry.scope === scope)) {
         const forms = formsOf(row);
@@ -2393,7 +2409,7 @@
       // A Yes/No question its meaning and direction answer (a saved fact, or the profile's own), or a
       // text box whose exact question the Manager saved an answer for (typed as saved):
       // filled on Alt+F like a profile fact, no AI. The AI is only asked about it on Ask AI.
-      const exactSaved = (savedAnswers || []).some((row) => row.questionKey === normalizeQuestionKey(field.label));
+      const exactSaved = (savedAnswers || []).some((row) => sameQuestion(row.questionKey, normalizeQuestionKey(field.label)));
       const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exactSaved && (answer.fact === 'answer' || !hasOptions(field))));
       // The saved answer in this box's form: this job site's own form first, else the form that fits
       // (an option, a number). A profile fact stays the profile's.
@@ -2421,7 +2437,7 @@
         const { hint: _hint, intended: _intended, ...rest } = asked;
         sent = rest;
       }
-      const exact = (savedAnswers || []).some((row) => row.questionKey === normalizeQuestionKey(field.label));
+      const exact = (savedAnswers || []).some((row) => sameQuestion(row.questionKey, normalizeQuestionKey(field.label)));
       const known = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exact && (answer.fact === 'answer' || !hasOptions(field))));
       plan.ai.push({ field: sent, ...(known ? { check: answer } : {}), ...(lacking.has(field.id) ? { lacking: lacking.get(field.id) } : {}) });
     }
