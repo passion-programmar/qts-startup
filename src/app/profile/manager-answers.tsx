@@ -52,22 +52,22 @@ export function ManagerAnswers({ rows }: { rows: Row[] }) {
   return <div className="space-y-4">
     <p className="text-xs text-slate-500">Every reusable answer is kept here and used by Apply on any site, matched by meaning. The profile comes first (it is never changed by applying); then this job&apos;s answer, then this candidate&apos;s, then yours for all candidates. Saving from the Apply panel adds answers here too.</p>
 
-    <div className="grid gap-3 lg:grid-cols-2">
-      <LanguageLevelsForm row={languageRow} />
-      <SalaryForm row={salaryRow} />
-    </div>
+    {/* Creating comes first: the "+ New answer" form, then the common questions that fill it. */}
+    <AnswerForm key={`new-${preset.key}`} row={null} duplicate={false} presetQuestion={preset.question} />
 
     {empty.length > 0 && <div className="rounded-xl border border-dashed border-slate-300 p-3">
       <p className="text-xs font-semibold text-slate-700">Common questions without an answer for all candidates ({empty.length})</p>
-      <p className="mt-1 text-xs text-slate-500">Sites ask these most. Click one to answer it once; every later application fills it.</p>
+      <p className="mt-1 text-xs text-slate-500">Sites ask these most. Click one: it goes into New answer above; write its answer and click Add answer.</p>
       <div className="mt-2 flex flex-wrap gap-2">
         {empty.map(([topic, question]) => <button key={topic} type="button" onClick={() => setPreset({ question, key: Date.now() })}
           className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">{question}</button>)}
       </div>
     </div>}
 
-    {/* The add form first, so a new answer and its result are always in view. */}
-    <AnswerForm key={`new-${preset.key}`} row={null} duplicate={false} presetQuestion={preset.question} />
+    <div className="grid gap-3 lg:grid-cols-2">
+      <LanguageLevelsForm row={languageRow} />
+      <SalaryForm row={salaryRow} />
+    </div>
 
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <input aria-label="Search answers" placeholder="Search questions, answers, wordings…" value={search} onChange={(event) => setSearch(event.target.value)}
@@ -96,16 +96,17 @@ function AnswerForm({ row, duplicate, presetQuestion = "" }: { row: Row | null; 
   const [state, action, pending] = useActionState(manageAnswer, { message: "" });
   const saved = /^(Saved|Deleted|Moved)/.test(state.message);
   const wordings = row?.variants.map((variant, index) => ({ variant: variant.normalVariation || variant, index })) || [];
-  return <div className="space-y-2 rounded-xl border border-slate-200 p-3"><form action={action} className="space-y-2">
+  return <div className={`space-y-2 rounded-xl p-3 ${row ? "border border-slate-200" : "border-2 border-indigo-300 bg-indigo-50/40"}`}><form action={action} className="space-y-2">
       {row && <input type="hidden" name="id" value={row.id} />}
       {row && <input type="hidden" name="version" value={row.version} />}
-      <p className="text-xs font-semibold">{row ? row.scope === "candidate" ? `This candidate · ${row.candidateName || "Candidate"}` : row.scope === "manager" ? "All my candidates" : `This job · ${row.candidateName || "Candidate"}` : "Add an answer for all my candidates"}</p>
+      {row ? <p className="text-xs font-semibold">{row.scope === "candidate" ? `This candidate · ${row.candidateName || "Candidate"}` : row.scope === "manager" ? "All my candidates" : `This job · ${row.candidateName || "Candidate"}`}</p>
+        : <p className="text-sm font-semibold text-indigo-700">＋ New answer <span className="text-xs font-normal text-slate-500">· for all my candidates</span></p>}
       {duplicate && <p className="text-xs text-amber-700">Equivalent questions exist at this level. Review their answers and edit or delete them; QTS keeps each one separate.</p>}
       <label className="block text-xs">Question<input aria-label="Question" name="question" required maxLength={300} defaultValue={row?.questionText ?? presetQuestion} autoFocus={Boolean(presetQuestion)} className="mt-1 w-full rounded-lg border border-slate-200 p-2" /></label>
       <label className="block text-xs">Answer<textarea aria-label="Answer" name="answer" required maxLength={4000} defaultValue={row?.answer} className="mt-1 w-full rounded-lg border border-slate-200 p-2" /></label>
       {wordings.length > 0 && <details className="text-xs"><summary>Wordings and box variants ({wordings.length})</summary>{wordings.map(({ variant, index }) => <div key={index} className="mt-1 flex flex-wrap items-center gap-2"><span>{variant.questionText || row?.questionText} ({variant.kind}): {variant.answer}</span><button name="action" value={`variation-delete:${index}`} disabled={pending} formNoValidate className="text-rose-600">Remove</button></div>)}</details>}
       <div className="flex flex-wrap gap-2 text-xs">
-        <button disabled={pending} name="action" value="save" className="rounded-lg bg-indigo-600 px-3 py-2 text-white">Save</button>
+        <button disabled={pending} name="action" value="save" className="rounded-lg bg-indigo-600 px-3 py-2 text-white">{row ? "Save" : "Add answer"}</button>
         {row?.canReuse && <button disabled={pending} name="action" value="move" className="rounded-lg border px-3 py-2">Move to all my candidates</button>}
         {row && <button disabled={pending} name="action" value="delete" formNoValidate className="rounded-lg border px-3 py-2 text-rose-600">Delete</button>}
       </div>
