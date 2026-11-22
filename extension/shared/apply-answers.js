@@ -70,8 +70,11 @@
     return shorter.split(' ').length >= 5 && longer.startsWith(`${shorter} `);
   }
 
-  /** An answer and a choice compared without case, spaces or punctuation: "C1(Fluent)" is "C1 (Fluent)". */
-  const squashText = (value) => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  /**
+   * An answer and a choice compared without case, spaces or separators (brackets, dots, commas,
+   * dashes, slashes): "C1(Fluent)" is "C1 (Fluent)". Signs that change the meaning stay: "6" is not "6+".
+   */
+  const squashText = (value) => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s()[\]{}.,;:\-–—_/\\'"]+/g, '');
 
   function labelOf(field) {
     return String(field.label || '')
