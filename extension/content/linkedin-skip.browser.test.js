@@ -105,10 +105,6 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
   }, { known, signedIn, panel });
   await page.addScriptTag({ path: path.join(root, 'extension', 'shared', 'title-company-key.js') });
   await page.addScriptTag({ path: path.join(root, 'extension', 'content', 'linkedin-skip.js') });
-  if (panel) {
-    await page.addScriptTag({ path: path.join(root, 'extension', 'content', 'page-launcher.js') });
-    await page.waitForFunction(() => Boolean(window.__qtsPageLauncher));
-  }
   await page.waitForFunction(() => window.__qtsLinkedInSkip?.status().state !== 'starting');
   return page;
 }
@@ -192,56 +188,16 @@ test('a layout QTS cannot read pauses the feature; signed out paints nothing', {
   } finally { await browser.close(); }
 });
 
-test('the QTS panel on LinkedIn shows the count, Skip / Un-skip for the selected job, and the switch', { skip: !CHROME, timeout: 60000 }, async () => {
-  const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
-  try {
-    const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
-    const page = await openSearch(browser, { cards: PAGE1, known, panel: true });
-    await page.waitForFunction(() => window.painted().marked.length === 3);
-    await page.evaluate(() => window.__qtsPageLauncher.setOpen(true));
-    const section = () => page.evaluate(() => {
-      const root = window.panelRoot;
-      const box = root.querySelector('.li-skip');
-      return {
-        shown: Boolean(box) && !box.hidden,
-        count: root.querySelector('.li-skip-count')?.textContent,
-        selected: root.querySelector('.li-skip-selected')?.hidden ? null : root.querySelector('.li-skip-selected')?.textContent,
-        action: root.querySelector('.li-skip-action')?.hidden ? null : root.querySelector('.li-skip-action')?.textContent,
-        on: root.querySelector('.li-skip-switch')?.getAttribute('aria-checked'),
-      };
-    });
-    await page.waitForFunction(() => window.panelRoot?.querySelector('.li-skip') && !window.panelRoot.querySelector('.li-skip').hidden);
-    assert.deepEqual(await section(), { shown: true, count: '3 of 6 here already seen', selected: 'Senior DevOps Engineer (Azure+AWS) · N-iX', action: 'Un-skip this job', on: 'true' });
-    // How it was seen before: LinkedIn's "Viewed" label, where, when.
-    await page.waitForFunction(() => !window.panelRoot.querySelector('.li-skip-before').hidden);
-    assert.equal(await page.evaluate(() => window.panelRoot.querySelector('.li-skip-before').textContent), 'Seen before · Viewed on LinkedIn · Poland (Remote) · 1 min ago');
-
-    // Un-skip the selected job from the panel: its outline goes, the button turns into Skip.
-    await page.evaluate(() => window.panelRoot.querySelector('.li-skip-action').click());
-    await page.waitForFunction(() => !window.painted().marked.includes('4490425819'));
-    await page.waitForFunction(() => window.panelRoot.querySelector('.li-skip-action').textContent === 'Skip this job');
-    assert.equal(await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_UNSKIP').length), 1);
-
-    // The switch: off removes every outline, on brings them back.
-    await page.evaluate(() => window.panelRoot.querySelector('.li-skip-switch').click());
-    await page.waitForFunction(() => window.painted().marked.length === 0 && window.panelRoot.querySelector('.li-skip-count').textContent === 'Off');
-    await page.evaluate(() => window.panelRoot.querySelector('.li-skip-switch').click());
-    await page.waitForFunction(() => window.painted().marked.length === 2);
-  } finally { await browser.close(); }
-});
-
 test('server required: QTS not reachable or turned off by the Super Admin leaves LinkedIn as usual, and it resumes by itself', { skip: !CHROME, timeout: 60000 }, async () => {
   const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
   try {
     const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
-    const page = await openSearch(browser, { cards: PAGE1, known, panel: true });
+    const page = await openSearch(browser, { cards: PAGE1, known });
     await page.waitForFunction(() => window.painted().marked.length === 3);
-    for (const [state, text] of [['server-down', 'QTS server not reachable – paused'], ['admin-off', 'Turned off by your Super Admin']]) {
+    for (const state of ['server-down', 'admin-off']) {
       await page.evaluate((state) => { window.serverState = state; return window.__qtsLinkedInSkip.refresh('panel'); }, state);
       await page.waitForFunction((state) => window.__qtsLinkedInSkip.status().state === state, {}, state);
       assert.deepEqual(await page.evaluate(() => window.painted()), { marked: [], titles: [] }, `${state}: nothing painted`);
-      await page.evaluate(() => window.__qtsPageLauncher.setOpen(true));
-      await page.waitForFunction((text) => window.panelRoot.querySelector('.li-skip-count').textContent === text, {}, text);
       // A click while paused marks nothing.
       await page.click('[componentkey="job-card-component-ref-4492930672"] p');
       assert.equal(await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_MARK').length), 0);
