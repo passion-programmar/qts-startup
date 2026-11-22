@@ -704,6 +704,17 @@
       }
       return null;
     }
+    // Auto Apply too (decision 2026-11-06, both Applies): future-recruitment / talent-pool consent ticks
+    // when the Manager saved Yes for it (any wording of that question); No or none leaves it.
+    if (context.normalApply !== true && field.kind !== 'file' && semantics?.recognize(field.label)?.definition?.id === 'application.futureRecruitmentConsent') {
+      const saved = ['application', 'candidate', 'manager'].map((scope) => (savedAnswers || []).find((entry) => entry.scope === scope
+        && semantics.recognize(entry.questionText)?.definition?.id === 'application.futureRecruitmentConsent')).find(Boolean);
+      if (!saved) return { skip: 'Optional opt-in: no saved answer for future-recruitment consent.' };
+      if (!/^(yes|true|1|tak|ja|oui|s[ií]|i agree|agree|accept)\b/i.test(String(saved.answer).trim())) return { skip: 'Saved answer: do not consent to future recruitment.' };
+      const agreed = agreementAnswer(field);
+      return agreed ? { ...agreed, source: 'consent', provenance: { authority: saved.scope, meaning: 'application.futureRecruitmentConsent', savedAnswerId: saved.id || null } }
+        : { skip: 'No single clear Yes choice.', byHand: `Choose the consent for "${field.label}" yourself (your saved answer is Yes).` };
+    }
     if (context.normalApply === true && field.kind !== 'file') {
       if ((LEGAL_QUESTION.test(label) || OPT_IN.test(label) || /\b(policy|declaration|acknowledg)/i.test(label)) && !NOT_AN_AGREEMENT.test(label)) {
         const row = savedAnswers.find((entry) => ['application', 'candidate', 'manager'].includes(entry.scope)
