@@ -40,7 +40,7 @@ export async function proposeReusableAnswerAction(
   try {
     const outcome = await proposeReusableAnswer(actor.id, parsed);
     if (!outcome.ok) return { error: outcome.error, success: null };
-    revalidatePath("/profile");
+    revalidatePath("/answers");
     revalidatePath("/settings");
     return {
       error: null,
@@ -70,7 +70,7 @@ export async function withdrawReusableAnswerProposalAction(
     logProposalFailure("withdrawing", error);
     return { error: "The proposal could not be withdrawn. Please try again.", success: null };
   }
-  revalidatePath("/profile");
+  revalidatePath("/answers");
   revalidatePath("/settings");
   return { error: null, success: "Proposal withdrawn. Super Admin will not see it." };
 }

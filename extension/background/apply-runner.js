@@ -5067,11 +5067,8 @@ async function refreshAssistQuestions(tabId, assistant, force = false, editedIds
     && !(row.kind === 'textarea' && !self.__qtsAnswerMeaning?.asksYesNo?.(row.label, row.options || []))
     && !/\b(gender|sex|race|ethnic\w*|veteran|disabilit\w*|orientation|pronouns?|transgender|captcha|verification code)\b/i.test(row.label)
     && savePromptFor(row, plan?.answers?.[row.id]?.source || null, application?.job?.company || '')?.levels?.length === 3);
-  if (unanswered.length && application?.attemptId) {
-    for (const row of unanswered) assistant.reportedUnanswered.add(row.label);
-    workerApiRequest('POST', '/api/extension/apply/unanswered', { attemptId: application.attemptId,
-      questions: unanswered.slice(0, 30).map((row) => ({ question: row.label, kind: row.kind, options: (row.options || []).slice(0, 50) })) }).catch(() => {});
-  }
+  // (Unanswered questions are no longer sent anywhere: reusable answers are added by hand on the Manager page.)
+  for (const row of unanswered) assistant.reportedUnanswered.add(row.label);
   // A new change to save: the panel opens and shows that question.
   if (promptFieldId && rows.some((row) => row.id === promptFieldId && row.edit && !row.edit.none)) assistant.questionsPrompt = { id: promptFieldId, at: Date.now() };
   await assistant.show?.();

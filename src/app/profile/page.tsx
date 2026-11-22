@@ -1,10 +1,7 @@
 import type { Metadata } from "next";
 import { eq } from "drizzle-orm";
-import { KeyRound, LockKeyhole, MailCheck, MessageSquareText } from "lucide-react";
+import { KeyRound, LockKeyhole, MailCheck } from "lucide-react";
 import { redirect } from "next/navigation";
-import { ManagerAnswers } from "@/app/profile/manager-answers";
-import { listManagerAnswers } from "@/server/apply/manager-answers";
-import { listUnanswered } from "@/server/apply/unanswered-questions";
 import { ProfileForm } from "@/app/profile/profile-form";
 import { SiteAccountPasswordForm } from "@/app/profile/site-account-password-form";
 import { VerificationMailboxForm } from "@/app/profile/verification-mailbox-form";
@@ -26,13 +23,10 @@ const roleLabels = { super_admin: "Super Admin", admin: "Admin", manager: "Manag
 export default async function ProfilePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const [[siteAccount], managerAnswers, unanswered] = user.role === "manager"
-    ? await Promise.all([
-      db.select({ password: users.siteAccountPassword, mailAddress: users.verificationMailAddress, mailHost: users.verificationMailHost }).from(users).where(eq(users.id, user.id)).limit(1),
-      listManagerAnswers(user.id),
-      listUnanswered(user.id),
-    ])
-    : [[], [], []];
+  // Reusable answers have their own page now (Answers).
+  const [siteAccount] = user.role === "manager"
+    ? await db.select({ password: users.siteAccountPassword, mailAddress: users.verificationMailAddress, mailHost: users.verificationMailHost }).from(users).where(eq(users.id, user.id)).limit(1)
+    : [];
   const initials = user.displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "Q";
 
   return (
@@ -76,21 +70,6 @@ export default async function ProfilePage() {
             title="Verification mailbox"
           />
           <VerificationMailboxForm address={siteAccount?.mailAddress ?? null} host={siteAccount?.mailHost ?? null} />
-        </Card>
-      )}
-
-      {user.role === "manager" && (
-        <Card>
-          <CardHeader
-            className="mb-6 border-b border-line-soft pb-4"
-            description="Manage answers for your applications and candidates. Your shared answers are available to your candidates without approval. Apply does not use global answers."
-            icon={<MessageSquareText />}
-            title="Reusable answers"
-          />
-          <ManagerAnswers
-            rows={managerAnswers}
-            unanswered={unanswered.map((row) => ({ id: row.id, questionText: row.questionText, kind: row.kind, options: row.options, timesSeen: row.timesSeen }))}
-          />
         </Card>
       )}
     </main>

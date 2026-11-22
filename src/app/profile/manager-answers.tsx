@@ -1,7 +1,6 @@
 "use client";
 import { useActionState, useMemo, useState } from "react";
 import { manageAnswer } from "./manager-answer-actions";
-import { dismissUnansweredQuestion } from "./unanswered-actions";
 import { AnswerForms } from "./answer-forms";
 import type { AnswerVariant } from "@/server/apply/manager-answer-values";
 import identity from "../../../extension/shared/answer-identity.js";
@@ -26,9 +25,9 @@ const LEVELS: Record<string, string> = { manager: "All my candidates", candidate
 const LANGUAGE_LEVELS = ["Native", "C2", "C1", "B2", "B1", "A2", "A1"];
 const topicOf = (question: string) => meaning.topicOf(question)?.id ?? null;
 
-type Unanswered = { id: string; questionText: string; kind: string; options: string[]; timesSeen: number };
 
-export function ManagerAnswers({ rows, unanswered = [] }: { rows: Row[]; unanswered?: Unanswered[] }) {
+// Reusable answers are added and edited only here, by hand (no list of questions Apply met).
+export function ManagerAnswers({ rows }: { rows: Row[] }) {
   const duplicates = new Set(identity.duplicateGroups(rows).flat().map((row) => row.id));
   const [search, setSearch] = useState("");
   const [level, setLevel] = useState("all");
@@ -57,14 +56,6 @@ export function ManagerAnswers({ rows, unanswered = [] }: { rows: Row[]; unanswe
       <LanguageLevelsForm row={languageRow} />
       <SalaryForm row={salaryRow} />
     </div>
-
-    {unanswered.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
-      <p className="text-xs font-semibold text-amber-900">Needs answer ({unanswered.length})</p>
-      <p className="mt-1 text-xs text-amber-800">Required questions Apply met that no saved answer or profile fact answered, most frequent first. Answer one once; every later application fills it.</p>
-      <ul className="mt-2 space-y-2">
-        {unanswered.map((item) => <UnansweredItem key={item.id} item={item} onAnswer={(question) => setPreset({ question, key: Date.now() })} />)}
-      </ul>
-    </div>}
 
     {empty.length > 0 && <div className="rounded-xl border border-dashed border-slate-300 p-3">
       <p className="text-xs font-semibold text-slate-700">Common questions without an answer for all candidates ({empty.length})</p>
@@ -98,20 +89,6 @@ export function ManagerAnswers({ rows, unanswered = [] }: { rows: Row[]; unanswe
     </section>)}
     {!shown.length && rows.length > 0 && <p className="text-xs text-slate-500">No answers match these filters.</p>}
   </div>;
-}
-
-function UnansweredItem({ item, onAnswer }: { item: Unanswered; onAnswer: (question: string) => void }) {
-  const [state, action, pending] = useActionState(dismissUnansweredQuestion, { message: "" });
-  return <li className="rounded-lg border border-amber-100 bg-white p-2 text-xs">
-    <p className="font-medium text-slate-800">{item.questionText}</p>
-    <p className="text-slate-500">Seen {item.timesSeen}×{item.options.length ? ` · choices: ${item.options.slice(0, 6).join(" / ")}${item.options.length > 6 ? " …" : ""}` : ""}</p>
-    <form action={action} className="mt-1 flex flex-wrap gap-2">
-      <input type="hidden" name="id" value={item.id} />
-      <button type="button" onClick={() => onAnswer(item.questionText)} className="rounded-lg bg-indigo-600 px-3 py-1 text-white">Answer</button>
-      <button disabled={pending} className="rounded-lg border px-3 py-1 text-slate-600">Dismiss</button>
-      {state.message && <span role="status" className="self-center text-slate-500">{state.message}</span>}
-    </form>
-  </li>;
 }
 
 function AnswerForm({ row, duplicate, presetQuestion = "" }: { row: Row | null; duplicate: boolean; presetQuestion?: string }) {

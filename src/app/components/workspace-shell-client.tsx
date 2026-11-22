@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquareText,
   NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
@@ -128,6 +129,7 @@ export function WorkspaceShellClient({
         ]
       : user.role === "manager"
         ? [
+            { label: "Answers", href: "/answers", icon: MessageSquareText },
             { label: "My AI prompts", href: "/prompts", icon: Sparkles },
             { label: "Useful prompts", href: "/useful-prompts", icon: NotebookPen },
             { label: "Auto Apply settings", href: "/settings", icon: Settings2 },
