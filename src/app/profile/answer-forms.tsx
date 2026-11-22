@@ -6,7 +6,7 @@ import { alternativesOf, MAX_ALTERNATIVES, MAX_FORM_LENGTH, siteFormsOf } from "
 import type { AnswerVariant } from "@/server/apply/manager-answer-values";
 import { manageAnswerForms } from "./answer-form-actions";
 
-/** Under one saved answer: its other forms ("30 days" for "1 month") and what each job site took. */
+/** Under one saved answer: its other answers ("30 days" for "1 month"; tried when the first does not fit a box) and what each job site took. */
 export function AnswerForms({ id, version, variants }: { id: string; version: string; variants: AnswerVariant[] }) {
   const [state, action, pending] = useActionState(manageAnswerForms, { message: "" });
   const alternatives = alternativesOf(variants);
@@ -14,7 +14,7 @@ export function AnswerForms({ id, version, variants }: { id: string; version: st
   const hidden = <><input type="hidden" name="id" value={id} /><input type="hidden" name="version" value={version} /></>;
   return <div className="space-y-2 border-t border-slate-100 pt-2 text-xs">
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="font-medium text-slate-600">Other forms</span>
+      <span className="font-medium text-slate-600">Other answers</span>
       {alternatives.map((text) => <form key={text} action={action} className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 py-0.5 pl-2 pr-1 text-slate-700">
         {hidden}<input type="hidden" name="text" value={text} />
         <span>{text}</span>
@@ -22,8 +22,8 @@ export function AnswerForms({ id, version, variants }: { id: string; version: st
       </form>)}
       {alternatives.length < MAX_ALTERNATIVES && <form action={action} className="inline-flex items-center gap-1">
         {hidden}
-        <input aria-label="Other form" name="text" required maxLength={MAX_FORM_LENGTH} placeholder="e.g. 30 days" className="h-8 w-36 rounded-lg border border-slate-200 px-2" />
-        <Button type="submit" name="action" value="alternative-add" variant="secondary" size="sm" disabled={pending}>Add</Button>
+        <input aria-label="Another answer" name="text" required maxLength={MAX_FORM_LENGTH} placeholder="Another answer" className="h-8 w-44 rounded-lg border border-slate-200 px-2" />
+        <Button type="submit" name="action" value="alternative-add" variant="secondary" size="sm" disabled={pending}>＋ Add</Button>
       </form>}
     </div>
     {sites.length > 0 && <div className="space-y-1">

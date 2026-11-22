@@ -83,6 +83,8 @@ function AnswerForm({ row, duplicate, presetQuestion = "" }: { row: Row | null; 
   const [state, action, pending] = useActionState(manageAnswer, { message: "" });
   const saved = /^(Saved|Deleted|Moved)/.test(state.message);
   const wordings = row?.variants.map((variant, index) => ({ variant: variant.normalVariation || variant, index })) || [];
+  // New answer only: more answers to the same question, added one box at a time.
+  const [more, setMore] = useState<number[]>([]);
   return <div className={`space-y-2 rounded-xl p-3 ${row ? "border border-slate-200" : "border-2 border-indigo-300 bg-indigo-50/40"}`}><form action={action} className="space-y-2">
       {row && <input type="hidden" name="id" value={row.id} />}
       {row && <input type="hidden" name="version" value={row.version} />}
@@ -91,6 +93,11 @@ function AnswerForm({ row, duplicate, presetQuestion = "" }: { row: Row | null; 
       {duplicate && <p className="text-xs text-amber-700">Equivalent questions exist at this level. Review their answers and edit or delete them; QTS keeps each one separate.</p>}
       <label className="block text-xs">Question<input aria-label="Question" name="question" required maxLength={300} defaultValue={row?.questionText ?? presetQuestion} autoFocus={Boolean(presetQuestion)} className="mt-1 w-full rounded-lg border border-slate-200 p-2" /></label>
       <label className="block text-xs">Answer<textarea aria-label="Answer" name="answer" required maxLength={4000} defaultValue={row?.answer} className="mt-1 w-full rounded-lg border border-slate-200 p-2" /></label>
+      {!row && more.map((key, index) => <div key={key} className="flex items-center gap-2 text-xs">
+        <input aria-label={`Another answer ${index + 1}`} name="more" maxLength={500} placeholder={`Another answer ${index + 1}`} className="w-full rounded-lg border border-slate-200 p-2" />
+        <button type="button" onClick={() => setMore((list) => list.filter((entry) => entry !== key))} aria-label={`Remove another answer ${index + 1}`} className="rounded-lg border px-2 py-1 text-slate-500 hover:text-rose-600">✕</button>
+      </div>)}
+      {!row && more.length < 20 && <button type="button" onClick={() => setMore((list) => [...list, Date.now()])} className="text-xs font-semibold text-indigo-600 hover:underline">＋ Add another answer</button>}
       {wordings.length > 0 && <details className="text-xs"><summary>Wordings and box variants ({wordings.length})</summary>{wordings.map(({ variant, index }) => <div key={index} className="mt-1 flex flex-wrap items-center gap-2"><span>{variant.questionText || row?.questionText} ({variant.kind}): {variant.answer}</span><button name="action" value={`variation-delete:${index}`} disabled={pending} formNoValidate className="text-rose-600">Remove</button></div>)}</details>}
       <div className="flex flex-wrap gap-2 text-xs">
         <button disabled={pending} name="action" value="save" className="rounded-lg bg-indigo-600 px-3 py-2 text-white">{row ? "Save" : "Add answer"}</button>

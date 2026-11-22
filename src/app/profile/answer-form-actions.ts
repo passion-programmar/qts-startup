@@ -14,12 +14,12 @@ export async function manageAnswerForms(_state: { message: string }, form: FormD
   if (actor.role !== "manager") return { message: "Only Managers can change their answers here." };
   const id = form.get("id"), version = form.get("version"), action = form.get("action");
   if (!isUuid(id)) return { message: "Invalid answer ID." };
-  if (typeof version !== "string" || !/^\d{1,12}(?:\.\d{1,6})?$/.test(version)) return { message: "Reload Profile before changing this answer." };
+  if (typeof version !== "string" || !/^\d{1,12}(?:\.\d{1,6})?$/.test(version)) return { message: "Reload Answers before changing this answer." };
   // Only the Manager's own row, and only the version the page showed: a newer change is never overwritten.
   const where = and(eq(managerApplyAnswers.id, id), eq(managerApplyAnswers.managerId, actor.id), sql`extract(epoch from ${managerApplyAnswers.updatedAt})::text = ${version}`);
   try {
     const [row] = await db.select({ answer: managerApplyAnswers.answer, variants: managerApplyAnswers.variants }).from(managerApplyAnswers).where(where).limit(1);
-    if (!row) return { message: "This answer changed or was deleted. Reload Profile; nothing was overwritten." };
+    if (!row) return { message: "This answer changed or was deleted. Reload Answers; nothing was overwritten." };
     const variants = row.variants ?? [];
     const result = action === "alternative-add" ? addAlternative(variants, form.get("text"), row.answer)
       : action === "alternative-remove" ? removeAlternative(variants, form.get("text"))
@@ -28,8 +28,8 @@ export async function manageAnswerForms(_state: { message: string }, form: FormD
       : { ok: false as const, reason: "Unknown action." };
     if (!result.ok) return { message: result.reason };
     const changed = await db.update(managerApplyAnswers).set({ variants: result.variants, updatedAt: sql`clock_timestamp()` }).where(where).returning({ id: managerApplyAnswers.id });
-    if (!changed.length) return { message: "This answer changed or was deleted. Reload Profile; nothing was overwritten." };
-    revalidatePath("/profile");
+    if (!changed.length) return { message: "This answer changed or was deleted. Reload Answers; nothing was overwritten." };
+    revalidatePath("/answers");
     return { message: action === "alternative-add" || action === "site-edit" ? "Saved." : "Removed." };
-  } catch { return { message: "The change could not be confirmed. Reload Profile and review the saved answer before retrying." }; }
+  } catch { return { message: "The change could not be confirmed. Reload Answers and review the saved answer before retrying." }; }
 }
