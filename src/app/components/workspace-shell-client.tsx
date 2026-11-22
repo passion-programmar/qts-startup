@@ -46,7 +46,7 @@ type NavigationItem = { label: string; href: string; icon: typeof Users };
 const overviewItem: NavigationItem = { label: "Overview", href: "/", icon: LayoutDashboard };
 const peopleItem: NavigationItem = { label: "People", href: "/users", icon: Users };
 const profileItem: NavigationItem = { label: "My profile", href: "/profile", icon: UserRound };
-const remoteCompaniesItem: NavigationItem = { label: "Remote companies", href: "/remote-companies", icon: Globe };
+const remoteCompaniesItem: NavigationItem = { label: "Companies", href: "/remote-companies", icon: Globe };
 
 // Pages that show without the sidebar even when signed in: the resume preview is loaded in a frame.
 const barePaths = new Set(["/login", "/resume-template"]);
