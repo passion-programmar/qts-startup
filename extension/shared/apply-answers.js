@@ -412,6 +412,9 @@
     { test: /^(state|province|region|county)(\s*\/\s*(state|province|region|county))*$|^(bundesland|wojew[oó]dztwo|r[ée]gion|provincia)$/, fact: (c) => c.province, name: 'state or province', personal: true },
     { test: /nationalit|citizenship|staatsangeh|ciudadan[ií]a|obywatelstwo/, fact: (c) => c.nationality, name: 'nationality', personal: true },
     // Never guessed: without a birthday in the profile it is left for the Manager.
+    // "What is your current age?", "Age", "Age range", "How old are you?": worked out from the birthday,
+    // as a number or the range it falls in ("25–34", "Under 25", "65 or over"). Never guessed without one.
+    { test: /^(what is |what's )?(your )?(current )?age( range| group| bracket)?\b(?! of)|how old are you/, age: true, neverGuess: true, name: 'age', personal: true },
     { test: /birth ?day|date of birth|birth ?date|d.?o.?b|geburtsdatum|date de naissance|fecha de nacimiento|data (urodzenia|di nascita)/, fact: (c) => c.birthday, date: true, neverGuess: true, name: 'birthday', personal: true },
     { test: SPONSORSHIP_QUESTION, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
     { test: /relocat/, yesNo: (c) => c.willingToRelocate, name: 'relocation' },
@@ -941,8 +944,42 @@
     return undefined;
   }
 
+  /** Whole years from a YYYY-MM-DD birthday to today; null without one. */
+  function ageOf(birthday, today = new Date()) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(birthday || ''));
+    if (!match) return null;
+    const [y, m, d] = match.slice(1).map(Number);
+    return today.getFullYear() - y - ((today.getMonth() + 1 < m || (today.getMonth() + 1 === m && today.getDate() < d)) ? 1 : 0);
+  }
+
+  /** The choice an age falls in: "25–34", "18-24", "Under 25", "65 or over", "65+", "Over 65"; null when none. */
+  function ageChoice(options, age) {
+    for (const option of options) {
+      const text = String(option).toLowerCase().replace(/[–—]/g, '-');
+      const range = text.match(/(\d+)\s*-\s*(\d+)/);
+      if (range && age >= Number(range[1]) && age <= Number(range[2])) return option;
+      const under = text.match(/\b(under|below|less than|younger than)\s*(\d+)/);
+      if (under && age < Number(under[2])) return option;
+      const over = text.match(/(\d+)\s*(\+|or (over|older|above|more))|\b(over|above|older than)\s*(\d+)/);
+      if (over) {
+        const from = Number(over[1] || over[5]);
+        if (over[1] ? age >= from : age > from) return option;
+      }
+    }
+    return null;
+  }
+
   function ruleAnswer(rule, field, label, candidate, context) {
     if (rule.skipWith) return { skip: rule.skipWith };
+    if (rule.age) {
+      const age = ageOf(candidate.birthday, context.today || new Date());
+      if (age === null) return context.autoApply ? { missing: rule.name } : { skip: 'No birthday in the profile: the age is left for the Manager.' };
+      if (hasOptions(field)) {
+        const option = ageChoice(field.options, age);
+        return option ? { value: option, source: 'profile' } : { skip: `No choice fits the age ${age}.` };
+      }
+      return { value: String(age), source: 'profile' };
+    }
     {
       if (rule.yesNo) {
         const fact = rule.yesNo(candidate);
