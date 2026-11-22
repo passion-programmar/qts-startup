@@ -729,6 +729,13 @@
       "when": 1795277400516,
       "tag": "0103_linkedin_skips_switch_location",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1795337002961,
+      "tag": "0104_linkedin_skips_default_off",
+      "breakpoints": true
     }
   ]
 }

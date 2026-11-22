@@ -99,8 +99,8 @@ export const users = pgTable(
     canManageJobDetectionUrlRules: boolean("can_manage_job_detection_url_rules")
       .default(false)
       .notNull(),
-    // Super Admin's per-Manager switch for the LinkedIn skip-list (on unless turned off).
-    canUseLinkedInSkips: boolean("can_use_linkedin_skips").default(true).notNull(),
+    // Super Admin's per-Manager switch for the LinkedIn skip-list: off until the Super Admin turns it on.
+    canUseLinkedInSkips: boolean("can_use_linkedin_skips").default(false).notNull(),
     // Super Admin assigns Gemini candidate matching per Manager; others use general Get JD.
     useGeminiMatching: boolean("use_gemini_matching").default(false).notNull(),
     // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.

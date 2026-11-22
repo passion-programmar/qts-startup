@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "can_use_linkedin_skips" SET DEFAULT false;
