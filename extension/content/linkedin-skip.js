@@ -1,6 +1,7 @@
 // LinkedIn skip-list on LinkedIn's job search: cards whose (title, company) the Manager has already
 // seen (clicked, labelled Viewed / Saved / Applied by LinkedIn, applied or saved in QTS) show inverted:
-// the card's text white on black at 70% (rgba 0.7: ::highlight takes no opacity). Only the CSS Custom Highlight API paints it (text ranges and
+// the card's title white on black at 70% (rgba 0.7: ::highlight takes no opacity); the rest of the
+// card stays as LinkedIn shows it. Only the CSS Custom Highlight API paints it (text ranges and
 // their ::highlight colours): LinkedIn's HTML is never changed, no style rule names its elements,
 // nothing is hidden or clicked. Cards are read only through hooks confirmed on the live
 // page (2026-11-21): the card's componentkey "job-card-component-ref-<id>", the title in its Dismiss
@@ -22,7 +23,7 @@
   // Lines that are never a company (seen on live cards).
   const NOT_COMPANY = /^(?:viewed|saved|applied|promoted|easy apply|actively reviewing applicants|be an early applicant|posted\b.*|\d+\s+(?:second|minute|hour|day|week|month)s?\s+ago|.*\b(?:alumni|connections?)\b.*\bwork(?:s)? here)$/i;
   const LOCATION_LINE = /\((?:remote|hybrid|on-?site)\)$/i;
-  const HIGHLIGHT = 'qts-linkedin-skip';             // the whole card's text: white on 70% black
+  const HIGHLIGHT = 'qts-linkedin-skip';             // the title of a seen card: white on 70% black
   const OLD_TITLE_HIGHLIGHT = 'qts-linkedin-skip-title'; // an earlier version's title strike, cleared
   const BATCH_MS = 400;
   const RETURN_AFTER_MS = 2 * 60_000;
@@ -81,8 +82,9 @@
     }
   }
 
-  // Every skipped card: its whole text white on 70% black (one range over the card). Only the
-  // highlight name gets a style: no rule names LinkedIn's elements, and the page is untouched.
+  // Every skipped card: its title white on 70% black (a range over each title text, also beside the
+  // verified badge). Only the highlight name gets a style: no rule names LinkedIn's elements, and
+  // the page is untouched.
   style.replaceSync(`::highlight(${HIGHLIGHT}) { color: #ffffff; background-color: rgba(0, 0, 0, 0.7); }`);
   function paint() {
     const seen = cards.filter((card) => skipped.has(card.key));
@@ -90,9 +92,14 @@
     if (!seen.length) { clearPaint(); return; }
     const marked = new Highlight();
     for (const card of seen) {
-      const whole = new Range();
-      whole.selectNodeContents(card.el);
-      marked.add(whole);
+      const walker = document.createTreeWalker(card.el, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if ((node.nodeValue || '').trim() !== card.title) continue;
+        const range = new Range();
+        range.selectNodeContents(node);
+        marked.add(range);
+      }
     }
     CSS.highlights.delete(OLD_TITLE_HIGHLIGHT);
     CSS.highlights.set(HIGHLIGHT, marked);

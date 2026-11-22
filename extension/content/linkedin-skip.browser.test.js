@@ -93,11 +93,11 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
       } },
     };
     window.htmlBefore = document.querySelector('main').innerHTML;
-    // What is painted: the marked cards (one highlight range per card) and the texts they cover.
+    // What is painted: the cards whose title is marked, and the marked texts.
     window.painted = () => {
       const card = (range) => range.startContainer.closest?.('[componentkey]') || range.startContainer.parentElement?.closest('[componentkey]');
       const ranges = [...(CSS.highlights.get('qts-linkedin-skip') || [])];
-      const marked = ranges.map((range) => card(range)?.getAttribute('componentkey').replace('job-card-component-ref-', '')).filter(Boolean);
+      const marked = [...new Set(ranges.map((range) => card(range)?.getAttribute('componentkey').replace('job-card-component-ref-', '')).filter(Boolean))];
       const titles = ranges.map((range) => range.toString().replace(/\s+/g, ' ').trim()).filter(Boolean).map((text) => text.split(' (Verified job)')[0]);
       return { marked, titles: marked.length ? titles : [] };
     };
@@ -115,7 +115,7 @@ async function openSearch(browser, { cards, url = 'https://www.linkedin.com/jobs
 
 const sorted = (values) => [...values].sort();
 
-test('seen cards are white on 70% black (with or without the verified badge), painted only by one highlight; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
+test('a seen card\'s title is white on 70% black (with or without the verified badge), nothing else on the card; LinkedIn\'s HTML is untouched', { skip: !CHROME, timeout: 60000 }, async () => {
   const browser = await require('puppeteer-core').launch({ executablePath: CHROME, headless: true, pipe: true });
   try {
     const known = [computeTitleCompanyKey('Site Reliability Engineer II', 'Akamai Technologies')];
@@ -124,10 +124,8 @@ test('seen cards are white on 70% black (with or without the verified badge), pa
     const painted = await page.evaluate(() => window.painted());
     // Viewed (LinkedIn), Applied (LinkedIn), and the QTS bid; the three new jobs are left as they are.
     assert.deepEqual(sorted(painted.marked), sorted(['4490425819', '4492410414', '4491500626']));
-    // Each marked card's range covers its whole text, title included (no separate title strike).
-    for (const title of ['Senior DevOps Engineer (Azure+AWS)', 'Senior Site Reliability Engineer - AI/GPU', 'Site Reliability Engineer II']) {
-      assert.ok(painted.titles.some((text) => text.startsWith(title)), title);
-    }
+    // Only the titles are marked: never the company, the place or LinkedIn's labels.
+    assert.deepEqual(sorted(new Set(painted.titles)), sorted(['Senior DevOps Engineer (Azure+AWS)', 'Senior Site Reliability Engineer - AI/GPU', 'Site Reliability Engineer II']));
     assert.equal(await page.evaluate(() => CSS.highlights.has('qts-linkedin-skip-title')), false, 'no strike-through highlight');
     // Only the highlight name is styled: no rule names LinkedIn's elements, no strike-through.
     const rules = await page.evaluate(() => window.styleRules());
