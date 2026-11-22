@@ -27,6 +27,7 @@ const pageSizes = [10, 25, 50];
 export type RemoteCompaniesQuery = { field: SearchField; q: string; sort: RemoteCompanySort; page: number; size: number };
 
 export type RemoteRole = {
+  titleKey: string;
   title: string;
   places: string[];
   jobs: number;
@@ -123,6 +124,7 @@ export function remoteCompaniesPageQuery(query: RemoteCompaniesQuery, page: numb
           'lastSeen', p.last_seen,
           'items', (
             select json_agg(json_build_object(
+              'titleKey', m.title_key,
               'title', m.job_title,
               'places', m.places,
               'jobs', m.job_count,
@@ -156,6 +158,7 @@ export function toRemoteCompanies(row: RemoteCompaniesRow | undefined): { total:
       bids: Number(company.bids),
       lastSeen: new Date(company.lastSeen),
       items: (company.items ?? []).map((role) => ({
+        titleKey: role.titleKey,
         title: role.title,
         places: role.places ?? [],
         jobs: Number(role.jobs),
@@ -165,4 +168,40 @@ export function toRemoteCompanies(row: RemoteCompaniesRow | undefined): { total:
       })),
     })),
   };
+}
+
+/** One application (bid) to a company's remote role, as the viewer may see it. */
+export type RemoteApplication = {
+  titleKey: string;
+  /** The candidate's name; null when the bid is another Manager's (a Manager sees only their own). */
+  candidate: string | null;
+  /** The Manager who made the bid: only the Super Admin sees it. */
+  manager: string | null;
+  own: boolean;
+  appliedAt: Date;
+  place: string | null;
+};
+
+/**
+ * Who applied to a company's remote roles: its bids (kept forever) that are remote by the same rule
+ * as the list, newest first, at most 500. Names are left out in the database for bids the viewer
+ * may not see, so they never reach the browser.
+ */
+export function remoteCompanyApplicationsQuery(companyKey: string, viewer: { id: string; superAdmin: boolean }): SQL {
+  return sql`
+    select r.title_key as "titleKey",
+      case when ${viewer.superAdmin}::boolean or b.manager_id = ${viewer.id}::uuid
+        then nullif(btrim(concat_ws(' ', p.first_name, p.last_name)), '') end as "candidate",
+      case when ${viewer.superAdmin}::boolean then m.display_name end as "manager",
+      (b.manager_id = ${viewer.id}::uuid) as "own",
+      b.applied_at as "appliedAt",
+      b.location as "place"
+    from remote_company_jobs r
+    join bids b on b.title_company_key = r.title_key || '|' || r.company_key
+    left join profiles p on p.user_id = b.candidate_id
+    left join users m on m.id = b.manager_id
+    where r.company_key = ${companyKey} and qts_is_fully_remote(b.location, b.work_type)
+    order by b.applied_at desc, b.id
+    limit 500
+  `;
 }

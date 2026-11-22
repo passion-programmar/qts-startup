@@ -8,6 +8,7 @@ import { computeTitleCompanyKey } from "../jobs/job-key";
 import {
   parseRemoteCompaniesQuery,
   remoteCompaniesPageQuery,
+  remoteCompanyApplicationsQuery,
   toRemoteCompanies,
   type RemoteCompaniesRow,
 } from "./remote-companies-query";
@@ -181,6 +182,44 @@ test("remote companies: guarded triggers, backfill and the page query on real Po
       const second = await page({ size: "10", page: "2" });
       assert.equal(second.companies.length, 0);
       assert.equal(second.total, 4);
+    });
+
+    await t.test("each role carries its key, so its details can find who applied", async () => {
+      const acme = (await page({ q: "acme", field: "company" })).companies[0];
+      assert.deepEqual(acme.items.map((role) => role.titleKey).sort(), ["platform engineer", "site reliability engineer"]);
+    });
+
+    await t.test("who applied: a Manager sees their own candidates' names, the Super Admin sees all and the Manager", async () => {
+      const ann = "20000000-0000-4000-8000-000000000001";
+      const bob = "20000000-0000-4000-8000-000000000002";
+      const superAdmin = "20000000-0000-4000-8000-000000000009";
+      await pg.exec(`
+        alter table bids add column manager_id uuid, add column candidate_id uuid;
+        alter table users add column display_name text;
+        create table profiles (user_id uuid primary key, first_name text, last_name text);
+        insert into users (id, display_name) values ('${ann}', 'Ann'), ('${bob}', 'Bob');
+        insert into profiles values ('30000000-0000-4000-8000-000000000001', 'Jane', 'Doe'), ('30000000-0000-4000-8000-000000000002', 'Omar', 'Ali');
+      `);
+      const sre = key("Site Reliability Engineer", "Acme");
+      await pg.exec(`
+        insert into bids (job_title, company, location, work_type, title_company_key, applied_at, manager_id, candidate_id) values
+          ('Site Reliability Engineer', 'Acme', 'Spain (Remote)', 'Remote', '${sre}', '2026-11-20T10:00:00Z', '${ann}', '30000000-0000-4000-8000-000000000001'),
+          ('Site Reliability Engineer', 'Acme', 'Spain', 'Full-time · Remote', '${sre}', '2026-11-21T10:00:00Z', '${bob}', '30000000-0000-4000-8000-000000000002'),
+          ('Site Reliability Engineer', 'Acme', 'Spain', 'Hybrid', '${sre}', '2026-11-21T11:00:00Z', '${ann}', '30000000-0000-4000-8000-000000000001');
+      `);
+      type Who = { titleKey: string; candidate: string | null; manager: string | null; own: boolean | null; appliedAt: Date; place: string | null };
+      const who = async (viewer: { id: string; superAdmin: boolean }) => {
+        const compiled = dialect.sqlToQuery(remoteCompanyApplicationsQuery("acme", viewer));
+        return (await pg.query<Who>(compiled.sql, compiled.params)).rows.filter((row) => row.candidate !== null || row.own === false);
+      };
+
+      const asAnn = await who({ id: ann, superAdmin: false });
+      assert.deepEqual(asAnn.map((row) => [row.candidate, row.manager, row.own]), [[null, null, false], ["Jane Doe", null, true]],
+        "newest first; Bob's candidate has no name for Ann; the hybrid bid is not a remote application");
+      assert.ok(asAnn.every((row) => row.titleKey === "site reliability engineer"));
+
+      const asSuperAdmin = await who({ id: superAdmin, superAdmin: true });
+      assert.deepEqual(asSuperAdmin.map((row) => [row.candidate, row.manager]), [["Omar Ali", "Bob"], ["Jane Doe", "Ann"]]);
     });
   } finally {
     await pg.close();

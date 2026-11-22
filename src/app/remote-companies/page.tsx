@@ -2,6 +2,7 @@ import { Globe } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { PaginatedTable } from "@/app/components/paginated-table";
+import { CompanyDetails, OpenCompany, type CompanyDetail } from "@/app/remote-companies/company-details";
 import { Badge } from "@/app/ui/badge";
 import { PageHeader } from "@/app/ui/page-header";
 import { formatRomaniaDate } from "@/lib/romania-time";
@@ -14,13 +15,9 @@ import {
   remoteCompanySorts,
   type RemoteCompaniesQuery,
   type RemoteCompanySort,
-  type RemoteRole,
 } from "@/server/remote-companies/remote-companies-query";
 
 export const instant = false;
-
-const SHOWN_ROLES = 3;
-const SHOWN_PLACES = 4;
 
 // The address of this page with another sort; the search and page size stay, the page goes back to 1.
 function sortHref(query: RemoteCompaniesQuery, sort: RemoteCompanySort): string {
@@ -54,57 +51,9 @@ function SortLinks({ query }: { query: RemoteCompaniesQuery }) {
   );
 }
 
-function Places({ places }: { places: string[] }) {
-  const shown = places.slice(0, SHOWN_PLACES);
-  return (
-    <span className="mt-1 flex flex-wrap gap-1">
-      {shown.map((place) => (
-        <span className="rounded-full bg-success-soft px-2 py-0.5 text-[11px] font-medium text-success-text ring-1 ring-inset ring-success-ring" key={place}>{place}</span>
-      ))}
-      {places.length > shown.length && (
-        <span className="rounded-full px-1.5 py-0.5 text-[11px] text-fg-muted" title={places.slice(SHOWN_PLACES).join(" · ")}>+{places.length - shown.length}</span>
-      )}
-    </span>
-  );
-}
-
-function Role({ role }: { role: RemoteRole }) {
-  return (
-    <li className="py-1.5 first:pt-0 last:pb-0">
-      <span className="block text-sm font-medium text-fg">{role.title}</span>
-      <Places places={role.places} />
-      <span className="mt-1 block text-[11px] text-fg-muted">
-        Saved {role.jobs} · Applied {role.bids} · last seen {formatRomaniaDate(role.lastSeen)}
-      </span>
-    </li>
-  );
-}
-
-// The first roles show at once; the rest open under "more roles" (no script needed).
-function Roles({ roles }: { roles: RemoteRole[] }) {
-  const rest = roles.slice(SHOWN_ROLES);
-  return (
-    <div>
-      <ul className="divide-y divide-line-soft">
-        {roles.slice(0, SHOWN_ROLES).map((role, index) => <Role key={`${role.title}-${index}`} role={role} />)}
-      </ul>
-      {rest.length > 0 && (
-        <details className="group mt-1.5">
-          <summary className="cursor-pointer select-none text-xs font-semibold text-primary-text hover:underline">
-            <span className="group-open:hidden">Show {rest.length} more {rest.length === 1 ? "role" : "roles"}</span>
-            <span className="hidden group-open:inline">Show fewer</span>
-          </summary>
-          <ul className="mt-1.5 divide-y divide-line-soft">
-            {rest.map((role, index) => <Role key={`${role.title}-${index + SHOWN_ROLES}`} role={role} />)}
-          </ul>
-        </details>
-      )}
-    </div>
-  );
-}
-
 // Companies with fully remote jobs that QTS has seen: saved as a job or applied as a bid by any
 // Manager. The database fills the list itself (and keeps it for good); this page only reads it.
+// One line per company; clicking it opens its roles, places, dates and who applied.
 // The Super Admin always sees it; a Manager only when the Super Admin turned it on for them.
 export default async function RemoteCompaniesPage({
   searchParams,
@@ -115,52 +64,66 @@ export default async function RemoteCompaniesPage({
   if (!(await canViewRemoteCompanies(currentUser))) redirect("/");
   const query = parseRemoteCompaniesQuery(await searchParams);
   const list = await readRemoteCompaniesPage(query);
-  const offset = (list.page - 1) * query.size;
+  const details: CompanyDetail[] = list.companies.map((company) => ({
+    companyKey: company.companyKey,
+    company: company.company,
+    roles: company.roles,
+    jobs: company.jobs,
+    bids: company.bids,
+    lastSeen: company.lastSeen.toISOString(),
+    items: company.items.map((role) => ({
+      titleKey: role.titleKey,
+      title: role.title,
+      places: role.places,
+      jobs: role.jobs,
+      bids: role.bids,
+      firstSeen: role.firstSeen.toISOString(),
+      lastSeen: role.lastSeen.toISOString(),
+    })),
+  }));
 
   return (
     <main className="py-1">
       <PageHeader
         actions={<Badge className="px-3 py-1 text-xs">{list.all} {list.all === 1 ? "company" : "companies"}</Badge>}
-        description="Companies with fully remote jobs that any Manager saved or applied to in QTS. The list fills itself and keeps everything. Dates are Romania time."
+        description="Companies with fully remote jobs that any Manager saved or applied to in QTS. Click a company to see its roles and who applied. Dates are Romania time."
         title={<span className="inline-flex items-center gap-2"><Globe aria-hidden="true" className="size-6 text-primary" />Remote companies</span>}
       />
-      <PaginatedTable
-        columns={[
-          { label: "No", className: "w-[5%]" },
-          { label: "Company", className: "w-[22%]" },
-          { label: "Remote roles", className: "w-[45%]" },
-          { label: "Saved", className: "w-[8%]" },
-          { label: "Applied", className: "w-[8%]" },
-          { label: "Last seen", className: "w-[12%]" },
-        ]}
-        emptyMessage={query.q ? "No remote companies match your search" : "No remote jobs saved or applied yet"}
-        searchFields={[...remoteCompanySearchFields]}
-        server={{
-          path: "/remote-companies",
-          params: query.sort === "recent" ? {} : { sort: query.sort },
-          total: list.total,
-          page: list.page,
-          pageSize: query.size,
-          defaultPageSize: defaultRemoteCompanyPageSize,
-          field: query.field,
-          query: query.q,
-        }}
-        toolbar={<SortLinks query={query} />}
-        rows={list.companies.map((company, index) => ({
-          id: company.companyKey,
-          cells: [
-            offset + index + 1,
-            <div key="company">
-              <span className="block font-semibold text-fg">{company.company}</span>
-              <span className="text-xs text-fg-muted">{company.roles} remote {company.roles === 1 ? "role" : "roles"}</span>
-            </div>,
-            <Roles key="roles" roles={company.items} />,
-            <span className="tabular-nums" key="saved">{company.jobs}</span>,
-            <span className="tabular-nums" key="applied">{company.bids}</span>,
-            <span className="text-xs" key="seen">{formatRomaniaDate(company.lastSeen)}</span>,
-          ],
-        }))}
-      />
+      <CompanyDetails companies={details} searching={Boolean(query.q)}>
+        <PaginatedTable
+          columns={[
+            { label: "Company", className: "w-[46%]" },
+            { label: "Remote roles", className: "w-[18%]" },
+            { label: "Applied", className: "w-[18%]" },
+            { label: "Last seen", className: "w-[18%]" },
+          ]}
+          emptyMessage={query.q ? "No remote companies match your search" : "No remote jobs saved or applied yet"}
+          searchFields={[...remoteCompanySearchFields]}
+          server={{
+            path: "/remote-companies",
+            params: query.sort === "recent" ? {} : { sort: query.sort },
+            total: list.total,
+            page: list.page,
+            pageSize: query.size,
+            defaultPageSize: defaultRemoteCompanyPageSize,
+            field: query.field,
+            query: query.q,
+          }}
+          toolbar={<SortLinks query={query} />}
+          rows={list.companies.map((company, index) => {
+            const label = `Open ${company.company}: roles and who applied`;
+            return {
+              id: company.companyKey,
+              cells: [
+                <OpenCompany className="font-semibold text-fg hover:text-primary-text hover:underline" index={index} key="company" label={label}>{company.company}</OpenCompany>,
+                <OpenCompany className="tabular-nums" index={index} key="roles" label={label}>{company.roles}</OpenCompany>,
+                <OpenCompany className="tabular-nums" index={index} key="applied" label={label}>{company.bids}</OpenCompany>,
+                <OpenCompany className="text-xs" index={index} key="seen" label={label}>{formatRomaniaDate(company.lastSeen)}</OpenCompany>,
+              ],
+            };
+          })}
+        />
+      </CompanyDetails>
     </main>
   );
 }

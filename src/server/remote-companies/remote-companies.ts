@@ -5,7 +5,9 @@ import { db } from "@/lib/db";
 import type { StaffSession } from "@/lib/session";
 import {
   remoteCompaniesPageQuery,
+  remoteCompanyApplicationsQuery,
   toRemoteCompanies,
+  type RemoteApplication,
   type RemoteCompaniesQuery,
   type RemoteCompaniesRow,
 } from "@/server/remote-companies/remote-companies-query";
@@ -19,6 +21,16 @@ export async function canViewRemoteCompanies(user: Pick<StaffSession, "id" | "ro
   if (user.role !== "manager") return false;
   const [row] = await db.select({ on: users.canViewRemoteCompanies }).from(users).where(eq(users.id, user.id)).limit(1);
   return row?.on === true;
+}
+
+/**
+ * Who applied to one company's remote roles (one trip, when its details open). A Manager sees their
+ * own candidates' names only; the Super Admin sees every candidate and their Manager.
+ */
+export async function readRemoteCompanyApplications(viewer: Pick<StaffSession, "id" | "role">, companyKey: string): Promise<RemoteApplication[]> {
+  type Row = Omit<RemoteApplication, "appliedAt"> & { appliedAt: Date | string };
+  const result = await db.execute<Row>(remoteCompanyApplicationsQuery(companyKey, { id: viewer.id, superAdmin: viewer.role === "super_admin" }));
+  return result.rows.map((row) => ({ ...row, own: row.own === true, appliedAt: new Date(row.appliedAt) }));
 }
 
 /** One page of companies (one trip); a page past the end (an old link) shows the last page instead. */
