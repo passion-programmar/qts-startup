@@ -9,7 +9,7 @@ import { requireUser } from "@/lib/session";
 import { identityMetadata, semanticWriteGuard } from "@/server/apply/answer-identity";
 import { addAlternative, unwrapVariant } from "@/server/apply/answer-variant-forms";
 import { isUuid } from "@/server/apply/apply-route-auth";
-import { canShareQuestion, correctionKey, mergeVariants, parseCorrection, type AnswerVariant } from "@/server/apply/manager-answer-values";
+import { correctionKey, mergeVariants, parseCorrection, type AnswerVariant } from "@/server/apply/manager-answer-values";
 
 // The Answers page: one question with all its answers, saved or deleted in one go. The first answer
 // is the main one (text boxes get it); the others are tried when it does not fit a box's choices.
@@ -44,13 +44,7 @@ export async function saveAnswerAction(input: { id?: string; version?: string; q
   if (typeof answers === "string") return { ok: false, message: answers };
   const parsed = parseCorrection({ question: input?.question, answer: answers[0], kind: "text" }, { normalApply: true });
   if (typeof parsed === "string") return { ok: false, message: parsed };
-  if (!canShareQuestion(parsed.questionText, true)) {
-    // Which kind of question it is, so the message says what to do.
-    const companySpecific = /\b(?:this|that|our)\s+(?:company|employer|product|service|team)\b|\bwhy (?:do you want|are you interested|would you like)\b/i.test(parsed.questionText);
-    return { ok: false, message: companySpecific
-      ? "This question is about one company, so it cannot be one answer for every job. Leave it to Ask AI or answer it on that job."
-      : "This is a fact about each candidate (name, contact, location, nationality, diversity…): it comes from the candidate's profile, not from Answers." };
-  }
+  // Any question may be saved here (the Manager's decision, 2026-11-22): no question is refused.
   const editing = input.id !== undefined;
   if (editing && (!isUuid(input.id) || typeof input.version !== "string" || !VERSION.test(input.version))) return { ok: false, message: CHANGED };
   try {
