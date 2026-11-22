@@ -128,14 +128,14 @@ test('seen cards are red with a struck title (with or without the verified badge
     // Only highlight names are styled: no rule names LinkedIn's elements.
     const rules = await page.evaluate(() => window.styleRules());
     assert.ok(rules.length === 2 && rules.every((rule) => rule.startsWith('::highlight(qts-linkedin-skip')), rules.join(' | '));
-    // On screen: the struck title's background is red.
+    // On screen: black at 70% over LinkedIn's white page (about rgb 77, 77, 77).
     const box = await page.evaluate(() => {
       const range = [...CSS.highlights.get('qts-linkedin-skip-title')][0];
       const rect = range.getBoundingClientRect();
       return { x: rect.x + 2, y: rect.y + 2, width: 2, height: 2 };
     });
     const { data } = await require('sharp')(await page.screenshot({ clip: box })).raw().toBuffer({ resolveWithObject: true });
-    assert.ok([0xdc, 0x26, 0x26].every((value, index) => Math.abs(data[index] - value) <= 8), `title background ${[...data.slice(0, 3)]}`);
+    assert.ok([77, 77, 77].every((value, index) => Math.abs(data[index] - value) <= 12), `title background ${[...data.slice(0, 3)]}`);
     // LinkedIn's own labels were sent as marks with their source.
     const marks = await page.evaluate(() => window.calls.filter((call) => call.type === 'QTS_LINKEDIN_SKIPS_MATCH').flatMap((call) => call.marks));
     assert.deepEqual(marks.map((mark) => [mark.title, mark.source]).sort(), [['Senior DevOps Engineer (Azure+AWS)', 'viewed'], ['Senior Site Reliability Engineer - AI/GPU', 'applied']]);
