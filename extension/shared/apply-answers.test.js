@@ -1192,3 +1192,23 @@ test('two generic uploads are ambiguous; named resume and cover remain independe
   assert.equal(named.answers.letter.file, 'coverLetter');
   assert.equal(named.answers.support, undefined);
 });
+
+test('current company and job title come from the profile\'s current job; "most recent" falls back to the latest', () => {
+  const history = [
+    { companyName: 'Datanet SA', jobTitle: 'DevOps Engineer', isCurrent: false, startDate: '2016-09-01', endDate: '2021-02-28' },
+    { companyName: 'Cloudway SRL', jobTitle: 'Senior SRE', isCurrent: true, startDate: '2021-03-01', endDate: null },
+  ];
+  const boxes = ['Current company', 'Current employer', 'Current job title', 'Most recent company', 'Twitter URL']
+    .map((label) => ({ id: label, label, kind: 'text', required: false }));
+  const plan = answers.planApiFields(boxes, { firstName: 'Alex', lastName: 'Morgan' }, [], { experiences: history });
+  const value = (label) => plan.ai.find((entry) => entry.field.id === label)?.check?.value;
+  assert.equal(value('Current company'), 'Cloudway SRL');
+  assert.equal(value('Current employer'), 'Cloudway SRL');
+  assert.equal(value('Current job title'), 'Senior SRE');
+  assert.equal(value('Most recent company'), 'Cloudway SRL');
+  // No current job: "current company" stays empty, "most recent" takes the latest one.
+  const past = [{ ...history[0] }, { ...history[1], isCurrent: false, endDate: '2025-01-31' }];
+  const before = answers.planApiFields(boxes, { firstName: 'Alex' }, [], { experiences: past });
+  assert.equal(before.ai.find((entry) => entry.field.id === 'Current company')?.check, undefined);
+  assert.equal(before.ai.find((entry) => entry.field.id === 'Most recent company')?.check?.value, 'Cloudway SRL');
+});

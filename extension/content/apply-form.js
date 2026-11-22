@@ -3343,11 +3343,19 @@
     const boxKeys = boxes.map((box) => [box.field.id, box.key]);
     if (!newPage || seedOnly) return { keys, boxKeys, newPage, emptied, stuck };
     const job = keepValues.map((value) => cleanText(value).toLowerCase()).filter(Boolean);
+    const squashName = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    const ownFiles = keepFiles.map(squashName).filter(Boolean);
+    // This candidate's own résumé or cover letter already attached (the site shows its name, in any
+    // case: Lever writes it in capitals): kept. Only another person's file is taken off.
+    const holdsOwnFile = (element) => {
+      const shown = squashName(`${[...(element.files || [])].map((file) => file.name).join(' ')} ${textOf(uploadScope(element))}`);
+      return ownFiles.some((own) => shown.includes(own));
+    };
     const touched = [];
     const attached = [];
     for (const { field, key } of boxes) {
       const element = seen.has(key) ? null : findField(field.id);
-      if (uploads && element && field.kind === 'file' && !managerChanged(element, field) && uploadHolds(field.id)) {
+      if (uploads && element && field.kind === 'file' && !managerChanged(element, field) && uploadHolds(field.id) && !holdsOwnFile(element)) {
         await removeUpload(element, field.id).catch(() => {});
         attached.push(field);
         continue;
@@ -3370,8 +3378,6 @@
       else emptied.push(field.label);
     }
     if (uploads) {
-      const squashName = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-      const ownFiles = keepFiles.map(squashName).filter(Boolean);
       for (const row of attachmentRows().filter((entry) => !ownFiles.some((own) => squashName(entry.name).includes(own)))) {
         const name = row.name;
         press(row.control);

@@ -347,6 +347,18 @@
     return value.trim().replace(/^(?:(?:https?:)?\/\/)?(?:www\.)?linkedin\.com(?=[/?#]|$)/i, 'https://www.linkedin.com');
   }
 
+  /**
+   * The job the profile marks as current (one without an end date counts too); for a "most recent"
+   * question, else the latest one by start date. Null when the history has none.
+   */
+  function currentJob(context, label) {
+    const history = (context?.experiences || []).filter((entry) => entry && String(entry.companyName || '').trim());
+    const current = history.find((entry) => entry.isCurrent === true) || history.find((entry) => !entry.endDate && entry.isCurrent !== false);
+    if (current) return current;
+    if (!label || !/^(most recent|latest|last)/.test(String(label))) return null;
+    return [...history].sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || '')))[0] || null;
+  }
+
   const RULES = [
     { test: /first and last name|full name|legal name|^(your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name', personal: true },
     // English, then the Polish, German, French, and Spanish words forms use.
@@ -361,6 +373,10 @@
     { test: /linkedin/, fact: (c) => linkedinProfileUrl(c.linkedinUrl), name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
+    // "Current company", "Current employer", "Most recent company"; "Current job title", "Current
+    // position": the profile's current job (else its latest one, for "most recent").
+    { test: /^(your )?(current|present) (company|employer|organi[sz]ation)( name)?$|^(name of )?(your )?current employer$|^(most recent|latest|last) (company|employer)( name)?$/, fact: (c, context, label) => currentJob(context, label)?.companyName || null, name: 'current company', optionalIfMissing: true },
+    { test: /^(your )?(current|present) (job )?(title|position|role)$|^(most recent|latest|last) (job )?(title|position|role)$/, fact: (c, context, label) => currentJob(context, label)?.jobTitle || null, name: 'current job title', optionalIfMissing: true },
     // City-labelled location fields are profile facts in both modes; sites vary parenthesis spacing.
     { test: /^(current )?(city|town)(\s*(\/|or)\s*(city|town|locality))?$|^(current )?location\s*\(\s*(city|town)\s*\)$|city of residence|^(stadt|ort|wohnort|ville|ciudad|miasto|localidad|localit[ée]|citt[àa])$/, autoTest: /^(your )?city\s*\/\s*town$/, fact: (c) => c.city, name: 'city', personal: true },
     // autoTest (Auto Apply and Normal Apply): also as a whole question, "What is your location?" (Lever, a list of countries).
@@ -917,7 +933,7 @@
         return resolveNotice(field, label, candidate, context.today)
           ?? { ask: `notice period ${noticeWords(noticeDays(candidate)).toLowerCase()}, can start ${formatDate(startDate(candidate, context.today))}` };
       }
-      const fact = rule.fact(candidate);
+      const fact = rule.fact(candidate, context, label);
       if (fact === null || fact === undefined || fact === '') {
         if (rule.optionalIfMissing && !field.required) return { skip: `No ${rule.name} in the profile.` };
         // Auto Apply gives unresolved facts to the Super Admin's configured answer instructions.
