@@ -590,6 +590,12 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     const uploadStarted = Date.now();
     if (plan.autofillUpload || plan.uploads.length) await say('Attaching the documents…');
     let uploaded = false;
+    // Once per application: and never again when the box already holds a file (a second send makes the
+    // site read it again and reset what it filled, Ashby's Résumé box included; a restarted worker forgets).
+    if (plan.autofillUpload && !application.resumeAutofillTried
+      && await inForm(tabId, (id) => globalThis.__qtsApplyForm.uploadHolds(id), [plan.autofillUpload.id]).catch(() => false)) {
+      application.resumeAutofillTried = true;
+    }
     if (plan.autofillUpload && !application.resumeAutofillTried) {
       const ready = await needDocuments();
       application.resumeAutofillTried = true;
