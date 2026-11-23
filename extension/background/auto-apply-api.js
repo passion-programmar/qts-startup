@@ -171,6 +171,7 @@ function answerContext(application) {
     today: new Date(),
     coverLetterText: application.job.coverLetterText,
     experiences: application.profileDetails?.experiences || [],
+    educations: application.profileDetails?.educations || [],
     jobCompany: application.job.company || '',
     jobLocation: application.job.location || '',
     siteKey: application.siteKey || '',
@@ -241,6 +242,309 @@ function forField(field, answer) {
 }
 
 /** One form page, in the order above. Returns what fillFormPage returns. */
+// Off: Skills, Experience and Education come only from the site's résumé import (switch on to have
+// QTS add an empty section's entries through its own "ADD …" form).
+const ADD_CARDS_BY_HAND = false;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const COUNTRY_WORDS = { uk: 'United Kingdom', 'u.k.': 'United Kingdom', usa: 'United States', us: 'United States', 'u.s.': 'United States' };
+
+/**
+ * Card sections (Oracle Candidate Experience: Skills, Experience, Education), on the page's first
+ * visit only (the Manager's choice of 2026-11-22): every old card is deleted, then this application's
+ * are added through each section's own "ADD …" form: skills from this job's résumé, jobs and schools
+ * from the profile (a job's description from this résumé's bullets for it). What the site refuses is
+ * left out and listed for the Manager. Never Submit.
+ */
+/**
+ * Every old entry of Skills, Experience and Education removed with its own ✕ / Delete, checked, and
+ * removed again (up to 3 rounds) until the sections are empty: the Manager's rule of 2026-11-22, "must
+ * empty all, then upload the PDFs". An open ADD / Edit form is cancelled first (it hides the entries).
+ * True when every section is empty (or the page has none).
+ */
+async function deleteOldCards(tabId, problem, say) {
+  const form = (func, args = []) => inForm(tabId, func, args).catch(() => null);
+  let sections = await form(() => globalThis.__qtsApplyForm.cardSections());
+  if (!Array.isArray(sections) || !sections.length) return true;
+  for (let round = 0; round < 3 && sections.some((section) => section.cards); round += 1) {
+    for (const { kind, cards } of sections) {
+      if (await form((k) => globalThis.__qtsApplyForm.sectionFormOpen(k), [kind])) await form((k) => globalThis.__qtsApplyForm.closeSectionForm(k, false), [kind]);
+      if (!cards) continue;
+      await say(`Removing the old ${kind} entries…`);
+      await form((k) => globalThis.__qtsApplyForm.deleteSectionCards(k), [kind]);
+    }
+    await sleep(700);
+    sections = (await form(() => globalThis.__qtsApplyForm.cardSections())) || [];
+  }
+  const left = sections.filter((section) => section.cards);
+  for (const { kind, cards } of left) problem(`${kind[0].toUpperCase()}${kind.slice(1)}: ${cards} old ${cards === 1 ? 'entry' : 'entries'} could not be removed; remove ${cards === 1 ? 'it' : 'them'} by hand, then click Fill again.`, null, 'field', true);
+  return !left.length;
+}
+
+// Sites whose "Employment" step QTS fills entry by entry from the profile's work history (the
+// Manager's choice of 2026-11-22: Dropbox's careers site).
+const EMPLOYMENT_SITES = /(^|\.)dropbox\.jobs$/i;
+
+/**
+ * Dropbox's "Employment *" and "Education *" steps: one entry per job (newest first) and per school of
+ * the profile, each added with the section's own "Add". Employment: Job Title, Company (picked from its
+ * list, else typed and Enter, as the form says), "I currently work here" for the current job, else the
+ * To month, and the From month. Education: School (from its search list, else "Other", as the form
+ * says), Qualification ("Bachelor's Degree" is "Bachelor"), Field of study (else "Other"), From and To
+ * months. What a list really holds decides, never what its box shows. What does not take is listed
+ * for the Manager. Never Submit.
+ */
+async function fillRepeatedEntries(tabId, application, seen, problem, say) {
+  const form = (func, args = []) => inForm(tabId, func, args).catch(() => null);
+  const squash = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  const month = (date) => /^\d{4}-\d{2}/.exec(String(date || ''))?.[0] || '';
+  // A box holding the value counts: a message the page shows for a moment while it redraws (an item
+  // of another list) is no refusal.
+  const fill = async (field, value) => {
+    if (!field) return false;
+    if ((await fillAndCheck(tabId, field, { value, source: 'profile' }, null, seen)).ok) return true;
+    if (typeof value === 'boolean') return (await form((id) => Boolean(globalThis.__qtsApplyForm.findFieldChecked?.(id)), [field.id])) === value;
+    return squash(await form((id) => globalThis.__qtsApplyForm.boxValue?.(id), [field.id])) === squash(value);
+  };
+  const details = application.profileDetails || {};
+  const kinds = {
+    employment: {
+      title: 'Employment',
+      items: [...(details.experiences || [])]
+        .filter((job) => job && (String(job.companyName || '').trim() || String(job.jobTitle || '').trim()))
+        .sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || ''))),
+      name: (job) => [job.jobTitle, job.companyName].filter(Boolean).join(' at '),
+    },
+    education: {
+      title: 'Education',
+      items: [...(details.educations || [])]
+        .filter((school) => school && (String(school.institution || '').trim() || String(school.degree || '').trim()))
+        .sort((a, b) => String(b.endDate || b.startDate || '').localeCompare(String(a.endDate || a.startDate || ''))),
+      name: (school) => [school.degree, school.institution].filter(Boolean).join(', '),
+    },
+  };
+  /**
+   * One list: its own choice already, else the closest of its choices (exact, then the profile's words
+   * starting with a choice: "Bachelor's Degree" is "Bachelor", the longest such), else its search box
+   * (picked, or typed and Enter when allowEnter), else "Other" when allowed. True when the list holds it.
+   */
+  const pickList = async (kind, index, part, wanted, { allowEnter = false, orOther = false } = {}) => {
+    const read = async () => (await form((k, n) => globalThis.__qtsApplyForm.entryFields(k, n), [kind, index]))?.[part] || null;
+    let list = await read();
+    if (!list || !wanted) return false;
+    const holds = (text) => squash(list?.chosen) === squash(text);
+    if (holds(wanted)) return true;
+    const exact = list.options.find((option) => squash(option) === squash(wanted));
+    const starts = list.options.filter((option) => squash(option).length >= 3 && squash(wanted).startsWith(squash(option)))
+      .sort((a, b) => b.length - a.length)[0];
+    const choice = exact || starts;
+    // Through the box a person uses first (the site's own widget then shows it too); the list behind it
+    // only when the box will not take it.
+    if (choice && list.box) {
+      await realSuggestionOne(tabId, list.box, choice);
+      list = await read();
+      if (holds(choice)) return true;
+    }
+    if (choice && list.list) {
+      await fillAndCheck(tabId, list.list, { value: choice, source: 'profile' }, null, seen);
+      list = await read();
+      if (holds(choice)) return true;
+    }
+    if (list.box && !choice) {
+      await realSuggestionOne(tabId, list.box, wanted);
+      list = await read();
+      if (list && list.chosen && (holds(wanted) || squash(wanted).startsWith(squash(list.chosen)))) return true;
+      if (allowEnter) {
+        const box = await form((id) => globalThis.__qtsApplyForm.boxOf(id), [list.box.id]);
+        if (box) {
+          await realClick(tabId, box);
+          await sleep(200);
+          await realPasteText(tabId, wanted);
+          await sleep(900);
+          await realKey(tabId, REAL_KEYS.enter);
+          await sleep(700);
+        }
+        list = await read();
+        if (holds(wanted)) return true;
+      }
+    }
+    if (orOther) {
+      if (list?.box) {
+        await realSuggestionOne(tabId, list.box, 'Other');
+        list = await read();
+        if (list && /^other\b/i.test(list.chosen)) return true;
+      }
+      const other = list?.options.find((option) => /^other\b/i.test(option));
+      if (other && list.list) {
+        await fillAndCheck(tabId, list.list, { value: other, source: 'profile' }, null, seen);
+        list = await read();
+        if (list && squash(list.chosen) === squash(other)) return true;
+      }
+    }
+    return false;
+  };
+  for (const [kind, spec] of Object.entries(kinds)) {
+    if ((await form((k) => globalThis.__qtsApplyForm.entryCount(k), [kind])) < 0) continue;
+    if (!spec.items.length) {
+      problem(`${spec.title}: the profile has none: add ${kind === 'employment' ? 'the jobs' : 'the schools'} by hand.`);
+      continue;
+    }
+    await say(`${spec.title}: adding the entries from the profile…`);
+    const left = [];
+    for (let index = 0; index < spec.items.length; index += 1) {
+      const item = spec.items[index];
+      let count = await form((k) => globalThis.__qtsApplyForm.entryCount(k), [kind]);
+      if (count <= index) count = await form((k) => globalThis.__qtsApplyForm.addEntry(k), [kind]);
+      const entry = count > index ? await form((k, n) => globalThis.__qtsApplyForm.entryFields(k, n), [kind, index]) : null;
+      if (!entry) { left.push(spec.name(item)); continue; }
+      let ok = true;
+      if (kind === 'employment') {
+        if (item.jobTitle) ok = (await fill(entry.title, item.jobTitle)) && ok;
+        if (item.companyName) ok = (await pickList(kind, index, 'company', item.companyName, { allowEnter: true })) && ok;
+        if (month(item.startDate)) ok = (await fill(entry.start, month(item.startDate))) && ok;
+        if (item.isCurrent || !item.endDate) ok = (await fill(entry.current, true)) && ok;
+        else ok = (await fill(entry.end, month(item.endDate))) && ok;
+      } else {
+        if (item.institution) ok = (await pickList(kind, index, 'school', item.institution, { orOther: true })) && ok;
+        if (item.degree) ok = (await pickList(kind, index, 'degree', item.degree, { orOther: true })) && ok;
+        if (item.fieldOfStudy) ok = (await pickList(kind, index, 'field', item.fieldOfStudy, { orOther: true })) && ok;
+        if (month(item.startDate)) await fill(entry.start, month(item.startDate));
+        if (month(item.endDate)) await fill(entry.end, month(item.endDate));
+      }
+      if (!ok) left.push(spec.name(item));
+    }
+    if (left.length) problem(`${spec.title}: check ${left.join('; ')}: not every box took its value.`);
+  }
+}
+
+async function fillCardSections(tabId, application, seen, problem, say) {
+  const form = (func, args = []) => inForm(tabId, func, args).catch(() => null);
+  const all = await form(() => globalThis.__qtsApplyForm.cardSections());
+  if (!Array.isArray(all) || !all.length) return;
+  const helpers = self.__qtsApplyAnswers;
+  const resumeText = application.job?.resumeText || '';
+  const details = application.profileDetails || {};
+  const names = { skills: 'Skills', experience: 'Experience', education: 'Education' };
+  const title = (kind) => names[kind] || kind;
+  /** The first of values the box takes; with keep, a box that already holds something is left. */
+  const squash = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  const fill = async (field, values, keep = false) => {
+    if (!field) return false;
+    // The page's own read of the box ("filled"): Oracle's empty Degree list reads as answered otherwise.
+    if (keep && field.filled) return true;
+    for (const value of values.filter((entry) => entry !== undefined && entry !== null && entry !== '')) {
+      const outcome = await fillAndCheck(tabId, field, { value, source: 'profile' }, null, seen);
+      if (outcome.ok) return true;
+      // The entry form keeps its "invalid" mark until SAVE: the box holding the value is enough.
+      const held = await form((id) => globalThis.__qtsApplyForm.boxValue?.(id), [field.id]);
+      if (typeof value === 'string' && held && squash(held) === squash(value)) return true;
+    }
+    return false;
+  };
+  const dateParts = (value) => {
+    const match = /^(\d{4})-(\d{2})/.exec(String(value || ''));
+    if (!match) return null;
+    const month = Number(match[2]);
+    return { year: match[1], month: [MONTH_NAMES[month - 1], MONTH_NAMES[month - 1].slice(0, 3), match[2], String(month)] };
+  };
+  /** One entry's boxes from the profile (keep: only the empty ones). Whether the required ones took. */
+  const fillEntry = async (kind, fields, entry, keep) => {
+    const byLabel = (pattern) => fields.find((field) => pattern.test(String(field.label || '')));
+    let ok = true;
+    if (kind === 'skills') {
+      ok = await fill(byLabel(/skill/i) || fields[0], [entry.skill], keep);
+    } else if (kind === 'experience') {
+      const { job } = entry;
+      ok = await fill(byLabel(/employer|company/i), [job.companyName], keep);
+      ok = (await fill(byLabel(/job title|^title|position/i), [job.jobTitle], keep)) && ok;
+      const country = byLabel(/country/i);
+      const dates = fields.filter((field) => field !== country && ['combobox', 'select', 'menu'].includes(field.kind)
+        && (!field.label || /month|year|date/i.test(field.label)));
+      const start = dateParts(job.startDate);
+      const end = dateParts(job.endDate);
+      if (start) { await fill(dates[0], start.month, keep); await fill(dates[1], [start.year], keep); }
+      const current = fields.find((field) => field.kind === 'checkbox' && /current/i.test(String(field.label || '')));
+      if (job.isCurrent && current) await fill(current, [true], keep);
+      else if (end) { await fill(dates[2], end.month, keep); await fill(dates[3], [end.year], keep); }
+      const parts = String(job.location || '').split(',').map((part) => part.trim()).filter(Boolean);
+      if (parts.length) {
+        const place = parts.at(-1);
+        await fill(country, [COUNTRY_WORDS[place.toLowerCase()] || place, place], keep);
+        if (parts.length > 1) await fill(byLabel(/city|town/i), [parts[0]], keep);
+      }
+      const text = helpers.resumeBullets(resumeText, job.companyName) || job.description || '';
+      if (text) await fill(byLabel(/responsib|description|duties|summary/i), [text.slice(0, 2000)], keep);
+    } else if (kind === 'education') {
+      const { school } = entry;
+      const degree = String(school.degree || '');
+      await fill(byLabel(/degree|qualification/i), [degree, degree.replace(/\s*degree$/i, ''), degree.replace(/'s\b.*$/i, '')], keep);
+      await fill(byLabel(/major|field|subject/i), [school.fieldOfStudy], keep);
+      ok = await fill(byLabel(/institution|school|university|college/i), [school.institution], keep);
+    }
+    return ok;
+  };
+  const entries = {
+    skills: () => helpers.resumeSkills(resumeText, 15).map((skill) => ({ name: skill, skill })),
+    experience: () => (details.experiences || []).map((job, key) => ({ key, name: [job.jobTitle, job.companyName].filter(Boolean).join(' at '), job, words: [job.companyName, job.jobTitle, job.startDate?.slice(0, 4)] })),
+    // A degree word on the card (Oracle shows the degree once it has one) and the years tell two
+    // entries of one school apart.
+    education: () => (details.educations || []).map((school, key) => ({ key, name: school.institution || school.degree || 'school', school,
+      words: [school.institution, school.fieldOfStudy, String(school.degree || '').replace(/'s\b.*$/i, ''), school.startDate?.slice(0, 4), school.endDate?.slice(0, 4)] })),
+  };
+
+  // 1. Entries the import made but the site flags ("Fields to fix"): opened with their Edit, the empty
+  // boxes filled from the profile entry the card names (else the only one), saved with SAVE.
+  for (const { kind, cards, flagged } of all) {
+    if (!cards || !flagged || kind === 'skills') continue;
+    await say(`${title(kind)}: completing the entries marked "Fields to fix"…`);
+    let left = 0;
+    // Each profile entry completes one card at most (a Bachelor's and a Master's at the same school
+    // are two cards): the card goes to the unused entry naming most of what it shows.
+    const usedEntries = new Set();
+    for (let index = 0; index < flagged; index += 1) {
+      const opened = await form((k) => globalThis.__qtsApplyForm.openFlaggedCard(k), [kind]);
+      if (!opened?.fields?.length) { left += 1; continue; }
+      const card = squash(opened.text);
+      const choices = entries[kind]().filter((item) => !usedEntries.has(item.name + item.key));
+      const score = (item) => item.words.filter((word) => squash(word) && card.includes(squash(word))).length;
+      const best = choices.map((item) => ({ item, points: score(item) })).sort((a, b) => b.points - a.points)[0];
+      const entry = best && (best.points > 0 || choices.length === 1) ? best.item : null;
+      if (entry) usedEntries.add(entry.name + entry.key);
+      if (entry) await fillEntry(kind, opened.fields, entry, true);
+      await form((k) => globalThis.__qtsApplyForm.closeSectionForm(k, true), [kind]);
+      if (!entry || await form((k) => globalThis.__qtsApplyForm.sectionFormOpen(k), [kind])) {
+        await form((k) => globalThis.__qtsApplyForm.closeSectionForm(k, false), [kind]);
+        left += 1;
+      }
+    }
+    if (left) problem(`${title(kind)}: ${left} ${left === 1 ? 'entry needs' : 'entries need'} a missing field ("Fields to fix"): open ${left === 1 ? 'it' : 'them'} with Edit and complete.`);
+  }
+
+  // 2. Sections the import left empty.
+  const sections = all.filter((section) => !section.cards);
+  if (!sections.length) return;
+  // The sections come from the résumé import only (the Manager's choice of 2026-11-22: PDFs first, no
+  // entry added one by one): one the import left empty is listed for the Manager.
+  if (!ADD_CARDS_BY_HAND) {
+    for (const { kind } of sections) problem(`${title(kind)}: empty after the résumé import; add ${kind === 'skills' ? 'the skills' : 'the entries'} by hand.`);
+    return;
+  }
+  for (const { kind } of sections) {
+    await say(`${title(kind)}: adding the entries…`);
+    const skipped = [];
+    for (const entry of entries[kind]()) {
+      const fields = await form((k) => globalThis.__qtsApplyForm.openSectionForm(k), [kind]);
+      if (!Array.isArray(fields) || !fields.length) { skipped.push(entry.name); continue; }
+      const ok = await fillEntry(kind, fields, entry, false);
+      if (ok) await form((k) => globalThis.__qtsApplyForm.closeSectionForm(k, true), [kind]);
+      if (!ok || await form((k) => globalThis.__qtsApplyForm.sectionFormOpen(k), [kind])) {
+        await form((k) => globalThis.__qtsApplyForm.closeSectionForm(k, false), [kind]);
+        skipped.push(entry.name);
+      }
+    }
+    if (skipped.length) problem(`${title(kind)}: not added (the site did not take them): ${skipped.slice(0, 12).join('; ')}. Add them by hand.`);
+  }
+}
+
 async function fillApiFormPage(tabId, application, keepAlive, step, options = {}) {
   const attempts = [];
   stepAttemptsByTab.set(tabId, attempts);
@@ -352,12 +656,89 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     return documents;
   };
 
+  /**
+   * Attaches what the plan's file boxes need: the résumé to an "Autofill from resume" box (once per
+   * application, never to a box already holding a file: a second send makes the site read it again and
+   * reset what it filled), then the résumé and cover letter. A box already holding a file keeps it (the
+   * clean took every old file off, so it is this application's). True when anything went up.
+   */
+  const attachDocuments = async (plan) => {
+    const uploadStarted = Date.now();
+    if (plan.autofillUpload || plan.uploads.length) await say('Attaching the documents…');
+    let uploaded = false;
+    const holds = (id) => inForm(tabId, (box) => globalThis.__qtsApplyForm.uploadHolds(box), [id]).catch(() => false);
+    if (plan.autofillUpload && !application.resumeAutofillTried && await holds(plan.autofillUpload.id)) {
+      application.resumeAutofillTried = true;
+    }
+    if (plan.autofillUpload && !application.resumeAutofillTried) {
+      const ready = await needDocuments();
+      application.resumeAutofillTried = true;
+      const outcome = await fillAndCheck(tabId, plan.autofillUpload, { file: 'resume', source: 'documents' }, { ...ready.resume, mimeType: 'application/pdf' }, seen);
+      if (outcome.ok) {
+        application.siteFilledFromResume = true;
+        application.uploadedFileNames.add(ready.resume.filename);
+        uploaded = true;
+        await waitForSiteFill(tabId);
+      } else problem(outcome.error || 'Check the resume parser upload before continuing.', plan.autofillUpload, 'upload');
+    }
+    for (const { field, answer } of plan.uploads) {
+      await throwIfStopped();
+      if (await holds(field.id)) continue;
+      const ready = await needDocuments();
+      const file = { ...ready[answer.file], mimeType: 'application/pdf' };
+      const name = answer.file === 'coverLetter' ? 'cover letter' : 'résumé';
+      if (!file.base64) {
+        if (field.required) problem(`Upload the ${name} by hand: "${field.label}".`, field, 'upload');
+        continue;
+      }
+      const outcome = await fillAndCheck(tabId, field, answer, file, seen);
+      if (outcome.ok) {
+        uploaded = true;
+        if (file.filename) application.uploadedFileNames.add(file.filename);
+        application.stuckBoxes.delete(field.id);
+        continue;
+      }
+      if (outcome.gone) continue;
+      // Sent but not seen yet (a site redrawing its uploads while it reads the résumé, Telekom): looked
+      // at again for up to 6 s once the page settles; shown by then, it is attached.
+      if (outcome.manualUpload && !['rejected', 'mismatch'].includes(outcome.uploadState)) {
+        let shown = false;
+        for (let waited = 0; waited < 6000 && !shown; waited += 1000) {
+          await sleep(1000);
+          shown = await holds(field.id);
+        }
+        if (shown) {
+          uploaded = true;
+          if (file.filename) application.uploadedFileNames.add(file.filename);
+          application.stuckBoxes.delete(field.id);
+          continue;
+        }
+      }
+      // A cover letter that could not be attached is typed instead where the site offers it.
+      const typed = !outcome.manualUpload && answer.file === 'coverLetter' && application.job.coverLetterText
+        && await inForm(tabId, (id) => globalThis.__qtsApplyForm.enterManually(id), [field.id]).catch(() => false);
+      if (!typed && (field.required || outcome.manualUpload)) problem(outcome.manualUpload ? outcome.error : `The ${name} upload failed: add it by hand ("${field.label}") from the folder above.`, field, 'upload');
+    }
+    if (uploaded) await settle(400, 4000);
+    timings.upload += Date.now() - uploadStarted;
+    return uploaded;
+  };
+
   // A quick Ask AI (the page and step just filled, options.quick): straight to the questions still
   // empty. The page, its sign-in and its old values were seen to by that fill; what the Manager has
   // typed since is marked on each box as they type, so nothing needs looking at again.
   const quick = options.quick === true;
   // 0. The page: a sign-in or human check is the Manager's, and nothing is sent or filled for it.
   await inForm(tabId, (context) => globalThis.__qtsApplyForm.setUploadContext(context), [{ attemptId: application.attemptId, step }]);
+  // An employment step with no entry yet shows no box at all (Dropbox): its first entry is opened.
+  const employmentSite = EMPLOYMENT_SITES.test(self.__qtsSiteSessions.hostOf((await chrome.tabs.get(tabId).catch(() => null))?.url || '') || '');
+  if (!quick && employmentSite) {
+    for (const kind of ['employment', 'education']) {
+      if ((await inForm(tabId, (k) => globalThis.__qtsApplyForm.entryCount(k), [kind]).catch(() => -1)) === 0) {
+        await inForm(tabId, (k) => globalThis.__qtsApplyForm.addEntry(k), [kind]).catch(() => null);
+      }
+    }
+  }
   if (!quick) await waitForFormFields(tabId, { minFields: step > 1 || application.tabMoved ? 1 : 3, pollMs: 300, steadyPolls: 2 });
   if (!quick) await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
   const page = quick ? null : await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
@@ -376,19 +757,21 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   // own Fill again or Ask AI again goes back over them).
   const metBefore = new Set(application.cleanedBoxes);
 
-  // 1. Clean, once per page: nothing left from anyone before.
+  // 1. Clean, once per page: nothing left from anyone before (the Manager's choice of 2026-11-22,
+  // replacing "nothing emptied" of 2026-11-17). The first time QTS meets a page of this application it
+  // empties every box (text, choices, ticks) and takes off every attached file (an earlier job's
+  // résumé the site kept included); later passes on the page empty nothing. Files QTS itself attached
+  // in this application stay. QTS notes the boxes it has met, so a box met before is never emptied again.
   await throwIfStopped();
-  // (Nothing typed or chosen is emptied, the Manager's choice of 2026-11-17; only another person's
-  // uploaded files go, so the candidate's own PDFs can be attached. QTS notes the boxes it has met, so
-  // a box met on an earlier pass is never filled over again.)
+  application.uploadedFileNames ||= new Set();
   const cleanStarted = Date.now();
   const cleaned = quick ? { keys: [], boxKeys: [], stuck: [], emptied: [] } : await inForm(tabId, (given) => globalThis.__qtsApplyForm.emptyOldAnswers(given), [{
     known: [...application.cleanedBoxes],
     seedOnly: application.seedCleanOnce === true,
-    values: false,
+    values: true,
     keepValues: [application.job?.title, application.job?.company].filter(Boolean),
     uploads: true,
-    keepFiles: [application.applyDocuments?.resume?.filename, application.applyDocuments?.coverLetter?.filename].filter(Boolean),
+    keepFiles: [...application.uploadedFileNames],
   }]).catch(() => null);
   application.seedCleanOnce = false;
   timings.clean = Date.now() - cleanStarted;
@@ -398,8 +781,72 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     return finish({ checks: false });
   }
   for (const key of cleaned.keys || []) application.cleanedBoxes.add(key);
+  // Card sections (Skills, Experience, Education): their old cards go on the page's first visit, before
+  // this job's résumé is uploaded to the site's "Import your profile from resume", which fills them again.
+  // sectionsEmpty: false while old Skills / Experience / Education entries are still on the page: the résumé import
+  // waits (it would add this job's entries beside them).
+  let sectionsEmpty = true;
+  if (cleaned.newPage && !quick && !options.onlyEmpty) {
+    sectionsEmpty = await deleteOldCards(tabId, problem, say).catch((error) => { problem(`The old profile entries could not be removed: ${error?.message || error}`); return false; });
+  }
+  // 1b. The documents, before any answer (the Manager's order of 2026-11-22: empty, clean, upload, fill):
+  // "Import your profile from resume" first, then the résumé and cover-letter boxes. A site that
+  // rebuilds its form from the résumé (Oracle) has finished before QTS reads a single question.
+  let uploadedFirst = false;
+  if (!quick && !options.onlyEmpty) {
+    // Passes: Oracle shows its résumé and cover-letter boxes only after the import, so the page is
+    // looked at again after each pass that attached something, until no document box is left.
+    for (let pass = 0; pass < 3; pass += 1) {
+      await throwIfStopped();
+      const shown = (await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist({ fullNotes: true })).catch(() => [])) || [];
+      const files = shown.filter((field) => field.kind === 'file' && !field.hidden && !field.disabled);
+      if (!files.length) break;
+      const filePlan = helpers.planApiFields(files, application.candidate, application.savedAnswers, answerContext(application));
+      if (filePlan.uploads.length || filePlan.autofillUpload) await needDocuments();
+      // The import only once every old entry is gone (the résumé and cover letter boxes go up anyway).
+      if (!sectionsEmpty && filePlan.autofillUpload) {
+        problem(`"${filePlan.autofillUpload.label}" was not used: old entries are still in the sections above. Remove them, then click Fill again.`, filePlan.autofillUpload, 'upload', true);
+        filePlan.autofillUpload = null;
+      }
+      const attached = await attachDocuments(filePlan);
+      if (!attached) break;
+      uploadedFirst = true;
+      await settle(600, 6000);
+      // The site rebuilds its form after an import or upload (Oracle: "Uploading…", fields loading):
+      // looked at again only once it is done and its boxes are there and steady (at most 90 s: the form
+      // is hidden while a file is still uploading, and a cover letter can take a minute).
+      await say('Waiting for the site to finish reading the documents…');
+      let steady = 0;
+      let last = -1;
+      // As many boxes as the page showed before (at most 3): a page whose only box is the upload
+      // (Dropbox's first step) is not waited on; one that hid its form while uploading (Oracle) is.
+      const boxesBefore = Math.min(3, shown.filter((field) => !field.hidden && !field.disabled && field.kind !== 'file').length);
+      for (let waited = 0; waited < 90000 && steady < 3; waited += 500) {
+        await sleep(500);
+        const look = await inForm(tabId, () => ({
+          busy: globalThis.__qtsApplyForm.pageUploadBusy() || /fields-loading/i.test(document.body?.innerText || ''),
+          boxes: globalThis.__qtsApplyForm.scanForAssist().filter((field) => !field.hidden && !field.disabled && field.kind !== 'file').length,
+        })).catch(() => null);
+        steady = look && !look.busy && look.boxes >= boxesBefore && look.boxes === last ? steady + 1 : 0;
+        last = look?.boxes ?? -1;
+      }
+    }
+  }
+  // The employment step (Dropbox): one entry per job of the profile.
+  if (!quick && !options.onlyEmpty && employmentSite) {
+    await fillRepeatedEntries(tabId, application, seen, problem, say).catch((error) => problem(`Employment and education could not be filled: ${error?.message || error}`));
+  }
+  // An entry form the site opened by itself (Oracle opens an empty "Add Education" once a required
+  // section has no entries): closed with its CANCEL, so the imported entries show.
+  if (!quick && !options.onlyEmpty) {
+    for (const kind of ['skills', 'experience', 'education']) {
+      if (await inForm(tabId, (k) => globalThis.__qtsApplyForm.sectionFormOpen(k), [kind]).catch(() => false)) {
+        await inForm(tabId, (k) => globalThis.__qtsApplyForm.closeSectionForm(k, false), [kind]).catch(() => false);
+      }
+    }
+  }
   // (Ask AI goes over every box still empty, reviewed or not.)
-  const reviewed = new Set(options.again || options.onlyEmpty ? [] : (cleaned.boxKeys || []).filter(([, key]) => metBefore.has(key)).map(([id]) => id));
+  const reviewed =new Set(options.again || options.onlyEmpty ? [] : (cleaned.boxKeys || []).filter(([, key]) => metBefore.has(key)).map(([id]) => id));
   for (const box of cleaned.stuck || []) application.stuckBoxes.set(box.id ?? box.label, box);
   emptiedCount = (cleaned.emptied || []).length;
   if (!quick) await settle(300, 1500);
@@ -439,7 +886,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     const readKey = lightFill ? await glanceKey() : null;
     let fresh = [];
     for (const field of fields) {
-      if (field.hidden || field.disabled || field.unrelated || field.account || field.managerChanged || field.trackingValue || reviewed.has(field.id) || seen.has(field.id)) continue;
+      if (field.hidden || field.disabled || field.unrelated || field.account || field.managerChanged || field.trackingValue || field.cardForm || reviewed.has(field.id) || seen.has(field.id)) continue;
       if (!options.onlyEmpty && await stillAnswered(field)) {
         seen.add(field.id);
         used[field.label].fieldId = field.id;
@@ -473,11 +920,28 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     await say('Reading the questions…');
     const discoveryStarted = Date.now();
     let plan = helpers.planApiFields(fresh, application.candidate, application.savedAnswers, answerContext(application));
-    const unread = plan.ai.filter((entry) => !entry.check).map((entry) => fresh.find((field) => field.id === entry.field.id)).filter(Boolean);
+    // A fill without the AI (Alt+F, the fill on arrival) never uses the choices of a question only the
+    // AI answers: those lists are read when the Manager asks the AI (Ask AI), not now (~1-2 s each).
+    // Still read: a list whose choices would let the profile or a saved answer answer it (a required
+    // agreement picks "Acknowledge/Confirm" or "Yes" from its own choices), told by planning it with
+    // sample choices.
+    // (One clear yes: an agreement is chosen only when its list has exactly one.)
+    // ("LinkedIn": "Where did you hear about us?" is answered from its own choices too.)
+    // ("English": a "Preferred language" list.)
+    const SAMPLE_CHOICES = ['Yes', 'No', 'LinkedIn', 'English'];
+    const answerableWithChoices = (field) => ['combobox', 'select', 'menu', 'radio'].includes(field.kind) && !field.options?.length && (() => {
+      const trial = helpers.planApiFields([{ ...field, options: SAMPLE_CHOICES }], application.candidate, application.savedAnswers, answerContext(application));
+      return trial.code.some((entry) => entry.field.id === field.id) || trial.ai.some((entry) => entry.field.id === field.id && entry.check);
+    })();
+    const unread = plan.ai.filter((entry) => !entry.check).map((entry) => fresh.find((field) => field.id === entry.field.id)).filter(Boolean)
+      .filter((field) => !options.noAi || answerableWithChoices(field));
     // A phone's country-code list is looked up too: one search for the candidate's country, then the
     // profile picks the number's own code from what it shows.
+    // Not when the plan already has its answer (Oracle's "+40 (Romania)"): looking opens and searches
+    // the list, which leaves some lists (Oracle's) unable to take the real pick after.
     for (const field of fresh) {
-      if (field.kind === 'combobox' && /^phone country code$/i.test(String(field.label || '').trim()) && !field.options?.length && !unread.includes(field)) unread.push(field);
+      if (field.kind === 'combobox' && /^((phone|telephone|mobile) )?country (phone |calling |dial(l)?ing )?code$|^(phone |telephone )?(dial(l)?ing|calling) code$/i.test(String(field.label || '').trim()) && !field.options?.length && !unread.includes(field)
+        && !plan.code.some((entry) => entry.field.id === field.id)) unread.push(field);
     }
     const changedByLooking = await readComboboxOptions(tabId, unread, options.stop, application.candidate);
     for (const field of changedByLooking) problem(`Check "${field.label}": looking at its choices changed it; set it as it should be.`, field);
@@ -485,6 +949,12 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     plan = helpers.planApiFields(fresh, application.candidate, application.savedAnswers, answerContext(application));
     timings.discovery += Date.now() - discoveryStarted;
     for (const { field, message } of plan.manager) {
+      // A box that already holds an answer (picked on an earlier fill: a multi-select hides its picked
+      // choices, so the saved answer seems missing from its list) is not flagged for the Manager.
+      if (!(await inForm(tabId, (entry) => globalThis.__qtsApplyForm.isUnanswered(entry), [field]).catch(() => true))) {
+        seen.add(field.id);
+        continue;
+      }
       problem(message, field);
       leave(field);
     }
@@ -585,52 +1055,9 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       application.aiUnanswered = [];
     }
 
-    // 4. Documents next: whatever a site reads from the résumé is overwritten by the answers below.
+    // 4. Documents a box that appeared later still needs (the page's own went up before the filling).
     await throwIfStopped();
-    const uploadStarted = Date.now();
-    if (plan.autofillUpload || plan.uploads.length) await say('Attaching the documents…');
-    let uploaded = false;
-    // Once per application: and never again when the box already holds a file (a second send makes the
-    // site read it again and reset what it filled, Ashby's Résumé box included; a restarted worker forgets).
-    if (plan.autofillUpload && !application.resumeAutofillTried
-      && await inForm(tabId, (id) => globalThis.__qtsApplyForm.uploadHolds(id), [plan.autofillUpload.id]).catch(() => false)) {
-      application.resumeAutofillTried = true;
-    }
-    if (plan.autofillUpload && !application.resumeAutofillTried) {
-      const ready = await needDocuments();
-      application.resumeAutofillTried = true;
-      const outcome = await fillAndCheck(tabId, plan.autofillUpload, { file: 'resume', source: 'documents' }, { ...ready.resume, mimeType: 'application/pdf' }, seen);
-      if (outcome.ok) {
-        application.siteFilledFromResume = true;
-        uploaded = true;
-        await waitForSiteFill(tabId);
-      } else problem(outcome.error || 'Check the resume parser upload before continuing.', plan.autofillUpload, 'upload');
-    }
-    for (const { field, answer } of plan.uploads) {
-      await throwIfStopped();
-      // Fill again: a document already attached stays (a site may keep a second copy).
-      if (options.again && await inForm(tabId, (id) => globalThis.__qtsApplyForm.uploadHolds(id), [field.id]).catch(() => false)) continue;
-      const ready = await needDocuments();
-      const file = { ...ready[answer.file], mimeType: 'application/pdf' };
-      const name = answer.file === 'coverLetter' ? 'cover letter' : 'résumé';
-      if (!file.base64) {
-        if (field.required) problem(`Upload the ${name} by hand: "${field.label}".`, field, 'upload');
-        continue;
-      }
-      const outcome = await fillAndCheck(tabId, field, answer, file, seen);
-      if (outcome.ok) {
-        uploaded = true;
-        application.stuckBoxes.delete(field.id);
-        continue;
-      }
-      if (outcome.gone) continue;
-      // A cover letter that could not be attached is typed instead where the site offers it.
-      const typed = !outcome.manualUpload && answer.file === 'coverLetter' && application.job.coverLetterText
-        && await inForm(tabId, (id) => globalThis.__qtsApplyForm.enterManually(id), [field.id]).catch(() => false);
-      if (!typed && (field.required || outcome.manualUpload)) problem(outcome.manualUpload ? outcome.error : `The ${name} upload failed: add it by hand ("${field.label}") from the folder above.`, field, 'upload');
-    }
-    if (uploaded) await settle(400, 4000);
-    timings.upload += Date.now() - uploadStarted;
+    const uploaded = uploadedFirst || await attachDocuments(plan);
 
     // 5. Everything, in page order, replacing anything the site put there.
     await throwIfStopped();
@@ -671,9 +1098,23 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
           outcome = tried;
         }
       }
+      // Decided again with the choices the list showed (planned before they were known): "Are you
+      // Hispanic/Latino?" Yes / No from the profile's ethnicity, a disability list in its own words.
+      if (!outcome.ok && !outcome.gone && outcome.choices?.length && chosen.source !== 'ai') {
+        const known = { ...field, ...choicesSeen(field, outcome.choices), options: outcome.choices };
+        const again = helpers.planApiFields([known], application.candidate, application.savedAnswers, answerContext(application));
+        const next = again.code.find((item) => item.field.id === field.id)?.answer || again.ai.find((item) => item.field.id === field.id)?.check;
+        if (next && answerText(next.value) !== answerText(chosen.value)) {
+          const retry = forField(field, next);
+          const tried = await fillAndCheck(tabId, field, retry, null, seen);
+          if (tried.ok || tried.gone) chosen = retry;
+          outcome = tried.ok || tried.gone || tried.choices?.length ? tried : { ...tried, choices: outcome.choices };
+        }
+      }
       return { outcome, chosen };
     };
     const issues = [];
+    const later = [];
     for (const field of fresh) {
       await throwIfStopped();
       const code = fromCode.get(field.id);
@@ -699,8 +1140,38 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
         if (outcome.choices?.length) Object.assign(sent, choicesSeen(sent, outcome.choices));
         issues.push({ id: field.id, label: field.label, reason: `the site did not take "${[].concat(chosen.value).join(' | ')}": ${outcome.error}` });
       } else if (field.required) {
-        problem(`Fill by hand: "${field.label}" — the site did not take "${answerText(chosen.value)}" (${outcome.error}).`, field);
+        // Looked at again once the whole page is filled (below): a site that redraws part of its form
+        // meanwhile (Oracle after a Country pick) closes a list mid-pick, or marks a good answer late.
+        later.push({ field, given, chosen, error: outcome.error });
       }
+    }
+    if (later.length) await settle(800, 5000);
+    for (const { field, given, chosen, error } of later) {
+      await throwIfStopped();
+      const wanted = answerText(chosen.value);
+      const held = await inForm(tabId, (id) => globalThis.__qtsApplyForm.boxValue?.(id), [field.id]).catch(() => '');
+      const squashed = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+      // The box's own text: the whole answer, or its start for a code list ("+40" for "+40 (Romania)").
+      const holdsAnswer = (text) => {
+        const own = squashed(text);
+        return Boolean(own) && (own === squashed(wanted) || (field.kind === 'combobox' && own.length >= 2 && squashed(wanted).startsWith(own)));
+      };
+      if (holdsAnswer(held)) { record(field, chosen); continue; }
+      const again = await fillOne(field, given, asked.get(field.id));
+      if (again.outcome.ok || again.outcome.gone) { if (again.outcome.ok) record(field, again.chosen); continue; }
+      // The site's red mark can stay a moment after a good pick (Oracle): the box holding the answer
+      // with no error left on it after a short wait is done.
+      // Oracle checks a list box when the cursor leaves it: the cursor is taken out first.
+      await inForm(tabId, () => { const active = document.activeElement; if (active && active !== document.body) active.blur?.(); }).catch(() => null);
+      await sleep(1500);
+      const heldNow = await inForm(tabId, (id) => globalThis.__qtsApplyForm.boxValue?.(id), [field.id]).catch(() => '');
+      const stillMarked = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldError?.(id), [field.id]).catch(() => null);
+      if (holdsAnswer(heldNow) && !stillMarked) { record(field, chosen); continue; }
+      problem(`Fill by hand: "${field.label}" — the site did not take "${wanted}" (${again.outcome.error || error}).`, field);
+    }
+    // Card sections the résumé import left empty: QTS adds their cards (first visit only).
+    if (cleaned?.newPage && !quick && !options.onlyEmpty) {
+      await fillCardSections(tabId, application, seen, problem, say).catch((error) => problem(`The profile sections could not be filled: ${error?.message || error}`));
     }
     // What the site refused is never sent to the AI again on its own (the Manager asked for one call
     // per Ask AI): it is listed with the site's reason, for the Manager or their next Ask AI.

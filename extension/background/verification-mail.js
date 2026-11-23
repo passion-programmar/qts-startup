@@ -5,10 +5,9 @@
 // Both Normal Apply and Auto Apply call complete() where they meet such a page.
 
 (function initializeQtsVerificationMail(global) {
-  // Switched off for now (the Manager asked, 2026-11-19): the hosted server has no verification
-  // endpoint yet. Off, nothing is checked, asked or shown: complete() answers "not done" at once
-  // (the page stays for the Manager, as with no mailbox) and the 4-second watcher does nothing.
-  // Set to true to turn the verification mailbox back on; the code below is unchanged.
+  // Off again (the Manager asked, 2026-11-22: "will do later"); the server part is live since 9fc5f77.
+  // Off, nothing is checked, asked or shown: complete() answers
+  // "not done" at once (the page stays for the Manager, as with no mailbox) and the watcher does nothing.
   const ENABLED = false;
   const FIRST_WAIT_MS = 15_000;
   const ASKS = 3;

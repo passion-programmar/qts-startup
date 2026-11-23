@@ -199,7 +199,9 @@ test('yes/no facts pick the matching option; a missing required fact stops inste
     field('Are you willing to relocate?', { kind: 'radio', options: ['Yes', 'No'] }),
   ], candidate, []);
   assert.equal(resolved['Will you now or in the future require visa sponsorship?'].value, 'No');
-  assert.deepEqual(missing.map((entry) => entry.fact), ['relocation']);
+  // Relocation is always No (the Manager's rule of 2026-11-22), never left missing.
+  assert.equal(resolved['Are you willing to relocate?'].value, 'No');
+  assert.deepEqual(missing.map((entry) => entry.fact), []);
 });
 
 test('optional links the profile lacks are left empty, not guessed', () => {
@@ -303,7 +305,8 @@ test('Teamtailor\'s menu dropdown and drag-and-drop CV are answered like any cho
     field('Additional files', { kind: 'file', drop: true, required: false }),
   ], candidate, []);
   assert.equal(resolved['Upload CV * Required'].file, 'resume');
-  assert.equal(resolved['Additional files'], undefined);
+  // The cover letter goes with every job (2026-11-23): with no cover-letter upload, "Additional files" takes it.
+  assert.equal(resolved['Additional files'].file, 'coverLetter');
   assert.deepEqual(open.map((entry) => entry.id), ['Please select what right to work you hold: * Required']);
 });
 
@@ -570,8 +573,9 @@ test('a personal fact the profile lacks is left for the Manager; one in another 
   // "Poland" is "Polska" in the list's language: the profile's fact, not a guess.
   assert.equal(resolved.Country.value, 'Polska');
   assert.equal(resolved.Country.intended, 'Poland');
-  assert.deepEqual(missing.map((entry) => entry.fact), ['relocation']);
-  assert.match(open.find((entry) => entry.id === 'Are you willing to relocate?').hint, /has no relocation/);
+  // Relocation is always No (2026-11-22), even with nothing in the profile.
+  assert.equal(resolved['Are you willing to relocate?'].value, 'No');
+  assert.deepEqual(missing.map((entry) => entry.fact), []);
   // Never asked of the AI: the Manager fills it or adds it to the profile.
   assert.equal(open.some((entry) => entry.id === 'What is your nationality?'), false);
   assert.match(byHand[0].message, /profile has no nationality: fill "What is your nationality\?" by hand, or add it to the profile/);
@@ -1133,9 +1137,10 @@ test('Auto Apply: country and location asked as whole questions; the assisted Ap
   // A list of countries takes the country (Lever's "What is your location?").
   const list = answers.resolveFields([{ id: 'l', label: 'What is your location?', kind: 'select', options: ['Afghanistan', 'Romania', 'Spain'] }], person, [], { autoApply: true });
   assert.equal(list.answers.l.value, 'Romania');
-  // A yes/no question naming another country of residence is not this rule's.
+  // A yes/no question naming another country of residence is not the country rule's: the relocation
+  // rule answers it, always No (2026-11-22), never the country.
   const yesNo = answers.resolveFields([{ id: 'y', label: 'Will you relocate to another country of residence?', kind: 'text' }], person, [], { autoApply: true });
-  assert.equal(yesNo.answers.y, undefined);
+  assert.equal(yesNo.answers.y?.value, 'No');
 });
 
 test('Auto Apply: an approved answer matches the same question in other words (job / position / opportunity)', () => {

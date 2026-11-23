@@ -9,7 +9,7 @@
   const meaning = global.__qtsAnswerMeaning || (typeof module !== 'undefined' && module.exports ? module.require('./answer-meaning.js') : null);
   const answerFeature = (name) => global.__qtsAnswerRollout?.[name] ?? global.__qtsRuntimeConfig?.features?.[name] ?? true;
   const DECLINE = /decline|prefer not|don['’]?t wish|do not wish|not to (say|answer|disclose)|i do not want|rather not/i;
-  const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
+  const EEO = /\b(gender|sex|race|racial|ethnic|ethnicity|veteran|disabilit\w*|disabled|hispanic|latin[oa]|sexual orientation|pronouns?|transgender)\b/i;
   const PERSONAL_FACT = /authori[sz]|\bsponsor|\bvisa\b|citizen|nationality|right to work|work permit|permanent resident|relocat|security clearance|criminal|date of birth|\bage\b|over 18|gender|veteran|disab|\brace\b|ethnic/i;
   const WORK_RIGHT_QUESTION = /\b(legally )?(authori[sz]ed|eligible|entitled|permitted|allowed|right) to (work|be employed)\b|\bwork (authori[sz]ation|permit|visa)\b|\bright to work\b/i;
   // Auto Apply: a question that asks the candidate to agree to, consent to, or attest something.
@@ -17,7 +17,7 @@
   // Questions about salary, notice or start date, and sponsorship, for the profile rules and for
   // Super Admin's reusable answers on the same topics.
   const SALARY_QUESTION = /salary|compensation|financial expectations?|remuneration|pay expectation|expected (pay|rate)|desired (pay|rate)|\b(hourly|daily|day) rate\b|rate expectation|\bpay (period|frequency)\b|^(payment |salary )?frequency$|\bcurrency\b|stawk|wynagrodzeni/;
-  const NOTICE_QUESTION = /notice period|when can you start|earliest start|availability to start|available to start|start date|date (you are |you're )?available|okres wypowiedzenia|od kiedy mo[zż]esz/;
+  const NOTICE_QUESTION = /notice period|when (can|could|would) you (start|join)|earliest start|availability to start|available to start|start date|date (you are |you're )?available|okres wypowiedzenia|od kiedy mo[zż]esz/;
   const SPONSORSHIP_QUESTION = /sponsor|\bvisa\b/;
   // Opt-ins a person may refuse without losing the application.
   const OPT_IN = /\b(marketing|newsletters?|(future|other|new) (jobs?|roles?|opportunit\w*|vacanc\w*|positions?|openings?)|talent (pool|community|network)|sms|text messages?|updates|offers|promotional|job alerts?|contact me about)\b/i;
@@ -377,17 +377,80 @@
     return [...history].sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || '')))[0] || null;
   }
 
+  /** "Do you live in or (plan to) relocate to X?": Yes only when the profile's country is X; else No. */
+  function livesInNamedCountry(candidate, label) {
+    if (!/\b(live|living|reside|residing|based|located)\b/.test(String(label))) return false;
+    const own = countryCode(String(candidate?.country || ''));
+    return Boolean(own) && countriesNamed(String(label)).includes(own);
+  }
+
+  /** Whether the profile's years of experience reach the number the question names; null without them. */
+  function yearsAtLeast(candidate, label) {
+    const raw = candidate?.yearsOfExperience;
+    const years = Number(raw);
+    if (raw === null || raw === undefined || raw === '' || !Number.isFinite(years)) return null;
+    const named = /\b(?:at least|minimum(?: of)?|over|more than) (\d+|[a-z]+)/.exec(String(label));
+    const needed = named ? (Number(named[1]) || NUMBER_WORDS[named[1]]) : null;
+    if (!needed) return null;
+    return /\b(over|more than)\b/.test(named[0]) ? years > needed : years >= needed;
+  }
+
+  const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20 };
+
+  /**
+   * "How many companies have you worked for (in the past ten years, since you graduated…)?": the
+   * profile's distinct employers whose time there reaches into the window the question sets (the later
+   * of "the past N years" and the first degree's end); the whole history when it sets none. Null
+   * without a work history.
+   */
+  function companiesWorkedFor(context, label) {
+    const history = (context?.experiences || []).filter((entry) => entry && String(entry.companyName || '').trim());
+    if (!history.length) return null;
+    const today = context?.today ? new Date(context.today) : new Date();
+    const starts = [];
+    const years = /\b(?:past|last|previous)\s+(\d+|[a-z]+)\s+years?\b/.exec(label);
+    const count = years ? (Number(years[1]) || NUMBER_WORDS[years[1]]) : null;
+    if (count) starts.push(new Date(Date.UTC(today.getUTCFullYear() - count, today.getUTCMonth(), today.getUTCDate())));
+    if (/since (you )?graduat/.test(label)) {
+      const ends = (context?.educations || []).map((entry) => entry?.endDate).filter(Boolean).sort();
+      if (ends[0]) starts.push(new Date(`${String(ends[0]).slice(0, 10)}T00:00:00Z`));
+    }
+    const from = starts.length ? new Date(Math.max(...starts.map((date) => date.getTime()))) : null;
+    const names = new Set(history.filter((entry) => {
+      if (!from) return true;
+      const end = entry.isCurrent || !entry.endDate ? today : new Date(`${String(entry.endDate).slice(0, 10)}T00:00:00Z`);
+      return !Number.isNaN(end.getTime()) && end >= from;
+    }).map((entry) => String(entry.companyName).trim().toLowerCase()));
+    return names.size;
+  }
+
+  /** The profile's latest school (by end date, else start date); null when it has none. */
+  function latestSchool(context) {
+    const schools = (context?.educations || []).filter((entry) => entry && String(entry.institution || entry.degree || '').trim());
+    return [...schools].sort((a, b) => String(b.endDate || b.startDate || '').localeCompare(String(a.endDate || a.startDate || '')))[0] || null;
+  }
+
   const RULES = [
     { test: /first and last name|full name|legal name|^(your )?name$|^name and surname$/, fact: (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null, name: 'name', personal: true },
     // English, then the Polish, German, French, and Spanish words forms use.
     { test: /\b(first|given|preferred) name\b|preferred first|^(first|given)$|^fore ?names?$|^imi[eę]$|^vorname$|^pr[ée]nom$|^nombre$/, fact: (c) => c.firstName, name: 'first name', personal: true },
     { test: /\b(last|family) name\b|\bsurname\b|^(last|family)$|^nazwisko$|^nachname$|^nom( de famille)?$|^apellidos?$/, fact: (c) => c.lastName, name: 'last name', personal: true },
+    // An email AT the hiring company ("uSoftware internal email: if you have/had @usoftware.co email"):
+    // not the candidate's own, left empty.
+    { test: /\binternal e-?mail\b|\b(company|corporate) e-?mail\b|@[a-z0-9-]+(\.[a-z0-9-]+)+ e-?mail\b|\bhave\/had @|e-?mail (address )?(at|with) (our|the) company/, skipWith: 'An email at the hiring company (not the candidate\'s own): left empty.', name: 'company email' },
     { test: /e-?mail|^correo( electr[oó]nico)?$|^courriel$/, fact: (c) => c.email, name: 'email', personal: true },
+    // A phone picker's own country search ("country selector phone", "Search country"): not a question.
+    { test: /\bcountry (selector|search|picker)\b|\bsearch (for a )?country\b/, skipWith: 'The phone picker\'s country search: left alone.', name: 'country search' },
     // A phone extension is not the phone number: left empty (the profile has none).
     { test: /\b(phone|telephone|tel|mobile)\b.*\bext(ension)?\b|^ext(ension)?\.?( number)?$|\bextension number\b/, skipWith: 'A phone extension: left empty (the profile has none).', name: 'phone extension' },
     // The kind of phone ("Phone Device Type", "Type of phone"): the candidate's number is a mobile.
     { test: /\b(phone|telephone)( device)? type\b|\btype of (phone|telephone|number|device)\b|^device type$/, fact: () => 'Mobile', choose: /\b(mobile|cell(ular)?)\b/i, name: 'phone type' },
-    { test: /\b(phone|mobile|telephone|cell)\b|^(your )?contact (phone )?number$|^whats ?app( number)?$|^tel\.?$|^telefon(nummer| kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone', personal: true },
+    // The phone's country code asked alone ("Country code", "Dialing code" beside the number box): the
+    // number's own code, as the list words it ("🇷🇴 (+40) Romania"), else "+40" typed.
+    { test: /^((phone|telephone|mobile) )?country (phone |calling |dial(l)?ing )?code$|^(phone |telephone )?(dial(l)?ing|calling) code$/, fact: (c) => c.phone, name: 'phone', personal: true, callingCode: true },
+    // "Cell" alone is a phone only as "cell phone / number" or the whole label: "use this cell for the
+    // minimum" (a salary interval) is a form cell.
+    { test: /\b(phone|mobile|telephone|cell ?phone|cell number|cellular)\b|^cell$|^(your)?contact (phone )?number$|^whats ?app( number)?$|^tel\.?$|^telefon(nummer| kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone', personal: true },
     { test: /linkedin/, fact: (c) => linkedinProfileUrl(c.linkedinUrl), name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
     { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
@@ -395,15 +458,22 @@
     // position": the profile's current job (else its latest one, for "most recent").
     { test: /^(your )?(current|present) (company|employer|organi[sz]ation)( name)?$|^(name of )?(your )?current employer$|^(most recent|latest|last) (company|employer)( name)?$/, fact: (c, context, label) => currentJob(context, label)?.companyName || null, name: 'current company', optionalIfMissing: true },
     { test: /^(your )?(current|present) (job )?(title|position|role)$|^(most recent|latest|last) (job )?(title|position|role)$/, fact: (c, context, label) => currentJob(context, label)?.jobTitle || null, name: 'current job title', optionalIfMissing: true },
+    // "How many companies have you worked for…?", "Number of employers in the last 5 years": counted
+    // from the profile's work history; a list of numbers or ranges ("10+", "3-5") takes the one it falls in.
+    { test: /how many (different )?(companies|employers|organi[sz]ations)\b.*\b(work(ed)?|employed)\b|\bnumber of (companies|employers|organi[sz]ations)\b.*\b(work(ed)?|employed)\b/, fact: (c, context, label) => companiesWorkedFor(context, label), name: 'number of companies', count: true },
+    // An education block (Greenhouse: School, Degree, Discipline): the profile's latest school.
+    { test: /^(school|university|college|institution|education institution|school name|university name|name of (your )?(school|university|college|institution))$/, fact: (c, context) => latestSchool(context)?.institution || null, name: 'school', optionalIfMissing: true, orOther: true },
+    { test: /^(degree|degree type|degree level|highest degree|education level|level of education|highest level of education)$/, fact: (c, context) => latestSchool(context)?.degree || null, name: 'degree', optionalIfMissing: true },
+    { test: /^(discipline|field of study|major|area of study|study field|specialization|specialisation)$/, fact: (c, context) => latestSchool(context)?.fieldOfStudy || null, name: 'field of study', optionalIfMissing: true },
     // City-labelled location fields are profile facts in both modes; sites vary parenthesis spacing.
     { test: /^(current )?(city|town)(\s*(\/|or)\s*(city|town|locality))?$|^(current )?location\s*\(\s*(city|town)\s*\)$|city of residence|^(stadt|ort|wohnort|ville|ciudad|miasto|localidad|localit[ée]|citt[àa])$/, autoTest: /^(your )?city\s*\/\s*town$/, fact: (c) => c.city, name: 'city', personal: true },
     // autoTest (Auto Apply and Normal Apply): also as a whole question, "What is your location?" (Lever, a list of countries).
-    { test: /^(current )?location$|where are you (currently )?(located|based|living)|where do you (currently )?(live|reside)\b(?! in)|current location|^location of residence|^(city|place) of residence$/, autoTest: /^(what is|what's) your (current )?location\??(\s|$)/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location', personal: true },
+    { test: /^(current )?location$|where are you (currently )?(located|based|living)|where do you (currently )?(live|reside)\b(?! in)|current location|^location of residence|^(city|place) of residence$/, autoTest: /^(what is|what's) your (current )?location\??(\s|$)/, fact: (c) => [c.city, c.country].filter(Boolean).join(', ') || null, name: 'location', personal: true, orOther: true },
     // "Country", "Country/Region" (SmartRecruiters), "Country / Territory", "Region/Country"; autoTest
     // (Auto Apply and Normal Apply) also as a question: "What is your current country of residence?"
     // (Greenhouse), "What country are you based in?" (Ashby), "What country do you currently live
     // in?", "Please choose the country in which you are located." (a yes/no question is never this rule's).
-    { test: /^(your |current )?country(\s*(\/|or|and|&)\s*(region|territory|area))?( of (current )?residence)?$|^(region|territory)\s*(\/|or)\s*country$|^residence country$|^(land|wohnland|pays( de r[ée]sidence)?|pa[ií]s( de residencia)?|kraj( zamieszkania)?|paese)$/, autoTest: /\bcountry of (current |permanent )?residence\b|\b(which|what) country (are|do) you (currently )?(live|living|reside|residing|based|located|in)\b|\bcountry (in which|where) you (are |currently |are currently )?(live|living|reside|residing|located|based)\b/, fact: (c) => c.country, name: 'country', personal: true },
+    { test: /^(your |current )?country(\s*(\/|or|and|&)\s*(region|territory|area))?( of (current )?residence)?$|^(region|territory)\s*(\/|or)\s*country$|^residence country$|^(land|wohnland|pays( de r[ée]sidence)?|pa[ií]s( de residencia)?|kraj( zamieszkania)?|paese)$/, autoTest: /\bpreferred (work(ing)? )?(locations?|countr(y|ies))\b|\b(which|what) country (do|are) you (currently )?work(ing)?\b|\bcountry (in which|where) you (currently )?work\b|\bcountry of (current |permanent )?residence\b|\b(which|what) country (are|do) you (currently )?(live|living|reside|residing|based|located|in)\b|\bcountry (in which|where) you (are |currently |are currently )?(live|living|reside|residing|located|based)\b/, fact: (c) => c.country, name: 'country', personal: true, orOther: true },
     { test: /second line of (your )?address|address line 2|apartment|suite/, fact: () => null, name: 'address line 2', optionalIfMissing: true },
     // The whole address in one box ("Complete Address"): street, postal code and city, province, country.
     { test: /(complete|full|home|residential|postal|current|permanent) address|^address (full)$/, fact: (c) => fullAddress(c), name: 'full address', personal: true },
@@ -411,16 +481,29 @@
     { test: /^(street )?address( line 1)?$|first line of (your )?address|^street( (and|&) (house )?number)?$|^stra(ss|ß)e( (und|&) hausnummer)?$|^(adresse|direcci[oó]n|adres|indirizzo)$/, fact: (c) => c.addressLine1, name: 'address', personal: true },
     { test: /^(state|province|region|county)(\s*\/\s*(state|province|region|county))*$|^(bundesland|wojew[oó]dztwo|r[ée]gion|provincia)$/, fact: (c) => c.province, name: 'state or province', personal: true },
     { test: /nationalit|citizenship|staatsangeh|ciudadan[ií]a|obywatelstwo/, fact: (c) => c.nationality, name: 'nationality', personal: true },
+    // "Which languages can you communicate confidently in…?", "What languages do you speak?": the
+    // profile's languages as written ("English C1").
+    // "Preferred language" (for contact): the profile's first language ("English C1" → "English").
+    { test: /^(your )?preferred (communication |correspondence |contact )?language$|^language (for|of) (communication|correspondence)$|^correspondence language$/, fact: (c) => String(Array.isArray(c.languages) ? c.languages[0] || '' : c.languages || '').split(/[,;/]/)[0].replace(/\s*\(?\b(native|fluent|[abc][12])\b\)?.*$/i, '').trim() || null, name: 'preferred language', optionalIfMissing: true },
+    { test: /\b(which|what) languages?\b|\blanguages? (do you|can you|you can|you) (speak|communicate)|\blanguages you (can )?(speak|communicate)/, fact: (c) => (Array.isArray(c.languages) ? c.languages.join(', ') : c.languages) || null, name: 'languages', optionalIfMissing: true },
     // Never guessed: without a birthday in the profile it is left for the Manager.
     // "What is your current age?", "Age", "Age range", "How old are you?": worked out from the birthday,
     // as a number or the range it falls in ("25–34", "Under 25", "65 or over"). Never guessed without one.
     { test: /^(what is |what's )?(your )?(current )?age( range| group| bracket)?\b(?! of)|how old are you/, age: true, neverGuess: true, name: 'age', personal: true },
-    { test: /birth ?day|date of birth|birth ?date|d.?o.?b|geburtsdatum|date de naissance|fecha de nacimiento|data (urodzenia|di nascita)/, fact: (c) => c.birthday, date: true, neverGuess: true, name: 'birthday', personal: true },
+    { test: /birth ?day|date of birth|birth ?date|\bd.?o.?b\b|geburtsdatum|date de naissance|fecha de nacimiento|data (urodzenia|di nascita)/, fact: (c) => c.birthday, date: true, neverGuess: true, name: 'birthday', personal: true },
     { test: SPONSORSHIP_QUESTION, yesNo: (c) => c.needsSponsorship, name: 'visa sponsorship' },
-    { test: /relocat/, yesNo: (c) => c.willingToRelocate, name: 'relocation' },
+    // Relocation: always No (the Manager's rule of 2026-11-22), whatever the profile says. Yes only when
+    // the question also asks whether the candidate lives there and the profile's country is the one named
+    // ("Do you live in or plan to relocate to Poland?" for a candidate living in Poland).
+    { test: /relocat/, yesNo: (c, label) => livesInNamedCountry(c, label), name: 'relocation' },
     { test: NOTICE_QUESTION, notice: true, name: 'notice period' },
     { test: SALARY_QUESTION, salary: true, name: 'salary expectation' },
     { test: /^(total )?(years of (professional |work |relevant )?experience|how many years of (professional |work )?experience( do you have)?)\??$/, fact: (c) => (c.yearsOfExperience ?? null), years: true, name: 'years of experience' },
+    // Just "Experience" (careerpage.co: "0-1 Year … 10+ Years"): the same, when its choices are years.
+    { test: /^(total |work |professional |overall )?experience( \(?in years\)?)?$/, fact: (c) => (c.yearsOfExperience ?? null), years: true, onlyYearChoices: true, name: 'years of experience' },
+    // "Do you have at least 5 years of full time relevant working experience?": the profile's years, yes or
+    // no. General experience only (a skill named after it, "5 years of Go", is the AI's).
+    { test: /\b(at least|minimum( of)?|over|more than) (\d+|[a-z]+)\+? years? of (full[- ]?time )?((relevant|professional|industry|total|overall|hands[- ]on|commercial) )*(work(ing)? |professional )?experience\??$/, yesNo: (c, label) => yearsAtLeast(c, label), name: 'years of experience' },
   ];
 
   /**
@@ -447,7 +530,7 @@
     { topic: 'gender', test: /\bgender\b|\bsex\b/ },
     { topic: 'race or ethnicity', test: /\brace\b|racial|ethnic|hispanic|latin[oa]/ },
     { topic: 'veteran', test: /veteran/ },
-    { topic: 'disability', test: /disabilit/ },
+    { topic: 'disability', test: /disabilit|\bdisabled\b/ },
   ];
   const FACT_TOPICS = new Set(['salary', 'notice', 'sponsorship', 'relocation']);
   // Yes/no reusable answers that stand in for these profile facts.
@@ -513,12 +596,13 @@
     if (!value) return null;
     const words = diversityLabelOf(topic, value);
     if (!words) return null;
-    if (!hasOptions(field)) return { value: words, source: 'profile' };
-    // "Are you Hispanic or Latino?" with Yes / No.
-    if (topic === 'race or ethnicity' && /hispanic|latin/.test(label) && value !== 'prefer_not_to_say') {
+    // "Are you Hispanic or Latino?" with Yes / No (also before its choices are read: a yes/no question).
+    if (topic === 'race or ethnicity' && /hispanic|latin/.test(label) && value !== 'prefer_not_to_say'
+      && (hasOptions(field) || /^(are|is) (you|the candidate)\b/.test(label))) {
       const yesNo = yesNoAnswer(field, value === 'hispanic_or_latino');
       if (yesNo !== null) return { value: yesNo, source: 'profile' };
     }
+    if (!hasOptions(field)) return { value: words, source: 'profile' };
     const option = value === 'prefer_not_to_say'
       ? pickOption(field, DECLINE)
       : field.options.find((choice) => entry.answers[value][1].test(String(choice)) && !DECLINE.test(String(choice)));
@@ -532,7 +616,25 @@
 
   /** The reusable answer for a topic: the one saved for the same question, else any on the topic. */
   function topicAnswer(field, topic, savedRows) {
-    const rows = (savedRows || []).filter((row) => topicOf(row.questionText) === topic);
+    let rows = (savedRows || []).filter((row) => topicOf(row.questionText) === topic);
+    // A right-to-work or sponsorship question about one country ("…the right to work in the UK?") takes
+    // the saved answer about that same country ("…permission to work in the UK?"), never another's.
+    if (['work authorization', 'sponsorship'].includes(topic)) {
+      // ("UK" too: too short for the general country finder, which leaves out two-letter words.)
+      const named = (text) => [...new Set([...countriesNamed(text), ...(/(^|[^a-z])(uk|u\.k\.)([^a-z]|$)/i.test(String(text)) ? ['GB'] : [])])];
+      const asked = named(field.label);
+      if (asked.length) {
+        rows = rows.filter((row) => named(row.questionText).some((code) => asked.includes(code)));
+        if (!rows.length) return null;
+        const row = matchSavedAnswer(field, rows) ?? rows[0];
+        return row ? { ...row, sameCountry: true } : null;
+      }
+      // A question naming no country ("…to work in the job location?") takes a saved answer naming none
+      // either ("…in the country where this role is based?"), never one about Canada or the UK.
+      const general = rows.filter((row) => !named(row.questionText).length);
+      if (general.length) rows = general;
+      else if (rows.length) return null;
+    }
     return matchSavedAnswer(field, rows) ?? rows[0] ?? null;
   }
 
@@ -686,6 +788,29 @@
     return null;
   }
 
+  /**
+   * A cover letter fitted into max characters: its greeting ("Dear Hiring Manager,"), as many whole
+   * sentences of its body as fit, and its sign-off ("Kind regards,\nName"). '' when not even the
+   * greeting, one sentence and the sign-off fit.
+   */
+  function fitLetter(letter, max) {
+    const paragraphs = String(letter).split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+    if (!paragraphs.length) return '';
+    const greeting = /^(dear|hello|hi|to whom)\b/i.test(paragraphs[0]) && paragraphs[0].length < 80 ? paragraphs.shift() : '';
+    const signOff = paragraphs.length && /^(kind regards|best regards|regards|sincerely|yours|thank you|thanks|best)\b/i.test(paragraphs.at(-1)) && paragraphs.at(-1).length < 120 ? paragraphs.pop() : '';
+    const frame = [greeting, signOff].filter(Boolean).join('\n\n').length + (greeting ? 2 : 0) + (signOff ? 2 : 0);
+    const room = max - frame;
+    const sentences = paragraphs.join(' ').match(/[^.!?]+[.!?]+(\s|$)/g) || [paragraphs.join(' ')];
+    let body = '';
+    for (const sentence of sentences) {
+      const next = `${body}${body ? ' ' : ''}${sentence.trim()}`;
+      if (next.length > room) break;
+      body = next;
+    }
+    if (!body) return '';
+    return [greeting, body, signOff].filter(Boolean).join('\n\n');
+  }
+
   function resolveField(field, candidate, savedAnswers, context = {}) {
     const label = labelOf(field);
     if (field.kind === 'file') {
@@ -697,6 +822,7 @@
       const document = uploadDocument(field);
       if (document) return { file: document, source: 'documents' };
       if (field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
+      if (field.id === context.extraLetterUploadId) return { file: 'coverLetter', source: 'documents' };
       return { skip: 'The document type is unclear.', byHand: `Choose the correct document for "${field.label}" manually; QTS could not identify this upload safely.` };
     }
     // An image CAPTCHA ("Type below image text") is the Manager's to solve, never typed by Apply or the AI.
@@ -715,6 +841,11 @@
       if (letter && (!field.maxLength || letter.length <= field.maxLength)) {
         return { value: letter, source: 'documents' };
       }
+      // Longer than the box allows (SoftServe's "Comment", 1000 characters): the letter cut to whole
+      // sentences, keeping its greeting and sign-off (the Manager's rule of 2026-11-22: the cover letter
+      // goes in every such box). The AI shortens it better on Ask AI.
+      const fitted = letter && field.maxLength ? fitLetter(letter, field.maxLength) : '';
+      if (fitted) return { value: fitted, source: 'documents' };
       if (letter && field.maxLength) {
         return {
           ask: letter,
@@ -731,7 +862,8 @@
         && semantics.recognize(entry.questionText)?.definition?.id === 'application.futureRecruitmentConsent')).find(Boolean);
       if (!saved) return { skip: 'Optional opt-in: no saved answer for future-recruitment consent.' };
       if (!/^(yes|true|1|tak|ja|oui|s[ií]|i agree|agree|accept)\b/i.test(String(saved.answer).trim())) return { skip: 'Saved answer: do not consent to future recruitment.' };
-      const agreed = agreementAnswer(field);
+      // A list not read yet ("Are you open for other positions?" [Select ▼]): "Yes", picked from its choices.
+      const agreed = agreementAnswer(field) || (!hasOptions(field) && ['combobox', 'select', 'menu'].includes(field.kind) ? { value: 'Yes' } : null);
       return agreed ? { ...agreed, source: 'consent', provenance: { authority: saved.scope, meaning: 'application.futureRecruitmentConsent', savedAnswerId: saved.id || null } }
         : { skip: 'No single clear Yes choice.', byHand: `Choose the consent for "${field.label}" yourself (your saved answer is Yes).` };
     }
@@ -803,6 +935,13 @@
     }
     // Optional marketing and future-contact opt-ins are never accepted automatically.
     if (OPT_IN.test(label)) return { skip: 'Optional opt-in.' };
+    // A consent asked as a choice between "Yes, I consent" and "No, I don't consent" (Revolut People's
+    // AI interview transcripts): Yes, the Manager's rule of 2026-11-22, required or not.
+    if (hasOptions(field) && !OPT_IN.test(field.options.join(' '))) {
+      const yes = field.options.find((option) => /^(yes,?\s*)?i\s+(consent|agree)\b/i.test(String(option).trim()));
+      const no = field.options.find((option) => /^(no,?\s*)?i\s+(do\s+not|don['’]t)\s+(consent|agree)\b/i.test(String(option).trim()));
+      if (yes && no) return { value: yes, source: 'consent' };
+    }
     const policyAgreement = /\b(privacy|terms|data processing|gdpr)\b/i.test(label);
     const requiredAgreement = (field.required || policyAgreement) && !OPT_IN.test(label);
     // The Manager explicitly allows required agreements and attestations to be accepted before review.
@@ -900,7 +1039,15 @@
     const topic = aboutSomeoneElse ? null : topicOf(field.label);
     if (topic && !FACT_TOPICS.has(topic)) {
       const row = topicAnswer(field, topic, savedAnswers);
-      if (row) return reusableAnswer(field, row);
+      // (The same country's saved answer counts as the Manager's answer to this question.)
+      const saved = row ? reusableAnswer(field, row) : null;
+      if (saved) return row.sameCountry ? { ...saved, topicMatch: true } : saved;
+    }
+    // The employee who recommended the candidate ("If you were recommended by an employee, enter the
+    // email address of the recommender"): nobody did, so it stays empty (never the candidate's own email);
+    // a required one (Telekom) says "N/A".
+    if (field.kind !== 'radio' && !hasOptions(field) && RECOMMENDER_DETAILS.test(label)) {
+      return field.required ? { value: 'N/A', source: 'profile' } : { skip: 'Nobody recommended the candidate: left empty.' };
     }
     // 2. The candidate's profile facts; other reusable answers never override them.
     const fromProfile = aboutSomeoneElse ? undefined : profileAnswer(field, label, candidate, context);
@@ -910,10 +1057,17 @@
     // 3. Super Admin's reusable answer for a matching question: used when it fits the field, else a hint.
     const reusable = matchSavedAnswer(field, savedAnswers, { sameMeaning: context.autoApply === true });
     if (reusable) return reusableAnswer(field, reusable);
+    // A fact the profile lacks (salary, notice…): the Manager's saved answer on the same topic, worded
+    // differently ("expected compensation (base salary + OTE)" for "salary expectations for this role").
+    if (fromProfile?.missing && topic && FACT_TOPICS.has(topic)) {
+      const row = topicAnswer(field, topic, savedAnswers);
+      const saved = row ? reusableAnswer(field, row) : null;
+      if (saved) return { ...saved, topicMatch: true };
+    }
     if (fromProfile) return fromProfile;
     if (offer) return { offer };
     // Auto Apply only: Normal Apply never fills an answer written in code; it uses the Manager's saved answer.
-    if (context.normalApply !== true && /how did you (hear|find|learn)|where did you (hear|find)|referral source|^source$/.test(label)) {
+    if (context.normalApply !== true && /how did you (hear|find|learn)|where did you (hear|find)|where you (heard|found|learned)|where (have|did) you appl(y|ied) from|referral source|^source$/.test(label)) {
       const option = pickOption(field, /linkedin/i) ?? pickOption(field, /job (board|site)|online|internet|website/i);
       if (option) return { value: option, source: 'rule' };
       if (!hasOptions(field)) return { value: 'LinkedIn', source: 'rule' };
@@ -927,10 +1081,14 @@
    * The answer from the candidate's profile facts; undefined when no rule recognizes the question.
    * A personal fact's answer names it (fact), so a value changed to fit the field can be checked.
    */
+  const RECOMMENDER_DETAILS = /\b(recommended|referred) by (an? |one of our )?(employee|colleague|staff)\b.*\b(e-?mail|name|who)\b|\brecommender\b|\breferr(er|ing employee)('s)? (e-?mail|name)/;
+
   function profileAnswer(field, label, candidate, context) {
     for (const rule of RULES) {
       // autoTest: the same profile fact asked as a whole question ("What country do you currently reside in?").
       if (!rule.test.test(label) && !((context.autoApply || context.normalApply) && rule.autoTest?.test(label))) continue;
+      // A bare "Experience" is about years only when its choices are years ("0-1 Year", "10+ Years").
+      if (rule.onlyYearChoices && !(hasOptions(field) && field.options.filter((option) => /\d+\s*\+?\s*(-\s*\d+\s*)?years?\b/i.test(String(option))).length >= 2)) continue;
       // A tick box takes only a yes/no fact ("SMS to my phone number" is not the phone number).
       if (field.kind === 'checkbox' && !rule.yesNo) continue;
       // Nor does a yes/no question ("Are you available for a phone screen?").
@@ -938,8 +1096,13 @@
       // A yes/no fact never answers a question asking where, what, or which ("Where would you
       // relocate to?" asks a place, not whether), unless the field only takes yes or no.
       if (rule.yesNo && !hasOptions(field) && field.kind !== 'checkbox' && OPEN_QUESTION.test(label)) continue;
-      const answer = ruleAnswer(rule, field, label, candidate, context);
-      return answer && rule.personal ? { ...answer, fact: rule.name } : answer;
+      // An "Address" box whose note asks for the city and country too (Workable: "Include your city,
+      // region, and country") takes the whole address, not the street alone.
+      const used = rule.name === 'address' && /\b(city|country|region|town)\b/i.test(String(field.note || field.placeholder || ''))
+        ? RULES.find((entry) => entry.name === 'full address') || rule
+        : rule;
+      const answer = ruleAnswer(used, field, label, candidate, context);
+      return answer && used.personal ? { ...answer, fact: used.name } : answer;
     }
     return undefined;
   }
@@ -982,7 +1145,7 @@
     }
     {
       if (rule.yesNo) {
-        const fact = rule.yesNo(candidate);
+        const fact = rule.yesNo(candidate, label);
         if ((fact === null || fact === undefined) && context.autoApply) return { missing: rule.name };
         if (fact === null || fact === undefined) return { missing: rule.name };
         const value = yesNoAnswer(field, fact);
@@ -1026,6 +1189,22 @@
             .sort((a, b) => b.from - a.from)[0];
           if (reached) return { value: reached.entry, source: 'profile' };
         }
+        // A count among numbers and ranges: "4" is "4", "3-5", "4+" or "10+" (the one it falls in).
+        if (rule.count) {
+          const number = Number(fact);
+          const fits = field.options.find((entry) => {
+            const text = String(entry).trim();
+            const range = /^(\d+)\s*(?:-|–|to)\s*(\d+)$/.exec(text);
+            if (range) return number >= Number(range[1]) && number <= Number(range[2]);
+            const plus = /^(\d+)\s*\+$|^(?:more than|over)\s+(\d+)$/i.exec(text);
+            if (plus) return plus[1] ? number >= Number(plus[1]) : number > Number(plus[2]);
+            return /^\d+$/.test(text) && Number(text) === number;
+          });
+          if (fits) return { value: fits, source: 'profile' };
+        }
+        // A list without it that offers "Other" (a school list): Other, never a similar name.
+        const other = rule.orOther ? field.options.find((entry) => /^other\b/i.test(String(entry).trim())) : null;
+        if (other) return { value: other, source: 'profile', intended: String(fact) };
         // The profile has it, but not as one of these choices: the AI changes only its form.
         return { ask: String(fact) };
       }
@@ -1034,7 +1213,13 @@
         if (Number.isNaN(date.getTime())) return { skip: `The profile's ${rule.name} is not a date.` };
         return { value: field.kind === 'date' ? formatDate(date) : formatDate(date, field.placeholder), source: 'profile' };
       }
-      return { value: String(fact), source: 'profile' };
+      // A calling code alone in a box or a list not read yet: "+40".
+      if (rule.callingCode) {
+        const code = representations?.callingCodeOf?.(String(fact));
+        return code ? { value: `+${String(code).replace(/^\+/, '')}`, source: 'profile', intended: String(fact) } : { skip: 'No calling code in the phone number.' };
+      }
+      // Choices not read yet (a search list): "Other" when the list has no such name.
+      return { value: String(fact), source: 'profile', ...(rule.orOther ? { alternatives: ['Other'] } : {}) };
     }
   }
 
@@ -1283,7 +1468,7 @@
   const AUTOFILL_UPLOAD = /auto-?fill|auto-?complete|auto-?populate|pre-?fill|easy apply|\b(parse|import)\b[^.]{0,30}\b(resume|résumé|cv)\b|\b(resume|résumé|cv)\b[^.]{0,40}\b(to |and )?(fill|complete) (in )?(the |your )?(form|application|profile|fields)/;
 
   function correctionKey(question) {
-    return /how did you (hear|find|learn)|where did you (hear|find)|referral source/i.test(question)
+    return /how did you (hear|find|learn)|where did you (hear|find)|where you (heard|found|learned)|where (have|did) you appl(y|ied) from|referral source/i.test(question)
       ? 'application source' : normalizeQuestionKey(question);
   }
 
@@ -1647,6 +1832,20 @@
    * "Attachment", "Add document": justjoin.it). Uploads for other documents (photos, portfolios,
    * "Additional files") are never it. The id of that one upload, or null.
    */
+  /**
+   * "Additional attachments" beside a résumé upload, on a page with no cover-letter upload (Telekom:
+   * "any additional documents… (cover letter, documents, etc.)"): the cover letter goes there, as on
+   * every job. Its id, or null.
+   */
+  function extraLetterUploadId(fields) {
+    const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled
+      && !isImageUpload(field) && !isAutofillUpload(field));
+    if (!uploads.some((field) => uploadDocument(field) === 'resume') || uploads.some((field) => uploadDocument(field) === 'coverLetter')) return null;
+    const extra = uploads.filter((field) => !uploadDocument(field)
+      && /^(additional|other|supporting|further|extra) (attachments?|documents?|files?|uploads?)$/.test(labelOf(field).trim()));
+    return extra.length === 1 ? extra[0].id : null;
+  }
+
   function generalUploadId(fields) {
     const uploads = (fields || []).filter((field) => field.kind === 'file' && !field.hidden && !field.disabled
       && !isImageUpload(field) && !isAutofillUpload(field));
@@ -1695,7 +1894,7 @@
    */
   function resolveFields(fields, profile, savedAnswerRows, givenContext = {}) {
     const savedAnswers = savedAnswerRows || [];
-    const context = { ...givenContext, generalUploadId: generalUploadId(fields),
+    const context = { ...givenContext, generalUploadId: generalUploadId(fields), extraLetterUploadId: extraLetterUploadId(fields),
       // A salary period choice on the page (Manatal: amount + currency + period): a bare amount box then
       // takes the saved period's figure, and that choice is set to the saved period.
       salaryUnitsOnPage: fields.some((entry) => hasOptions(entry) && SALARY_QUESTION.test(labelOf(entry))
@@ -2347,6 +2546,29 @@
       return option === null ? null : { value: option, source, fact: 'answer', intended: fact.value ? 'Yes' : 'No', polar: meaning };
     }
     fact = facts[meaning];
+    // "Authorized to work in the job location?" (no place named): a saved answer about one country
+    // (Canada, the UK) says nothing here. A saved answer naming no place answers it instead, also one
+    // asked together with sponsorship ("…in the country where this role is based, without requiring
+    // sponsorship?" Yes: allowed to work there).
+    if (meaning === 'workPermit' && !polarPlace(label) && (!fact || fact.conflict || (fact.row && polarPlace(fact.row.questionText)))) {
+      fact = null;
+      for (const scope of ['application', 'candidate', 'manager']) {
+        for (const row of (savedAnswers || []).filter((entry) => entry.scope === scope)) {
+          if (polarPlace(row.questionText) || countriesNamed(row.questionText).length) continue;
+          const meanings = polarMeanings(row.questionText);
+          if (!meanings.includes('workPermit') || meanings.some((entry) => !['workPermit', 'sponsorship'].includes(entry))) continue;
+          const said = typeof row.answer === 'boolean' ? row.answer : checkboxAnswerValue(row.answer) ?? yesOrNo(row.answer);
+          if (said === null || said === undefined) continue;
+          const value = polarDirection(polarClause(row.questionText).replace(/\bwithout\b[^?]*?\b(sponsor\w*|visa|h-?1b)\b/, ' ')) === -1 ? !said : said;
+          // Together with sponsorship only a Yes tells the work permit (a No may be about sponsorship).
+          if (meanings.length > 1 && !value) continue;
+          if (fact && fact.value !== value) return null;
+          fact = { value, row };
+        }
+        if (fact) break;
+      }
+      if (!fact) return null;
+    }
     if (fact?.conflict) return null;
     if (!fact) {
       fact = profilePolarFact(meaning, candidate, context);
@@ -2450,7 +2672,7 @@
       // text box whose exact question the Manager saved an answer for (typed as saved):
       // filled on Alt+F like a profile fact, no AI. The AI is only asked about it on Ask AI.
       const exactSaved = (savedAnswers || []).some((row) => sameQuestion(row.questionKey, normalizeQuestionKey(field.label)));
-      const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exactSaved && (answer.fact === 'answer' || !hasOptions(field))));
+      const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && (exactSaved || answer.topicMatch || FACT_TOPICS.has(topicOf(field.label))) && (answer.fact === 'answer' || !hasOptions(field))));
       // The saved answer in this box's form: this job site's own form first, else the form that fits
       // (an option, a number). A profile fact stays the profile's.
       if (answer?.source !== 'profile') {
@@ -2478,7 +2700,7 @@
         sent = rest;
       }
       const exact = (savedAnswers || []).some((row) => sameQuestion(row.questionKey, normalizeQuestionKey(field.label)));
-      const known = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && exact && (answer.fact === 'answer' || !hasOptions(field))));
+      const known = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && (exact || answer.topicMatch || FACT_TOPICS.has(topicOf(field.label))) && (answer.fact === 'answer' || !hasOptions(field))));
       plan.ai.push({ field: sent, ...(known ? { check: answer } : {}), ...(lacking.has(field.id) ? { lacking: lacking.get(field.id) } : {}) });
     }
     return plan;
@@ -2545,7 +2767,47 @@
     return wrong;
   }
 
-  const api = { planApiFields, polarAnswer, siteFormAnswer, siteKeyOf, verifyApiAnswer, personalMismatches, changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
+  /**
+   * This job's skills from its résumé text: the comma lists under the skill-group headings (after the
+   * Summary, before the first job line "Title · Company · …"), taken in turns from each group so the
+   * first ones cover every group; at most max, each once.
+   */
+  function resumeSkills(resumeText, max = 15) {
+    const lines = String(resumeText || '').split('\n').map((line) => line.trim());
+    const firstJob = lines.findIndex((line) => line.split(' · ').length >= 3);
+    const groups = lines.slice(0, firstJob < 0 ? lines.length : firstJob)
+      .filter((line) => (line.match(/,/g) || []).length >= 2 && line.length < 600 && !/[.!?]$/.test(line))
+      .map((line) => line.split(',').map((item) => item.trim()).filter((item) => item && item.length <= 60));
+    const picked = [];
+    const seen = new Set();
+    for (let index = 0; picked.length < max && groups.some((group) => index < group.length); index += 1) {
+      for (const group of groups) {
+        const skill = group[index];
+        if (!skill || seen.has(skill.toLowerCase())) continue;
+        seen.add(skill.toLowerCase());
+        picked.push(skill);
+        if (picked.length >= max) break;
+      }
+    }
+    return picked;
+  }
+
+  /** A job's bullets in the résumé text (under "Title · Company · Place · Dates"), as lines; '' when not found. */
+  function resumeBullets(resumeText, company) {
+    const key = String(company || '').trim().toLowerCase();
+    if (!key) return '';
+    const lines = String(resumeText || '').split('\n');
+    const at = lines.findIndex((line) => line.split(' · ').slice(1, 2).some((part) => part.trim().toLowerCase() === key));
+    if (at < 0) return '';
+    const bullets = [];
+    for (const line of lines.slice(at + 1)) {
+      if (/^\s*[-•]\s+/.test(line)) bullets.push(line.trim());
+      else if (line.trim()) break;
+    }
+    return bullets.join('\n');
+  }
+
+  const api = { resumeSkills, resumeBullets, planApiFields, polarAnswer, siteFormAnswer, siteKeyOf, verifyApiAnswer, personalMismatches, changedCorrections, correctionKey, controlledAnswer, checkboxAnswerValue, normalizeQuestionKey, resolveField, resolveFields, worthReading, isAutofillUpload, buildAnswerPrompt, checkAnswer, parseAnswerReply, buildFixPrompt, optionsKey, findRememberedChoice, sameFactOption, keepsMeaning, factSources, verifyAiAnswer, DEFAULT_ANSWER_PROMPT };
   global.__qtsApplyAnswers = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

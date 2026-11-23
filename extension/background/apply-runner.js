@@ -409,6 +409,9 @@ async function autoAccountSteps(tabId, application) {
  */
 // Auto Apply: the Manager's Alt+S while QTS looks for the form. The page is the Manager's until
 // they press Alt+F (or Fill again): nothing more is clicked, typed or opened there.
+// Sites whose application steps Auto Apply moves on by itself (Next / "Save & Continue", never Submit):
+// only the ones the Manager named (2026-11-22: Dropbox's own careers site).
+const AUTO_NEXT_SITES = /(^|\.)dropbox\.jobs$/i;
 const MANAGER_STOPPED_FINDING = 'You stopped QTS (Alt+S): it no longer looks for the form on this page. Alt+F (or Fill again) goes on.';
 
 async function reachApplicationForm(tab, onTab, application, { handleAccountSteps = true, stop = null, managerStop = null } = {}) {
@@ -832,6 +835,7 @@ async function pickOneWithRealClick(tabId, field, wanted) {
 const REAL_KEYS = {
   selectAll: { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 },
   backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
+  enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
 };
 async function realKey(tabId, key) {
   await debuggerSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...key });
@@ -861,8 +865,26 @@ async function realPasteText(tabId, text) {
 // Up to the first space, comma or bracket: "C1(Fluent)" searches "C1" (Pinpoint lists "C1 (Fluent)").
 const firstWordOf = (text) => String(text).trim().split(/[\s,;/()[\]]+/).filter(Boolean)[0] || '';
 
-/** One answer into a suggestion box: { ok } or { ok: false, error, pickYourself, choices }. */
+/**
+ * One answer into a suggestion box: { ok } or { ok: false, error, pickYourself, choices }. A box
+ * whose list closed under QTS (the site redrew that part of the form meanwhile: Oracle reloads its
+ * address and phone rows after a Country pick) gets one more try after a short wait.
+ */
+// A ceiling on one box's searching (all its tries and the second round): a slow site search past it
+// goes to the answer's fallback ("Other", the list's own words) or to the Manager.
+const SUGGESTION_BUDGET_MS = 12000;
+
 async function realSuggestionOne(tabId, field, wanted) {
+  const deadline = Date.now() + SUGGESTION_BUDGET_MS;
+  const first = await realSuggestionOnce(tabId, field, wanted, deadline);
+  // Not when the list answered (it showed choices, or said it found nothing): the same search again
+  // finds the same; the answer's fallback ("Other", the list's own words) comes next instead.
+  if (first.ok || !first.pickYourself || first.choices?.length || first.listAnswered || deadline - Date.now() < 4000) return first;
+  await sleep(1500);
+  return realSuggestionOnce(tabId, field, wanted, deadline);
+}
+
+async function realSuggestionOnce(tabId, field, wanted, deadline = Date.now() + SUGGESTION_BUDGET_MS) {
   const id = field.id;
   const squash = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
   // Already holding this answer: left as it is.
@@ -872,10 +894,24 @@ async function realSuggestionOne(tabId, field, wanted) {
   const tries = [wanted];
   const first = firstWordOf(wanted);
   if (first && squash(first) !== squash(wanted)) tries.push(first);
+  // Its longest word too: a list searched by name finds "+40 (Romania)" from "Romania" (Oracle).
+  const longest = String(wanted).split(/[\s,;/()[\]+]+/).filter((word) => /\p{L}{4,}/u.test(word)).sort((a, b) => b.length - a.length)[0];
+  if (longest && !tries.some((text) => squash(text) === squash(longest))) tries.push(longest);
   let seen = [];
+  // The list answered at least one search (choices, or "nothing found"): no second round needed.
+  let listAnswered = false;
+  // Test-only trace (self.__qtsListDebug set by a test): what each try saw.
+  const trace = (entry) => { if (Array.isArray(self.__qtsListDebug)) self.__qtsListDebug.push({ label: String(field.label || '').slice(0, 30), wanted, ...entry }); };
   for (const text of tries) {
+    if (Date.now() > deadline) break;
     const box = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.boxOf(fieldId), [id]).catch(() => null);
     if (!box) return { ok: false, error: 'the box is not on the screen: pick it yourself', pickYourself: true };
+    // A list left open (an earlier look at its choices) is closed first: on a list that a click
+    // toggles (Oracle's cx-select), the click below would close it instead of opening it.
+    if (await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.listOpen?.(fieldId), [id]).catch(() => false)) {
+      await realEscape(tabId);
+      await sleep(250);
+    }
     await inForm(tabId, () => globalThis.__qtsApplyForm.markShownChoices()).catch(() => false);
     await realClick(tabId, box);
     await sleep(250);
@@ -883,30 +919,63 @@ async function realSuggestionOne(tabId, field, wanted) {
     if (!(await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.cursorInField(fieldId), [id]).catch(() => false))) {
       return { ok: false, error: 'the cursor could not be put in this box: pick it yourself', pickYourself: true };
     }
-    await realPasteText(tabId, text);
+    // The list opened by the click may show the answer already (Oracle's phone code lists "+40 (Romania)"
+    // first, and its search finds nothing for "+40"): picked there, nothing typed.
+    // A list loaded from the site's server the first time it opens (Oracle) is given up to 2 s to show.
     let choice = null;
-    for (let waited = 0; waited < 3500 && !choice; waited += 350) {
-      await sleep(350);
+    if (text === tries[0]) {
+      for (let waited = 0; waited <= 2000; waited += 250) {
+        choice = await inForm(tabId, (fieldId, value) => globalThis.__qtsApplyForm.suggestionChoiceBox(fieldId, value, true), [id, wanted]).catch(() => null);
+        if (choice) break;
+        const showing = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.suggestionTexts(fieldId).length, [id]).catch(() => 0);
+        if (showing) break;
+        await sleep(250);
+      }
+    }
+    trace({ text, open: await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.listOpen?.(fieldId), [id]).catch(() => null), shown: (await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.suggestionTexts(fieldId), [id]).catch(() => [])).slice(0, 3), exact: Boolean(choice) });
+    if (!choice) await realPasteText(tabId, text);
+    // Up to 6 s while the list shows nothing yet (some come from the site's server the first time,
+    // Oracle's cx-select); done at once when it says it found nothing, and once it has shown the same
+    // choices without this answer for a moment (about 1 s): the search is answered.
+    let lastShown = '';
+    let sameFor = 0;
+    for (let waited = 0; waited < 6000 && !choice && Date.now() < deadline; waited += 300) {
+      await sleep(300);
       choice = await inForm(tabId, (fieldId, value) => globalThis.__qtsApplyForm.suggestionChoiceBox(fieldId, value), [id, wanted]).catch(() => null);
+      if (choice) break;
+      const look = await inForm(tabId, (fieldId) => ({ nothing: globalThis.__qtsApplyForm.listSaysNothing?.(fieldId) || false, shown: globalThis.__qtsApplyForm.suggestionTexts(fieldId).join('|') }), [id]).catch(() => null);
+      if (look?.nothing && waited >= 300) { listAnswered = true; break; }
+      if (look?.shown) {
+        listAnswered = true;
+        sameFor = look.shown === lastShown ? sameFor + 1 : 0;
+        lastShown = look.shown;
+        if (sameFor >= 2 && waited >= 900) break;
+      }
     }
     if (!choice) {
       const shown = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.suggestionTexts(fieldId), [id]).catch(() => []);
+      trace({ text, afterTyping: (shown || []).slice(0, 3), value: await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.boxValue?.(fieldId), [id]).catch(() => null) });
       seen = [...new Set([...seen, ...(shown || [])])];
       continue;
     }
     await realClick(tabId, choice);
     await sleep(400);
+    trace({ text, clicked: choice.text, at: [choice.x, choice.y], value: await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.boxValue?.(fieldId), [id]).catch(() => null), shownValue: await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.shownValue(fieldId), [id]).catch(() => null) });
     const now = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.shownValue(fieldId), [id]).catch(() => '');
     const [held, picked] = [squash(now), squash(choice.text)];
     if (held && (held.includes(picked) || (held.length >= 2 && picked.includes(held)))) return { ok: true };
     if (await inForm(tabId, (fieldId, value) => globalThis.__qtsApplyForm.choiceShown(fieldId, value), [id, choice.text]).catch(() => false)) return { ok: true };
+    // The box's own text, without the words around it: Oracle's phone code holds "+40" for
+    // "+40 (Romania)" and shows "+40 Country code".
+    const own = squash(await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.boxValue?.(fieldId), [id]).catch(() => ''));
+    if (own.length >= 2 && (own === picked || picked.startsWith(own))) return { ok: true };
   }
   // No suggestion: nothing typed stays in the box.
   await realKey(tabId, REAL_KEYS.selectAll).catch(() => {});
   await realKey(tabId, REAL_KEYS.backspace).catch(() => {});
   await realEscape(tabId);
   await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.clearField(fieldId), [id]).catch(() => false);
-  return { ok: false, error: `no suggestion for "${String(wanted).slice(0, 80)}": pick it yourself`, pickYourself: true, choices: seen.slice(0, 300) };
+  return { ok: false, error: `no suggestion for "${String(wanted).slice(0, 80)}": pick it yourself`, pickYourself: true, choices: seen.slice(0, 300), listAnswered };
 }
 
 /** Each answer (a skills box takes several) into a suggestion box with real input. */
@@ -3201,9 +3270,10 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   // Auto Apply with APIs records answers only with a real Submit: anything else starts fresh next time.
   const keptAnswers = () => (application.apiFlow ? [] : appliedAnswers(answersUsed));
   const checkBaselines = new Map(resume?.checkBaselines || []);
-  // Auto Apply: each step is filled only when the Manager presses Alt+F (or Fill again); the
-  // setting qtsAutoApplyFillOnKey = false fills each step by itself, as before.
-  if (auto) application.fillOnKey = (await chrome.storage.local.get('qtsAutoApplyFillOnKey').catch(() => ({}))).qtsAutoApplyFillOnKey !== false;
+  // Auto Apply: each step is filled by itself as soon as its form is found (the Manager's choice of
+  // 2026-11-22, replacing "only on Alt+F" of 2026-11-17); Alt+F stays as Fill again. The setting
+  // qtsAutoApplyFillOnKey = true waits for Alt+F (or Fill again) as before.
+  if (auto) application.fillOnKey = (await chrome.storage.local.get('qtsAutoApplyFillOnKey').catch(() => ({}))).qtsAutoApplyFillOnKey === true;
   let savedChanges = resume?.savedChanges || [];
   application.answerCache = new Map(resume?.cache || []);
   // Auto Apply: questions whose AI answer was refused (or that the AI could not answer), with why.
@@ -3216,6 +3286,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     application.seedCleanOnce = Boolean(resume?.tabId != null);
     application.destinationConfirmed = Boolean(resume?.tabId != null);
     application.stuckBoxes = new Map(resume?.stuckBoxes || []);
+    // Files QTS attached in this application: never taken off again when a page is emptied.
+    application.uploadedFileNames = new Set(resume?.uploadedFileNames || []);
   }
   const dryRun = !auto && (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
   // Auto Apply reviews once, before Submit, and never submits itself.
@@ -3235,7 +3307,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     ...(checklist ? { checklist: checklist.save(), stepShapes: [...stepShapes] } : {}),
     ...(application.apiFlow ? {
       apiFlow: true, verifiedSites: [...application.verifiedSites], cleanedBoxes: [...application.cleanedBoxes],
-      stuckBoxes: [...application.stuckBoxes], candidateId: application.candidate?.candidateId ?? null,
+      stuckBoxes: [...application.stuckBoxes], uploadedFileNames: [...(application.uploadedFileNames || [])], candidateId: application.candidate?.candidateId ?? null,
     } : {}),
   });
   // Auto Apply: the step's checklist checked on the page as it is now (read only).
@@ -4153,7 +4225,16 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       // themselves while nothing needs the Manager; the last step waits for one review of everything.
       // (Auto Apply waits for the Manager on every step: its own Next.)
       await onProgress({ step, phase: final ? 'final' : problems.length || auto ? 'needs_you' : 'next', problems: problems.length, unresolved: unresolved.size, aiCalls: application.aiCalls || 0, aiTimings: application.aiTimings || [], memory: memory() });
-      // (Auto Apply never clicks Next: every step waits for the Manager's own click, below.)
+      // (Auto Apply never clicks Next: every step waits for the Manager's own click, below. Except on
+      // the sites the Manager named, 2026-11-22: Dropbox's application, whose steps ("Save & Continue")
+      // go on by themselves once a step is filled with nothing left for the Manager. Never its Submit.)
+      if (auto && !final && !problems.length && !filled.stoppedByManager && !filled.waitingForKey
+        && AUTO_NEXT_SITES.test(self.__qtsSiteSessions.hostOf((await getTab(tab.id))?.url || '') || '')) {
+        await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
+        await interruptible(sleep(2500));
+        step += 1;
+        continue;
+      }
       if (!auto && reviewBeforeSubmit() && !submitsItself() && !final && !problems.length) {
         await inForm(tab.id, () => globalThis.__qtsApplyForm.clickButton('next'));
         await interruptible(sleep(2500));

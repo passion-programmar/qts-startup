@@ -27,6 +27,8 @@
   const SUBMIT_TEXT = /^(submit|submit application|submit your application|send application|apply|apply now|send|send (my |your )?(cv|resume|application)|submit (my |your )?(cv|resume)|aplikuj|wyślij( zgłoszenie| aplikację| cv)?|zaaplikuj|(bewerbung )?(absenden|senden)|jetzt bewerben|envoyer( ma candidature)?|postuler|enviar( candidatura| solicitud)?|candidatar(-se)?|invia( candidatura)?)$/i;
   const NEXT_TEXT = /^(next|continue|save (and|&) continue|next step|proceed|dalej|weiter|suivant|siguiente|continuar|avanti)$/i;
   const START_TEXT = /^(apply|apply now|apply (for|to) (this |the |a )?[^|]{2,60}|apply (online|here|today)|apply for job|start (your |my )?application|begin (your )?application|i['’]?m interested|aplikuj( teraz)?|zaaplikuj|(jetzt )?bewerben|postuler|aplicar( ahora)?|candidatar(-se)?|candidati( ora)?|apply (directly )?(on|at|via|through) (the )?(employer|company|hiring company|recruiter)['’]?s? (site|website|page|career(s)? (site|page))|apply (on|at) (company|employer) (site|website)|apply externally|apply on website|(continue|go|proceed) to (the )?(application|apply|employer['’]?s? site))$/i;
+  // Starting with the résumé read by the site (Workday's "Autofill with Resume").
+  const RESUME_START = /^(autofill|apply|start|continue) with (your |my )?(r[eé]sum[eé]|cv)$/i;
   const MANUAL_TEXT = /^(apply manually|manual application|apply without .{1,30}|fill (out|in) (the )?(form|application)( manually)?|fill (it|this|everything) (in|out)( manually)?|fill in manually|enter (it )?manually|type (it )?in manually|enter (your )?(details|information) manually|continue (manually|without .{1,30})|(continue|apply|proceed|check ?out) as (a )?guest|guest (application|apply|checkout)|skip( for now| this step| sign[ -]?in| login)?|i don['’]?t have an account)$/i;
   const ACCOUNT_ACTION_TEXT = /^(sign ?in|log ?in|register|sign ?up|create (an |your )?account|candidate login|candidate portal|apply with an account)$/i;
   const NOT_START = /linkedin|indeed|seek|xing|glassdoor|easy apply|with (google|facebook|apple|github|resume|cv)|later|save|share|refer|alert|similar|sign ?in|log ?in|register|autofill/i;
@@ -284,7 +286,9 @@
   }
 
   // Elements that are a field (or one option of one).
-  const FIELD_CONTROLS = 'input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"], [role="listbox"], [role="radiogroup"], button[aria-pressed], [contenteditable="true"]';
+  // (Also Revolut People's multi-select: a div named by aria-label inside its "MultiSelect__Wrapper".)
+  const MULTI_SELECT = '[class*="MultiSelect__Wrapper"] > [aria-label], [class*="MultiSelect__Wrapper"] > [data-testid]';
+  const FIELD_CONTROLS = `input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"], [role="listbox"], [role="radiogroup"], button[aria-pressed], [contenteditable="true"], ${MULTI_SELECT}`;
 
   /** The text of the boxes around a control, up to the first one that holds another field; '' when none. */
   function ownTextAround(control) {
@@ -395,7 +399,17 @@
    * Whether an upload's own section says it reads the résumé to fill the form (Zoho's "Autofill
    * Application" above "Upload your resume"). Stops at a section holding another upload.
    */
+  /** The nearest enclosing element with one of these tag names, across shadow roots too. */
+  function hostTag(element, names) {
+    for (let node = element; node; node = node.parentElement || node.getRootNode?.()?.host || null) {
+      if (names.includes(node.tagName)) return node;
+    }
+    return null;
+  }
+
   function autofillSection(element) {
+    // SmartRecruiters' "Easy Apply: autocomplete your application" drop box.
+    if (hostTag(element, ['OC-APPLY-WITH-RESUME'])) return true;
     for (let node = element.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth += 1) {
       if (node.querySelectorAll('input[type="file"]').length > 1) return false;
       const text = textOf(node);
@@ -413,6 +427,8 @@
    * own <label>, leaving out button words. Empty when only button words name it.
    */
   function uploadQuestion(control) {
+    // SmartRecruiters' own résumé box (named only "Choose a file or drop it here").
+    if (hostTag(control, ['OC-RESUME-UPLOAD'])) return 'Resume';
     const root = control.getRootNode();
     const named = (control.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
       .map((id) => textOf(root.getElementById?.(id)))
@@ -628,6 +644,14 @@
     // A component's own label first: the text next to the button may be its current value ("-None-").
     const component = componentLabel(control);
     if (component) return component;
+    // A button inside its own <label> (Revolut People): that label's words, without the value shown.
+    const wrapper = control.tagName === 'INPUT' ? control.closest('label') : null;
+    if (wrapper) {
+      const words = cleanText(wrapper.innerText || wrapper.textContent || '');
+      const value = cleanText(control.value || '');
+      const named = value && words.endsWith(value) ? words.slice(0, -value.length).trim() : words;
+      if (named) return named;
+    }
     const own = textOf(control);
     let label = blockQuestion(control).text || labelFor(control);
     if (own && label.endsWith(own)) label = label.slice(0, -own.length).trim();
@@ -658,7 +682,9 @@
 
   function isMenuButton(control) {
     const role = control.getAttribute('role');
+    // (Also an <input type="button"> that opens a list: Revolut People's dropdowns.)
     return control.tagName === 'BUTTON' || role === 'button'
+      || (control.tagName === 'INPUT' && control.type === 'button' && /^(listbox|menu|true)$/i.test(control.getAttribute('aria-haspopup') || ''))
       || (role === 'combobox' && control.tagName !== 'INPUT' && control.hasAttribute('aria-haspopup'));
   }
 
@@ -680,10 +706,16 @@
   // A styled radio group's choices: role="radio" items, or pressable buttons.
   function groupItems(group) {
     const radios = [...group.querySelectorAll('[role="radio"]')];
-    return radios.length ? radios : pressButtons(group);
+    if (radios.length) return radios;
+    // Tick boxes drawn as one choice (Revolut People): each option's label.
+    if (group.matches?.(TICK_CHOICE_GROUP)) return [...group.querySelectorAll('input[type="checkbox"]')].map((box) => box.closest('label') || box);
+    return pressButtons(group);
   }
 
-  const isChosen = (item) => item.getAttribute('aria-checked') === 'true' || item.getAttribute('aria-pressed') === 'true';
+  // Revolut People's single-choice questions: tick boxes inside one "RadioButtons-…" group.
+  const TICK_CHOICE_GROUP = '[data-testid^="RadioButtons"]';
+  const isChosen = (item) => item.getAttribute('aria-checked') === 'true' || item.getAttribute('aria-pressed') === 'true'
+    || (item.tagName === 'LABEL' && item.querySelector('input[type="checkbox"], input[type="radio"]')?.checked === true);
 
   // Ashby draws a required question's asterisk with CSS: its heading's class says "required".
   function headingRequired(element) {
@@ -816,6 +848,71 @@
         continue;
       }
       if (tag === 'INPUT' && control.closest(`[${RADIO_GROUP_ATTRIBUTE}="press"]`)) continue;
+      // Tick boxes that are one choice (Revolut People's "RadioButtons-…"): the group is the question.
+      const tickGroup = tag === 'INPUT' && control.type === 'checkbox' ? control.closest(TICK_CHOICE_GROUP) : null;
+      if (tickGroup) {
+        if (tickGroup.getAttribute(RADIO_GROUP_ATTRIBUTE) === '1' && fields.some((field) => field.id === tickGroup.getAttribute(FIELD_ATTRIBUTE))) continue;
+        const items = groupItems(tickGroup);
+        // The question is the text just before the group (its options are inside it), or before one of
+        // its boxes a few levels up ("Interview transcripts" sits above the group's wrapper).
+        let label = '';
+        for (let node = tickGroup, up = 0; !label && node && up < 4; node = node.parentElement, up += 1) {
+          const before = node.previousElementSibling;
+          const text = cleanText(before?.innerText || before?.textContent || '');
+          if (text && text.length < 300) label = text;
+        }
+        if (!label) label = blockQuestion(tickGroup.parentElement || tickGroup).text || labelFor(tickGroup);
+        mark(tickGroup, RADIO_GROUP_ATTRIBUTE, '1');
+        fields.push({
+          id: fieldId(tickGroup),
+          label,
+          kind: 'radio',
+          required: tickGroup.hasAttribute('required') || isRequired(tickGroup, label),
+          options: items.map(itemText).filter(Boolean),
+          hidden: !items.some((item) => isShown(item)),
+          disabled: false,
+        });
+        continue;
+      }
+      // A list drawn as a plain box with no input until opened (SoftServe's "Where did you hear about
+      // us?": <div class="select"> in a "select-wrapper", named by the label above it): opened to pick from.
+      if (tag === 'DIV' && /(^|\s)select(\s|$)/.test(String(control.className || '')) && /select-wrapper/.test(String(control.parentElement?.className || ''))
+        && !control.querySelector('input, select, textarea') && isShown(control)) {
+        const field = control.parentElement.parentElement;
+        const label = cleanText(field?.querySelector(':scope > label')?.textContent || '') || blockQuestion(control).text;
+        if (label) {
+          mark(control, MENU_ATTRIBUTE, 'lazy');
+          fields.push({
+            id: fieldId(control),
+            label,
+            kind: 'menu',
+            lazy: true,
+            required: /\*\s*$/.test(label) || isRequired(control, label),
+            options: [],
+            hidden: false,
+            disabled: false,
+          });
+          continue;
+        }
+      }
+      // Revolut People's multi-select (no input: a box named by aria-label): a list opened to pick from.
+      if (control.matches?.(MULTI_SELECT)) {
+        // Named by aria-label, else by its test id when that is words ("Preferred work locations").
+        const testId = control.getAttribute('data-testid') || '';
+        const label = cleanText(control.getAttribute('aria-label')) || (/^[A-Za-z][A-Za-z ]+$/.test(testId) ? cleanText(testId) : '') || blockQuestion(control).text;
+        mark(control, MENU_ATTRIBUTE, 'lazy');
+        fields.push({
+          id: fieldId(control),
+          label,
+          kind: 'menu',
+          lazy: true,
+          required: control.hasAttribute('required') || isRequired(control, label),
+          options: [],
+          hidden: !isShown(control),
+          disabled: control.getAttribute('aria-disabled') === 'true',
+        });
+        continue;
+      }
       // Menus count only inside the form (a "Share page" menu is not a question).
       if (isMenuButton(control) && control.closest('form, fieldset') && menuChoices(control)) {
         const label = labelFor(control);
@@ -835,7 +932,8 @@
       // A menu button beside an input (a phone number's country flag) belongs to that input.
       if (isMenuButton(control) && control.closest('form, fieldset')
         && /^(menu|listbox|true)$/i.test(control.getAttribute('aria-haspopup') || '') && !listboxChoices(control)
-        && !deepQuery(blockQuestion(control).block, 'input:not([type="hidden"]):not([aria-hidden="true"]), textarea').length
+        // (A button inside its own label, Revolut People's, is looked at within that label only.)
+        && !deepQuery(control.closest('label') || blockQuestion(control).block, 'input:not([type="hidden"]):not([aria-hidden="true"]), textarea').filter((box) => box !== control && box.type !== 'button').length
         // "Import resume from…" and autofill pickers are not questions.
         && !/import|autofill|upload|attach|apply with|\bresume\b|\bcv\b|svg/i.test(`${textOf(control)} ${labelFor(control)}`)) {
         const label = menuLabel(control);
@@ -948,7 +1046,7 @@
         ? control.closest('label') || (control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
         : null;
       const shown = type === 'file' ? isShown(control.closest('div, label, section') || control)
-        : isShown(control) || Boolean(ownLabel && isShown(ownLabel));
+        : isShown(control) || Boolean(ownLabel && isShown(ownLabel)) || Boolean(tag === 'SELECT' && selectWidget(control));
       if ((type === 'radio' || type === 'checkbox') && control.name) {
         const key = `${type}:${control.name}`;
         const option = choiceText(control);
@@ -971,6 +1069,10 @@
         field.hidden = field.hidden && !shown;
         continue;
       }
+      // A text box that only shows an upload's file name (SoftServe's "Attach Resume/CV" beside its
+      // file input) is the upload's, not a question of its own.
+      if (tag === 'INPUT' && type !== 'file' && /attach|upload|r[eé]sum[eé]|\bcv\b/i.test(label)
+        && deepQuery(blockQuestion(control).block || control.parentElement || document.body, 'input[type="file"]').length) continue;
       // A styled upload's input has no useful label of its own ("Attach"); its question names it.
       const blockLabel = type === 'file' ? blockQuestion(control).text : '';
       const fieldLabel = type === 'file'
@@ -1525,7 +1627,17 @@
     if (element.tagName === 'SELECT') {
       const option = [...element.options].find((entry) => optionText(entry).toLowerCase() === cleanText(value).toLowerCase());
       if (!option) return { ok: false, error: `"${value}" is not an option.` };
-      setNativeValue(element, option.value);
+      // A hidden select drawn as a widget beside it (jQuery nice-select): its own item is clicked, so the
+      // widget shows the choice and the site's script sets the select; the select itself as a fallback.
+      const widget = selectWidget(element);
+      const item = widget && [...widget.querySelectorAll('li[data-value], [data-value]')].find((entry) => entry.getAttribute('data-value') === option.value);
+      if (item) {
+        press(widget);
+        await sleep(150);
+        press(item);
+        await sleep(150);
+      }
+      if (element.value !== option.value) setNativeValue(element, option.value);
       return { ok: element.value === option.value, value: optionText(option) };
     }
     if (isTypedList(element)) {
@@ -1546,13 +1658,23 @@
     // A phone box beside a country-code picker: the picker on the number's country, the rest typed.
     // A box after a fixed start ("https://linkedin.com/in/") takes only what follows it.
     const typed = withoutBoxPrefix(element, await fitPhoneToPicker(element, String(value)));
+    // A search box (Lever's location, Google Places) keeps a value only when a suggestion is picked:
+    // up to 700 ms for its list. A plain box (name, email, website) that says nothing of a list is
+    // looked at once (each look reads the whole page): no list is coming.
+    const mayList = Boolean(element.getAttribute('aria-autocomplete') || element.getAttribute('role') === 'combobox'
+      || element.getAttribute('aria-controls') || element.getAttribute('aria-owns') || element.hasAttribute('list')
+      || SUGGEST_HINT.test([element.className, element.id, element.name, element.parentElement?.className].map((part) => String(part || '')).join(' '))
+      || /\b(location|city|town|address|place|school|university|company|employer)\b/i.test(labelFor(element) || ''));
     // Suggestions already showing (another field's list) are marked, so only this box's are used.
-    markShownChoices();
+    if (mayList) markShownChoices();
     element.focus();
     setNativeValue(element, typed);
-    // A search box (Lever's location, Google Places) keeps a value only when a suggestion is picked.
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    const suggestion = pickSuggestion(element, typed);
+    let suggestion = null;
+    for (let waited = 0; waited < (mayList ? 700 : 100); waited += mayList ? 50 : 100) {
+      await new Promise((resolve) => setTimeout(resolve, mayList ? 50 : 100));
+      suggestion = mayList ? pickSuggestion(element, typed) : null;
+      if (suggestion) break;
+    }
     if (suggestion) {
       suggestion.click();
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -1835,9 +1957,17 @@
       form ? forms.indexOf(form) : -1, headingAbove(element), question(element), Math.max(0, peers.indexOf(element))]);
   }
 
+  // A class that marks an error itself ("error", "field-error", "is-invalid"), never a utility class that
+  // only styles one when it comes ("aria-invalid:border-red", Tailwind / shadcn, on Workfully's button).
+  const ERROR_CLASS = /^(?!.*:)[\w-]*(error|invalid)[\w-]*$/i;
+  // (Never an item of a dropdown list: a list widget marks its items with such classes too; Dropbox's
+  // "Other" school item once its box was emptied.)
+  const errorMarked = (node) => node.getAttribute?.('role') === 'alert'
+    || (!node.matches?.('button, [role="button"], a') && !node.closest?.('[role="listbox"], [role="option"], select, [class*="choices__list"], [class*="dropdown"], [class*="__menu"]')
+      && String(node.className?.baseVal ?? node.className ?? '').split(/\s+/).some((name) => ERROR_CLASS.test(name)));
   function uploadError(element, scope = uploadScope(element)) {
     const errors = [scope, ...deepQuery(scope, '[role="alert"], [class*="error" i], [class*="invalid" i]')];
-    const message = errors.filter(node => node.matches?.('[role="alert"], [class*="error" i], [class*="invalid" i]')
+    const message = errors.filter(node => errorMarked(node)
       && isShown(node) && !node.contains(element) && textOf(node).length < 300).map(textOf).find(Boolean);
     return message || (element.getAttribute?.('aria-invalid') === 'true' ? 'The site marks this upload as invalid.' : '');
   }
@@ -1849,17 +1979,40 @@
       || /\b(uploading|processing upload|scanning file)\b/i.test(textOf(scope));
   }
 
+  /** Whether the page is still uploading or reading a file anywhere (its form may be hidden meanwhile). */
+  function pageUploadBusy() {
+    if (!document.body) return false;
+    // The page's words or a busy mark anywhere; a progress bar only inside an upload's own area (a
+    // form's "0% complete" bar, Dropbox's, is no upload).
+    if (/\b(uploading|processing upload|scanning file)\b/i.test(textOf(document.body))) return true;
+    if (deepQuery(document.body, '[aria-busy="true"]').some((node) => isShown(node))) return true;
+    return deepQuery(document.body, 'input[type="file"]').some((input) => uploadBusy(uploadScope(input)));
+  }
+
   function exactFilenameShown(scope, filename) {
     const escaped = filename.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&');
     const pattern = new RegExp('(^|[^\\p{L}\\p{N}_-])' + escaped + '(?![\\p{L}\\p{N}_.-])', 'iu');
     // ShadowRoot.textContent concatenates adjacent labels and attachment names without spaces.
-    return [scope, ...deepQuery(scope, '*')].some(node => pattern.test(textOf(node)));
+    // (Also a box that shows the attached file's name as its value: SoftServe's "Attach Resume/CV".)
+    return [scope, ...deepQuery(scope, '*')].some(node => pattern.test(textOf(node))
+      || (node.tagName === 'INPUT' && node.type !== 'file' && pattern.test(String(node.value || ''))));
   }
 
   function uploadHolds(id) {
     const element = findField(id);
     if (!element || uploadError(element) || uploadBusy(uploadScope(element))) return false;
-    return Boolean(element.files?.length || SHOWN_FILE_NAME.test(textOf(uploadScope(element))));
+    return Boolean(element.files?.length || SHOWN_FILE_NAME.test(textOf(uploadScope(element))) || fileNameBox(element));
+  }
+
+  /**
+   * A box beside an upload that shows the attached file's name as its value (SoftServe's read-only
+   * "Attach Resume/CV" next to its file input, which empties itself once the site took the file).
+   */
+  function fileNameBox(element) {
+    const block = blockQuestion(element).block || element.parentElement;
+    if (!block) return null;
+    return deepQuery(block, 'input:not([type="file"]):not([type="hidden"])')
+      .find((box) => SHOWN_FILE_NAME.test(String(box.value || '')) && deepQuery(block, 'input[type="file"]').length === 1) || null;
   }
 
   async function inspectUpload(element, file) {
@@ -1885,6 +2038,9 @@
     }
     if (exactFilenameShown(scope, file.filename)) return { state: 'confirmed' };
     if (SHOWN_FILE_NAME.test(textOf(scope))) return { state: 'mismatch', error: 'This upload shows a different filename. Check the attachment manually.' };
+    // The file's name shown in a box beside the upload (SoftServe).
+    const nameBox = fileNameBox(element);
+    if (nameBox) return exactFilenameShown(nameBox.parentElement || nameBox, file.filename) ? { state: 'confirmed' } : { state: 'mismatch', error: 'This upload shows a different filename. Check the attachment manually.' };
     return { state: 'empty' };
   }
 
@@ -1969,8 +2125,20 @@
     const problems = [];
     for (const [key, record] of uploadState.entries) {
       if (record.context !== uploadState.context || record.pageUrl !== location.href) continue;
-      const result = uploadOutcome(record, await inspectUploadRecord(record, key));
-      if (!result.ok) {
+      // A site still uploading or reading the file (Oracle shows "Uploading…" for many seconds): waited
+      // for, up to 20 s, before it counts as a problem.
+      let observed = await inspectUploadRecord(record, key);
+      for (let waited = 0; observed?.state === 'pending' && waited < 20000; waited += 1000) {
+        await sleep(1000);
+        observed = await inspectUploadRecord(record, key);
+      }
+      const result = uploadOutcome(record, observed);
+      // A site that redrew its upload area (Oracle after its résumé import) loses the box QTS used:
+      // the file's own name shown on the page, with nothing still uploading, is the document attached.
+      // (Never one the site rejected, or a different file: those stay problems.)
+      const shownOnPage = !result.ok && !['rejected', 'mismatch'].includes(observed?.state) && record.file?.filename && document.body
+        && !uploadBusy(document.body) && exactFilenameShown(document.body, record.file.filename);
+      if (!result.ok && !shownOnPage) {
         const element = currentUpload(key, record.element);
         problems.push({ id: element ? fieldId(element) : record.id, label: record.label, message: result.error });
       }
@@ -1990,8 +2158,14 @@
 
   async function pickMenuChoice(button, value) {
     const wanted = cleanText(value).toLowerCase();
-    // Already showing this choice: left as it is, never opened again.
+    // Already showing this choice: left as it is, never opened again (a multi-select shows its picks
+    // beside its name, "Preferred work locations Romania": picking Romania again would untick it).
     if (sameWords(textOf(button), value)) return { ok: true, value: textOf(button) };
+    if (button.matches?.(MULTI_SELECT)) {
+      const picked = textOf(button).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ');
+      const wantedWords = String(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+      if (wantedWords && ` ${picked} `.includes(` ${wantedWords} `)) return { ok: true, value: textOf(button) };
+    }
     if (['listbox', 'lazy'].includes(button.getAttribute(MENU_ATTRIBUTE))) {
       // The choices appear in a popup (often outside the form) only once the button is pressed.
       if (button.getAttribute('aria-expanded') !== 'true') press(button);
@@ -2003,8 +2177,18 @@
       const squash = (text) => String(text).toLowerCase().replace(/[^a-z0-9]+/g, '');
       const target = squash(wanted);
       let option = null;
+      let searched = false;
       for (let waited = 0; waited < 3000 && !option; waited += 250) {
         await new Promise((resolve) => setTimeout(resolve, 250));
+        // A long list draws only its first choices; its own search box (focused when it opens,
+        // Revolut People's country list) is given the answer to bring it into view.
+        const search = focusedElement();
+        if (!searched && waited >= 500 && search && search !== button && search.tagName === 'INPUT'
+          && /^(search|text)$/i.test(search.type || 'text') && !search.hasAttribute(FIELD_ATTRIBUTE)) {
+          searched = true;
+          setNativeValue(search, String(value));
+          search.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         const shown = ownList() || shownChoices();
         option = shown.find((element) => squash(itemText(element)) === target)
           || shown.find((element) => squash(itemText(element)) && (target.includes(squash(itemText(element))) || squash(itemText(element)).includes(target)))
@@ -2018,7 +2202,10 @@
       press(option);
       await new Promise((resolve) => setTimeout(resolve, 300));
       // A Selectize input is empty; its box shows the choice.
-      const display = button.tagName === 'INPUT' ? textOf(button.closest('[class*="control" i]') || button.parentElement) : textOf(button);
+      // (A button-type input shows its choice as its own value: Revolut People's.)
+      const display = button.tagName === 'INPUT'
+        ? (button.type === 'button' && button.value ? cleanText(button.value) : textOf(button.closest('[class*="control" i]') || button.parentElement))
+        : textOf(button);
       const shownNow = squash(display);
       return { ok: Boolean(shownNow) && (squash(picked).includes(shownNow) || shownNow.includes(squash(picked))), value: display };
     }
@@ -2065,23 +2252,102 @@
       || /(^|\s)(pac-item|dropdown-location|location-result|autocomplete-item|suggestion)/i.test(entry.className || '')
       // react-select's choices (Pinpoint): <div class="react-select__option"> with no option role.
       || /(^|\s)[\w-]*select__option(\s|$)/i.test(entry.className || '')
+      // Oracle Candidate Experience's cx-select: <div class="cx-select__list-item-container"> (a click picks it).
+      || /(^|\s)[\w-]*select__list-item-container(\s|$)/i.test(entry.className || '')
+      // SmartRecruiters' city search: <div class="c-spl-autocomplete-default-option">.
+      || /(^|\s)[\w-]*autocomplete[\w-]*-option(\s|$)/i.test(entry.className || '')
     )).filter((entry) => (ownList ? ownList.contains(entry) : !entry.hasAttribute(SEEN_ATTRIBUTE)))
       .filter((entry) => answerable(itemText(entry)));
+  }
+  /**
+   * Whether this box's list says its search found nothing ("No options" in React Select, "No results",
+   * "0 matches found" read aloud by Oracle): the search is answered, no need to wait for more.
+   */
+  const NOTHING_FOUND = /^(no (options|results?|matches|items|suggestions)( found)?|nothing found|0 (results|matches)( found)?|keine (ergebnisse|optionen))\.?$/i;
+  function listSaysNothing(id) {
+    const element = findField(id);
+    if (!element) return false;
+    const listId = element.getAttribute('aria-controls') || element.getAttribute('aria-owns');
+    const own = listId ? element.getRootNode().getElementById?.(listId) : null;
+    const box = ownBox(element) || element.parentElement;
+    const places = [own, box, box?.parentElement].filter(Boolean);
+    return places.some((place) => deepQuery(place, '*').some((node) => node.children.length === 0 && isShown(node) && NOTHING_FOUND.test(cleanText(node.textContent || ''))))
+      || deepQuery(document, '[aria-live]').some((node) => /^0 (results|matches)|no (results|matches)/i.test(cleanText(node.textContent || '')));
+  }
+
+  /** The visible widget a site draws over a hidden select (jQuery nice-select), or null. */
+  function selectWidget(select) {
+    if (!select || isShown(select)) return null;
+    const next = select.nextElementSibling;
+    return next && /(^|\s)nice-select(\s|$)/.test(String(next.className || '')) && isShown(next) ? next : null;
+  }
+
+  /** Whether a tick box is ticked now. */
+  function findFieldChecked(id) {
+    const element = findField(id);
+    return Boolean(element && element.checked);
+  }
+
+  /** The text in the box itself, nothing around it ("+40" where the box shows "+40 Country code"). */
+  function boxValue(id) {
+    const element = findField(id);
+    return element && 'value' in element ? String(element.value || '') : '';
+  }
+  /** Whether this box says its list is open now (aria-expanded on it or on its combobox). */
+  function listOpen(id) {
+    const element = findField(id);
+    if (!element) return false;
+    const owner = element.closest('[aria-expanded]');
+    return (element.getAttribute('aria-expanded') || owner?.getAttribute('aria-expanded')) === 'true';
   }
   function suggestionTexts(id) {
     return suggestionElements(id).map(itemText).slice(0, 300);
   }
   /** The suggestion matching an answer, with where to click it: the same one, else the closest. */
-  function suggestionChoiceBox(id, value) {
+  function suggestionChoiceBox(id, value, exact = false) {
     const squash = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
     const entries = suggestionElements(id);
     const first = String(value).split(',')[0].trim();
+    /**
+     * Where a click really lands on the choice: what the screen shows at its centre must be the choice
+     * (a sticky header or another copy of the list can sit there). Moved into view the least first, then
+     * to the middle; null when neither shows it.
+     */
+    const reachable = (entry) => {
+      // Never scrolled to the middle: a page scroll closes some open lists (Oracle's).
+      for (const block of ['nearest']) {
+        const centre = centreOf(entry, block);
+        if (!centre) continue;
+        if (entry.ownerDocument !== document) return centre;
+        const hit = deepElementFromPoint(centre.x, centre.y);
+        // The choice itself (or something inside it), never a wrapper around the box and its list.
+        if (hit && (hit === entry || entry.contains(hit))) return centre;
+      }
+      return null;
+    };
+    // exact: the whole list shows (nothing typed yet), so only the same choice, never a close one.
+    if (exact) {
+      const same = entries.find((entry) => squash(itemText(entry)) === squash(value));
+      const centre = same && reachable(same);
+      return centre ? { ...centre, text: itemText(same) } : null;
+    }
     const choice = entries.find((entry) => squash(itemText(entry)) === squash(value))
       || entries.find((entry) => closeChoice(itemText(entry), value))
       || entries.find((entry) => wordsOf(first).trim() && wordsOf(itemText(entry)).startsWith(wordsOf(first)))
       || entries.find((entry) => closeChoice(itemText(entry), first));
-    const centre = choice && centreOf(choice);
+    const centre = choice && reachable(choice);
     return centre ? { ...centre, text: itemText(choice) } : null;
+  }
+
+  /** The element shown at a point, inside shadow roots too. */
+  function deepElementFromPoint(x, y) {
+    let hit = document.elementFromPoint(x, y);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
   }
 
   /** Empties a text box Apply does not answer, so nothing someone else typed there is sent. */
@@ -2137,7 +2403,7 @@
     const block = element.matches('input[type="file"], [' + DROP_ATTRIBUTE + ']') ? uploadScope(element) : blockQuestion(element).block;
     // Inside page components too: a component shows its own field's error in its shadow root.
     const message = deepQuery(block, '[role="alert"], [class*="error" i], [class*="invalid" i]')
-      .filter((node) => isShown(node) && !node.contains(element) && textOf(node) && textOf(node).length < 300)
+      .filter((node) => errorMarked(node) && isShown(node) && !node.contains(element) && textOf(node) && textOf(node).length < 300)
       .map(textOf)[0];
     if (message) return message;
     return element.getAttribute('aria-invalid') === 'true' ? 'The site marks this answer as invalid.' : '';
@@ -2146,9 +2412,17 @@
   // For real clicks (the service worker's debugger input), which some dropdowns require: Greenhouse's
   // React Select and BambooHR's menus ignore simulated events.
 
-  function centreOf(element) {
+  function centreOf(element, block = 'center') {
     // Instant: a page with smooth scrolling would still be moving when the position is measured.
-    element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    // A choice in an open list: block 'nearest' (an item in view is not moved; a page scroll closes
+    // some lists, Oracle's cx-select among them).
+    if (block === 'upper') {
+      // A list's box near the top of the screen, so the list it opens has room below it.
+      element.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' });
+      const top = element.getBoundingClientRect().top;
+      const wanted = Math.round(innerHeight * 0.22);
+      if (Math.abs(top - wanted) > 8) element.ownerDocument?.defaultView?.scrollBy?.({ top: top - wanted, behavior: 'instant' });
+    } else element.scrollIntoView({ block, inline: 'nearest', behavior: 'instant' });
     const box = element.getBoundingClientRect();
     if (!box.width || !box.height) return null;
     // Inside a frame its box is measured from the frame: the frames' own places are added.
@@ -2189,7 +2463,9 @@
     const target = isTypedList(element)
       ? ownBox(element) || element
       : element;
-    return centreOf(target);
+    // A box that opens a list (Oracle's cx-select, React Select…) goes near the top of the screen.
+    const opensList = isTypedList(element) || element.getAttribute('role') === 'combobox' || element.getAttribute('aria-haspopup') === 'listbox';
+    return centreOf(target, opensList ? 'upper' : 'center');
   }
 
   /** The element that has the cursor, inside shadow roots too. */
@@ -2224,6 +2500,10 @@
       POPUP_ITEM.test(element.getAttribute('role') || '')
       || (element.tagName === 'LI' && element.closest('[role="listbox"], [role="menu"]'))
       || /(^|[\s_-])(option|menu-?item|dropdown-?item|select-?item)([\s_-]|$)|(^|\s)(pac-item|dropdown-location|location-result|autocomplete-item|suggestion)/i.test(String(element.className || ''))
+      // Oracle Candidate Experience's cx-select items.
+      || /(^|\s)[\w-]*select__list-item-container(\s|$)/i.test(String(element.className || ''))
+      // SmartRecruiters' city search items.
+      || /(^|\s)[\w-]*autocomplete[\w-]*-option(\s|$)/i.test(String(element.className || ''))
     )).filter((element, index, all) => !all.some((other, otherIndex) => otherIndex !== index && element.contains(other) && textOf(other) === textOf(element)));
   }
 
@@ -2508,6 +2788,9 @@
       // file input or a drop box, or a question asking for a document, is left to it. Sites swap
       // the input for the file's name once uploaded (Greenhouse).
       if (deepQuery(block, `input[type="file"], [${DROP_ATTRIBUTE}]`).length || UPLOAD_QUESTION.test(question)) continue;
+      // An employment entry's "To Date" while its "I currently work here" is ticked (Dropbox): not needed.
+      const entryEnd = block.querySelector('[name^="work_enddate_"]');
+      if (entryEnd && document.querySelector(`[name="work_current_${/_(\d+)$/.exec(entryEnd.name)?.[1]}"]`)?.checked) continue;
       // Inside page components too: SmartRecruiters keeps its phone input in a shadow root.
       const marked = [block, ...deepQuery(block, `[${FIELD_ATTRIBUTE}]`)];
       // A field the page hid once answered (a picked dropdown, an uploaded file) still counts; a
@@ -2567,6 +2850,12 @@
   }
 
   /** Field error messages shown on the page (after filling, before Submit). */
+  /** Whether this box is marked invalid by the site now (aria-invalid on it). */
+  function fieldError(id) {
+    const element = findField(id);
+    return Boolean(element && element.getAttribute('aria-invalid') === 'true');
+  }
+
   function fieldErrors() {
     const errors = [];
     for (const element of allElements()) {
@@ -2621,13 +2910,16 @@
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const page = document.scrollingElement || document.documentElement;
     const start = page.scrollTop;
+    const heightBefore = page.scrollHeight;
+    // Short pauses while the page does not grow; the full moment only for a page that drew more.
     for (let step = 0, last = -1; step < 25 && page.scrollTop !== last; step += 1) {
       last = page.scrollTop;
       page.scrollBy({ top: Math.max(400, window.innerHeight * 0.9), behavior: 'instant' });
-      await wait(200);
+      await wait(page.scrollHeight > heightBefore ? 200 : 80);
     }
-    // A site draws a section a moment after it is reached: the end of the page is given that moment.
-    await wait(600);
+    // A site draws a section a moment after it is reached: the end of the page is given that moment
+    // (shorter when nothing was drawn on the way).
+    await wait(page.scrollHeight > heightBefore ? 600 : 200);
     const boxes = allElements().filter((element) => element.scrollHeight > element.clientHeight + 200 && /auto|scroll/.test(getComputedStyle(element).overflowY) && isShown(element)).slice(0, 3);
     for (const box of boxes) {
       const before = box.scrollTop;
@@ -3091,8 +3383,11 @@
     const fields = assistant ? scanForAssist() : scanForm();
     const hasApplicationFields = fields.some((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account
       && !unrelatedBox(findField(field.id) || document.body));
+    // "Autofill with Resume" (Workday's start page) comes first where a site offers it: the site reads
+    // the résumé and fills its own boxes (the Manager's choice of 2026-11-22). Never LinkedIn or Indeed.
+    const withResume = candidates.find((element) => RESUME_START.test(startText(element)));
     const button = !hasApplicationFields
-      ? starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || manual || null
+      ? withResume || starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || manual || null
       : null;
     if (button) {
       if (probe) return { ok: true, action: 'application', text: startText(button) };
@@ -3231,6 +3526,23 @@
 
   // Forms that are not the application: a site search, a newsletter, job alerts.
   const UNRELATED_FORM = /\b(news ?letters?|subscri(be|ption)|job ?alerts?|get (job )?notified|notify me|mailing list|talent (community|network|pool)|stay (in touch|updated)|search)\b/i;
+  /**
+   * The page's application form when it has several: the one with a résumé/CV upload, else the one
+   * with clearly the most boxes (at least 3). Null with one form or none, or when it is not clear.
+   */
+  function applicationForm() {
+    const forms = [...document.querySelectorAll('form')].filter((form) => isShown(form));
+    if (forms.length < 2) return null;
+    const boxesIn = (form) => [...form.querySelectorAll('input, select, textarea')]
+      .filter((element) => !['hidden', 'submit', 'button', 'image', 'reset'].includes((element.type || '').toLowerCase())).length;
+    const withCv = forms.filter((form) => form.querySelector('input[type="file"]'));
+    if (withCv.length === 1) return withCv[0];
+    const ranked = forms.map((form) => ({ form, boxes: boxesIn(form) })).sort((a, b) => b.boxes - a.boxes);
+    return ranked[0].boxes >= 3 && ranked[0].boxes >= 2 * (ranked[1]?.boxes || 0) ? ranked[0].form : null;
+  }
+
+  // A careers page's box for its own employees (sign-in, referrals).
+  const EMPLOYEE_BOX = /\balready (working|employed|work) (at|for|with)\b|\brecruit together\b|\brefer a (friend|colleague)\b|\bemployee (login|sign[- ]?in|referral|portal)\b/i;
   const PAGE_FRAME = 'header, nav, footer, [role="banner"], [role="navigation"], [role="contentinfo"]';
 
   /** The <form> a control sits in, out of page components too; null outside any form. */
@@ -3251,8 +3563,17 @@
       if (node.tagName === 'SEARCH' || node.getAttribute?.('role') === 'search') return true;
     }
     if (cookieBanner(control)) return true;
+    // An employees' own sign-in or referral box on the careers page (Teamtailor's "Already working at
+    // Avenga? Let's recruit together… Log in", section "auto-join"): not the application.
+    if (control.closest?.('[id*="auto-join"], [class*="auto-join"]')) return true;
+    const section = control.closest?.('section, aside');
+    if (section && EMPLOYEE_BOX.test(cleanText(section.innerText || '').slice(0, 300))) return true;
     const form = formOf(control);
     if (!form) return Boolean(control.closest(PAGE_FRAME));
+    // Only the application form is filled (the Manager's rule of 2026-11-22): on a page with several
+    // forms, a box in any form other than the application's is not touched.
+    const main = applicationForm();
+    if (main && form !== main && !main.contains(form) && !form.contains(main)) return true;
     const named = `${form.id} ${typeof form.className === 'string' ? form.className : ''} ${form.getAttribute('name') || ''} ${form.getAttribute('action') || ''} ${form.getAttribute('aria-label') || ''}`;
     if (UNRELATED_FORM.test(named.replace(/[-_/.?=&]+/g, ' '))) return true;
     const boxes = [...form.querySelectorAll('input, select, textarea')]
@@ -3651,12 +3972,232 @@
       if (STRICT_TRACKING_BOX.test(field.label) && !isUnanswered(field)) field = { ...field, trackingValue: true };
       if (fullNotes && field.note) field = { ...field, note: fullHelpText(element) || field.note };
       if (managerChanged(element, field)) field = { ...field, managerChanged: true };
+      // A box of a Skills / Experience / Education entry form (Oracle): filled only by the entry step.
+      if (inRepeatedEntry(element)) field = { ...field, cardForm: true };
+      if (element.closest?.('.apply-flow-block__region[aria-label]') && Object.values(SECTION_KINDS).some((kind) => kind.test(cleanText(element.closest('.apply-flow-block__region[aria-label]').getAttribute('aria-label'))))) field = { ...field, cardForm: true };
       if (unrelatedBox(element)) return { ...field, unrelated: true };
       return accountBox(element) ? { ...field, account: true } : field;
     });
   }
 
+  // ---- Repeated entries (Dropbox's careers site: "Employment *" and "Education *", each with "Add") ----
+  // Employment entry: Job Title (work_title_N), Company (a search list over work_company_N), "I currently
+  // work here" (work_current_N), From and To months (work_startdate_N / work_enddate_N).
+  // Education entry: School (a search list over education_schoolnameid_N), Qualification
+  // (education_degreeid_N), Field of study (education_disciplineid_N), From and To months.
+  const ENTRY_KINDS = {
+    employment: { heading: /^employment\s*\*?$/i, key: '[name^="work_title_"]', prefix: 'work' },
+    education: { heading: /^education\s*\*?$/i, key: '[name^="education_schoolnameid_"]', prefix: 'education' },
+  };
+  const entryKeys = (kind) => [...document.querySelectorAll(ENTRY_KINDS[kind].key)];
+  const entryNumber = (element) => /_(\d+)$/.exec(element?.getAttribute('name') || '')?.[1] || null;
+  /** A kind's section and its own "Add" button: { scope, add }, or null when the page has no such section. */
+  function entrySection(kind) {
+    const spec = ENTRY_KINDS[kind];
+    const heading = [...document.querySelectorAll('legend, h2, h3, h4, label, p, div, span')]
+      .find((node) => node.children.length <= 2 && spec.heading.test(cleanText(node.textContent || '')) && isShown(node));
+    const first = entryKeys(kind)[0];
+    if (!heading && !first) return null;
+    // The smallest box around the heading that holds an "Add" button.
+    let scope = heading || first;
+    const addIn = (box) => [...box.querySelectorAll('button, a, [role="button"]')].find((button) => isShown(button) && /^\+?\s*add$/i.test(cleanText(button.innerText || button.getAttribute('aria-label') || '')));
+    while (scope && scope !== document.body && !addIn(scope)) scope = scope.parentElement;
+    return scope ? { scope, add: addIn(scope) || null } : null;
+  }
+  /** How many entries of a kind the page shows; -1 when it has no such section. */
+  function entryCount(kind) {
+    if (!entrySection(kind)) return -1;
+    return entryKeys(kind).length;
+  }
+  /** Adds one entry with the section's own "Add"; the new count (the same when nothing appeared). */
+  async function addEntry(kind) {
+    const before = entryKeys(kind).length;
+    const add = entrySection(kind)?.add;
+    if (!add) return before;
+    press(add);
+    for (let waited = 0; waited < 3000 && entryKeys(kind).length === before; waited += 150) await sleep(150);
+    return entryKeys(kind).length;
+  }
+  /** The search box a site draws over a hidden list (in the same block as the list). */
+  function searchBoxOf(select) {
+    let block = select?.parentElement;
+    for (let up = 0; up < 4 && block && !block.querySelector('input[role="combobox"]'); up += 1) block = block.parentElement;
+    return block?.querySelector('input[role="combobox"]') || null;
+  }
+  /** Entry n of a kind: its boxes as QTS fields (ids set) and each list's real choice and choices. */
+  function entryFields(kind, index) {
+    const key = entryKeys(kind)[index];
+    const number = entryNumber(key);
+    if (!number) return null;
+    const prefix = ENTRY_KINDS[kind].prefix;
+    const byName = (name) => document.querySelector(`[name="${prefix}_${name}_${number}"]`);
+    const as = (element, label, kind) => (element ? { id: fieldId(element), label, kind, required: true } : null);
+    const list = (select, label) => (select ? {
+      box: as(searchBoxOf(select), label, 'combobox'),
+      list: as(select, label, 'select'),
+      chosen: select.value ? cleanText(select.options[select.selectedIndex]?.text || '') : '',
+      options: [...select.options].map((option) => cleanText(option.text)).filter((text) => text && !/^please select$/i.test(text)),
+    } : null);
+    if (kind === 'employment') {
+      return {
+        title: as(byName('title'), 'Job Title', 'text'),
+        company: list(byName('company'), 'Company'),
+        current: as(byName('current'), 'I currently work here', 'checkbox'),
+        start: as(byName('startdate'), 'From Date', 'month'),
+        end: as(byName('enddate'), 'To Date', 'month'),
+      };
+    }
+    return {
+      school: list(byName('schoolnameid'), 'School name'),
+      degree: list(byName('degreeid'), 'Qualification'),
+      field: list(byName('disciplineid'), 'Field of study'),
+      start: as(byName('startdate'), 'From Date', 'month'),
+      end: as(byName('enddate'), 'To Date', 'month'),
+    };
+  }
+  /** Whether a box belongs to a repeated entry (filled by the entry step, not as a question). */
+  function inRepeatedEntry(element) {
+    const entryName = (node) => /^(work|education)_[a-z]+_\d+$/.test(node?.getAttribute?.('name') || '');
+    if (entryName(element)) return true;
+    if (element.getAttribute?.('role') !== 'combobox') return false;
+    // The search box over an entry's list: the nearest block holding a list is that entry's.
+    let block = element.parentElement;
+    for (let up = 0; up < 4 && block; up += 1, block = block.parentElement) {
+      const select = block.querySelector('select');
+      if (select) return entryName(select);
+    }
+    return false;
+  }
+
+  // ---- Card sections (Oracle Candidate Experience: Skills, Experience, Education) ----
+  // A region (aria-label "Skills Required", "Experience ", "Education ") holding cards, each with Edit
+  // and Delete, and an "ADD …" button that opens a small form saved by its own "ADD …" button.
+  const SECTION_KINDS = { skills: /^skills\b/i, experience: /^(work )?experience\b/i, education: /^education\b/i };
+  const ADD_WORDS = { skills: /^add (more )?skills?$/i, experience: /^add experience$/i, education: /^add education$/i };
+  const sectionRegion = (kind) => [...document.querySelectorAll('.apply-flow-block__region[aria-label]')]
+    .find((region) => isShown(region) && SECTION_KINDS[kind]?.test(cleanText(region.getAttribute('aria-label'))));
+  const regionButtons = (region, pattern) => [...region.querySelectorAll('button')]
+    .filter((button) => isShown(button) && pattern.test(cleanText(button.innerText || button.getAttribute('aria-label') || '')));
+
+  /**
+   * A section's remove buttons: each card's Delete, and the ✕ on each skill chip ("Additional skills
+   * you've shared": a small button "x" / "×" / "Remove …"). Never a box's own "Remove value for …"
+   * clear button, nor anything inside an open ADD form.
+   */
+  const removeButtons = (region) => [...region.querySelectorAll('button, [role="button"]')].filter((button) => {
+    if (!isShown(button) || button.closest('.app-dialog, [role="dialog"]')) return false;
+    const words = cleanText([button.getAttribute('aria-label'), button.getAttribute('title'), button.innerText].filter(Boolean).join(' '));
+    if (/remove value for|clear|close|open the drop/i.test(words)) return false;
+    return /^(delete|remove)\b/i.test(words) || /^[x×✕✖]$/i.test(cleanText(button.innerText || ''));
+  });
+
+  /** The card sections on the page: [{ kind, cards, flagged }] (flagged: cards marked "Fields to fix"). */
+  function cardSections() {
+    return Object.keys(SECTION_KINDS).map((kind) => {
+      const region = sectionRegion(kind);
+      if (!region) return null;
+      return { kind, cards: removeButtons(region).length, flagged: (cleanText(region.innerText).match(/fields to fix/gi) || []).length };
+    }).filter(Boolean);
+  }
+
+  /** Removes every card or chip of a section with its own ✕ / Delete (no confirmation on Oracle). How many are left. */
+  async function deleteSectionCards(kind) {
+    for (let round = 0; round < 80; round += 1) {
+      const region = sectionRegion(kind);
+      const next = region && removeButtons(region)[0];
+      if (!next) break;
+      press(next);
+      await sleep(200);
+    }
+    await sleep(300);
+    const region = sectionRegion(kind);
+    return region ? removeButtons(region).length : 0;
+  }
+
+  /** Opens a section's "ADD …" form; its boxes as fields (ids set), or null when it did not open. */
+  async function openSectionForm(kind) {
+    const region = sectionRegion(kind);
+    const add = region && regionButtons(region, ADD_WORDS[kind])[0];
+    if (!add) return null;
+    press(add);
+    for (let waited = 0; waited < 4000; waited += 250) {
+      await sleep(250);
+      const now = sectionRegion(kind);
+      const fields = scanForAssist().filter((field) => {
+        const element = findField(field.id);
+        return element && now?.contains(element) && !field.hidden && !field.disabled;
+      });
+      if (fields.length) return fields;
+    }
+    return null;
+  }
+
+  /**
+   * Opens the first card marked "Fields to fix" with its own Edit (✎). { text, fields } (the card's
+   * words, the edit form's boxes with ids set), or null when no such card or the form did not open.
+   */
+  async function openFlaggedCard(kind) {
+    const region = sectionRegion(kind);
+    if (!region) return null;
+    // Each entry is its own tile (Oracle: <article class="apply-flow-profile-item-tile">); else the
+    // smallest box around the Edit that holds one Edit only.
+    const cardOf = (button) => {
+      const tile = button.closest('article, .apply-flow-profile-item-tile, [data-profile-item-tile]');
+      if (tile && region.contains(tile)) return tile.closest('article') || tile;
+      let card = button.parentElement;
+      while (card && card !== region && card.parentElement && card.parentElement !== region
+        && [...card.parentElement.querySelectorAll('button')].filter((item) => /^edit$/i.test(cleanText(item.innerText || item.getAttribute('aria-label') || ''))).length === 1) card = card.parentElement;
+      return card;
+    };
+    // Shown or not: Oracle shows a tile's Edit only while the pointer is over it.
+    const edits = [...region.querySelectorAll('button')].filter((button) => /^edit$/i.test(cleanText(button.innerText || button.getAttribute('aria-label') || '')) && !button.closest('.app-dialog, [role="dialog"]'));
+    const edit = edits.find((button) => /fields to fix/i.test(cardOf(button)?.innerText || ''));
+    if (!edit) return null;
+    const text = cleanText(cardOf(edit)?.innerText || '');
+    press(edit);
+    for (let waited = 0; waited < 4000; waited += 250) {
+      await sleep(250);
+      const now = sectionRegion(kind);
+      const fields = scanForAssist().filter((field) => {
+        const element = findField(field.id);
+        return element && now?.contains(element) && !field.hidden && !field.disabled;
+      });
+      if (fields.length) return { text, fields };
+    }
+    return null;
+  }
+
+  /** Saves (or cancels) a section's open form with its own button. Whether a button was pressed. */
+  async function closeSectionForm(kind, save) {
+    const region = sectionRegion(kind);
+    if (!region) return false;
+    // An entry opened with Edit saves with SAVE; a new one with the last "ADD …" in the section (the
+    // one that opened it is hidden or first).
+    const buttons = save ? (regionButtons(region, /^save$/i).length ? regionButtons(region, /^save$/i) : regionButtons(region, ADD_WORDS[kind])) : regionButtons(region, /^cancel$/i);
+    const button = buttons.at(-1);
+    if (!button) return false;
+    press(button);
+    await sleep(900);
+    return true;
+  }
+
+  /** Whether a section's form is still open (a save the site refused leaves it open). */
+  function sectionFormOpen(kind) {
+    const region = sectionRegion(kind);
+    return Boolean(region && regionButtons(region, /^cancel$/i).length);
+  }
+
   global.__qtsApplyForm = {
+    cardSections,
+    deleteSectionCards,
+    openFlaggedCard,
+    entryCount,
+    addEntry,
+    entryFields,
+    pageUploadBusy,
+    openSectionForm,
+    closeSectionForm,
+    sectionFormOpen,
     scanForm,
     scanForAssist,
     emptyOldAnswers,
@@ -3693,6 +4234,10 @@
     cursorInField,
     suggestionBox,
     suggestionTexts,
+    listOpen,
+    boxValue,
+    listSaysNothing,
+    findFieldChecked,
     suggestionChoiceBox,
     markShownChoices,
     shownChoiceTexts,
@@ -3705,6 +4250,7 @@
     isUnanswered,
     unreadRequired,
     fieldErrors,
+    fieldError,
     detectBlockers,
     pageGate,
     auditForm,
@@ -4055,8 +4601,9 @@
     // Not when the page already holds the application's later steps (hidden questions other than a
     // password or email a sign-in would reveal): that is step 1 of a multi-step form, which the
     // Manager moves on, not an account gate QTS continues by itself.
+    // A hidden bot trap ("honeypot", Oracle's email page) is no later step.
     const laterSteps = fields.filter((field) => field.hidden && !field.disabled && !field.unrelated
-      && field.kind !== 'password' && !isEmail(field));
+      && field.kind !== 'password' && !isEmail(field) && !/honey ?pot/i.test(String(field.label || '')));
     // An email gate goes on with Continue / Next / Start; a page whose button is a real submit word
     // ("Submit application", "Send application") is a short application form, filled and reviewed.
     const realSubmit = (action) => action.type === 'submit' && /^(submit|send)\b|bewerbung|wyślij|envoyer|enviar/i.test(action.text);

@@ -745,13 +745,15 @@ test('the form is filled from the profile and documents without AI (what the sit
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
-    // The profile and the documents in (over what was there); nothing emptied; no AI request by itself.
+    // The profile and the documents in; no AI request by itself. The first visit empties every box the
+    // site had filled before anything is filled (Manager's rule, 2026-11-22), so what QTS has no answer
+    // for is left empty, never someone else's answer.
     assert.equal(await valueOf(form, 'fn'), 'Ana');
     assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
     assert.equal(await valueOf(form, 'ph'), '+40264484948');
-    assert.equal(await valueOf(form, 'hear'), 'Indeed', 'a choice QTS has no answer for stays as the site had it');
-    assert.equal(await valueOf(form, 'mot'), "Someone else's answer", 'nothing emptied, nothing invented');
-    assert.equal(await valueOf(form, 'ref'), 'KEEP-123', 'a referral code the site put there stays');
+    assert.equal(await valueOf(form, 'hear'), '', 'an old choice QTS has no answer for is emptied');
+    assert.equal(await valueOf(form, 'mot'), '', 'an old answer is emptied, nothing invented');
+    assert.equal(await valueOf(form, 'ref'), 'KEEP-123', 'a referral code box is not the candidate\'s: left as the site had it');
     assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true);
     assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
     const events = await form.evaluate(() => window.events);
