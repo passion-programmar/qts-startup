@@ -209,9 +209,10 @@ test('Auto Apply uses the same branding in a full-height sidebar with complete r
     await click('.copy-button', '👤 Profile');
     const profile = await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.profile-box .profile-group, .profile-box .profile-row')].map(n => n.classList.contains('profile-group') ? `# ${n.textContent}` : `${n.querySelector('.profile-label').textContent} = ${n.querySelector('.profile-input')?.value ?? n.querySelector('.profile-value').textContent}`));
     // Files: the résumé folder's full path (added 2026-11-19), kept left-to-right with invisible marks.
-    assert.deepEqual(profile.map((row) => row.replace(/\u200e/g, '')), ['# Name', 'Full name = Sample', 'First name = Sample', '# Links', 'LinkedIn = https://www.linkedin.example/in/sample', 'GitHub = https://github.example/sample',
-      '# Files', String.raw`Résumé folder = C:\Users\sample\Downloads\QTS_Resume\Sample Candidate`,
+    assert.deepEqual(profile.map((row) => row.replace(/\u200e/g, '')), ['# Name', '# Links', 'LinkedIn = https://www.linkedin.example/in/sample', 'GitHub = https://github.example/sample',
       '# Salary', 'Per month = 6000 EUR per month', 'Per year = 60000 - 70000 EUR per year']);
+    // Name: values only (2026-11-25): the full name, then first | last (no last name here).
+    assert.deepEqual(await page.evaluate(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.profile-box .address-line')].map((line) => [...line.querySelectorAll('.address-chip')].map((n) => n.textContent))), [['Sample', ''], ['Sample']]);
     await click('.profile-box .profile-row', 'LinkedInhttps://www.linkedin.example/in/sample⧉');
     await page.waitForFunction(() => window.clipboard.at(-1) === 'https://www.linkedin.example/in/sample');
     assert.equal(await page.evaluate(() => document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.profile-row.copied').length), 1, 'the copied row shows it');

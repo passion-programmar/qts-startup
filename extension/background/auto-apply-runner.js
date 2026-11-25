@@ -355,6 +355,7 @@ self.__qtsAutoApply = {
   browserSession: autoApplyBrowserSession,
   isRunning: () => autoRuns.size > 0,
   runningCount: () => autoRuns.size,
+  runningIds: () => [...autoRuns.keys()],
   KIND_KEY: AUTO_APPLY_KIND_KEY,
   STATE_KEY: AUTO_APPLY_STATE_KEY,
   RUNS_KEY: AUTO_APPLY_RUNS_KEY,

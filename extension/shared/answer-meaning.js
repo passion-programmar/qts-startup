@@ -292,7 +292,10 @@
   // ---- Employer history: "Are you / have you been employed by <company>?" from the work history. ----
   const LEGAL_SUFFIX = /\b(inc|incorporated|ltd|limited|llc|llp|plc|gmbh|ag|se|sa|s a|spa|s p a|srl|sro|s r o|bv|nv|oy|ab|as|aps|kft|zrt|sp z o o|sp zoo|sp k|co|corp|corporation|company|group|holding|holdings|international|technologies|technology|software|solutions|services)\b/g;
   const companyKey = (name) => clean(name).replace(/[.,&()'’"]/g, ' ').replace(/\s+/g, ' ').replace(LEGAL_SUFFIX, ' ').replace(/\s+/g, ' ').trim();
-  const EMPLOYER_QUESTION = /\b(currently|presently|previously|ever|before|formerly|in the past|are you|have you|were you|do you)\b.{0,70}\b(employed|employee|worked|work(ing)?|contracted|contractor|engaged|consultant|worker|staff)\b.{0,50}\b(by|for|at|with|to)\b|\b(current|former|ex)[- ]?(or former )?(employee|contractor|worker)s?\b/;
+  const EMPLOYER_QUESTION = /\b(currently|presently|previously|ever|before|formerly|in the past|are you|have you|were you|do you)\b.{0,70}\b(employed|employee|worked|work(ing)?|contracted|contractor|engaged|consultant|worker|staff)\b.{0,50}\b(by|for|at|with|to)\b|\b(current|former|ex)[- ]?(or former )?(employee|contractor|worker)s?\b|\b(ever|previously|before|formerly)\b.{0,40}\b(issued|given|assigned|had|held)\b.{0,40}\b(employee (id|number|badge)|e-?mail (address|account))\b/;
+  // "Have you ever been issued a Cisco Employee ID or Cisco email address?" (Workday, 2026-11-26): the
+  // company is the one named before "Employee ID" / "email".
+  const ISSUED_BY = /\b(?:issued|given|assigned|had|held)\s+(?:an?\s+)?([A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,3})\s+(?:employee\s+(?:id|number|badge)|e-?mail)\b/;
 
   /**
    * The answer to "employed / contracted by <company>?" from the candidate's work history: listed →
@@ -306,6 +309,9 @@
     const options = (field.options || []).map(String);
     // The companies asked about: named in the question, in the choices ("Yes - Codete"), or this company.
     const named = [];
+    // (Read from the label as written: the company's capital letters tell it apart from the words around it.)
+    const issuedBy = String(field.label || '').match(ISSUED_BY)?.[1];
+    if (issuedBy) named.push(issuedBy);
     const after = label.match(/\b(?:by|for|at|with|to)\s+([^?,;]+?)(?:\s+or\s+(?:any|one)\s+of|\s+or\s+its|\s+and\s+its|\s+\(|\s*,|\?|$)/);
     if (after && !/^(us|our|this|the company|the employer|any|an?)\b/.test(after[1].trim())) named.push(after[1].trim());
     for (const option of options) {

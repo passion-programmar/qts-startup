@@ -36,6 +36,42 @@
     if (greenhouseJob && /^\d+$/.test(greenhouseJob)) {
       return { site: 'greenhouse', formUrl: `https://boards.greenhouse.io/embed/job_app?token=${greenhouseJob}` };
     }
+    // Form addresses worked out from the job link (2026-11-25): the form opens at once, without the job
+    // page and its Apply button. direct: if the address shows no form, sign-in or Apply button, Apply
+    // opens the job page (jobUrl) instead and finds the way there, as before.
+    const direct = (site, formUrl) => ({ site, formUrl, jobUrl: url.href, findStart: true, direct: true });
+    // Workable: apply.workable.com/{account}/j/{shortcode} → …/apply/
+    if (host === 'apply.workable.com') {
+      const match = path.match(/^(\/[^/]+\/j\/[0-9a-z]{6,12})(\/apply)?$/i);
+      if (match) return direct('workable', `${url.origin}${match[1]}/apply/`);
+    }
+    // Recruitee: {company}.recruitee.com/o/{slug} → …/c/new
+    if (/\.recruitee\.com$/.test(host)) {
+      const match = path.match(/^(\/o\/[^/]+)(\/c\/new)?$/i);
+      if (match) return direct('recruitee', `${url.origin}${match[1]}/c/new`);
+    }
+    // Breezy: {company}.breezy.hr/p/{id}-{slug} → …/apply
+    if (/\.breezy\.hr$/.test(host)) {
+      const match = path.match(/^(\/p\/[^/]+)(\/apply)?$/i);
+      if (match) return direct('breezy', `${url.origin}${match[1]}/apply`);
+    }
+    // Pinpoint: {company}.pinpointhq.com/{lang}/postings/{uuid} → …/applications/new
+    if (/\.pinpointhq\.com$/.test(host)) {
+      const match = path.match(new RegExp(`^(/(?:[a-z]{2}/)?postings/${UUID})(/applications/new)?$`, 'i'));
+      if (match) return direct('pinpoint', `${url.origin}${match[1]}/applications/new`);
+    }
+    // Jobvite: jobs.jobvite.com/{company}/job/{id} → …/apply
+    if (host === 'jobs.jobvite.com') {
+      const match = path.match(/^(\/[^/]+\/job\/[^/]+)(\/apply)?$/i);
+      if (match) return direct('jobvite', `${url.origin}${match[1]}/apply`);
+    }
+    // Workday: …/job/{place}/{title}_{id} → …/apply/applyManually. Auto Apply no longer uses a site's
+    // résumé import (2026-11-26: "Autofill with Resume" is only an import box, which QTS leaves alone, so
+    // nothing was filled there); QTS fills Workday's own pages, Experience and Education included. It is
+    // an account site, so its sign-in steps run as before.
+    if (/(^|\.)(myworkdayjobs\.com|myworkdaysite\.com)$/i.test(host) && /\/job\//i.test(path) && !/\/apply(\/|$)/i.test(path)) {
+      return { ...direct('account', `${url.origin}${path}/apply/applyManually${url.search}`), workday: true };
+    }
     // Oracle's candidate sites also run under company domains (explore-jobs.ciklum.com). These
     // pages use the same Apply-first, account-action fallback as other job pages.
     if (ACCOUNT_SITES.test(host) || /\/hcmUI\/CandidateExperience\/|\/sites\/[^/]+\/job\/\d+/i.test(path)) {

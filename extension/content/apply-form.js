@@ -162,6 +162,38 @@
     return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
   }
 
+  /**
+   * A typed box that is there only to catch bots (a "honeypot", 2026-11-25): pushed far off the screen,
+   * clipped or shrunk to a pixel, so no person can see it, or kept out of the keyboard order with a
+   * trap's name ("website", "honeypot", "hp"…). Filling one marks the application as spam, so it is
+   * treated as hidden and never filled. File inputs, ticks and radios are hidden by many sites on
+   * purpose and are not judged here.
+   */
+  const TRAP_NAME = /^(hp|hpt|honey|honeypot|bot|bot_?check|website|url|homepage|home_?page|fax|nickname|leave_?(this_?)?(blank|empty)|confirm_?email_?address|email_?confirm_?2|address_?2_?trap)$/i;
+  function botTrap(control, tag, type) {
+    if (!['INPUT', 'TEXTAREA'].includes(tag) || ['file', 'checkbox', 'radio', 'hidden', 'range'].includes(type)) return false;
+    if (control.getAttribute('role') === 'combobox' || control.getAttribute('aria-autocomplete')) return false;
+    // Only a box that also says it is a trap (its name, or a label like "Leave this field empty"):
+    // real list boxes can be 2 px wide while empty (React Select) or sit off screen behind a widget.
+    const nameSays = TRAP_NAME.test(String(control.name || '').trim()) || TRAP_NAME.test(String(control.id || '').trim());
+    const labelSays = () => {
+      const own = control.id ? control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`)?.textContent || '' : '';
+      const words = cleanText(`${control.getAttribute('aria-label') || ''} ${control.placeholder || ''} ${own}`);
+      return /\b(leave (this|it) (field )?(blank|empty)|do not (fill|complete) (this|it)|if you are (a )?human)\b/i.test(words);
+    };
+    if (!nameSays && !labelSays()) return false;
+    if (control.getAttribute('tabindex') === '-1') return true;
+    const rect = control.getBoundingClientRect();
+    const page = control.ownerDocument.documentElement;
+    // (Measured on the whole page, not the visible part: a box scrolled out of view is no trap.)
+    const [left, right, bottom] = [rect.left + scrollX, rect.right + scrollX, rect.bottom + scrollY];
+    if (right < -200 || bottom < -200 || left > Math.max(page.scrollWidth, innerWidth) + 200) return true;
+    if (rect.width <= 2 || rect.height <= 2) return true;
+    const style = getComputedStyle(control);
+    return /rect\(\s*0(px)?,?\s*0(px)?,?\s*0(px)?,?\s*0(px)?\s*\)/.test(style.clip || '') || /inset\(\s*(50|100)%/.test(style.clipPath || '');
+  }
+
+
   function cleanText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
   }
@@ -289,6 +321,48 @@
   // (Also Revolut People's multi-select: a div named by aria-label inside its "MultiSelect__Wrapper".)
   const MULTI_SELECT = '[class*="MultiSelect__Wrapper"] > [aria-label], [class*="MultiSelect__Wrapper"] > [data-testid]';
   const FIELD_CONTROLS = `input:not([type="hidden"]), textarea, select, [role="combobox"], [role="radio"], [role="checkbox"], [role="listbox"], [role="radiogroup"], button[aria-pressed], [contenteditable="true"], ${MULTI_SELECT}`;
+  // Where a dropdown button is a question: inside the form, or (Workday, which has no <form>) inside
+  // the box the site keeps for one question ("formField-countryDropdown").
+  const QUESTION_HOLDER = 'form, fieldset, [data-automation-id^="formField-"]';
+  // Workday's date box (its Month / Day / Year parts and its calendar button).
+  const DATE_WRAPPER = '[data-automation-id="dateInputWrapper"]';
+  // A date part's own name (its aria-label), in the languages job sites use.
+  const DATE_PART_WORDS = {
+    month: /^(month|mm|mois|monat|mes|mese|maand|m[ěe]s[ií]c|miesi[aą]c|luna|h[óo]nap)$/i,
+    day: /^(day|dd|jour|tag|d[ií]a|giorno|dag|dzie[nń]|zi|nap)$/i,
+    year: /^(year|yyyy|yy|ann[ée]e|jahr|a[ñn]o|anno|jaar|rok|an|[ée]v)$/i,
+  };
+  // An empty part as a date box shows it.
+  const DATE_PART_SHOWN = { month: 'MM', day: 'DD', year: 'YYYY' };
+
+  // ---- Links to the candidate's own pages (2026-11-26, the Manager's decision) ----
+  // Only LinkedIn and GitHub are filled, from the profile. Any other link box (Twitter/X, Website,
+  // Portfolio, a blog, an "Other" link beside them) is marked otherLink: left empty, never asked of an
+  // AI, and left out of the Answer copy.
+  const OWN_LINK = /linked\s?in|git\s?hub/i;
+  const LINK_NAME = /\b(urls?|links?|web ?sites?|web ?pages?|home ?pages?|portfolios?|personal (site|page)|blogs?|twitter|facebook|instagram|tiktok|youtube|dribbble|behance|medium|stack ?overflow|gitlab|bitbucket|kaggle|leetcode|hackerrank|mastodon|substack|codepen|xing|social (media|profiles?|networks?))\b|^x$|^x\s*[/(]|\(x\)|\/\s*x\b|\bx\.com\b/i;
+  // A question about something else that only mentions a site ("How did you hear about us? Website…").
+  const ASKS_SOMETHING_ELSE = /^(how|why|what|where|when|which|who|whom|whose|do|does|did|are|is|was|were|have|has|had|can|could|would|will|should|may)\b/i;
+  const OTHER_LABEL = /^(any )?others?( (links?|urls?|web ?sites?|profiles?|social( media)?|pages?))?$/i;
+  const bareLabel = (text) => cleanText(text).replace(/\s*\((optional|required)\)\s*$/i, '').replace(/[\s*✱:]+$/, '');
+  /** Whether a scanned box asks for a link (any site's). */
+  function linkBoxField(field) {
+    if (!['text', 'url', 'textarea'].includes(field.kind) || field.options?.length) return false;
+    if (field.kind === 'url' || /^\s*(https?:\/\/|www\.)/i.test(field.placeholder || '')) return true;
+    const label = bareLabel(field.label);
+    return label.length <= 60 && !ASKS_SOMETHING_ELSE.test(label) && LINK_NAME.test(label);
+  }
+  /** Marks every link box that is not LinkedIn or GitHub (an "Other" box counts when a link box is beside it). */
+  function markOtherLinks(fields) {
+    const shown = fields.filter((field) => !field.hidden);
+    const links = new Set(shown.filter(linkBoxField));
+    shown.forEach((field, index) => {
+      const beside = [shown[index - 1], shown[index + 1]].some((other) => other && links.has(other));
+      const other = OTHER_LABEL.test(bareLabel(field.label)) && ['text', 'url', 'textarea'].includes(field.kind) && !field.options?.length && beside;
+      if ((links.has(field) || other) && !OWN_LINK.test(`${field.label || ''} ${field.placeholder || ''}`)) field.otherLink = true;
+    });
+    return fields;
+  }
 
   /** The text of the boxes around a control, up to the first one that holds another field; '' when none. */
   function ownTextAround(control) {
@@ -913,8 +987,9 @@
         });
         continue;
       }
-      // Menus count only inside the form (a "Share page" menu is not a question).
-      if (isMenuButton(control) && control.closest('form, fieldset') && menuChoices(control)) {
+      // Menus count only inside the form (a "Share page" menu is not a question). Workday's form has
+      // no <form>: each question sits in its own "formField-…" box (Country, Phone Device Type, Degree).
+      if (isMenuButton(control) && control.closest(QUESTION_HOLDER) && !control.closest(DATE_WRAPPER) && menuChoices(control)) {
         const label = labelFor(control);
         mark(control, MENU_ATTRIBUTE, '1');
         fields.push({
@@ -930,7 +1005,8 @@
       }
       // A menu whose choices exist only while it is open (Radix DropdownMenu): read by opening it.
       // A menu button beside an input (a phone number's country flag) belongs to that input.
-      if (isMenuButton(control) && control.closest('form, fieldset')
+      if (isMenuButton(control) && control.closest(QUESTION_HOLDER) && !control.closest(DATE_WRAPPER)
+        && !/calendar|date ?picker/i.test(control.getAttribute('aria-label') || '')
         && /^(menu|listbox|true)$/i.test(control.getAttribute('aria-haspopup') || '') && !listboxChoices(control)
         // (A button inside its own label, Revolut People's, is looked at within that label only.)
         && !deepQuery(control.closest('label') || blockQuestion(control).block, 'input:not([type="hidden"]):not([aria-hidden="true"]), textarea').filter((box) => box !== control && box.type !== 'button').length
@@ -1022,6 +1098,32 @@
         });
         continue;
       }
+      // A date typed in parts (Workday's Month and Year boxes, 2026-11-26): ONE question, read at its
+      // first part and named by the date's own label ("From", "To"); the other parts are its own.
+      if (datePartOf(control)) {
+        const parts = datePartsAround(control);
+        if (parts?.length) {
+          if (parts[0] !== control) continue;
+          const label = dateQuestion(parts);
+          // Shown when a person sees it: its boxes, else the digits drawn beside them (Workday may make
+          // the boxes themselves see-through and mark the digits aria-hidden), else the date's box.
+          const seen = (node) => Boolean(node?.isConnected) && (typeof node.checkVisibility === 'function'
+            ? node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) : node.getClientRects().length > 0);
+          const face = (part) => datePartFace(part);
+          fields.push({
+            id: fieldId(control),
+            label,
+            kind: 'text',
+            dateParts: parts.map(datePartOf),
+            placeholder: dateFormatOf(parts),
+            required: parts.some((part) => isRequired(part, label)),
+            hidden: !parts.some((part) => isShown(part) || seen(face(part)) || seen(part.closest(DATE_WRAPPER))),
+            disabled: parts.every((part) => part.disabled || part.getAttribute('aria-disabled') === 'true'),
+            ...(dateText(control) ? { filled: true } : {}),
+          });
+          continue;
+        }
+      }
       // A typed list: role="combobox" (also on type="search" boxes), or a box that says it suggests
       // from a list (aria-autocomplete, aria-haspopup="listbox") without that role.
       const isCombobox = isTypedList(control);
@@ -1046,7 +1148,7 @@
         ? control.closest('label') || (control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
         : null;
       const shown = type === 'file' ? isShown(control.closest('div, label, section') || control)
-        : isShown(control) || Boolean(ownLabel && isShown(ownLabel)) || Boolean(tag === 'SELECT' && selectWidget(control));
+        : (isShown(control) && !botTrap(control, tag, type)) || Boolean(ownLabel && isShown(ownLabel)) || Boolean(tag === 'SELECT' && selectWidget(control));
       if ((type === 'radio' || type === 'checkbox') && control.name) {
         const key = `${type}:${control.name}`;
         const option = choiceText(control);
@@ -1166,6 +1268,7 @@
       }
       field.required = field.required || isRequired(control, field.label);
     }
+    markOtherLinks(fields);
     return fields;
   }
 
@@ -1556,9 +1659,12 @@
   }
 
   /** Fills one field; returns { ok, value } with what the field holds afterwards. */
-  async function fillField(id, value, file = null) {
+  async function fillField(id, value, file = null, guard = null) {
+    if (managerEditedSince({ ...guard, id })) return { preserved: true };
     const element = findField(id);
     if (!element) return { ok: false, error: 'The field is no longer on the page.' };
+    // A date in parts keeps only real key presses: the worker types it (fillDateParts).
+    if (datePartOf(element)) return { ok: false, error: 'This date takes real key presses, part by part.', realDate: true };
     if (element.hasAttribute(DROP_ATTRIBUTE)) {
       return fillUpload(element, file);
     }
@@ -1637,6 +1743,7 @@
         press(item);
         await sleep(150);
       }
+      if (managerEditedSince({ ...guard, id })) return { preserved: true };
       if (element.value !== option.value) setNativeValue(element, option.value);
       return { ok: element.value === option.value, value: optionText(option) };
     }
@@ -1649,7 +1756,7 @@
           picked.push(cleanText(one));
           continue;
         }
-        const result = await pickInCombobox(element, one);
+        const result = await pickInCombobox(element, one, guard);
         if (!result.ok) return { ...result, value: picked.join(', ') };
         picked.push(result.value);
       }
@@ -1667,6 +1774,7 @@
       || /\b(location|city|town|address|place|school|university|company|employer)\b/i.test(labelFor(element) || ''));
     // Suggestions already showing (another field's list) are marked, so only this box's are used.
     if (mayList) markShownChoices();
+    if (managerEditedSince({ ...guard, id })) return { preserved: true };
     element.focus();
     setNativeValue(element, typed);
     let suggestion = null;
@@ -1675,6 +1783,7 @@
       suggestion = mayList ? pickSuggestion(element, typed) : null;
       if (suggestion) break;
     }
+    if (managerEditedSince({ ...guard, id })) return { preserved: true };
     if (suggestion) {
       suggestion.click();
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -1694,7 +1803,8 @@
    * matches the whole answer best. Nothing typed stays when no option matches; the options the list
    * showed come back, so the AI can choose one of them.
    */
-  async function pickInCombobox(element, value) {
+  async function pickInCombobox(element, value, guard = null) {
+    const edited = () => managerEditedSince({ ...guard, id: element.getAttribute(FIELD_ATTRIBUTE) });
     const answer = cleanText(value).toLowerCase();
     const search = String(value).split(',')[0].trim();
     const before = shownListboxes();
@@ -1717,6 +1827,7 @@
     };
     // A choice counts only when the box shows it after the click: a click alone is not an answer.
     const take = async (choice) => {
+      if (edited()) return { preserved: true };
       const picked = itemText(choice);
       choice.click();
       await sleep(200);
@@ -1732,11 +1843,13 @@
     let match = await findMatch(1200, true);
     if (match) return take(match);
     // No choices shown, or not this one among them: typed to search.
+    if (edited()) return { preserved: true };
     setNativeValue(element, search);
     match = await findMatch(3000);
     // (A box that searches only on real key presses gets the service worker's real input instead:
     // nothing is ever typed letter by letter.)
     if (!match) {
+      if (edited()) return { preserved: true };
       setNativeValue(element, '');
       return { ok: false, error: `No option matching "${value}".`, choices: [...new Set(seen)].slice(0, 300) };
     }
@@ -2291,6 +2404,7 @@
   /** The text in the box itself, nothing around it ("+40" where the box shows "+40 Country code"). */
   function boxValue(id) {
     const element = findField(id);
+    if (element && datePartOf(element)) return dateText(element);
     return element && 'value' in element ? String(element.value || '') : '';
   }
   /** Whether this box says its list is open now (aria-expanded on it or on its combobox). */
@@ -2353,7 +2467,8 @@
   /** Empties a text box Apply does not answer, so nothing someone else typed there is sent. */
   function clearField(id) {
     const element = findField(id);
-    if (!element || element.readOnly || element.disabled || !element.value) return false;
+    // (A date in parts takes only key presses: never emptied from here.)
+    if (!element || element.readOnly || element.disabled || !element.value || datePartOf(element)) return false;
     setNativeValue(element, '');
     element.dispatchEvent(new Event('blur', { bubbles: true }));
     return !element.value;
@@ -2388,8 +2503,9 @@
    * { suggest } | { result } | { result, issue, unanswered }.
    */
   async function fillAndInspect(id, value, field) {
+    if (managerEditedSince({ ...field, id })) return { result: { preserved: true } };
     if (value != null && typeof value !== 'boolean' && suggestionBox(id)) return { suggest: true };
-    const result = await fillField(id, value);
+    const result = await fillField(id, value, null, field);
     if (!result?.ok) return { result };
     // About the time the next trip used to take: a site that checks on change has shown its message.
     await sleep(60);
@@ -2615,6 +2731,8 @@
   function isUnanswered(field) {
     const element = findField(field.id);
     if (!element) return false;
+    // A date in parts is answered only when every part shows a number ("MM/2016" is not).
+    if (datePartOf(element)) return !dateComplete(element);
     if (element.hasAttribute(RADIO_GROUP_ATTRIBUTE)) return !groupItems(element).some(isChosen);
     if (field.kind === 'radio' || field.kind === 'checkbox-group') return !controlsOfGroup(element).some((control) => control.checked);
     if (field.kind === 'checkbox') return element.tagName === 'INPUT' ? !element.checked : element.getAttribute('aria-checked') !== 'true';
@@ -2832,6 +2950,7 @@
   function shownValue(id) {
     const element = findField(id);
     if (!element) return '';
+    if (datePartOf(element)) return dateText(element);
     if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)) return textOf(element);
     // React Select shows the choice in its control box, not in the input's own small container.
     // Only a box around this field alone: a wrapper of several questions holds their answers too.
@@ -3383,19 +3502,29 @@
     const fields = assistant ? scanForAssist() : scanForm();
     const hasApplicationFields = fields.some((field) => !field.hidden && !field.disabled && !field.unrelated && !field.account
       && !unrelatedBox(findField(field.id) || document.body));
-    // "Autofill with Resume" (Workday's start page) comes first where a site offers it: the site reads
-    // the résumé and fills its own boxes (the Manager's choice of 2026-11-22). Never LinkedIn or Indeed.
+    // Auto Apply no longer uses a site's résumé import (2026-11-26): where a site offers "Apply Manually"
+    // beside "Autofill with Resume" (Workday's choice), the manual way comes first, so QTS fills the site's
+    // own pages. Normal Apply keeps "Autofill with Resume" first (the Manager's choice of 2026-11-22).
+    // Never LinkedIn or Indeed.
     const withResume = candidates.find((element) => RESUME_START.test(startText(element)));
+    const offersBoth = Boolean(withResume && manual);
     const button = !hasApplicationFields
-      ? withResume || starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || manual || null
+      ? (apiFlow && offersBoth ? manual : withResume) || starts.find((element) => !/^mailto:/i.test(element.getAttribute('href') || '')) || manual || null
       : null;
     if (button) {
       if (probe) return { ok: true, action: 'application', text: startText(button) };
-      button.scrollIntoView({ block: 'center' });
-      button.click();
       // A link's own address, for when the page catches the click instead (an aggregator's sign-up box).
       const away = (element) => element?.tagName === 'A' && /^https?:/i.test(element.href || '')
         && element.href.split('#')[0] !== location.href.split('#')[0];
+      // Auto Apply: a start control that is a plain link is read, not clicked (2026-11-25): its address is
+      // opened in this same tab (navigate), so no new tab opens and nothing waits to see what the click
+      // did. Never a LinkedIn / Indeed / Google apply link, a mail link, or one leading back to this page.
+      const direct = apiFlow ? [button, button.closest('a[href]')].find(away) : null;
+      if (direct && !/(^|\.)(linkedin|indeed|google)\.[a-z.]+$/i.test((() => { try { return new URL(direct.href).hostname; } catch { return ''; } })())) {
+        return { ok: true, action: 'application', text: startText(button), href: direct.href, navigate: true };
+      }
+      button.scrollIntoView({ block: 'center' });
+      button.click();
       const href = [button, button.closest('a[href]'), ...starts].find(away)?.href || null;
       return { ok: true, action: 'application', text: startText(button), ...(href ? { href } : {}) };
     }
@@ -3611,6 +3740,21 @@
     return element.tagName === 'INPUT' && ['radio', 'checkbox-group'].includes(field.kind) && controlsOfGroup(element).some(marked);
   }
 
+  // A fill pass captures one revision. Later edits win even if the new value is empty.
+  function managerEditRevision() {
+    return Math.max(global.__qtsManagerEditRevision || 0, ...deepQuery(document, '[' + MANAGER_ATTRIBUTE + ']')
+      .map(node => Number(node.getAttribute(MANAGER_ATTRIBUTE)) || 0));
+  }
+
+  function managerEditedSince(field) {
+    if (!Number.isFinite(field?.managerEditBaseline)) return false;
+    const element = findField(field.id);
+    if (!element) return false;
+    const nodes = [element, ...deepQuery(element, '[' + MANAGER_ATTRIBUTE + ']')];
+    if (element.tagName === 'INPUT' && ['radio', 'checkbox-group'].includes(field.kind)) nodes.push(...controlsOfGroup(element));
+    return nodes.some(node => (Number(node.getAttribute?.(MANAGER_ATTRIBUTE)) || 0) > field.managerEditBaseline);
+  }
+
   /** Empties one box the way its kind needs. Whether it worked is read afterwards. */
   async function emptyBox(element, field) {
     if (isEditorHost(element)) {
@@ -3726,7 +3870,8 @@
         continue;
       }
       if (!values) continue;
-      if (!element || ['file', 'range'].includes(field.kind) || isUnanswered(field) || managerChanged(element, field)
+      // (A date in parts is never emptied: it takes only key presses, and its fill types over it.)
+      if (!element || ['file', 'range'].includes(field.kind) || isUnanswered(field) || managerChanged(element, field) || datePartOf(element)
         || (uploads ? STRICT_TRACKING_BOX : TRACKING_BOX).test(field.label) || job.includes(cleanText(element.value || '').toLowerCase())) continue;
       await emptyBox(element, field).catch(() => {});
       touched.push(field);
@@ -4069,6 +4214,364 @@
     return false;
   }
 
+  // ---- Dates typed in parts (Workday's "MM/YYYY", 2026-11-26) ----
+  // One date drawn as small boxes side by side, one per part (Workday: inputs named "Month", "Day",
+  // "Year" in its dateInputWrapper, data-automation-id "dateSectionMonth-input"…). A part takes only
+  // key presses: a value set from a script is not kept ("MM/2016", "Error: Invalid Date"). The date is
+  // ONE question at its first part; the worker clicks each part, types its digits with real key
+  // presses and reads each part back from what the page shows.
+
+  /** Which part of a date a box is ('month' / 'day' / 'year'), or null for any other box. */
+  function datePartOf(element) {
+    if (!element || element.nodeType !== 1) return null;
+    const spin = element.getAttribute('role') === 'spinbutton';
+    if (element.tagName !== 'INPUT' && !spin) return null;
+    const marker = /dateSection(Month|Day|Year)/i.exec(`${element.getAttribute('data-automation-id') || ''} ${element.id || ''}`)?.[1];
+    if (marker) return marker.toLowerCase();
+    // Named only "Month" / "Year": a part only inside a date's own box, or as a spin box.
+    if (!spin && !element.closest(DATE_WRAPPER)) return null;
+    const named = cleanText(element.getAttribute('aria-label') || '').replace(/[\s,.:*✱]+$/, '');
+    for (const [part, words] of Object.entries(DATE_PART_WORDS)) if (words.test(named)) return part;
+    const empty = cleanText(element.getAttribute('aria-valuetext') || '');
+    return /^m{2}$/i.test(empty) ? 'month' : /^d{2}$/i.test(empty) ? 'day' : /^y{2,4}$/i.test(empty) ? 'year' : null;
+  }
+
+  /** A date's parts in page order, from any one of them (the parts sharing its box); null when none. */
+  function datePartsAround(element) {
+    if (!datePartOf(element)) return null;
+    const up = (node) => node.parentElement || node.parentNode?.host || null;
+    let parts = [element];
+    for (let node = up(element), depth = 0; node && node !== document.body && depth < 5; node = up(node), depth += 1) {
+      const boxes = deepQuery(node, 'input:not([type="hidden"]), textarea, select, [role="spinbutton"], [role="combobox"], [contenteditable="true"]')
+        .filter((box) => datePartOf(box) || !box.closest('[aria-hidden="true"]'));
+      const inside = boxes.filter((box) => datePartOf(box));
+      // Past the date: this box holds another question's field too.
+      if (inside.length !== boxes.length) break;
+      parts = inside;
+      if (node.matches(`${DATE_WRAPPER}, [role="group"]`)) break;
+    }
+    return [...new Set(parts)];
+  }
+
+  /** The box a person sees for a part (Workday draws the digits in a "…-display" beside its input). */
+  function datePartFace(element) {
+    const own = element.getAttribute('data-automation-id') || '';
+    if (!/-input$/.test(own)) return null;
+    const holder = element.closest(DATE_WRAPPER) || element.parentElement?.parentElement || element.parentElement;
+    const face = holder?.querySelector(`[data-automation-id="${CSS.escape(own.replace(/-input$/, '-display'))}"]`);
+    return face && face !== element ? face : null;
+  }
+
+  const MONTH_WORDS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  /** The number a part shows (null: still empty, "MM"). */
+  function datePartNumber(element) {
+    const face = datePartFace(element);
+    const sources = [face ? textOf(face) : '', element.value, element.getAttribute('aria-valuenow'), element.getAttribute('aria-valuetext'),
+      element.isContentEditable ? element.textContent : ''];
+    for (const source of sources) {
+      const text = cleanText(source).toLowerCase();
+      if (/^\d{1,4}$/.test(text)) return Number(text);
+      const month = datePartOf(element) === 'month' && /^[a-z]{3,}/.test(text) ? MONTH_WORDS.indexOf(text.slice(0, 3)) : -1;
+      if (month >= 0) return month + 1;
+    }
+    return null;
+  }
+
+  /** A date in parts as its boxes show it ("09/2016"; an empty part as "MM": "MM/2016"); '' when all are empty. */
+  function dateText(element) {
+    const parts = datePartsAround(element) || [];
+    const numbers = parts.map(datePartNumber);
+    if (numbers.every((number) => number === null)) return '';
+    return parts.map((part, index) => {
+      const kind = datePartOf(part);
+      return numbers[index] === null ? DATE_PART_SHOWN[kind] : String(numbers[index]).padStart(kind === 'year' ? 4 : 2, '0');
+    }).join('/');
+  }
+
+  /** Whether every part of a date shows a number. */
+  function dateComplete(element) {
+    const parts = datePartsAround(element) || [];
+    return parts.length > 0 && parts.every((part) => datePartNumber(part) !== null);
+  }
+
+  /** How a date in parts is written: "MM/YYYY", "MM/DD/YYYY", "YYYY". */
+  const dateFormatOf = (parts) => parts.map((part) => DATE_PART_SHOWN[datePartOf(part)]).join('/');
+
+  /** The date's own question ("From", "To (Actual or Expected)"), never a part's name ("Month"). */
+  function dateQuestion(parts) {
+    const first = parts[0];
+    const partName = (text) => Object.values(DATE_PART_WORDS).some((words) => words.test(cleanText(text).replace(/[\s,.:*✱]+$/, '')));
+    const own = labelFor(first);
+    if (own && !partName(own)) return own;
+    const holder = first.closest('[data-automation-id^="formField-"]');
+    const label = holder && [...holder.querySelectorAll('label, legend')].find((node) => textOf(node) && !partName(textOf(node)));
+    if (label) return textOf(label);
+    const group = first.closest('[role="group"]');
+    const named = group ? cleanText(group.getAttribute('aria-label') || '') : '';
+    if (named && !partName(named)) return named;
+    const around = blockQuestion(group || first.parentElement || first).text;
+    return around && !partName(around) ? around : own;
+  }
+
+  /** The worker's view of a date in parts: each part's kind and id, in typing order. */
+  function datePartsOf(id) {
+    const element = findField(id);
+    const parts = element ? datePartsAround(element) : null;
+    return parts ? parts.map((part) => ({ part: datePartOf(part), id: fieldId(part) })) : null;
+  }
+
+  /** What one part shows now (null: empty). */
+  function datePartValue(id) {
+    const element = findField(id);
+    return element ? datePartNumber(element) : null;
+  }
+
+  /** Where to click a part: its own box, else the digits drawn for it. */
+  function datePartPoint(id) {
+    const element = findField(id);
+    if (!element) return null;
+    return centreOf(element) || (datePartFace(element) && centreOf(datePartFace(element))) || null;
+  }
+
+  /** The whole date as it shows now ("09/2016", "MM/2016", ''). */
+  function dateShown(id) {
+    const element = findField(id);
+    return element ? dateText(element) : '';
+  }
+
+  // ---- Experience and Education entries on any site (2026-11-26) ----
+  // An entry is the smallest block of the form that holds one job's title and its company (or one
+  // school and its degree / field of study) together with a date, a "currently" tick or a description.
+  // Each box's part in it comes from its label. The section's own Add button (and an entry form's own
+  // Save) is found next to it, for the worker to click with real input. Skills are never read here.
+  const ENTRY_ROLES = {
+    experience: {
+      anchor: /\b(job|position|role)\s*title\b|^\s*(job\s*)?(title|position|role|designation)\s*$/i,
+      partner: /\b(company|employer|organi[sz]ation)(\s*name)?\b/i,
+      location: /\b(location|city|town)\b/i,
+      description: /\b(description|responsibilit\w*|achievements?|duties|summary|what did you do)\b/i,
+    },
+    education: {
+      anchor: /\b(school|university|institution|college|academy)(\s*name)?\b/i,
+      partner: /\b(degree|qualification|diploma|level of (study|education))\b/i,
+      field: /\b(field of study|major|discipline|subject|course|speciali[sz]ation|area of study|programme|program)\b/i,
+    },
+  };
+  const ENTRY_START = /\b(from|start(ing)?( date)?|date (started|from)|began|commencement)\b/i;
+  const ENTRY_END = /(^|\b)(to|end( date)?|until|date (left|to)|finish(ed)?|graduat\w*( date)?|completion( date)?)\b/i;
+  const ENTRY_CURRENT = /\b(current(ly)?( (work|employ\w*|stud\w*|attend\w*|role|position|job|employer))?|i (still )?(work|study) here|present|ongoing|still (working|employed|studying))\b/i;
+  const ENTRY_OTHER_KIND = /skill|certif|licen[cs]e|language|award|honou?r|reference|link|website|project|publication|volunteer|patent|hobb/i;
+
+  function commonAncestor(nodes) {
+    if (!nodes.length) return null;
+    let common = nodes[0];
+    while (common && !nodes.every((node) => common.contains(node))) common = common.parentElement;
+    return common;
+  }
+
+  /** The entries of one kind: [{ node, fields: { role: field | { month, year } } }] in page order. */
+  function entryBlocks(kind, fields) {
+    const roles = ENTRY_ROLES[kind];
+    const elementOf = new Map(fields.map((field) => [field, findField(field.id)]).filter(([, element]) => element));
+    const listed = [...elementOf.keys()];
+    const anchors = listed.filter((field) => roles.anchor.test(field.label)
+      && !(kind === 'experience' && ENTRY_ROLES.education.anchor.test(field.label)) && field.kind !== 'file' && field.kind !== 'checkbox');
+    const blocks = [];
+    for (const anchor of anchors) {
+      let block = null;
+      for (let node = elementOf.get(anchor).parentElement, depth = 0; node && node !== document.body && depth < 6; node = node.parentElement, depth += 1) {
+        const inside = listed.filter((field) => node.contains(elementOf.get(field)));
+        if (inside.filter((field) => anchors.includes(field)).length > 1) break;
+        // Never the whole form: a block that also holds the person's own boxes (name, email, phone,
+        // CV), or more than an entry's boxes, is past the entry ("Current job title" and "Current
+        // company" asked as plain questions beside "Available start date" are not an entry).
+        if (inside.length > 14 || inside.some((field) => /\b(e-?mail|phone|mobile|first name|last name|surname|full name|r[eé]sum[eé]|\bcv\b|cover letter)\b/i.test(field.label || ''))) break;
+        const partner = inside.some((field) => field !== anchor && (roles.partner.test(field.label) || (roles.field && roles.field.test(field.label))));
+        const more = inside.some((field) => field !== anchor && (ENTRY_START.test(field.label) || ENTRY_END.test(field.label)
+          || ['date', 'month'].includes(field.kind) || field.nativeType === 'month' || field.dateParts || /\b(month|year)\b/i.test(field.label)
+          || (field.kind === 'checkbox' && ENTRY_CURRENT.test(field.label)) || (roles.description && roles.description.test(field.label))));
+        if (partner && more) { block = { node, inside }; break; }
+      }
+      if (!block || blocks.some((known) => known.node === block.node)) continue;
+      blocks.push({ node: block.node, fields: entryRoles(kind, anchor, block.inside) });
+    }
+    return blocks.sort((a, b) => (a.node.compareDocumentPosition(b.node) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  }
+
+  /** Each box's part in one entry, by its label (dates: one box, or a month and a year box). */
+  function entryRoles(kind, anchor, inside) {
+    const roles = ENTRY_ROLES[kind];
+    const taken = new Set([anchor]);
+    const take = (test) => {
+      const found = inside.find((field) => !taken.has(field) && test(field));
+      if (found) taken.add(found);
+      return found || null;
+    };
+    const parts = { [kind === 'experience' ? 'title' : 'school']: anchor };
+    if (kind === 'experience') {
+      parts.company = take((field) => roles.partner.test(field.label));
+      parts.current = take((field) => field.kind === 'checkbox' && ENTRY_CURRENT.test(field.label));
+      parts.location = take((field) => field.kind !== 'checkbox' && roles.location.test(field.label));
+      parts.description = take((field) => ['textarea', 'text'].includes(field.kind) && roles.description.test(field.label));
+    } else {
+      parts.degree = take((field) => roles.partner.test(field.label));
+      parts.field = take((field) => roles.field.test(field.label));
+      parts.current = take((field) => field.kind === 'checkbox' && ENTRY_CURRENT.test(field.label));
+    }
+    // Dates in page order: a box says from / to, or a month box then its year box; unnamed ones go
+    // start first, end second.
+    const dated = inside.filter((field) => !taken.has(field) && field.kind !== 'checkbox' && field.kind !== 'textarea'
+      && (field.dateParts || ENTRY_START.test(field.label) || ENTRY_END.test(field.label) || ['date', 'month'].includes(field.kind) || field.nativeType === 'month'
+        || /\b(month|year)\b/i.test(field.label) || (field.options || []).some((option) => /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(String(option)))));
+    const dates = [];
+    for (const field of dated) {
+      // A date in parts (Workday's "MM/YYYY") is one whole date, whatever its label says.
+      const half = field.dateParts ? 'whole'
+        : /\bmonth\b/i.test(field.label) || (field.options || []).filter((option) => /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(String(option))).length >= 6 ? 'month'
+        : /\byear\b/i.test(field.label) || ((field.options || []).length >= 5 && (field.options || []).filter((option) => /^(19|20)\d{2}$/.test(String(option).trim())).length >= 5) ? 'year' : 'whole';
+      const side = ENTRY_END.test(field.label) && !ENTRY_START.test(field.label) ? 'end' : ENTRY_START.test(field.label) ? 'start' : '';
+      const open = dates.at(-1);
+      // A year box right after its month box (same side or unnamed) completes that date.
+      if (half === 'year' && open && open.month && !open.year && (!side || !open.side || side === open.side)) { open.year = field; continue; }
+      dates.push({ side, ...(half === 'whole' ? { whole: field } : { [half]: field }) });
+    }
+    const start = dates.find((date) => date.side === 'start') || dates.find((date) => !date.side);
+    const end = dates.find((date) => date !== start && date.side === 'end') || dates.find((date) => date !== start && !date.side);
+    parts.start = start || null;
+    parts.end = end || null;
+    return parts;
+  }
+
+  /** What a box shows now (a tick: true / false). */
+  function entryValue(field) {
+    if (!field) return null;
+    const element = findField(field.id);
+    if (!element) return '';
+    if (field.kind === 'checkbox') return Boolean(element.checked);
+    // A date in parts: what its parts show together ("09/2016", "MM/2016").
+    if (datePartOf(element)) return dateText(element);
+    // The box's own value only (never the text around it: an entry's boxes often share one block).
+    if (element.tagName === 'SELECT') return element.value ? cleanText(element.selectedOptions?.[0]?.textContent || '') : '';
+    if (['INPUT', 'TEXTAREA'].includes(element.tagName)) return cleanText(element.value || '');
+    if (element.isContentEditable) return cleanText(element.textContent || '');
+    // A dropdown button (Workday's Degree): the choice it shows; "Select One" is none.
+    if (element.tagName === 'BUTTON' || element.hasAttribute(MENU_ATTRIBUTE)) {
+      const shown = cleanText(shownValue(field.id).replace(/[×✕]/g, ''));
+      return PLACEHOLDER.test(shown) ? '' : shown;
+    }
+    // A list drawn as a box (role="combobox" on a div): the choice it shows.
+    return cleanText(boxValue(field.id) || '');
+  }
+
+  /** The section's own Add button for a kind (never another section's), or null. */
+  function entryAddButton(kind, blocks) {
+    const words = kind === 'experience' ? /experience|employment|job|position|work|role|career/i : /education|school|degree|qualification|academic|study|studies/i;
+    const addText = (button) => cleanText(`${button.innerText || ''} ${button.getAttribute('aria-label') || ''} ${button.getAttribute('title') || ''}`);
+    const isAdd = (button) => /^\s*\+?\s*add\b|^\s*\+\s*$|\badd (another|more|new)\b/i.test(addText(button)) && !ENTRY_OTHER_KIND.test(addText(button));
+    const around = (scope) => {
+      for (let box = scope, up = 0; box && box !== document.documentElement && up < 4; box = box.parentElement, up += 1) {
+        const buttons = deepQuery(box, 'button, a, [role="button"]').filter((button) => isShown(button) && !button.disabled && isAdd(button));
+        const named = buttons.find((button) => words.test(addText(button)));
+        const generic = buttons.filter((button) => !/\b(experience|employment|job|position|education|school|degree|qualification)\b/i.test(addText(button)));
+        const found = named || (generic.length === 1 ? generic[0] : null);
+        if (found) return found;
+      }
+      return null;
+    };
+    // Where the section is: around its entries, else (an entry read deep inside its panel, or none
+    // yet) around the heading that names it.
+    const fromEntries = blocks.length ? around(commonAncestor(blocks.map((block) => block.node))) : null;
+    if (fromEntries) return fromEntries;
+    const heading = deepQuery(document, 'h1, h2, h3, h4, h5, legend, [role="heading"], label, p, span, div')
+      .find((node) => isShown(node) && node.children.length <= 2 && cleanText(node.textContent).length <= 60 && words.test(cleanText(node.textContent))
+        && !ENTRY_OTHER_KIND.test(cleanText(node.textContent)) && /^(work |professional |employment )?(experience|history|education|employment|work history|academic|qualifications?)\b/i.test(cleanText(node.textContent)));
+    return heading?.parentElement ? around(heading.parentElement) : null;
+  }
+
+  /**
+   * The page's Experience and Education entries for the worker: per kind, whether the section is there,
+   * its entries (each box's id, kind, label, required, choices, and what it shows now) and whether it has
+   * an Add button. { experience, education }; a kind the page lacks is { found: false }.
+   */
+  function profileEntries() {
+    const fields = scanForAssist().filter((field) => !field.hidden && !field.disabled);
+    const shape = (field) => (field ? { id: field.id, kind: field.kind, label: field.label, required: Boolean(field.required),
+      ...(field.options?.length ? { options: field.options } : {}), ...(field.placeholder ? { placeholder: field.placeholder } : {}),
+      ...(field.nativeType ? { nativeType: field.nativeType } : {}), ...(field.maxLength ? { maxLength: field.maxLength } : {}),
+      ...(field.dateParts ? { dateParts: field.dateParts } : {}),
+      value: entryValue(field) } : null);
+    const result = {};
+    for (const kind of ['experience', 'education']) {
+      const blocks = entryBlocks(kind, fields);
+      const add = entryAddButton(kind, blocks);
+      if (!blocks.length && !add) { result[kind] = { found: false }; continue; }
+      result[kind] = {
+        found: true,
+        add: Boolean(add),
+        entries: blocks.map((block) => {
+          const out = {};
+          for (const [role, part] of Object.entries(block.fields)) {
+            if (!part) continue;
+            if (part.id) out[role] = shape(part);
+            else out[role] = { ...(part.whole ? { whole: shape(part.whole) } : {}), ...(part.month ? { month: shape(part.month) } : {}), ...(part.year ? { year: shape(part.year) } : {}) };
+          }
+          return out;
+        }),
+      };
+    }
+    return result;
+  }
+
+  /**
+   * Whether the page already shows a name as text (an entry shown as a card: "Kubernetes Engineer ·
+   * Postis · Aug 2021 – Mar 2024" with its Edit), shadow parts included; never QTS's own panel. Used
+   * before adding a job or school, so a card the site imported is never added twice.
+   */
+  function pageMentions(text) {
+    const wanted = cleanText(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    if (wanted.length < 3) return false;
+    const parts = [document.body?.innerText || ''];
+    for (const element of allElements()) {
+      const shadow = shadowRootOf(element);
+      if (shadow) parts.push(shadow.textContent || '');
+    }
+    return parts.join(' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '').includes(wanted);
+  }
+
+  /** Where to click a kind's Add button (scrolled into view), or null. */
+  function entryAddPoint(kind) {
+    const fields = scanForAssist().filter((field) => !field.hidden && !field.disabled);
+    const button = entryAddButton(kind, entryBlocks(kind, fields));
+    if (!button) return null;
+    // Scrolled at once (centreOf): measured during a smooth scroll, the click would land beside it.
+    const centre = centreOf(button);
+    return centre ? { ...centre, text: cleanText(button.innerText || button.getAttribute('aria-label') || '').slice(0, 40) } : null;
+  }
+
+  /** An entry form's own Save / Done (a box of the entry given by one of its boxes), as a click point. */
+  function entrySavePoint(fieldIdInEntry) {
+    const element = findField(fieldIdInEntry);
+    if (!element) return null;
+    const popup = element.closest('dialog, [role="dialog"], [aria-modal="true"]');
+    for (let box = element.parentElement, up = 0; box && box !== document.body && up < 8; box = box.parentElement, up += 1) {
+      const button = deepQuery(box, 'button, [role="button"], input[type="submit"], input[type="button"]').find((node) => {
+        if (!isShown(node) || node.disabled) return false;
+        const words = cleanText(node.innerText || node.value || node.getAttribute('aria-label') || '');
+        // "Add" saves an entry only inside the entry's own pop-up: on the page it is the Add of a
+        // section (Workday's Education "Add" beside its Work Experience), never clicked from here.
+        if (/^add$/i.test(words)) return Boolean(popup && popup.contains(node));
+        return /^(save|done|ok|confirm|update|apply)$/i.test(words);
+      });
+      if (button) {
+        const centre = centreOf(button);
+        return centre ? { ...centre, text: cleanText(button.innerText || button.value || '').slice(0, 20) } : null;
+      }
+      // Never past the form's own box into the whole page.
+      if (box.matches?.('form, dialog, [role="dialog"], section')) break;
+    }
+    return null;
+  }
+
   // ---- Card sections (Oracle Candidate Experience: Skills, Experience, Education) ----
   // A region (aria-label "Skills Required", "Experience ", "Education ") holding cards, each with Edit
   // and Delete, and an "ADD …" button that opens a small form saved by its own "ADD …" button.
@@ -4194,6 +4697,14 @@
     entryCount,
     addEntry,
     entryFields,
+    profileEntries,
+    pageMentions,
+    entryAddPoint,
+    entrySavePoint,
+    datePartsOf,
+    datePartValue,
+    datePartPoint,
+    dateShown,
     pageUploadBusy,
     openSectionForm,
     closeSectionForm,
@@ -4218,6 +4729,8 @@
     formActions,
     uploadHolds,
     setUploadContext,
+    managerEditRevision,
+    managerEditedSince,
     verifyUploads,
     emptyRequiredUploads,
     unreadableFrames,
@@ -4309,6 +4822,9 @@
       value = shownValue(field.id).replace(/[×✕]/g, '').trim();
     } else if (field.kind === 'file') {
       value = element.files?.[0]?.name || '';
+    } else if (datePartOf(element)) {
+      // A date in parts: the whole date once every part shows a number ("09/2016"), else none.
+      value = dateComplete(element) ? dateText(element) : '';
     } else {
       value = isEditorHost(element) ? textOf(element) : String(element.value || '');
     }
@@ -4378,6 +4894,7 @@
         : ['select', 'menu', 'combobox'].includes(field.kind) && isUnanswered(field) ? ''
           : shown(valueOf(field, element));
       rows.push({ id: field.id, label: String(field.label || 'Question').slice(0, 160), kind: field.kind, required: Boolean(field.required), value,
+        ...(field.otherLink ? { otherLink: true } : {}),
         ...(Array.isArray(field.options) && field.options.length ? { options: field.options.map(String).slice(0, 60) } : {}),
         // The box's hint ("annual, local currency") and unit, so the panel works out the same answer as the fill.
         ...(field.note ? { note: String(field.note).slice(0, 200) } : {}), ...(field.unit ? { unit: field.unit } : {}) });

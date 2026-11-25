@@ -204,3 +204,30 @@ test('the wait for a page ends when it stops changing, and never runs past its l
   `);
   assert.ok(busy >= 650 && busy < 1500, `took ${busy}`);
 });
+
+
+test('attachment cleanup preserves existing answers and profile sections before direct replacement', { skip }, async () => {
+  const result = await onPage(`<form><label for="name">First name</label><input id="name" value="Old Name">
+    <label for="reason">Motivation</label><textarea id="reason">Keep when no replacement</textarea>
+    ${['Education', 'Experience', 'Skills'].map((kind, index) => `<section class="apply-flow-block__region" aria-label="${kind}">
+      <h2>${kind}</h2><label for="section-${index}">First name</label><input id="section-${index}" value="Keep ${kind}">
+      <button type="button" aria-label="Delete">Delete</button></section>`).join('')}
+    ${ROW('old_person_cv.pdf')}</form>`, `
+    const events = [];
+    document.addEventListener('input', e => events.push({ id: e.target.id, value: e.target.value }));
+    await api.emptyOldAnswers({ values: false, uploads: true });
+    const fields = api.scanForAssist();
+    const regular = fields.find(field => field.label === 'First name' && !field.cardForm);
+    await api.fillField(regular.id, 'Ana');
+    return { name: document.getElementById('name').value, reason: document.getElementById('reason').value,
+      protected: [0,1,2].map(i => document.getElementById('section-' + i).value),
+      protectedCount: fields.filter(field => field.cardForm).length,
+      oldAttachment: document.body.innerText.includes('old_person_cv.pdf'), events };
+  `);
+  assert.equal(result.name, 'Ana');
+  assert.equal(result.reason, 'Keep when no replacement');
+  assert.deepEqual(result.protected, ['Keep Education', 'Keep Experience', 'Keep Skills']);
+  assert.equal(result.protectedCount, 3);
+  assert.equal(result.oldAttachment, false);
+  assert.ok(result.events.every(event => event.id === 'name' && event.value === 'Ana'));
+});

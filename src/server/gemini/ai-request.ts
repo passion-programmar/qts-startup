@@ -11,7 +11,7 @@ import {
 } from "@/lib/gemini-usage";
 import { callAiModel } from "@/server/gemini/ai-call";
 import { aiRequestBudgetMs, runAiJob, type AiJobKey, type AiJobSlot, type AiJobState } from "@/server/gemini/ai-job";
-import { aiModels, aiSlotId } from "@/server/gemini/ai-models";
+import { aiModels, aiSlotId, type AiModelId } from "@/server/gemini/ai-models";
 import { estimateGroqInputTokens } from "@/server/gemini/ai-reply";
 import { markAiSlotCalled, readAiJobState, saveAiSlotPauses } from "@/server/gemini/ai-store";
 import { estimateGeminiInputTokens } from "@/server/gemini/gemini-request";
@@ -29,6 +29,8 @@ export type AiRequest<Result> = {
   parse: (text: string) => Result;
   /** When the whole request must be finished by. Defaults to the full time budget from now. */
   deadlineAt?: number;
+  /** The models to try first, in this order (ai-job.ts); the usual order when not given. */
+  modelOrder?: readonly AiModelId[];
 };
 
 type Claim = { leaseId: string; tokenCounts: GeminiTokenCounts };
@@ -95,5 +97,6 @@ export async function runAiRequest<Result>(request: AiRequest<Result>): Promise<
     ),
     savePauses: saveAiSlotPauses,
     parse: request.parse,
+    ...(request.modelOrder ? { modelOrder: request.modelOrder } : {}),
   });
 }

@@ -23,10 +23,14 @@ test('Ashby, Greenhouse, and Lever links lead to their application forms', () =>
 });
 
 test('account sites open their job page and use the shared application-start flow', () => {
+  // Workday opens its "Apply Manually" page directly (2026-11-26: no résumé import); the job page is the fallback.
   assert.deepEqual(recipeFor('https://mobility.wd503.myworkdayjobs.com/Mobility/job/Gdansk-POL/Cloud-Engineer_594'), {
     site: 'account',
-    formUrl: 'https://mobility.wd503.myworkdayjobs.com/Mobility/job/Gdansk-POL/Cloud-Engineer_594',
+    formUrl: 'https://mobility.wd503.myworkdayjobs.com/Mobility/job/Gdansk-POL/Cloud-Engineer_594/apply/applyManually',
+    jobUrl: 'https://mobility.wd503.myworkdayjobs.com/Mobility/job/Gdansk-POL/Cloud-Engineer_594',
     findStart: true,
+    direct: true,
+    workday: true,
   });
   assert.equal(recipeFor('https://fa-extu-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/4169').findStart, true);
   assert.match(recipeFor('not a url').unsupported, /not a valid/);

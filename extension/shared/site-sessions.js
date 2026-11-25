@@ -40,6 +40,27 @@
     return labels.slice(TWO_PART_ENDING.test(labels.slice(-2).join('.')) ? -3 : -2).join('.');
   }
 
+  // Job platforms where nobody signs in to apply (2026-11-26; Workable checked: only a visitor id and
+  // Cloudflare cookies on .workable.com, no sign-in): several candidates' applications run side by
+  // side there, and nothing is cleared between them (clearing would only bring back the human check).
+  const NO_ACCOUNT_SITES = new Set(['workable.com', 'greenhouse.io', 'lever.co', 'ashbyhq.com', 'smartrecruiters.com']);
+  // Platforms whose sign-in belongs to one company's own address (2026-11-26; Workday checked: its
+  // session cookies are on cisco.wd5.myworkdayjobs.com, apart from paloaltonetworks.wd5…): one
+  // candidate at a time per company there, not per the whole platform.
+  const PER_HOST_SITES = new Set(['myworkdayjobs.com', 'myworkdaysite.com']);
+
+  /**
+   * What two applications must not share in one Chrome at the same time ('' when nothing: a platform
+   * without sign-in): the company's own address on Workday, else the site.
+   */
+  function holdKeyOf(url) {
+    const host = hostOf(url);
+    if (!host) return '';
+    const site = siteOf(host);
+    if (SHARED_SITES.has(site) || NO_ACCOUNT_SITES.has(site)) return '';
+    return PER_HOST_SITES.has(site) ? host : site;
+  }
+
   /**
    * What this Chrome knows about a site, before the page is even opened. standing: 'none' (never used
    * here by QTS), 'same' (last used for this candidate), 'other' (origins to clear), or 'shared'.
@@ -48,8 +69,9 @@
     const origin = originOf(url);
     if (!origin) return { standing: 'none', site: '', origins: [] };
     const site = siteOf(hostOf(url));
-    if (SHARED_SITES.has(site)) return { standing: 'shared', site, origins: [] };
-    const related = Object.entries(ledger || {}).filter(([key]) => siteOf(hostOf(key)) === site);
+    if (SHARED_SITES.has(site) || NO_ACCOUNT_SITES.has(site)) return { standing: 'shared', site, origins: [] };
+    const key = holdKeyOf(url);
+    const related = Object.entries(ledger || {}).filter(([entry]) => holdKeyOf(entry) === key);
     const other = related.some(([, entry]) => entry.candidateId !== candidateId);
     return {
       standing: other ? 'other' : related.length ? 'same' : 'none',
@@ -133,7 +155,7 @@
     };
   }
 
-  const api = { STORAGE_KEY, SHARED_SITES, originOf, hostOf, siteOf, siteStanding, rememberSite, forgetSites, accountStanding, documentsBelong, createSiteHolds };
+  const api = { STORAGE_KEY, SHARED_SITES, originOf, hostOf, siteOf, holdKeyOf, siteStanding, rememberSite, forgetSites, accountStanding, documentsBelong, createSiteHolds };
   global.__qtsSiteSessions = Object.freeze(api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

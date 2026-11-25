@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { users } from "@/db/schema";
 import { db } from "@/lib/db";
-import { claimNextApplication } from "@/server/apply/apply-attempts";
+import { claimNextApplication, releaseUnheldAttempts } from "@/server/apply/apply-attempts";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
 import { readWorkSelection } from "@/server/work/work-selection";
@@ -15,7 +15,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (auth instanceof NextResponse) return auth;
   scheduleDailyCleanup();
   try {
-    const body = await request.json().catch(() => null) as { skipJobIds?: unknown; selection?: unknown; mode?: unknown } | null;
+    const body = await request.json().catch(() => null) as { skipJobIds?: unknown; selection?: unknown; mode?: unknown; keepAttemptIds?: unknown } | null;
     const mode = body?.mode === undefined ? "apply" : body.mode;
     if (mode !== "apply" && mode !== "auto_apply") {
       return NextResponse.json({ success: false, message: "Choose Apply or Auto Apply." }, { status: 400 });
@@ -33,6 +33,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     catch (error) { return NextResponse.json({ success: false, message: (error as Error).message }, { status: 400 }); }
     // Apply and Auto Apply both take the panel's candidate and checked jobs; none means every account.
     const skipJobIds = Array.isArray(body?.skipJobIds) ? body.skipJobIds.filter(isUuid).slice(0, 200) : [];
+    // Auto Apply sends the applications it works on now: this Chrome's other holds are let go first, so
+    // its jobs-at-once slots are only the ones really open (2026-11-25).
+    if (mode === "auto_apply" && Array.isArray(body?.keepAttemptIds)) {
+      await releaseUnheldAttempts(auth.manager.id, auth.browser.id, body.keepAttemptIds.filter(isUuid).slice(0, 20));
+    }
     const application = await claimNextApplication(auth.manager.id, auth.browser, skipJobIds, selection, {
       autoApply: mode === "auto_apply",
     });

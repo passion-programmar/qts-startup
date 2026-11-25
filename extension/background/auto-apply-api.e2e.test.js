@@ -48,6 +48,14 @@ const FORM = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 <script>document.getElementById('rm').addEventListener('click', () => document.getElementById('old-file').remove());</script>${FORM_END}
 </body></html>`;
 
+
+const PRESERVED_SECTIONS = ['Education', 'Experience', 'Skills'].map((kind, index) => `
+  <section class="apply-flow-block__region" aria-label="${kind}">
+    <h2>${kind}</h2><div class="card">Existing ${kind}
+    <button type="button" aria-label="Delete" onclick="this.parentElement.remove()">Delete</button></div>
+    <label for="protected-${index}">First name</label><input id="protected-${index}" value="Keep ${kind}">
+  </section>`).join('') + '<label for="parser">Autofill from resume</label><input id="parser" type="file">';
+
 // A question that appears after another answer.
 const FORM_DYN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Dyn - Apply</title></head><body>
 <form id="app">
@@ -401,6 +409,7 @@ const server = http.createServer((req, res) => {
     const json = (payload, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' }); res.end(JSON.stringify(payload)); };
     const html = (text, headers = {}) => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...headers }); res.end(text); };
     const cookie = req.headers.cookie || '';
+    if (url.pathname === '/preserve-form') return html(FORM.replace('</form>', PRESERVED_SECTIONS + '</form>'));
     if (url.pathname === '/form') return html(FORM);
     if (url.pathname === '/dyn') return html(FORM_DYN);
     if (url.pathname === '/steps') return html(FORM_STEPS);
@@ -738,6 +747,163 @@ const emptyBox = (page, id) => page.evaluate((box) => { document.getElementById(
 test.before(() => new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve)));
 test.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
 
+
+
+
+
+test('edits during autofill and deliberate clearing during an AI request take priority over pending writes', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(1, 'form')], answerDelay: 5000 });
+  const { browser, action, storage, worker } = await launch();
+  try {
+    // Pause immediately before an ordinary write, after the page has been scanned.
+    await worker.evaluate(() => {
+      const original = fillAndCheck;
+      self.testHoldEmail = true;
+      fillAndCheck = async (...args) => {
+        if (self.testHoldEmail && /email/i.test(args[1]?.label || '')) {
+          self.testEmailPending = true;
+          while (self.testHoldEmail) await sleep(50);
+        }
+        return original(...args);
+      };
+    });
+    assert.equal((await action('auto_apply')).ok, true);
+    await until(() => worker.evaluate(() => self.testEmailPending === true), 30000, 'autofill waiting before the email write');
+    const form = await formPage(browser, '/form');
+    await form.focus('#em');
+    await form.keyboard.down('Control');
+    await form.keyboard.press('KeyA');
+    await form.keyboard.up('Control');
+    await form.keyboard.type('my.choice@example.com');
+    await worker.evaluate(() => { self.testHoldEmail = false; });
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(form, 'em'), 'my.choice@example.com', 'the pending autofill must not overwrite the new edit');
+    assert.equal(await valueOf(form, 'ph'), '+40264484948', 'other fields still fill');
+    await emptyBox(form, 'mot');
+    await askAi(form, { wait: false });
+    await until(() => mock.answers === 1, 30000, 'the delayed AI request');
+    await form.type('#mot', 'Temporary answer');
+    await form.keyboard.down('Control');
+    await form.keyboard.press('KeyA');
+    await form.keyboard.up('Control');
+    await form.keyboard.press('Backspace');
+    await until(async () => (await globalThis.__diag()).some(review => review.waiting && review.mode === 'review'), 30000, 'review after the AI response');
+    assert.equal(await valueOf(form, 'mot'), '', 'deliberately cleared while AI was working: keep it empty');
+    assert.equal(await valueOf(form, 'em'), 'my.choice@example.com');
+    // A later explicit request may answer the empty field again.
+    await askAi(form);
+    assert.equal(await valueOf(form, 'mot'), 'Building reliable services.');
+  } finally { await browser.close(); }
+});
+
+test('Alt+A sends all remaining empty questions with options, including manually cleared and locally answerable fields', { skip, timeout: 150000 }, async () => {
+  const job = application(1, 'form');
+  job.candidate = { ...job.candidate, languages: ['English'] };
+  resetMock({ queue: [job], answerDelay: 5000 });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    await form.focus('#fn');
+    await form.keyboard.down('Control');
+    await form.keyboard.press('KeyA');
+    await form.keyboard.up('Control');
+    await form.keyboard.press('Backspace');
+    await form.click('#privacy');
+    await form.select('#hear', '');
+    await emptyBox(form, 'mot');
+    await form.evaluate(() => {
+      const row = document.createElement('div');
+      row.innerHTML = '<label for="language">Preferred language</label><select id="language"><option value="">Select...</option><option>English</option><option>Spanish</option></select><label for="optional">Anything else to share?</label><textarea id="optional"></textarea>';
+      document.getElementById('app').append(row);
+    });
+    await askAi(form, { wait: false });
+    await until(() => mock.answers === 1, 30000, 'the AI request');
+    const prompt = mock.prompts[0];
+    const questions = JSON.parse(prompt.slice(prompt.lastIndexOf('Questions:\n') + 11).split('\n')[0]);
+    const names = questions.map(q => q.question.replace(/\s*\*\s*$/, ''));
+    assert.deepEqual(names.sort(), ['First name', 'I agree to the privacy policy', 'How did you hear about us?', 'What motivates you in your work?', 'Preferred language', 'Anything else to share?'].sort());
+    assert.deepEqual(questions.find(q => /Preferred language/.test(q.question)).options, ['English', 'Spanish']);
+    assert.deepEqual(questions.find(q => /hear about/.test(q.question)).options, ['Indeed', 'LinkedIn']);
+    await form.type('#mot', 'My answer while AI is working.');
+    await until(async () => (await valueOf(form, 'fn')) === 'Ana' && (await valueOf(form, 'language')) === 'English', 30000, 'the empty fields to be answered');
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(form, 'mot'), 'My answer while AI is working.');
+    assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
+    assert.equal(mock.answers, 1);
+    // Even when the only remaining question has a local answer, Alt+A still sends it.
+    await form.click('#privacy');
+    await form.type('#optional', 'Done');
+    await askAi(form);
+    assert.deepEqual(mock.asked[1], ['I agree to the privacy policy']);
+    assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true);
+  } finally { await browser.close(); }
+});
+
+test('manual answers and newly revealed questions stay untouched until Alt+F explicitly refills', { skip, timeout: 150000 }, async () => {
+  resetMock({ queue: [application(1, 'form')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/form');
+    await emptyBox(form, 'mot');
+    await form.type('#mot', 'My own answer to the missing question.');
+    await form.focus('#ph');
+    await form.keyboard.down('Control');
+    await form.keyboard.press('KeyA');
+    await form.keyboard.up('Control');
+    await form.keyboard.type('+40 700 000 111');
+    await form.evaluate(() => {
+      const row = document.createElement('div');
+      row.innerHTML = '<label for="new-last">Last name *</label><input id="new-last" required>';
+      document.getElementById('app').append(row);
+    });
+    // Let the automatic page watcher see the new question and recheck the form.
+    await sleep(8000);
+    assert.equal(await valueOf(form, 'new-last'), '', 'a revealed field must wait for an explicit fill');
+    assert.equal(await valueOf(form, 'ph'), '+40 700 000 111');
+    assert.equal(await valueOf(form, 'mot'), 'My own answer to the missing question.');
+    await pressPanel(form, 'Check');
+    await sleep(1500);
+    assert.equal(await valueOf(form, 'new-last'), '', 'Check is read-only');
+    await form.keyboard.down('Alt');
+    await form.keyboard.press('KeyF');
+    await form.keyboard.up('Alt');
+    await until(async () => (await valueOf(form, 'new-last')) === 'Test' && (await valueOf(form, 'ph')) === '+40264484948', 30000, 'explicit refill of edited and newly revealed fields');
+    await waitForStep(storage, 1);
+    assert.equal(await valueOf(form, 'mot'), 'My own answer to the missing question.', 'no replacement answer means keep the manual value');
+    await form.focus('#ph');
+    await form.keyboard.down('Control');
+    await form.keyboard.press('KeyA');
+    await form.keyboard.up('Control');
+    await form.keyboard.type('+40 700 000 222');
+    await sleep(7000);
+    assert.equal(await valueOf(form, 'ph'), '+40 700 000 222', 'edits after Alt+F are protected again');
+    assert.equal(mock.answers, 0);
+  } finally { await browser.close(); }
+});
+
+test('regular answers are replaced while Education, Experience and Skills and resume import remain untouched', { skip, timeout: 120000 }, async () => {
+  resetMock({ queue: [application(1, 'preserve-form')] });
+  const { browser, action, storage } = await launch();
+  try {
+    assert.equal((await action('auto_apply')).ok, true);
+    await waitForStep(storage, 1);
+    const form = await formPage(browser, '/preserve-form');
+    assert.equal(await valueOf(form, 'fn'), 'Ana');
+    assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
+    for (const [index, kind] of ['Education', 'Experience', 'Skills'].entries()) {
+      assert.equal(await valueOf(form, 'protected-' + index), 'Keep ' + kind);
+    }
+    assert.equal(await form.evaluate(() => document.querySelectorAll('.card').length), 3);
+    assert.equal(await form.evaluate(() => document.getElementById('parser').files.length), 0);
+    assert.ok(!(await form.evaluate(() => window.events)).some(event => event.id.startsWith('protected-') || event.id === 'parser'));
+    assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
+  } finally { await browser.close(); }
+});
+
 test('the form is filled from the profile and documents without AI (what the site put in boxes QTS has no answer for stays); Ask AI answers what is left; QTS never submits', { skip, timeout: 180000 }, async () => {
   resetMock({ queue: [application(1, 'form')] });
   const { browser, action, storage } = await launch();
@@ -745,18 +911,17 @@ test('the form is filled from the profile and documents without AI (what the sit
     assert.equal((await action('auto_apply')).ok, true);
     await waitForStep(storage, 1);
     const form = await formPage(browser, '/form');
-    // The profile and the documents in; no AI request by itself. The first visit empties every box the
-    // site had filled before anything is filled (Manager's rule, 2026-11-22), so what QTS has no answer
-    // for is left empty, never someone else's answer.
+    // Existing answers are replaced directly when QTS has an answer; otherwise kept.
     assert.equal(await valueOf(form, 'fn'), 'Ana');
     assert.equal(await valueOf(form, 'em'), 'ana.test@example.com');
     assert.equal(await valueOf(form, 'ph'), '+40264484948');
-    assert.equal(await valueOf(form, 'hear'), '', 'an old choice QTS has no answer for is emptied');
-    assert.equal(await valueOf(form, 'mot'), '', 'an old answer is emptied, nothing invented');
+    assert.equal(await valueOf(form, 'hear'), 'Indeed', 'a choice without a replacement stays');
+    assert.equal(await valueOf(form, 'mot'), "Someone else's answer", 'an answer without a replacement stays');
     assert.equal(await valueOf(form, 'ref'), 'KEEP-123', 'a referral code box is not the candidate\'s: left as the site had it');
     assert.equal(await form.evaluate(() => document.getElementById('privacy').checked), true);
     assert.equal(await form.evaluate(() => document.getElementById('cv').files[0]?.name), 'Ana_Test_CV.pdf');
     const events = await form.evaluate(() => window.events);
+    assert.ok(!events.some((event) => ['fn', 'em', 'hear', 'mot'].includes(event.id) && event.value === ''), 'no blanket clearing before replacement');
     const uploadedAt = events.findIndex((event) => event.id === 'cv' && event.value === 'Ana_Test_CV.pdf');
     const filledAt = events.findIndex((event) => event.id === 'fn' && event.value === 'Ana');
     assert.ok(uploadedAt >= 0 && filledAt > uploadedAt, `upload ${uploadedAt} before fill ${filledAt}`);

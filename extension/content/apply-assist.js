@@ -235,9 +235,15 @@
   }
 
   // Copied with the page's own clipboard when allowed, else through a hidden text box.
+  // (A page whose permissions policy turns the Clipboard API off, Workday, goes straight to the text box:
+  // calling the API there only logs an error.)
   async function copyText(text) {
     const value = String(text ?? '');
+    const policy = document.permissionsPolicy || document.featurePolicy;
+    let allowed = true;
+    try { allowed = !policy?.allowsFeature || policy.allowsFeature('clipboard-write'); } catch {}
     try {
+      if (!allowed || !navigator.clipboard?.writeText) throw new Error('clipboard blocked');
       await navigator.clipboard.writeText(value);
       return true;
     } catch {

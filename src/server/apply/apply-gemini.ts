@@ -8,6 +8,10 @@ import type { GeminiContent } from "@/server/gemini/gemini-keys";
 // earlier turns, like ChatGPT's same chat.
 
 const generationConfig = { responseMimeType: "application/json", temperature: 0.2 };
+// Ask AI's models (2026-11-26): Groq first (about 3 s), then Gemini Flash-Lite (about 1 s), Gemini 3.6
+// Flash last (about 10 s, often an 18 s time-out). A model that is busy, used up or failing is skipped
+// at once for the next. Get JD keeps the usual order.
+const APPLY_MODEL_ORDER = ["openai/gpt-oss-120b", "gemini-3.5-flash-lite", "gemini-3.6-flash"] as const;
 const MAX_TURNS = 3;
 const MAX_TURN_LENGTH = 150_000;
 const MAX_REPLY_BYTES = 200_000;
@@ -36,6 +40,7 @@ export function askGeminiForApplyAnswers(turns: ApplyGeminiTurn[]): Promise<stri
   return runAiRequest({
     contents,
     generationConfig,
+    modelOrder: APPLY_MODEL_ORDER,
     parse: (text) => {
       if (!text || Buffer.byteLength(text, "utf8") > MAX_REPLY_BYTES) throw new Error("The answer was empty or too large.");
       return text;

@@ -70,10 +70,13 @@ test('Answer copies the résumé, the empty questions and the Manager\'s text; P
     await click('.copy-button', '👤 Profile');
     assert.deepEqual([await has('.answer-box'), await has('.profile-box')], [false, true]);
     const rows = await shadow(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.profile-box .profile-row')].map(n => `${n.querySelector('.profile-label').textContent} = ${n.querySelector('.profile-value, .profile-input')?.value ?? n.querySelector('.profile-value').textContent}`));
-    assert.ok(rows.includes('City, Country = Cluj-Napoca, Romania'), rows.join(' / '));
+    // Name and Address: values only (no labels): the whole line, then each part on its own (no province here).
+    const address = await shadow(() => [...document.querySelector('[data-qts-apply-review]').shadowRoot.querySelectorAll('.profile-box .address-line')].map(line => [...line.querySelectorAll('.address-chip')].map(n => n.textContent)));
+    // (Name first, the same way: full name, then first | last.)
+    assert.deepEqual(address.slice(0, 4), [['Ana Test'], ['Ana', 'Test'], ['Cluj-Napoca, Romania'], ['Cluj-Napoca', 'Romania']]);
     assert.ok(rows.includes('LinkedIn = https://www.linkedin.com/in/ana-test'), 'LinkedIn with https://www.');
     assert.ok(rows.includes('Per month = 6000 EUR per month') && rows.includes('Per year = 60000 - 70000 EUR per year'), rows.join(' / '));
-    await click('.profile-row', 'City, Country');
+    await click('.address-chip', 'Cluj-Napoca, Romania');
     await click('.profile-row', 'LinkedIn');
     await page.waitForFunction(() => window.copied.length === 4);
     assert.deepEqual(await shadow(() => window.copied.slice(2)), ['Cluj-Napoca, Romania', 'https://www.linkedin.com/in/ana-test']);

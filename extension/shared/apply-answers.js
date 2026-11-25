@@ -33,6 +33,10 @@
     'salary expectation': /salar|compensation|\bpay\b/i,
   };
   const SENSITIVE_DECLARATION = /\b(criminal|convict(?:ed|ions?)?|felon(?:y|ies)?|misdemeanou?rs?|arrest(?:ed|s)?|offen[cs]es?|perjury|sworn|affidavit|drug (?:test|screen)\w*|security clearance|bankrupt\w*|debarred|disciplinary)\b/i;
+  // What the AI is told about a declaration (the Manager's decision, 2026-11-17: always favorable).
+  const FAVORABLE_DECLARATION_HINT = 'A declaration: give the answer most favorable to the candidate. No to convictions, charges, arrests, offences, bankruptcy, debarment, disciplinary action or dismissal; Yes to being willing to take a drug test or a background check, or to obtain a security clearance.';
+  // A link other than LinkedIn or GitHub, required by the site (2026-11-26): the Manager's.
+  const OTHER_LINK_MESSAGE = (field) => `Fill "${String(field.label || '').replace(/[\s*✱:]+$/, '')}" yourself: QTS fills only the LinkedIn and GitHub links.`;
   const YES = /^(yes|y|true)$/i;
   const NO = /^(no|n|false)$/i;
 
@@ -359,6 +363,18 @@
   const YES_NO_QUESTION = /^(are|do|does|did|have|has|had|can|could|will|would|is|was|were|may|should|shall)\b/;
 
   // Each rule: the question it recognizes, and the candidate fact that answers it (or the missing fact's name).
+  /**
+   * A GitHub address made from the candidate's full name, in small letters with hyphens and without
+   * accents ("Andrei Victor" → https://github.com/andrei-victor; GitHub names are at most 39
+   * characters). null without a name.
+   */
+  function githubFromName(candidate) {
+    const slug = [candidate?.firstName, candidate?.lastName].filter(Boolean).join(' ')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 39).replace(/-+$/, '');
+    return slug ? `https://github.com/${slug}` : null;
+  }
+
   // Supply an absolute LinkedIn URL without changing the saved profile or its account path.
   function linkedinProfileUrl(value) {
     if (typeof value !== 'string') return value;
@@ -444,7 +460,7 @@
     // A phone extension is not the phone number: left empty (the profile has none).
     { test: /\b(phone|telephone|tel|mobile)\b.*\bext(ension)?\b|^ext(ension)?\.?( number)?$|\bextension number\b/, skipWith: 'A phone extension: left empty (the profile has none).', name: 'phone extension' },
     // The kind of phone ("Phone Device Type", "Type of phone"): the candidate's number is a mobile.
-    { test: /\b(phone|telephone)( device)? type\b|\btype of (phone|telephone|number|device)\b|^device type$/, fact: () => 'Mobile', choose: /\b(mobile|cell(ular)?)\b/i, name: 'phone type' },
+    { test: /\b(phone|telephone)( device)? type\b|\btype of (phone|telephone|number|device)\b|^device type$/, fact: () => 'Mobile', choose: /\b(mobile|cell(ular)?)\b/i, name: 'phone type', alternatives: () => ['Mobile Phone', 'Cell', 'Cell Phone', 'Mobile/Cell', 'Personal Mobile'] },
     // The phone's country code asked alone ("Country code", "Dialing code" beside the number box): the
     // number's own code, as the list words it ("🇷🇴 (+40) Romania"), else "+40" typed.
     { test: /^((phone|telephone|mobile) )?country (phone |calling |dial(l)?ing )?code$|^(phone |telephone )?(dial(l)?ing|calling) code$/, fact: (c) => c.phone, name: 'phone', personal: true, callingCode: true },
@@ -452,7 +468,9 @@
     // minimum" (a salary interval) is a form cell.
     { test: /\b(phone|mobile|telephone|cell ?phone|cell number|cellular)\b|^cell$|^(your)?contact (phone )?number$|^whats ?app( number)?$|^tel\.?$|^telefon(nummer| kom[oó]rkowy)?$|^(num[ée]ro de )?t[ée]l[ée]phone$|^tel[ée]fono( m[oó]vil)?$|^handy(nummer)?$/, fact: (c) => c.phone, name: 'phone', personal: true },
     { test: /linkedin/, fact: (c) => linkedinProfileUrl(c.linkedinUrl), name: 'LinkedIn profile', optionalIfMissing: true, personal: true },
-    { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true },
+    // No GitHub in the profile: an optional box stays empty; a required one gets the address made from
+    // the name (the Manager's rule, 2026-11-26: "Andrei Victor" → https://github.com/andrei-victor).
+    { test: /github/, fact: (c) => c.githubUrl, name: 'GitHub', optionalIfMissing: true, personal: true, fromName: githubFromName },
     { test: /portfolio|personal (web)?site|^website|other website/, fact: (c) => c.portfolioUrl, name: 'portfolio', optionalIfMissing: true, personal: true },
     // "Current company", "Current employer", "Most recent company"; "Current job title", "Current
     // position": the profile's current job (else its latest one, for "most recent").
@@ -479,7 +497,9 @@
     { test: /(complete|full|home|residential|postal|current|permanent) address|^address (full)$/, fact: (c) => fullAddress(c), name: 'full address', personal: true },
     { test: /postal|post ?code|zip|^plz$|postleitzahl|code postal|c[oó]digo postal|kod pocztowy|^cap$/, fact: (c) => c.postalCode, name: 'postal code', personal: true },
     { test: /^(street )?address( line 1)?$|first line of (your )?address|^street( (and|&) (house )?number)?$|^stra(ss|ß)e( (und|&) hausnummer)?$|^(adresse|direcci[oó]n|adres|indirizzo)$/, fact: (c) => c.addressLine1, name: 'address', personal: true },
-    { test: /^(state|province|region|county)(\s*\/\s*(state|province|region|county))*$|^(bundesland|wojew[oó]dztwo|r[ée]gion|provincia)$/, fact: (c) => c.province, name: 'state or province', personal: true },
+    { test: /^(state|province|region|county)(\s*\/\s*(state|province|region|county))*$|^(bundesland|wojew[oó]dztwo|r[ée]gion|provincia)$/, fact: (c) => c.province, name: 'state or province', personal: true, loosePlace: true,
+      // (A list not read yet: the same place without accents, or with "County" around it, in turn.)
+      alternatives: (fact) => [plainLetters(fact), `${fact} County`, `${plainLetters(fact)} County`, `Județul ${fact}`, `Judetul ${plainLetters(fact)}`] },
     { test: /nationalit|citizenship|staatsangeh|ciudadan[ií]a|obywatelstwo/, fact: (c) => c.nationality, name: 'nationality', personal: true },
     // "Which languages can you communicate confidently in…?", "What languages do you speak?": the
     // profile's languages as written ("English C1").
@@ -998,6 +1018,12 @@
       return { ask: 'Prefer not to say', from: 'reusable', note: neutral };
     }
     // Questions about someone else (a referrer, an employee you spoke to) never take the candidate's facts.
+    // Auto Apply: "Have you ever been issued a Cisco Employee ID…?", "employed by us before?": the work
+    // history answers it (2026-11-26), before the word "employee" makes it look like someone else's.
+    if (context.autoApply && meaning && field.kind !== 'file' && answerFeature('answerSemanticV1')) {
+      const employer = meaning.employerAnswer(field, context.experiences, context.jobCompany);
+      if (employer) return { value: employer.value, source: 'profile', fact: 'answer', note: employer.reason };
+    }
     const aboutSomeoneElse = /\b(employee|referr\w*|referee\w*|references?|emergency|next of kin|recruiter|their|someone|who referred|hiring manager)\b/.test(label);
     // "Are you based in Romania, Serbia or Poland?" naming the candidate's own country or city is a
     // Yes from the profile, never a guess; other country lists (sanctions lists) go on as before.
@@ -1068,9 +1094,14 @@
     if (offer) return { offer };
     // Auto Apply only: Normal Apply never fills an answer written in code; it uses the Manager's saved answer.
     if (context.normalApply !== true && /how did you (hear|find|learn)|where did you (hear|find)|where you (heard|found|learned)|where (have|did) you appl(y|ied) from|referral source|^source$/.test(label)) {
-      const option = pickOption(field, /linkedin/i) ?? pickOption(field, /job (board|site)|online|internet|website/i);
+      // LinkedIn; where the list has none, the company's own website (2026-11-26), then a job board.
+      const option = pickOption(field, /linkedin/i)
+        ?? pickOption(field, /compan(y|y's|ies) (web ?site|career(s)? (site|page))|career(s)? (site|page|website)|our (web ?site|career)|corporate (web ?site|career)|^(company )?web ?site$/i)
+        ?? pickOption(field, /web ?site/i)
+        ?? pickOption(field, /job (board|site)|online|internet|social media/i);
       if (option) return { value: option, source: 'rule' };
-      if (!hasOptions(field)) return { value: 'LinkedIn', source: 'rule' };
+      // A list whose choices are not read yet (Workday's "Select One"): LinkedIn, else these, in turn.
+      if (!hasOptions(field)) return { value: 'LinkedIn', source: 'rule', alternatives: ['Company Website', 'Company website', 'Website', 'Career Site', 'Job Board', 'Social Media'] };
       return null;
     }
     // 4. Everything else goes to the AI.
@@ -1082,6 +1113,11 @@
    * A personal fact's answer names it (fact), so a value changed to fit the field can be checked.
    */
   const RECOMMENDER_DETAILS = /\b(recommended|referred) by (an? |one of our )?(employee|colleague|staff)\b.*\b(e-?mail|name|who)\b|\brecommender\b|\breferr(er|ing employee)('s)? (e-?mail|name)/;
+
+  /** Lower case without accents or punctuation ("Maramureș County" → "maramures county"). */
+  function plainLetters(text) {
+    return String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  }
 
   function profileAnswer(field, label, candidate, context) {
     for (const rule of RULES) {
@@ -1164,6 +1200,11 @@
       }
       const fact = rule.fact(candidate, context, label);
       if (fact === null || fact === undefined || fact === '') {
+        // A required GitHub the profile lacks: made from the name, and marked for the Manager to check.
+        if (rule.fromName && field.required && !hasOptions(field)) {
+          const made = rule.fromName(candidate);
+          if (made) return { value: made, source: 'profile', checkedNote: `Made from the name (the profile has no ${rule.name} link): check it before Submit.` };
+        }
         if (rule.optionalIfMissing && !field.required) return { skip: `No ${rule.name} in the profile.` };
         // Auto Apply gives unresolved facts to the Super Admin's configured answer instructions.
         if (context.autoApply && (rule.neverGuess || rule.personal)) return { missing: rule.name };
@@ -1176,7 +1217,10 @@
         // A rule that knows its choice's words ("Mobile", "Mobile phone", "Cell").
         const chosen = rule.choose ? field.options.find((entry) => rule.choose.test(String(entry))) : null;
         if (chosen) return { value: chosen, source: 'profile' };
-        const option = field.options.find((entry) => String(entry).toLowerCase() === String(fact).toLowerCase());
+        // (A place also without its accents, or with "County" around it: "Maramures", "Maramureș County".)
+        const option = field.options.find((entry) => String(entry).toLowerCase() === String(fact).toLowerCase())
+          ?? (rule.loosePlace ? field.options.find((entry) => plainLetters(entry) === plainLetters(fact))
+            ?? field.options.find((entry) => ` ${plainLetters(entry)} `.includes(` ${plainLetters(fact)} `)) : null);
         if (option) return { value: option, source: 'profile' };
         // The same fact in the list's words: "Romania" is "Rumunia", "Roumanie", or "RO".
         const same = rule.personal ? sameFactOption(rule.name, String(fact), field.options) : null;
@@ -1219,7 +1263,9 @@
         return code ? { value: `+${String(code).replace(/^\+/, '')}`, source: 'profile', intended: String(fact) } : { skip: 'No calling code in the phone number.' };
       }
       // Choices not read yet (a search list): "Other" when the list has no such name.
-      return { value: String(fact), source: 'profile', ...(rule.orOther ? { alternatives: ['Other'] } : {}) };
+      // (The rule's own other wordings, tried in turn when the list's choices are not read yet.)
+      const others = typeof rule.alternatives === 'function' ? [...new Set(rule.alternatives(String(fact)).filter((entry) => entry && entry !== String(fact)))] : [];
+      return { value: String(fact), source: 'profile', ...(rule.orOther ? { alternatives: ['Other'] } : others.length ? { alternatives: others } : {}) };
     }
   }
 
@@ -1917,6 +1963,12 @@
     const offers = [];
     for (const field of fields) {
       if (field.hidden || field.disabled) continue;
+      // A link that is not LinkedIn or GitHub (Twitter/X, Website, Portfolio…, marked by the page's
+      // scan): never filled, never asked of the AI (2026-11-26); a required one is the Manager's.
+      if (field.otherLink) {
+        if (field.required) byHand.push({ id: field.id, label: field.label, message: OTHER_LINK_MESSAGE(field) });
+        continue;
+      }
       const resolved = resolveField(field, candidate, savedAnswers, context);
       // A box no text names for sure (labelUnresolved): only a fact its name hint matches fills it
       // ("first_name"); it is never asked of the AI as if it were some question.
@@ -2655,8 +2707,15 @@
         else if (byHand.has(field.id)) askManager(field, byHand.get(field.id));
         continue;
       }
+      if (field.otherLink) {
+        if (field.required) askManager(field, OTHER_LINK_MESSAGE(field));
+        continue;
+      }
+      // Declarations (criminal record, drug test, background check, bankruptcy…): asked of the AI on
+      // Ask AI, always for the answer most favorable to the candidate (the Manager's decision,
+      // 2026-11-17); filled from its reply like any question, and seen in the panel before Submit.
       if (SENSITIVE_DECLARATION.test(label)) {
-        if (field.required) askManager(field, `Answer "${field.label}" yourself: QTS and the AI leave declarations like this to you.`);
+        plan.ai.push({ field: { ...field, hint: FAVORABLE_DECLARATION_HINT } });
         continue;
       }
       if (EEO.test(label)) {
@@ -2672,7 +2731,7 @@
       // text box whose exact question the Manager saved an answer for (typed as saved):
       // filled on Alt+F like a profile fact, no AI. The AI is only asked about it on Ask AI.
       const exactSaved = (savedAnswers || []).some((row) => sameQuestion(row.questionKey, normalizeQuestionKey(field.label)));
-      const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && (exactSaved || answer.topicMatch || FACT_TOPICS.has(topicOf(field.label))) && (answer.fact === 'answer' || !hasOptions(field))));
+      const alreadyKnown = answer && answer.value !== undefined && (answer.source === 'profile' || answer.source === 'rule' || (answer.source === 'reusable' && (exactSaved || answer.topicMatch || FACT_TOPICS.has(topicOf(field.label))) && (answer.fact === 'answer' || !hasOptions(field))));
       // The saved answer in this box's form: this job site's own form first, else the form that fits
       // (an option, a number). A profile fact stays the profile's.
       if (answer?.source !== 'profile') {
@@ -2700,7 +2759,7 @@
         sent = rest;
       }
       const exact = (savedAnswers || []).some((row) => sameQuestion(row.questionKey, normalizeQuestionKey(field.label)));
-      const known = answer && answer.value !== undefined && (answer.source === 'profile' || (answer.source === 'reusable' && (exact || answer.topicMatch || FACT_TOPICS.has(topicOf(field.label))) && (answer.fact === 'answer' || !hasOptions(field))));
+      const known = answer && answer.value !== undefined && (answer.source === 'profile' || answer.source === 'rule' || (answer.source === 'reusable' && (exact || answer.topicMatch || FACT_TOPICS.has(topicOf(field.label))) && (answer.fact === 'answer' || !hasOptions(field))));
       plan.ai.push({ field: sent, ...(known ? { check: answer } : {}), ...(lacking.has(field.id) ? { lacking: lacking.get(field.id) } : {}) });
     }
     return plan;

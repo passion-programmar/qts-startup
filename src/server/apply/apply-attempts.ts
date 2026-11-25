@@ -352,6 +352,28 @@ export async function applySubmitSettings(managerId: string): Promise<{ reviewMo
   return { reviewMode: reviewModeOf(row?.reviewMode), autoSubmit: row?.autoSubmit === true };
 }
 
+/**
+ * Auto Apply: this Chrome's holds it no longer works on (a stopped tab, a reload, a Submitted whose save
+ * failed halfway) let go before a claim, so they never take its jobs-at-once slots (2026-11-25). keep:
+ * the applications the extension is working on now. A held job not in it goes back to the list
+ * unchanged; one left waiting for Submitted's answer over 10 minutes ends as failed (a bid, if saved,
+ * still keeps its job from coming back). Returns how many were let go.
+ */
+export async function releaseUnheldAttempts(managerId: string, browserId: string, keep: string[]): Promise<number> {
+  const mine = and(eq(applyAttempts.managerId, managerId), eq(applyAttempts.browserId, browserId));
+  const notKept = keep.length ? sql`not (${inArray(applyAttempts.id, keep)})` : sql`true`;
+  const dropped = await db.delete(applyAttempts)
+    .where(and(mine, inArray(applyAttempts.status, ["claimed", "waiting_review"]), notKept))
+    .returning({ id: applyAttempts.id });
+  const now = new Date();
+  const ended = await db.update(applyAttempts)
+    .set({ status: "failed", resultReason: "Left by this Chrome without an answer (not working on it any more).", finishedAt: now, leaseExpiresAt: null, updatedAt: now })
+    .where(and(mine, inArray(applyAttempts.status, ["submitting", "waiting_confirmation"]), notKept,
+      sql`${applyAttempts.updatedAt} < now() - interval '10 minutes'`))
+    .returning({ id: applyAttempts.id });
+  return dropped.length + ended.length;
+}
+
 function ownedBy(attemptId: string, managerId: string, browserId: string) {
   return and(
     eq(applyAttempts.id, attemptId),

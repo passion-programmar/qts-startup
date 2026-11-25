@@ -17,13 +17,24 @@
   const dock = document.createElement('style');
   dock.setAttribute('data-qts-auto-apply-dock', '');
   dock.textContent = `
-    html[data-qts-apply-docked="true"] body { box-sizing: border-box !important; padding-right: ${PANEL_WIDTH} !important; }
+    html[data-qts-apply-docked="true"] body { box-sizing: border-box !important; padding-right: var(--qts-auto-apply-width, ${PANEL_WIDTH}) !important; }
     html:has(> [data-qts-auto-apply-review]) [data-qts-page-launcher] { display: none !important; }
   `;
 
   const host = document.createElement('div');
   host.setAttribute('data-qts-apply-review', '');
   host.style.cssText = 'all:initial;position:fixed;top:12px;right:12px;z-index:2147483646;';
+  // The Auto Apply panel's size (2026-11-25): 30% of the window, between 380 and 430 px (never over 48%
+  // of a narrow window); everything in it grows with its width, up to 12.5% bigger at 430 px.
+  function sizeAutoPanel() {
+    const width = Math.round(Math.min(Math.max(380, window.innerWidth * 0.30), 430, window.innerWidth * 0.48));
+    const zoom = Math.min(1.125, Math.max(1, 1 + ((width - 380) / 50) * 0.125));
+    host.style.setProperty('--auto-w', `${width}px`);
+    host.style.setProperty('--auto-z', zoom.toFixed(3));
+    document.documentElement.style.setProperty('--qts-auto-apply-width', `${width}px`);
+  }
+  sizeAutoPanel();
+  window.addEventListener('resize', sizeAutoPanel);
   const root = host.attachShadow({ mode: 'closed' });
   const style = document.createElement('style');
   style.textContent = `
@@ -32,7 +43,8 @@
     /* The look of the QTS panel (page-launcher.js): dark navy cards, pill tags, the same tints. */
     .panel { width: 380px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; border: 1px solid #243047; border-radius: 14px; background: #0a0f1c; color: #e2e8f0; color-scheme: dark; box-shadow: -12px 0 32px rgb(0 0 0 / 35%); font: 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
     .panel.collapsed .body, .panel.collapsed .foot { display: none; }
-    .panel.auto { position: fixed; inset: 0 0 0 auto; width: ${PANEL_WIDTH}; height: 100vh; height: 100dvh; max-height: none; border: 0; border-left: 1px solid #243047; border-radius: 0; font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
+    /* (Its size follows the window: sizeAutoPanel sets --auto-w, and --auto-z scales all of it.) */
+    .panel.auto { position: fixed; inset: 0 0 0 auto; zoom: var(--auto-z, 1); width: calc(var(--auto-w, 384px) / var(--auto-z, 1)); height: calc(100vh / var(--auto-z, 1)); height: calc(100dvh / var(--auto-z, 1)); max-height: none; border: 0; border-left: 1px solid #243047; border-radius: 0; font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
     .panel[hidden], .review-tab[hidden] { display: none; }
     /* Same branding, dimensions and typography as the QTS actions header. */
     .brand { display: grid; flex: 0 0 64px; grid-template-columns: 42px 1fr auto; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid #243047; background: #0d1526; }
@@ -68,6 +80,10 @@
     .body { overflow-y: auto; padding: 10px 12px; scrollbar-color: #34425a transparent; }
     .job { margin-bottom: 8px; padding: 9px 10px; border: 1px solid #243047; border-radius: 12px; background: #0d1526; }
     .job-title { color: #f1f5f9; font-weight: 750; font-size: 13px; }
+    .copy-text { cursor: pointer; border-radius: 4px; transition: color .15s, background .15s; }
+    .copy-text:hover { color: #a5b4fc; text-decoration: underline dotted; text-underline-offset: 3px; }
+    .copy-text.copied { color: #34d399; }
+    .job-sep { color: #64748b; }
     .who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 4px; }
     .who-name { color: #f8fafc; font-size: 17px; font-weight: 800; }
     .who-label { padding: 2px 9px; border: 1px solid #34425a; border-radius: 999px; background: #111a2e; color: #93c5fd; font-size: 14px; font-weight: 750; }
@@ -143,6 +159,13 @@
     .profile-icon svg { display: block; }
     .profile-group { margin: 8px 0 3px; color: #64748b; font-size: 10px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
     .profile-head + .profile-group, .career-head + .profile-group { margin-top: 2px; }
+    .address-line { display: flex; flex-wrap: nowrap; gap: 4px; margin: 0 0 4px; }
+    .address-chip { flex: 1 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 6px 8px; border: 1px solid #243047; border-left: 3px solid #6366f1; border-radius: 9px; background: #101a2e; color: #e2e8f0; font: 600 12px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+    .address-chip:hover, .address-chip:focus-visible { border-color: #818cf8; background: #15213a; }
+    .address-chip.copied { border-color: #34d399; }
+    .path-chip { flex: 1 1 0; display: grid; place-items: center; height: 32px; padding: 0; border-left-color: #fdba74; }
+    .icon-chip { flex: 1 1 0; display: grid; place-items: center; height: 32px; padding: 0; }
+    .icon-chip .profile-icon { width: 22px; height: 22px; }
     .profile-row { display: grid; grid-template-columns: 104px minmax(0, 1fr) 14px; align-items: center; gap: 8px; width: 100%; margin: 0 0 4px; padding: 6px 8px; border: 1px solid #243047; border-left: 3px solid #6366f1; border-radius: 9px; background: #101a2e; color: #e2e8f0; font: 600 12px Inter, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
     .profile-row:hover, .profile-row:focus-visible { border-color: #818cf8; background: #15213a; }
     .profile-label { color: #94a3b8; font-size: 10.5px; font-weight: 700; }
@@ -224,6 +247,23 @@
     @keyframes sig-spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .sig.busy::before { animation-duration: 2.4s; } }
   `;
+  // Bigger text in the Auto Apply panel only (2026-11-25): every font size above, 18% larger and never
+  // under 12 px, read from the rules themselves so no text is missed; boxes and icons keep their size.
+  // (The brand's tiny "built for precision bidding" line grows less, to stay on one line.)
+  style.textContent += (() => {
+    const out = [];
+    for (const [, selectors, body] of style.textContent.matchAll(/([^{}@]+)\{([^{}]*)\}/g)) {
+      const size = body.match(/(?:^|;)\s*font-size\s*:\s*(\d+(?:\.\d+)?)px/)?.[1]
+        || body.match(/(?:^|;)\s*font\s*:\s*(?:[\w-]+\s+)*?(\d+(?:\.\d+)?)px/)?.[1];
+      if (!size) continue;
+      const scoped = selectors.replace(/\/\*[\s\S]*?\*\//g, '').split(',').map((one) => one.trim()).filter((one) => one && !/^(:host|\*|to|from)\b/.test(one))
+        .map((one) => (one.startsWith('.panel') ? one.replace(/^\.panel/, '.panel.auto') : `.panel.auto ${one}`));
+      if (!scoped.length) continue;
+      const floor = /\.subline\b/.test(selectors) ? 9 : 12;
+      out.push(`${scoped.join(', ')} { font-size: ${Math.max(floor, Math.round(Number(size) * 1.18 * 2) / 2)}px; }`);
+    }
+    return `\n    ${out.join('\n    ')}\n`;
+  })();
   const panel = document.createElement('div');
   panel.className = 'panel';
   const tab = document.createElement('button');
@@ -245,6 +285,21 @@
   signalF.textContent = 'F';
   signals.append(signalA, signalF);
   root.append(style, panel, tab, signals);
+  // A site's pop-up form closes when the keyboard focus leaves it (2026-11-25: Teamtailor's "Apply for
+  // this job" overlay listens for focusin on the whole page; a click on a panel button took the focus
+  // and the form closed). Using the panel never moves the focus out of the form: its buttons and copy
+  // boxes do not take the focus, and focus going into its own text boxes is not announced to the page
+  // (this listener runs before the page's, on the window). The panel has no focus listeners of its own.
+  root.addEventListener('mousedown', (event) => {
+    const target = event.composedPath()[0];
+    if (!(target instanceof Element) || target.closest('textarea, input, select, [contenteditable="true"]')) return;
+    if (target.closest('button, [role="button"], a, label, summary')) event.preventDefault();
+  }, true);
+  for (const type of ['focusin', 'focus']) {
+    global.addEventListener(type, (event) => {
+      if (host.isConnected && event.composedPath().includes(host)) event.stopImmediatePropagation();
+    }, true);
+  }
   (document.documentElement || document.body).appendChild(host);
   // Auto Apply: the panel in the browser's top layer (above any site pop-up, cookie banner or chat),
   // raised again whenever the site puts something of its own there.
@@ -269,13 +324,53 @@
     (document.documentElement || document.body).appendChild(host);
     return true;
   }
+  /**
+   * A site's pop-up form that closes on any click outside its box (2026-11-25: Teamtailor's "Apply for
+   * this job" overlay, focus-trap style; the page hears clicks before QTS can). While such a pop-up is
+   * open, the panel's element sits inside the pop-up's box, so a click on the panel counts as inside the
+   * form; on screen nothing moves (the panel is in the top layer, raised again after the move). It goes
+   * back to the page's root when the pop-up closes. Placed as soon as the mouse comes over the panel,
+   * before any click, and whenever the page changes.
+   */
+  function modalBox() {
+    const boxes = [...document.querySelectorAll('[aria-modal="true"], dialog')].filter((element) => element !== host && !host.contains(element)
+      && (element.getAttribute('aria-modal') === 'true' || element.matches(':modal'))
+      && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
+    return boxes.pop() || null;
+  }
+  let placing = false;
+  let insideCheck = null;
+  function placeHost() {
+    if (disposed || !state || placing || !host.isConnected) return;
+    const home = document.documentElement || document.body;
+    const want = modalBox() || home;
+    if (want && host.parentNode !== want) {
+      placing = true;
+      try {
+        want.appendChild(host);
+        raise();
+      } catch { /* stays where it was */ } finally {
+        placing = false;
+      }
+    }
+    // Inside a pop-up: looked at every second, so the panel is back on the page's root as soon as the
+    // site hides or closes its pop-up (a hidden pop-up would hide the panel with it).
+    const inside = host.parentNode !== home;
+    if (inside && !insideCheck) insideCheck = setInterval(placeHost, 1000);
+    if (!inside && insideCheck) { clearInterval(insideCheck); insideCheck = null; }
+  }
+  host.addEventListener('pointerover', () => placeHost());
   const topLayerWatch = new MutationObserver((records) => {
+    if (placing) return;
     if (reattach()) { render(); return; }
+    placeHostSoon();
     for (const record of records) {
       if (record.target === host || host.contains(record.target)) continue;
       if (record.type === 'attributes' || [...record.addedNodes].some((node) => node.nodeType === 1)) { raiseSoon(); return; }
     }
   });
+  let placeTimer = null;
+  const placeHostSoon = () => { clearTimeout(placeTimer); placeTimer = setTimeout(placeHost, 150); };
   const onPageToggle = (event) => { if (event.target !== host && event.newState === 'open') raiseSoon(); };
 
   let state = null;
@@ -303,7 +398,44 @@
   const jobStatus = element('div', 'job-status');
   jobStatus.setAttribute('role', 'status');
   let statusTimer = null;
+  // A copy's message is a small alert at the page's top left (2026-11-25), never a line in the panel:
+  // ✓ "Copied: …" (✕ when it failed), one line, gone after 1.5 s; a new one replaces it.
+  let toastTimer = null;
+  function copyToast(text) {
+    const failed = /^Could not copy/i.test(text);
+    let host = document.querySelector('[data-qts-copy-toast]');
+    if (!host) {
+      host = document.createElement('div');
+      host.setAttribute('data-qts-copy-toast', '');
+      host.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;inset:12px auto auto 12px;overflow:visible;';
+      // (In the top layer where the browser allows it, so a site's own pop-ups never cover it.)
+      if ('popover' in host) host.setAttribute('popover', 'manual');
+      host.attachShadow({ mode: 'open' }).innerHTML = `<style>
+        .toast { display: flex; align-items: center; gap: 7px; max-width: 320px; padding: 7px 12px; border: 1px solid #34d399; border-radius: 999px;
+          background: #0b1220; color: #f8fafc; font: 600 12px Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+          opacity: 0; transform: translateY(-4px); transition: opacity .18s, transform .18s; pointer-events: none; }
+        .toast.shown { opacity: 1; transform: none; }
+        .toast.failed { border-color: #f87171; }
+        .mark { flex: none; color: #34d399; font-weight: 800; }
+        .failed .mark { color: #f87171; }
+        .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      </style><div class="toast" role="status"><span class="mark"></span><span class="text"></span></div>`;
+      document.documentElement.append(host);
+    }
+    const toast = host.shadowRoot.querySelector('.toast');
+    toast.classList.toggle('failed', failed);
+    toast.querySelector('.mark').textContent = failed ? '✕' : '✓';
+    toast.querySelector('.text').textContent = text;
+    try { if (host.showPopover && !host.matches(':popover-open')) host.showPopover(); } catch {}
+    toast.classList.add('shown');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.remove('shown');
+      setTimeout(() => { if (!toast.classList.contains('shown')) { try { host.hidePopover?.(); } catch {} } }, 250);
+    }, 1500);
+  }
   function say(text) {
+    if (/^(Copied|Could not copy)/i.test(String(text))) { copyToast(String(text)); return; }
     jobStatus.textContent = text;
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => { jobStatus.textContent = ''; }, 8000);
@@ -351,26 +483,104 @@
   // runs, never saved); the text is remembered for every job.
   let answerQuestions = { key: '', text: '', edited: false };
   const jobKey = () => String(state?.job?.id || state?.job?.url || '');
+  const cleanQuestion = (label) => String(label || '').replace(/\s+/g, ' ').replace(/\s*\((required|optional)\)\s*$/i, '').replace(/[\s*✱:]+$/, '').trim();
+  // The choices of this job's lists read for the Answer copy (2026-11-25): a list's choices go with its
+  // question, so ChatGPT or the AI picks one of them. Kept for this job while it runs.
+  let listChoices = { key: '', byLabel: new Map(), tried: false, reading: false };
+  const choicesKey = () => `${jobKey()}#${state?.step || 1}#${location.pathname}`;
+  const LIST_KINDS = ['select', 'combobox', 'menu', 'radio', 'checkbox-group'];
+  /** This page's empty questions: [{ label, options, multiple, list }] (options [] when none are known). */
   function pageQuestions() {
-    const clean = (label) => String(label || '').replace(/\s+/g, ' ').replace(/\s*\((required|optional)\)\s*$/i, '').replace(/[\s*✱:]+$/, '').trim();
-    let labels = [];
+    let entries = [];
     try {
       const form = global.__qtsApplyForm;
-      labels = (form?.scanForm?.() || [])
-        .filter((field) => !field.hidden && !field.disabled && field.kind !== 'file' && field.label && form.isUnanswered(field))
-        .map((field) => clean(field.label));
-    } catch { labels = []; }
-    if (!labels.length) labels = (state?.requiredRows || []).filter((row) => !answeredLive(row)).map((row) => clean(row.label));
-    return [...new Set(labels.filter(Boolean))];
+      entries = (form?.scanForm?.() || [])
+        // (Links other than LinkedIn and GitHub are left empty, 2026-11-26: not asked of any AI.)
+        .filter((field) => !field.hidden && !field.disabled && field.kind !== 'file' && !field.otherLink && field.label && form.isUnanswered(field))
+        .map((field) => {
+          const label = cleanQuestion(field.label);
+          const known = listChoices.key === choicesKey() ? listChoices.byLabel.get(label) : null;
+          const options = field.options?.length ? field.options : known?.options || [];
+          return {
+            label, options, kind: field.kind, multiple: Boolean(field.multiple || known?.multiple), list: LIST_KINDS.includes(field.kind),
+            more: !field.options?.length && Boolean(known?.more), search: !options.length && Boolean(known?.search),
+          };
+        });
+    } catch { entries = []; }
+    if (!entries.length) entries = (state?.requiredRows || []).filter((row) => !answeredLive(row)).map((row) => ({ label: cleanQuestion(row.label), options: [], list: false }));
+    const seenLabels = new Set();
+    return entries.filter((entry) => entry.label && !seenLabels.has(entry.label) && seenLabels.add(entry.label));
   }
+  /**
+   * One question as a numbered block (2026-11-25), so each question and its options stay together:
+   *   2. How did you hear about us?
+   *      Options (choose one):
+   *      - LinkedIn
+   *      - Referral
+   *      Answer:
+   * Up to 4 short options on one line ("Yes | No"); a longer list one per line (its first 40, "… N more");
+   * a search list "(type to search…)"; a text box "(free text)".
+   */
+  function questionBlock(entry, number) {
+    const options = (entry.options || []).map((option) => String(option).replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const lines = [`${number}. ${entry.label}`];
+    if (options.length) {
+      const how = entry.multiple ? 'choose any, one or more' : 'choose one';
+      const shown = options.slice(0, 40);
+      const rest = options.length > 40 ? `… ${options.length - 40} more` : entry.more ? '… more in the list' : '';
+      if (shown.length <= 4 && shown.every((option) => option.length <= 25) && !rest) lines.push(`   Options (${how}): ${shown.join(' | ')}`);
+      else lines.push(`   Options (${how}):`, ...shown.map((option) => `   - ${option}`), ...(rest ? [`   - ${rest}`] : []));
+    } else if (entry.search) {
+      lines.push('   (type to search: write the answer, the site matches it in its list)');
+    } else if (entry.list) {
+      lines.push('   (a list on the site: its options could not be read)');
+    } else {
+      lines.push('   (free text)');
+    }
+    lines.push('   Answer:');
+    return lines.join('\n');
+  }
+  const QUESTIONS_HEAD = 'QUESTIONS (answer each by its number; for a list, copy ONE option exactly as written)';
   function questionsNow() {
     if (answerQuestions.edited && answerQuestions.key === jobKey()) return answerQuestions.text;
-    answerQuestions = { key: jobKey(), text: pageQuestions().map((label) => `${label}:`).join('\n'), edited: false };
+    const entries = pageQuestions();
+    const text = entries.length ? [QUESTIONS_HEAD, ...entries.map((entry, index) => questionBlock(entry, index + 1))].join('\n\n') : '';
+    answerQuestions = { key: jobKey(), text, edited: false };
     return answerQuestions.text;
   }
+  /**
+   * The Answer copy with every empty list's choices (2026-11-25, faster): copied at once with what is
+   * known (the page, this site's remembered lists); lists still unknown are looked at once each (about
+   * 1 s) and the copy is made again with their choices. Once per page of the form.
+   */
+  async function answerWithChoices({ copy = true } = {}) {
+    const key = choicesKey();
+    if (listChoices.key !== key) listChoices = { key, byLabel: new Map(), tried: false, reading: false };
+    const missing = pageQuestions().filter((entry) => entry.list && !entry.options.length && !entry.search);
+    if (copy) copyAnswer();
+    if (!state?.auto || !missing.length || listChoices.tried || listChoices.reading) return;
+    listChoices.reading = true;
+    listChoices.tried = true;
+    say(`Reading the choices of ${missing.length} list${missing.length === 1 ? '' : 's'}…`);
+    const reply = await send('read_choices');
+    listChoices.reading = false;
+    if (listChoices.key !== choicesKey()) return;
+    for (const entry of reply?.choices || []) listChoices.byLabel.set(cleanQuestion(entry.label), entry);
+    // A busy QTS (still filling) is asked again next time.
+    if (reply?.busy) {
+      listChoices.tried = false;
+      say('QTS is still working on this page: copied without the lists\' choices. Click Answer again when it waits for you.');
+      return;
+    }
+    if (!(answerQuestions.edited && answerQuestions.key === jobKey())) answerQuestions = { key: '', text: '', edited: false };
+    render();
+    if (!reply?.choices?.length) { say('No list choices could be read: the copy has the questions only.'); return; }
+    if (copy) copyAnswer('Copied again, now with the lists\' choices');
+    else say('Choices added to the questions.');
+  }
   const answerText = () => [String(state?.references?.resumeText || '').trim(), questionsNow().trim(), panelTexts.answerText.trim()].filter(Boolean).join('\n\n');
-  async function copyAnswer() {
-    say(await copyReference(answerText()) ? 'Copied: résumé, empty questions and your text' : 'Could not copy. Try again.');
+  async function copyAnswer(message = 'Copied: résumé, empty questions and your text') {
+    say(await copyReference(answerText()) ? message : 'Could not copy. Try again.');
   }
   function answerBox() {
     const box = element('div', 'career answer-box');
@@ -383,7 +593,13 @@
     const questionsHead = element('div', 'answer-label', 'Empty questions on this page (this job only)');
     const reread = element('button', 'answer-mini', '↻ Read the page again');
     reread.type = 'button';
-    reread.addEventListener('click', () => { answerQuestions = { key: '', text: '', edited: false }; render(); });
+    reread.addEventListener('click', () => {
+      answerQuestions = { key: '', text: '', edited: false };
+      // New lists on the page get their choices read too (nothing is copied).
+      listChoices.tried = false;
+      render();
+      answerWithChoices({ copy: false });
+    });
     questionsHead.append(reread);
     const questions = element('textarea', 'answer-text');
     questions.dataset.keep = 'answer-questions';
@@ -581,9 +797,9 @@
       LinkedIn: ['#c4b5fd', [P('M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6z'), R(2, 9, 4, 12, 0), C(4, 4, 2)]],
       GitHub: ['#c4b5fd', [P('M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.1-1.3-.3-2.5-1-3.5.3-1.2.3-2.4 0-3.5 0 0-1 0-3 1.5a13.4 13.4 0 0 0-8 0C6 2 5 2 5 2c-.3 1.1-.3 2.3 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.4.5-.7 1.1-.8 1.7-.2.6-.2 1.2-.2 1.8v4'), P('M9 18c-4.5 2-5-2-7-2')]],
       Portfolio: ['#c4b5fd', [C(12, 12, 10), P('M2 12h20'), P('M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20')]],
-      'City, Country': ['#6ee7b7', [P('M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z'), C(12, 10, 3)]],
-      Street: ['#6ee7b7', [P('m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'), P('M9 22V12h6v10')]],
-      State: ['#6ee7b7', [P('m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z'), P('M9 3v15'), P('M15 6v15')]],
+      'City, State, Country': ['#6ee7b7', [P('M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z'), C(12, 10, 3)]],
+      'Street, Postal code': ['#6ee7b7',[P('m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'), P('M9 22V12h6v10')]],
+      'State / Province': ['#6ee7b7',[P('m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z'), P('M9 3v15'), P('M15 6v15')]],
       'Postal code': ['#6ee7b7', [P('M4 9h16'), P('M4 15h16'), P('M10 3 8 21'), P('M16 3l-2 18')]],
       Headline: ['#fcd34d', [R(2, 7, 20, 14), P('M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16')]],
       Experience: ['#fcd34d', [C(12, 12, 10), P('M12 6v6l4 2')]],
@@ -616,53 +832,77 @@
       node.append(iconNode(label), label);
       return node;
     };
-    const groups = [
-      ['Name', [['Full name', fullName], ['First name', profile.firstName], ['Last name', profile.lastName]]],
-      ['Contact', [['Email', profile.email], ['Phone', profile.phone]]],
-      ['Links', [['LinkedIn', linkedinFull(profile.linkedinUrl)], ['GitHub', profile.githubUrl], ['Portfolio', profile.portfolioUrl]]],
-      ['Address', [['City, Country', [profile.city, profile.country].map((part) => String(part ?? '').trim()).filter(Boolean).join(', ')], ['Street', profile.addressLine1], ['State', profile.province], ['Postal code', profile.postalCode]]],
-      ['More', [['Headline', profile.headline], ['Experience', profile.yearsOfExperience ? `${profile.yearsOfExperience} years` : ''], ['Nationality', profile.nationality], ['Birthday', profile.birthday], ['Languages', Array.isArray(profile.languages) ? profile.languages.join(', ') : profile.languages]]],
-    ].map(([title, rows]) => [title, rows.map(([label, value]) => [label, String(value ?? '').trim()]).filter(([, value]) => value)])
+    const joined = (...parts) => parts.map((part) => String(part ?? '').trim()).filter(Boolean).join(', ');
+    const clean = (value) => String(value ?? '').trim();
+    // Name and Address (Manager's layout, 2026-11-25): values only, no labels; a whole line first, then
+    // its parts side by side, each copied on its own. Name: full name, then first | last. Address:
+    // "city, state, country", then city | state | country, then street | postal code.
+    const valueSections = {
+      Name: [[{ show: profile.yearsOfExperience && fullName ? `${fullName} (${profile.yearsOfExperience}+)` : fullName, value: fullName }], [profile.firstName, profile.lastName]],
+      // Contact: icons only (2026-11-25), sharing the row's width: the résumé folder, email, phone,
+      // LinkedIn; hovering shows the value, a click copies it.
+      Contact: [[{ path: /^[a-z]:\\/i.test(String(state?.resumeFolderPath || '')) ? state.resumeFolderPath : '' }, { icon: 'Email', value: profile.email }, { icon: 'Phone', value: profile.phone }, { icon: 'LinkedIn', value: linkedinFull(profile.linkedinUrl) }]],
+      Address: [[joined(profile.city, profile.province, profile.country)], [profile.city, profile.province, profile.country], [profile.addressLine1, profile.postalCode]],
+    };
+    const sections = [
+      ['Name', valueSections.Name],
+      ['Contact', valueSections.Contact],
+      ['Links', [['GitHub', profile.githubUrl], ['Portfolio', profile.portfolioUrl]]],
+      ['Address', valueSections.Address],
+      // (The More section — headline, nationality, birthday, languages — was removed 2026-11-25.)
+    ].map(([title, rows]) => (valueSections[title]
+      ? [title, rows.map((line) => line.map((value) => (value && typeof value === 'object' ? (value.path !== undefined ? { path: clean(value.path) } : { show: clean(value.show), value: clean(value.value), icon: value.icon || '' }) : clean(value))).filter((value) => (typeof value === 'object' ? value.path || value.value : value))).filter((line) => line.length), true]
+      : [title, rows.map(([label, value]) => [label, clean(value)]).filter(([, value]) => value), false]))
       .filter(([, rows]) => rows.length);
-    for (const [title, rows] of groups) {
+    const copied = (node, value, said) => node.addEventListener('click', async () => {
+      const ok = await copyReference(value);
+      say(ok ? `Copied: ${said}` : 'Could not copy. Try again.');
+      if (!ok) return;
+      node.classList.add('copied');
+      setTimeout(() => node.classList.remove('copied'), 1200);
+    });
+    for (const [title, rows, valuesOnly] of sections) {
       box.append(element('div', 'profile-group', title));
+      if (valuesOnly) {
+        for (const line of rows) {
+          const row = element('div', 'address-line');
+          for (const entry of line) {
+            const path = typeof entry === 'object' ? entry.path || '' : '';
+            // (A box may show more than it copies: "Andrei Sava (11+)" copies "Andrei Sava".)
+            const shown = typeof entry === 'object' && entry.value ? entry.show || entry.value : '';
+            const value = path || (typeof entry === 'object' ? entry.value : entry);
+            // The résumé folder: a folder icon only; hovering shows the full path, a click copies it.
+            // An icon-only box (the email, phone and LinkedIn): its icon; hovering shows the value.
+            const icon = typeof entry === 'object' && entry.icon ? entry.icon : '';
+            const chip = element('button', path ? 'address-chip path-chip' : icon ? 'address-chip icon-chip' : 'address-chip', path || icon ? '' : shown || value);
+            if (path) {
+              chip.append(iconNode('Résumé folder'));
+              chip.setAttribute('aria-label', 'Copy the résumé folder path');
+            }
+            if (icon) {
+              chip.append(iconNode(icon));
+              chip.setAttribute('aria-label', `Copy ${icon}`);
+            }
+            chip.type = 'button';
+            chip.title = path ? `Copy the résumé folder's full path: ${path}` : icon ? `Copy ${icon}: ${value}` : `Copy: ${value}`;
+            copied(chip, value, path ? 'résumé folder full path' : value);
+            row.append(chip);
+          }
+          box.append(row);
+        }
+        continue;
+      }
       for (const [label, value] of rows) {
         const row = element('button', 'profile-row');
         row.type = 'button';
         row.title = `Copy ${label}: ${value}`;
         row.append(labelNode(label), element('span', 'profile-value', value), element('span', 'profile-copy-mark', '⧉'));
-        row.addEventListener('click', async () => {
-          const ok = await copyReference(value);
-          say(ok ? `Copied: ${label}` : 'Could not copy. Try again.');
-          if (!ok) return;
-          row.classList.add('copied');
-          setTimeout(() => row.classList.remove('copied'), 1200);
-        });
+        copied(row, value, label);
         box.append(row);
       }
     }
-    if (!groups.length) box.append(element('div', 'reference-note', 'No profile details saved.'));
-    // Files: the résumé PDF's and its folder's full paths (for a site's upload window), one click to copy.
-    const files = [['Résumé PDF', state?.resumeFilePath], ['Résumé folder', state?.resumeFolderPath]]
-      .map(([label, value]) => [label, String(value || '').trim()]).filter(([, value]) => /^[a-z]:\\/i.test(value));
-    if (files.length) {
-      box.append(element('div', 'profile-group', 'Files'));
-      for (const [label, value] of files) {
-        const row = element('button', 'profile-row path-row');
-        row.type = 'button';
-        row.title = `Copy the full path: ${value}`;
-        // (Left-to-right marks keep the path's own order inside the right-to-left cut.)
-        row.append(labelNode(label), element('span', 'profile-value', `‎${value}‎`), element('span', 'profile-copy-mark', '⧉'));
-        row.addEventListener('click', async () => {
-          const ok = await copyReference(value);
-          say(ok ? `Copied: ${label} full path` : 'Could not copy. Try again.');
-          if (!ok) return;
-          row.classList.add('copied');
-          setTimeout(() => row.classList.remove('copied'), 1200);
-        });
-        box.append(row);
-      }
-    }
+    if (!sections.length) box.append(element('div', 'reference-note', 'No profile details saved.'));
+    // (The Files section was removed 2026-11-25: the résumé folder's path sits beside the full name.)
     // Account: the Manager's password for job sites (Settings), masked; a click copies it in full.
     if (String(sitePassword || '').trim()) {
       box.append(element('div', 'profile-group', 'Account'));
@@ -856,6 +1096,8 @@
     disposed = true;
     state = null;
     clearInterval(heartbeatTimer);
+    clearInterval(insideCheck);
+    clearTimeout(placeTimer);
     clearTimeout(editRender);
     clearTimeout(statusTimer);
     document.removeEventListener('click', onDocumentClick, true);
@@ -988,17 +1230,35 @@
 
   // Read-only references: copying never fills a field, accepts an answer, or sends a proposal.
   const referenceOpen = new Set();
+  // A page may switch the Clipboard API off with its permissions policy (Workday: "Permissions policy
+  // violation: The Clipboard API has been blocked"); calling it there logs an error. Such a page is
+  // checked first and copied the older way: a copy command whose text QTS sets itself.
+  const clipboardAllowed = () => {
+    const policy = document.permissionsPolicy || document.featurePolicy;
+    try { return !policy?.allowsFeature || policy.allowsFeature('clipboard-write'); } catch { return true; }
+  };
+  function copyByCommand(text) {
+    let done = false;
+    const onCopy = (event) => { event.clipboardData?.setData('text/plain', text); event.preventDefault(); done = true; };
+    document.addEventListener('copy', onCopy, true);
+    try { document.execCommand('copy'); } catch {} finally { document.removeEventListener('copy', onCopy, true); }
+    if (done) return true;
+    // (A page that stops copy events: a hidden box's text selected and copied.)
+    const box = element('textarea');
+    box.value = text;
+    box.style.cssText = 'position:fixed;left:-9999px;opacity:0;';
+    root.append(box);
+    box.select();
+    try { return document.execCommand('copy'); } catch { return false; } finally { box.remove(); }
+  }
   async function copyReference(value) {
+    const text = String(value);
+    if (!clipboardAllowed() || !navigator.clipboard?.writeText) return copyByCommand(text);
     try {
-      await navigator.clipboard.writeText(String(value));
+      await navigator.clipboard.writeText(text);
       return true;
     } catch {
-      const box = element('textarea');
-      box.value = String(value);
-      box.style.cssText = 'position:fixed;left:-9999px;opacity:0;';
-      root.append(box);
-      box.select();
-      try { return document.execCommand('copy'); } catch { return false; } finally { box.remove(); }
+      return copyByCommand(text);
     }
   }
 
@@ -1072,7 +1332,26 @@
       if (state.candidateLabel) who.append(element('span', 'who-label', state.candidateLabel));
       job.append(who);
     }
-    job.append(element('div', 'job-title', `${state.job.title} — ${state.job.company}`));
+    // The job title and the company as two parts of the line (2026-11-25): plain text, each copied by a click.
+    const jobLine = element('div', 'job-title');
+    const copyPart = (cls, text, what) => {
+      const part = element('span', `copy-text ${cls}`, text);
+      part.title = `Click to copy the ${what}`;
+      part.addEventListener('click', async () => {
+        const ok = await copyReference(text);
+        say(ok ? `Copied: ${text}` : 'Could not copy. Try again.');
+        if (!ok) return;
+        part.classList.add('copied');
+        setTimeout(() => part.classList.remove('copied'), 1200);
+      });
+      return part;
+    };
+    // Only the job title (the company was taken off the line 2026-11-25); the company only when there is no title.
+    const jobTitle = String(state.job.title || '').trim();
+    const jobCompany = String(state.job.company || '').trim();
+    if (jobTitle) jobLine.append(copyPart('job-name', jobTitle, 'job title'));
+    else if (jobCompany) jobLine.append(copyPart('job-company', jobCompany, 'company name'));
+    job.append(jobLine);
     // Auto Apply: the job's own page, at hand after its tab has closed.
     if (auto && /^https?:\/\//i.test(state.job.url || '')) {
       const link = element('a', 'job-link', 'Job page ↗');
@@ -1109,7 +1388,7 @@
         answer.type = 'button';
         answer.title = 'Copy the résumé, the empty questions and your text';
         answer.setAttribute('aria-pressed', String(openBox === 'answer'));
-        answer.addEventListener('click', () => { answerQuestions.edited && answerQuestions.key === jobKey() || (answerQuestions = { key: '', text: '', edited: false }); copyAnswer(); toggleBox('answer'); });
+        answer.addEventListener('click', () => { answerQuestions.edited && answerQuestions.key === jobKey() || (answerQuestions = { key: '', text: '', edited: false }); toggleBox('answer'); answerWithChoices(); });
         copies.append(answer);
       }
       // Profile: a toggle that opens the profile box (name, email, phone, links, address…), each one copy.
@@ -1643,15 +1922,18 @@
   };
   document.addEventListener('input', onEdit, true);
   document.addEventListener('change', onEdit, true);
-  // Auto Apply with APIs: what the Manager types or picks while reviewing is marked on the box itself,
-  // so QTS never empties or replaces it, on this step or after the Manager moves on.
+  // Auto Apply with APIs: edits during review AND filling are marked with a revision,
+  // so automatic passes and Ask AI preserve it. Only an explicit Fill again may replace it.
   const markManagerChange = (event) => {
-    if (!event.isTrusted || !state?.apiFlow || state.mode !== 'review' || host.contains(event.target)) return;
+    if (!event.isTrusted || global.__qtsAutomatedInputDepth || !state?.apiFlow || !['review', 'working'].includes(state.mode) || host.contains(event.target)) return;
     const path = event.composedPath().filter((node) => node?.setAttribute);
     const box = event.type === 'click'
       ? path.find((node) => node.matches('[role="radio"], [role="checkbox"], [role="combobox"], [aria-pressed], [data-qts-apply-field]'))
       : path[0];
-    box?.setAttribute('data-qts-manager-changed', '1');
+    if (box) {
+      global.__qtsManagerEditRevision = Math.max(global.__qtsManagerEditRevision || 0, Date.now()) + 1;
+      box.setAttribute('data-qts-manager-changed', String(global.__qtsManagerEditRevision));
+    }
   };
   for (const type of ['input', 'change', 'click']) document.addEventListener(type, markManagerChange, true);
 

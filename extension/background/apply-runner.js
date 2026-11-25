@@ -107,14 +107,14 @@ async function applyWindowId() {
   return windowId;
 }
 
-// The form is shown while Apply fills it. It opens next to the Manager's tab as its opener, so
-// Chrome shows that tab again when the form closes. active: false opens it behind the Manager's tab.
+// The form is shown while Apply fills it. active: false opens it behind the Manager's tab.
 async function openApplyTab(url, { active = true } = {}) {
   const windowId = await applyWindowId();
-  const [shown] = await chrome.tabs.query({ windowId, active: true }).catch(() => []);
-  // Placed beside the shown tab by position, never with an opener: a job tab opened beside another
+  // Always the window's last tab (the Manager's choice, 2026-11-25): job tabs line up in the order they
+  // opened, never between the tabs already there. Never with an opener: a job tab opened beside another
   // job's page would otherwise count as that page's continuation and take over its application.
-  const tab = await chrome.tabs.create({ windowId, url, active, ...(Number.isInteger(shown?.index) ? { index: shown.index + 1 } : {}) });
+  // (No index and no opener: Chrome adds the tab at the end of the window.)
+  const tab = await chrome.tabs.create({ windowId, url, active });
   await tabOwnership.markTab(tab.id, 'apply');
   return tab;
 }
@@ -147,6 +147,108 @@ async function applyChatTab(attemptId = null, onTab = () => {}) {
     [APPLY_CHAT_TAB_KEY]: { id: tab.id, uses: 1, chatGptUrl, ...(attemptId ? { attemptId } : {}) },
   });
   return tab.id;
+}
+
+/**
+ * Auto Apply (2026-11-25): a page is looked at as soon as it is usable (its content read, the browser's
+ * "interactive" stage), not after every image, video and tracker has loaded; the finder then keeps
+ * looking while the page draws. from: the address before QTS started this navigation, so the page
+ * still on screen is never taken for the new one (the new one counts once the tab shows its address).
+ * Not for reloads (the old page then has the same address): those wait for the full load.
+ */
+async function waitForTabUsable(tabId, timeoutMs, { from = '' } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const fromUrl = String(from || '').split('#')[0];
+  const begun = Date.now();
+  for (;;) {
+    const tab = await getTab(tabId);
+    // A closed page never loads: the wait ends at once.
+    if (!tab) return false;
+    const url = String(tab.url || '').split('#')[0];
+    const moved = !fromUrl || url !== fromUrl;
+    // Loaded; or no new page came (the click changed this one, or was refused): looked at after 2 s.
+    if (tab.status === 'complete' && (moved || Date.now() - begun > 2000)) return true;
+    if (tab.status === 'loading' && moved) {
+      const [hit] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        injectImmediately: true,
+        func: () => ({ state: document.readyState, href: location.href, parts: document.body ? document.body.childElementCount : 0 }),
+      }).catch(() => []);
+      const look = hit?.result;
+      const at = String(look?.href || '').split('#')[0];
+      if (look && look.state !== 'loading' && /^https?:/i.test(at) && (!fromUrl || at !== fromUrl) && look.parts > 0) return true;
+    }
+    if (Date.now() >= deadline) return false;
+    await sleep(250);
+  }
+}
+
+/**
+ * A form address worked out from the job link shows the application: a form, a sign-in or account
+ * page, a human check, or an Apply / Continue button (the finder goes on from there). False for a page
+ * that settled with none of these (a "not found" page) or nothing within maxMs.
+ */
+async function directFormShows(tabId, maxMs = 8000) {
+  const started = Date.now();
+  for (;;) {
+    const page = await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
+    if (['application_form', 'partial_application_form', 'application_navigation', 'email_first_application', 'authentication_required',
+      'registration_required', 'verification_required', 'captcha_required'].includes(page?.type)) return true;
+    const waited = Date.now() - started;
+    if (waited >= 3000 && await inForm(tabId, () => globalThis.__qtsApplyForm.pageSettledWithText()).catch(() => false)) {
+      // Finished drawing with no form: one last look for a start button (classified as something else).
+      const probe = await inForm(tabId, () => globalThis.__qtsApplyForm.clickStart([], { assistant: true, probe: true, apiFlow: true })).catch(() => null);
+      return probe?.ok === true;
+    }
+    if (waited >= maxMs) return false;
+    await sleep(300);
+  }
+}
+
+// ---- Learned form routes (2026-11-25): per site, the ending that turns a job link into its form ----
+// When the finder reaches the form at the job's own address plus a fixed ending ("/apply",
+// "/applications/new"), that ending is kept for the site (30 days, this Chrome); the next job there opens
+// its form directly, with the job page as the fallback (a route that fails is forgotten).
+const FORM_ROUTES_KEY = 'qtsLearnedFormRoutes';
+const FORM_ROUTE_DAYS = 30;
+async function readFormRoutes() {
+  const stored = (await chrome.storage.local.get(FORM_ROUTES_KEY).catch(() => ({})))[FORM_ROUTES_KEY];
+  return stored && typeof stored === 'object' ? stored : {};
+}
+async function learnedRecipe(recipe, jobUrl) {
+  if (!recipe || recipe.unsupported || recipe.direct || recipe.site !== 'other') return recipe;
+  let url;
+  try { url = new URL(jobUrl); } catch { return recipe; }
+  const route = (await readFormRoutes())[url.host];
+  if (!route?.suffix || !(route.at > Date.now() - FORM_ROUTE_DAYS * 24 * 3600 * 1000)) return recipe;
+  const path = url.pathname.replace(/\/+$/, '');
+  if (!path || path.endsWith(route.suffix)) return recipe;
+  return { ...recipe, formUrl: `${url.origin}${path}${route.suffix}${url.search}`, jobUrl: url.href, direct: true, learned: true };
+}
+async function rememberFormRoute(jobUrl, formUrl) {
+  let job;
+  let form;
+  try { job = new URL(jobUrl); form = new URL(formUrl); } catch { return; }
+  if (job.host !== form.host) return;
+  const base = job.pathname.replace(/\/+$/, '');
+  const formPath = form.pathname.replace(/\/+$/, '');
+  if (!base || !formPath.startsWith(`${base}/`)) return;
+  const suffix = formPath.slice(base.length);
+  // A fixed ending only, never another job's or person's id.
+  if (suffix.length > 40 || /\d{3,}|[0-9a-f]{8}-[0-9a-f]{4}/i.test(suffix)) return;
+  const routes = await readFormRoutes();
+  routes[job.host] = { suffix, at: Date.now() };
+  const keep = Object.entries(routes).sort((a, b) => b[1].at - a[1].at).slice(0, 300);
+  await chrome.storage.local.set({ [FORM_ROUTES_KEY]: Object.fromEntries(keep) }).catch(() => {});
+  diag('form-route-learned', { host: job.host, suffix });
+}
+async function forgetFormRoute(jobUrl) {
+  let url;
+  try { url = new URL(jobUrl); } catch { return; }
+  const routes = await readFormRoutes();
+  if (!routes[url.host]) return;
+  delete routes[url.host];
+  await chrome.storage.local.set({ [FORM_ROUTES_KEY]: routes }).catch(() => {});
 }
 
 async function waitForTabComplete(tabId, timeoutMs) {
@@ -425,6 +527,8 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
   const guestFirst = application.apiFlow === true;
   const seeksGuestWay = !handleAccountSteps || guestFirst;
   const tick = guestFirst ? 300 : 1000;
+  // Auto Apply: a page is looked at once usable (waitForTabUsable); Normal Apply waits for the full load.
+  const waitReady = (id, ms, from = '') => (guestFirst ? waitForTabUsable(id, ms, { from }) : waitForTabComplete(id, ms));
   const clicked = [];
   // Auto Apply with APIs: the pages passed through, for the failure report and to stop a loop.
   const trail = [];
@@ -462,8 +566,8 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       startSeen = page?.type === 'application_navigation' ? startSeen + 1 : 0;
       // Steady: seen twice in a row, and the page quiet for 0.4 s (still drawing: an embedded form
       // may be on its way, so the usual wait applies).
-      if (steadyClicks && startSeen >= 2
-        && await inForm(tab.id, () => globalThis.__qtsApplyForm.settled({ quietMs: 400, maxMs: 900 })).catch(() => false)) break;
+      if (steadyClicks && startSeen >= 1
+        && await inForm(tab.id, () => globalThis.__qtsApplyForm.settled({ quietMs: 300, maxMs: 700 })).catch(() => false)) break;
       if (page?.type === 'application_navigation' && waited >= 2000) break;
       if (guestFirst && page?.type === 'unsupported_page' && waited >= (steadyClicks ? 600 : 1500)) {
         const found = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickStart(skip, { assistant: true, probe: true, apiFlow: true }), [clicked]).catch(() => null);
@@ -496,6 +600,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       const knownTabs = new Set((await chrome.tabs.query({})).map((entry) => entry.id));
       halt();
       const guestClick = noteTabClick(tab.id, 'start');
+      const [guestTab, guestFrom] = [tab.id, (await getTab(tab.id))?.url || ''];
       const guest = await inForm(tab.id, (skip) => globalThis.__qtsApplyForm.clickGuestWay(skip), [clicked]).catch(() => null);
       if (!guest?.ok) forgetTabClick(tab.id, guestClick);
       if (guest?.ok) {
@@ -514,7 +619,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
           }
           if ((await getTab(tab.id))?.status === 'loading') break;
         }
-        await waitForTabComplete(tab.id, 20000).catch(() => {});
+        await waitReady(tab.id, 20000, tab.id === guestTab ? guestFrom : '').catch(() => {});
         continue;
       }
     }
@@ -573,7 +678,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
           onTab(tab);
           await tabOwnership.markTab(tab.id, 'apply');
           chrome.tabs.remove(previousTab.id).catch(() => {});
-          await waitForTabComplete(tab.id, 45 * 1000);
+          await waitReady(tab.id, 45 * 1000);
           advanced = true;
           break;
         }
@@ -612,9 +717,21 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       break;
     }
     if (start.frameUrl) {
+      const frameFrom = (await getTab(tab.id))?.url || '';
       await chrome.tabs.update(tab.id, { url: start.frameUrl });
-      await pause(500);
-      await waitForTabComplete(tab.id, 45 * 1000);
+      await pause(300);
+      await waitReady(tab.id, 45 * 1000, frameFrom);
+      continue;
+    }
+    // Auto Apply: the start link read instead of clicked: its address opens in this tab (no new tab to
+    // wait for or judge); the next look finds the form, a sign-in, or another start control there.
+    if (start.navigate && start.href) {
+      clicked.push(start.text);
+      diag('apply-start-link', { host: (() => { try { return new URL(start.href).hostname; } catch { return ''; } })() });
+      const linkFrom = (await getTab(tab.id))?.url || '';
+      await chrome.tabs.update(tab.id, { url: start.href });
+      await pause(300);
+      await waitReady(tab.id, 45 * 1000, linkFrom);
       continue;
     }
     clicked.push(start.text);
@@ -631,7 +748,7 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
         onTab(tab);
         await tabOwnership.markTab(tab.id, 'apply');
         if (handleAccountSteps) chrome.tabs.remove(jobPage.id).catch(() => {});
-        await waitForTabComplete(tab.id, 45 * 1000);
+        await waitReady(tab.id, 45 * 1000);
         movedOn = true;
         break;
       }
@@ -644,16 +761,17 @@ async function reachApplicationForm(tab, onTab, application, { handleAccountStep
       }
       if ((await getTab(tab.id))?.url !== urlBefore) movedOn = true;
       if (guestFirst && movedOn) {
-        await waitForTabComplete(tab.id, 45 * 1000);
+        await waitReady(tab.id, 45 * 1000, urlBefore || '');
         break;
       }
     }
     // A link the page caught instead of following (Jobgether's sign-up box when not signed in):
     // its address is opened directly, as a person would by opening the link.
     if (!movedOn && start.href) {
+      const caughtFrom = (await getTab(tab.id))?.url || '';
       await chrome.tabs.update(tab.id, { url: start.href });
-      await pause(500);
-      await waitForTabComplete(tab.id, 45 * 1000);
+      await pause(300);
+      await waitReady(tab.id, 45 * 1000, caughtFrom);
     }
     if (start.action === 'account') return tab;
   }
@@ -699,11 +817,40 @@ async function debuggerSend(tabId, method, params = {}) {
   if (!debuggerTabs.has(tabId)) {
     await chrome.debugger.attach({ tabId }, '1.3');
     debuggerTabs.add(tabId);
+    // Attached again (the Manager closed Chrome's debugging bar): a job tab kept at full speed is again.
+    if (awakeTabs.has(tabId) && method !== 'Emulation.setFocusEmulationEnabled') {
+      await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+    }
   }
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+  if (!method.startsWith('Input.')) return chrome.debugger.sendCommand({ tabId }, method, params);
+  // Debugger input is trusted too. Suppress only its immediate events, never the
+  // waits for suggestions or AI replies, so real edits during those waits count.
+  const mark = (delta) => chrome.scripting.executeScript({ target: { tabId }, func: (change) => {
+    globalThis.__qtsAutomatedInputDepth = Math.max(0, (globalThis.__qtsAutomatedInputDepth || 0) + change);
+  }, args: [delta] });
+  await mark(1);
+  try { return await chrome.debugger.sendCommand({ tabId }, method, params); }
+  finally { await mark(-1).catch(() => {}); }
 }
 
+/**
+ * Auto Apply's job tabs open in the background (2026-11-25), where Chrome slows a page down (its timers
+ * at most once a second) and some lists close when the page is not focused. While QTS works in the tab,
+ * Chrome treats it as shown and focused (focus emulation, through the debugger QTS already uses for
+ * real clicks); it ends with the application, when the debugger is let go. Never fails the application.
+ */
+const awakeTabs = new Set();
+async function keepTabAwake(tabId) {
+  if (tabId == null || (awakeTabs.has(tabId) && debuggerTabs.has(tabId))) return;
+  try {
+    await debuggerSend(tabId, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+    awakeTabs.add(tabId);
+  } catch { /* A page the debugger cannot reach (Chrome's own pages): it just runs as Chrome lets it. */ }
+}
+chrome.tabs.onRemoved.addListener((tabId) => awakeTabs.delete(tabId));
+
 async function releaseDebugger(tabId) {
+  awakeTabs.delete(tabId);
   if (debuggerTabs.delete(tabId)) await chrome.debugger.detach({ tabId }).catch(() => {});
 }
 
@@ -812,6 +959,7 @@ async function pickOneWithRealClick(tabId, field, wanted) {
       if (typed) await inForm(tabId, (id) => globalThis.__qtsApplyForm.clearField(id), [field.id]).catch(() => false);
       return { ok: false, error: `the list has no "${wanted}"`, choices: choices || [] };
     }
+    if (await managerEditedDuringFill(tabId, field)) return { preserved: true };
     await realClick(tabId, choice);
     await sleep(400);
     const shown = await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownValue(id), [field.id]).catch(() => '');
@@ -865,6 +1013,112 @@ async function realPasteText(tabId, text) {
 // Up to the first space, comma or bracket: "C1(Fluent)" searches "C1" (Pinpoint lists "C1 (Fluent)").
 const firstWordOf = (text) => String(text).trim().split(/[\s,;/()[\]]+/).filter(Boolean)[0] || '';
 
+// ---- Dates typed in parts (Workday's "MM/YYYY", 2026-11-26) ----
+// Each part (Month, Day, Year) is its own small box that keeps only key presses: a value set from a
+// script shows "MM/2016" and "Error: Invalid Date". Each part is clicked, its digits typed with real
+// key presses (the site moves on to the next part by itself), then read back from what the page
+// shows; a part that did not take them is stepped with the arrow keys (a spin box moves one per press).
+const DATE_KEYS = {
+  up: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+  down: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
+  tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
+};
+
+/**
+ * An answer as a date for a date in parts: { y, m, d } read in the parts' own order ("11/2026" for
+ * Month + Year, "11/26/2026" for Month + Day + Year), or written the usual ways ("2026-11-26",
+ * "Nov 2026", "26 November 2026"). null when it is no date.
+ */
+function dateFromAnswer(value, order = []) {
+  const text = String(Array.isArray(value) ? value[0] : value ?? '').trim();
+  if (!text) return null;
+  const valid = (date) => (date && date.y >= 1900 && date.y <= 2100 && date.m >= 1 && date.m <= 12 && date.d >= 1 && date.d <= 31 ? date : null);
+  if (/^(today|now)$/i.test(text)) {
+    const now = new Date();
+    return { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate() };
+  }
+  const iso = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?/.exec(text);
+  if (iso) return valid({ y: Number(iso[1]), m: Number(iso[2]), d: Number(iso[3] || 1) });
+  const numbers = text.match(/\d+/g) || [];
+  const named = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+    .findIndex((month) => new RegExp(`\\b${month}`, 'i').test(text));
+  if (named >= 0) {
+    const year = numbers.find((number) => number.length === 4);
+    const day = numbers.find((number) => number.length <= 2);
+    return year ? valid({ y: Number(year), m: named + 1, d: Number(day || 1) }) : null;
+  }
+  if (order.length && numbers.length === order.length) {
+    const date = { y: null, m: 1, d: 1 };
+    order.forEach((part, index) => {
+      const number = Number(numbers[index]);
+      if (part === 'year') date.y = numbers[index].length <= 2 ? 2000 + number : number;
+      else if (part === 'month') date.m = number;
+      else date.d = number;
+    });
+    return valid(date);
+  }
+  // A year alone ("2016"), or month and year ("09/2016") for a date asking for more.
+  if (numbers.length === 1 && numbers[0].length === 4) return valid({ y: Number(numbers[0]), m: 1, d: 1 });
+  if (numbers.length === 2 && numbers[1].length === 4) return valid({ y: Number(numbers[1]), m: Number(numbers[0]), d: 1 });
+  return null;
+}
+
+/**
+ * A date in parts filled with real input, part by part, each read back. date: { y, m, d }.
+ * { ok, value } | { ok: false, error } | { preserved }.
+ */
+async function fillDateParts(tabId, field, date) {
+  const parts = await inForm(tabId, (id) => globalThis.__qtsApplyForm.datePartsOf(id), [field.id]).catch(() => null);
+  if (!parts?.length) return { ok: false, error: 'the date is no longer on the page' };
+  const read = (id) => inForm(tabId, (partId) => globalThis.__qtsApplyForm.datePartValue(partId), [id]).catch(() => null);
+  const cursorIn = (id) => inForm(tabId, (partId) => globalThis.__qtsApplyForm.cursorInField(partId), [id]).catch(() => false);
+  const digitsOf = (part, number) => String(number).padStart(part === 'year' ? 4 : 2, '0');
+  let typed = false;
+  for (const { part, id } of parts) {
+    const target = part === 'year' ? date.y : part === 'month' ? date.m : (date.d || 1);
+    if (!Number.isFinite(target)) continue;
+    let now = await read(id);
+    if (now === target) continue;
+    if (await managerEditedDuringFill(tabId, field)) return { preserved: true };
+    const point = await inForm(tabId, (partId) => globalThis.__qtsApplyForm.datePartPoint(partId), [id]).catch(() => null);
+    if (!point) return { ok: false, error: `its ${part} box is not on the screen` };
+    await realClick(tabId, point);
+    await sleep(60);
+    // Real key presses go wherever the cursor is: nothing is typed until it is in this part.
+    if (!(await cursorIn(id))) return { ok: false, error: `the cursor could not be put in its ${part} box` };
+    // A part already holding a number: selected, so the digits replace it.
+    if (now !== null) await realKey(tabId, REAL_KEYS.selectAll);
+    for (const digit of digitsOf(part, target)) await realCharacter(tabId, digit);
+    typed = true;
+    await sleep(120);
+    now = await read(id);
+    if (now !== target) {
+      // Stepped instead: one arrow press per step from what it shows (an empty part takes a first
+      // number with one press up), at most three rounds.
+      if (!(await cursorIn(id))) return { ok: false, error: `the cursor could not be put back in its ${part} box` };
+      if (now === null) {
+        await realKey(tabId, DATE_KEYS.up);
+        await sleep(60);
+        now = await read(id);
+      }
+      for (let round = 0; round < 3 && now !== null && now !== target; round += 1) {
+        const key = now < target ? DATE_KEYS.up : DATE_KEYS.down;
+        for (let press = Math.min(Math.abs(target - now), 200); press > 0; press -= 1) await realKey(tabId, key);
+        await sleep(100);
+        now = await read(id);
+      }
+    }
+    if (now !== target) return { ok: false, error: `its ${part} shows ${now === null ? 'nothing' : digitsOf(part, now)}, not ${digitsOf(part, target)}` };
+  }
+  // Left with Tab, so the site checks the whole date now (its "Invalid Date" shows at once if any).
+  if (typed) {
+    await realKey(tabId, DATE_KEYS.tab);
+    await sleep(120);
+  }
+  const value = await inForm(tabId, (id) => globalThis.__qtsApplyForm.dateShown(id), [field.id]).catch(() => '');
+  return { ok: true, value };
+}
+
 /**
  * One answer into a suggestion box: { ok } or { ok: false, error, pickYourself, choices }. A box
  * whose list closed under QTS (the site redrew that part of the form meanwhile: Oracle reloads its
@@ -879,12 +1133,13 @@ async function realSuggestionOne(tabId, field, wanted) {
   const first = await realSuggestionOnce(tabId, field, wanted, deadline);
   // Not when the list answered (it showed choices, or said it found nothing): the same search again
   // finds the same; the answer's fallback ("Other", the list's own words) comes next instead.
-  if (first.ok || !first.pickYourself || first.choices?.length || first.listAnswered || deadline - Date.now() < 4000) return first;
+  if (first.preserved || first.ok || !first.pickYourself || first.choices?.length || first.listAnswered || deadline - Date.now() < 4000) return first;
   await sleep(1500);
   return realSuggestionOnce(tabId, field, wanted, deadline);
 }
 
 async function realSuggestionOnce(tabId, field, wanted, deadline = Date.now() + SUGGESTION_BUDGET_MS) {
+  if (await managerEditedDuringFill(tabId, field)) return { preserved: true };
   const id = field.id;
   const squash = (text) => String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
   // Already holding this answer: left as it is.
@@ -903,6 +1158,7 @@ async function realSuggestionOnce(tabId, field, wanted, deadline = Date.now() + 
   // Test-only trace (self.__qtsListDebug set by a test): what each try saw.
   const trace = (entry) => { if (Array.isArray(self.__qtsListDebug)) self.__qtsListDebug.push({ label: String(field.label || '').slice(0, 30), wanted, ...entry }); };
   for (const text of tries) {
+    if (await managerEditedDuringFill(tabId, field)) return { preserved: true };
     if (Date.now() > deadline) break;
     const box = await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.boxOf(fieldId), [id]).catch(() => null);
     if (!box) return { ok: false, error: 'the box is not on the screen: pick it yourself', pickYourself: true };
@@ -933,6 +1189,7 @@ async function realSuggestionOnce(tabId, field, wanted, deadline = Date.now() + 
       }
     }
     trace({ text, open: await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.listOpen?.(fieldId), [id]).catch(() => null), shown: (await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.suggestionTexts(fieldId), [id]).catch(() => [])).slice(0, 3), exact: Boolean(choice) });
+    if (await managerEditedDuringFill(tabId, field)) return { preserved: true };
     if (!choice) await realPasteText(tabId, text);
     // Up to 6 s while the list shows nothing yet (some come from the site's server the first time,
     // Oracle's cx-select); done at once when it says it found nothing, and once it has shown the same
@@ -970,7 +1227,8 @@ async function realSuggestionOnce(tabId, field, wanted, deadline = Date.now() + 
     const own = squash(await inForm(tabId, (fieldId) => globalThis.__qtsApplyForm.boxValue?.(fieldId), [id]).catch(() => ''));
     if (own.length >= 2 && (own === picked || picked.startsWith(own))) return { ok: true };
   }
-  // No suggestion: nothing typed stays in the box.
+  // No suggestion: clear only the automation's text, never a newer manual edit.
+  if (await managerEditedDuringFill(tabId, field)) return { preserved: true };
   await realKey(tabId, REAL_KEYS.selectAll).catch(() => {});
   await realKey(tabId, REAL_KEYS.backspace).catch(() => {});
   await realEscape(tabId);
@@ -994,11 +1252,13 @@ async function realSuggestionFill(tabId, field, value) {
 }
 
 /** One box filled: a suggestion box with real input, any other box by the form engine. */
-async function fillBox(tabId, fieldId, value) {
+async function fillBox(tabId, fieldId, value, guard = null) {
   const suggests = value != null && typeof value !== 'boolean'
     && await inForm(tabId, (id) => globalThis.__qtsApplyForm.suggestionBox(id), [fieldId]).catch(() => false);
-  if (!suggests) return inForm(tabId, (id, next) => globalThis.__qtsApplyForm.fillField(id, next), [fieldId, value]).catch(() => null);
-  const real = await realSuggestionFill(tabId, { id: fieldId }, value);
+  if (!suggests) return inForm(tabId, (id, next, guarded) => globalThis.__qtsApplyForm.fillField(id, next, null, guarded), [fieldId, value, guard]).catch(() => null);
+  if (await managerEditedDuringFill(tabId, { ...guard, id: fieldId })) return { preserved: true };
+  const real = await realSuggestionFill(tabId, { ...guard, id: fieldId }, value);
+  if (real.preserved) return real;
   return real.ok ? { ok: true } : { ok: false, error: real.error, choices: real.choices || [], pickYourself: real.pickYourself === true };
 }
 
@@ -1035,6 +1295,108 @@ const formsOfRow = (row) => (Array.isArray(row?.variants) ? row.variants : []).m
 
 const isPhoneCodeList = (field) => field?.kind === 'combobox' && /^phone country code$/i.test(String(field.label || '').trim());
 
+// ---- The Answer copy's list choices (2026-11-25): fast, and remembered per site ----
+// A list's choices are looked at once, quickly: opened with a real click, read as soon as they show
+// (about 1 s), closed again; never scrolled or searched letter by letter. A list that shows nothing
+// until typed into (a city, school or company search) is "type to search", not read. What was read is
+// remembered for this job site and question for 7 days (this Chrome), so the next job there is instant.
+const LIST_CHOICES_KEY = 'qtsListChoicesMemory';
+const LIST_CHOICES_DAYS = 7;
+const LIST_CHOICES_SHOWN = 40;
+// Words a list shows instead of choices ("No options", "Type to search", "Loading…").
+const NOT_A_CHOICE = /^(no (options|results|matches|items)( found)?|nothing found|type( to search| something| at least)|start typing|please (type|enter)|enter \d+ or more|search(ing)?\b|loading\b|please wait)/i;
+
+const listChoiceKey = (site, label) => `${site}|${self.__qtsApplyAnswers.normalizeQuestionKey(String(label || ''))}`;
+async function readListChoiceMemory() {
+  const stored = (await chrome.storage.local.get(LIST_CHOICES_KEY).catch(() => ({})))[LIST_CHOICES_KEY];
+  return stored && typeof stored === 'object' ? stored : {};
+}
+async function rememberListChoices(entries) {
+  if (!entries.length) return;
+  const all = await readListChoiceMemory();
+  const fresh = Date.now() - LIST_CHOICES_DAYS * 24 * 3600 * 1000;
+  for (const [key, entry] of Object.entries(all)) if (!(entry?.at > fresh)) delete all[key];
+  for (const { key, ...entry } of entries) all[key] = { ...entry, at: Date.now() };
+  // The newest 400 only.
+  const keep = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, 400);
+  await chrome.storage.local.set({ [LIST_CHOICES_KEY]: Object.fromEntries(keep) }).catch(() => {});
+}
+
+/** One quick look at a list's choices: { options, more, search } (search: nothing shown until typed). */
+async function quickListChoices(tabId, field) {
+  const state = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldStateOf(id), [field.id]).catch(() => null);
+  try {
+    if (!(await realOpen(tabId, field))) return { options: [], more: false, search: false };
+    let shown = [];
+    // Read as soon as choices show; a list loading them gets up to 1 s more.
+    for (let waited = 0; waited <= 1000; waited += 250) {
+      shown = ((await inForm(tabId, (id) => globalThis.__qtsApplyForm.shownChoiceTexts(id), [field.id]).catch(() => [])) || [])
+        .map((text) => String(text).replace(/\s+/g, ' ').trim()).filter((text) => text && !NOT_A_CHOICE.test(text));
+      if (shown.length) break;
+      await sleep(250);
+    }
+    await realEscape(tabId);
+    await sleep(150);
+    await inForm(tabId, (id, before) => globalThis.__qtsApplyForm.restoreFieldState(id, before), [field.id, state]).catch(() => false);
+    const unique = [...new Set(shown)];
+    return { options: unique.slice(0, LIST_CHOICES_SHOWN), more: unique.length > LIST_CHOICES_SHOWN, search: !unique.length };
+  } catch {
+    return { options: [], more: false, search: false };
+  }
+}
+
+/**
+ * The choices of every empty list on the page that shows none yet, for the panel's Answer copy: what this
+ * job site's same question showed before (7 days), the site's own data (Greenhouse), else one quick look
+ * per list (at most 15). The phone's country code list is skipped (the phone is filled). Returns
+ * { ok, choices: [{ label, options, multiple?, more?, search? }] }.
+ */
+async function readEmptyListChoices(tabId) {
+  const fields = (await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist()).catch(() => null)) || [];
+  const lists = [];
+  for (const field of fields) {
+    if (field.hidden || field.disabled || !['combobox', 'menu'].includes(field.kind) || field.options?.length) continue;
+    // (The phone's own country-code list, in any of its names: the phone is filled already.)
+    if (isPhoneCodeList(field) || /^((phone|telephone|mobile) )?country (phone |calling |dial(l)?ing )?code$|^(phone |telephone )?(dial(l)?ing|calling) code$/i.test(String(field.label || '').trim())) continue;
+    if (!(await inForm(tabId, (entry) => globalThis.__qtsApplyForm.isUnanswered(entry), [field]).catch(() => false))) continue;
+    lists.push(field);
+  }
+  if (!lists.length) return { ok: true, choices: [] };
+  const site = self.__qtsApplyAnswers.siteKeyOf((await getTab(tabId))?.url || '');
+  const found = new Map();
+  // 1. Remembered for this site.
+  if (site) {
+    const memory = await readListChoiceMemory();
+    const fresh = Date.now() - LIST_CHOICES_DAYS * 24 * 3600 * 1000;
+    for (const field of lists) {
+      const known = memory[listChoiceKey(site, field.label)];
+      if (known?.at > fresh && (known.search || known.options?.length)) found.set(field.id, { options: known.options || [], more: Boolean(known.more), search: Boolean(known.search) });
+    }
+  }
+  // 2. The site's own data (Greenhouse).
+  const open = lists.filter((field) => !found.has(field.id));
+  if (open.length) {
+    await self.__qtsAutoApplyApi?.addSiteChoices?.(tabId, open)?.catch?.(() => 0);
+    for (const field of open) if (field.options?.length) found.set(field.id, { options: field.options.slice(0, LIST_CHOICES_SHOWN), more: field.options.length > LIST_CHOICES_SHOWN, search: false, fromData: true });
+  }
+  // 3. One quick look at each list still unknown.
+  const learned = [];
+  for (const field of lists.filter((entry) => !found.has(entry.id)).slice(0, 15)) {
+    const look = await quickListChoices(tabId, field);
+    if (!look.options.length && !look.search) continue;
+    found.set(field.id, look);
+    if (site) learned.push({ key: listChoiceKey(site, field.label), options: look.options, more: look.more, search: look.search, ...(field.multiple ? { multiple: true } : {}) });
+  }
+  await rememberListChoices(learned);
+  return {
+    ok: true,
+    choices: lists.filter((field) => found.has(field.id)).map((field) => {
+      const look = found.get(field.id);
+      return { label: field.label, options: look.options, ...(field.multiple ? { multiple: true } : {}), ...(look.more ? { more: true } : {}), ...(look.search ? { search: true } : {}) };
+    }),
+  };
+}
+
 async function readComboboxOptions(tabId, fields, stop = null, candidate = null) {
   // Fields whose box looking at the choices changed (a tag a site created): checked by the Manager.
   const changed = [];
@@ -1049,9 +1411,32 @@ async function readComboboxOptions(tabId, fields, stop = null, candidate = null)
     if (read.partial || read.options.length >= 300) field.optionsPartial = true;
     return true;
   };
+  // This company's same list read before (7 days, this Chrome; kept per company on shared job boards):
+  // its choices at once, with no opening (2026-11-26, Ask AI faster). A list read now is remembered.
+  const site = self.__qtsApplyAnswers.siteKeyOf?.((await getTab(tabId))?.url || '') || '';
+  const memory = site ? await readListChoiceMemory() : {};
+  const recent = Date.now() - LIST_CHOICES_DAYS * 24 * 3600 * 1000;
+  const learned = [];
   for (const field of fields) {
     if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
     if (field.hidden || field.disabled || field.options?.length) continue;
+    // (Never a list that follows another answer: a State or City list changes with the Country chosen.)
+    const isList = (field.kind === 'combobox' || (field.kind === 'menu' && field.lazy))
+      && !/\b(state|province|region|county|city|town|district|municipality|prefecture|department|area|location)\b/i.test(String(field.label || ''));
+    const known = site && isList && !isPhoneCodeList(field) ? memory[listChoiceKey(site, field.label)] : null;
+    if (known?.at > recent && known.options?.length && keepChoices(field, { options: known.options, partial: Boolean(known.more) }, 'memory')) continue;
+    const remember = () => {
+      if (site && isList && !isPhoneCodeList(field) && field.optionsSource === 'click' && field.options?.length && !field.optionsPartial) {
+        learned.push({ key: listChoiceKey(site, field.label), options: field.options.slice(0, LIST_CHOICES_SHOWN), more: field.options.length > LIST_CHOICES_SHOWN, ...(field.multiple ? { multiple: true } : {}) });
+      }
+    };
+    await readOneList(field);
+    remember();
+  }
+  await rememberListChoices(learned);
+  return changed;
+
+  async function readOneList(field) {
     if (isPhoneCodeList(field) && /^\s*\+\d/.test(String(candidate?.phone || ''))) {
       const digits = String(candidate.phone).replace(/\D/g, '');
       const search = (queries) => inForm(tabId, (id, words) => globalThis.__qtsApplyForm.searchComboboxChoices(id, words), [field.id, queries]).catch(() => null);
@@ -1070,14 +1455,14 @@ async function readComboboxOptions(tabId, fields, stop = null, candidate = null)
         const byDigits = await search([1, 2, 3].map((length) => `+${digits.slice(0, length)}`));
         if (fits(byDigits)) read = { ...byDigits, options: [...new Set([...(read?.options || []), ...byDigits.options])], changed: Boolean(read?.changed || byDigits.changed) };
       }
-      if (fits(read) && keepChoices(field, read, 'search')) continue;
+      if (fits(read) && keepChoices(field, read, 'search')) return;
       if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
     }
     if (field.kind === 'combobox') {
-      if (keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.discoverComboboxChoices(id), [field.id]).catch(() => null), 'click')) continue;
+      if (keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.discoverComboboxChoices(id), [field.id]).catch(() => null), 'click')) return;
       if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       // A list that ignores simulated events (React Select) opens for a real click.
-      if (keepChoices(field, await readChoicesWithRealClick(tabId, field), 'click')) continue;
+      if (keepChoices(field, await readChoicesWithRealClick(tabId, field), 'click')) return;
       if (stop && await stop()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       if (!keepChoices(field, await inForm(tabId, (id) => globalThis.__qtsApplyForm.searchComboboxChoices(id), [field.id]).catch(() => null), 'search')) field.options = [];
     } else if (field.kind === 'menu' && field.lazy) {
@@ -1093,7 +1478,6 @@ async function readComboboxOptions(tabId, fields, stop = null, candidate = null)
       if (!field.options.length && !field.required) field.hidden = true;
     }
   }
-  return changed;
 }
 
 /** The answer prompt for a page's open questions: Super Admin's prompt for the AI mode, or the default. */
@@ -1678,11 +2062,28 @@ async function fillAndCheck(tabId, field, answer, file, seen) {
   return outcome;
 }
 
+// Guards are opt-in: API autofill captures the edit revision at the start of its pass.
+async function managerEditedDuringFill(tabId, field) {
+  if (!Number.isFinite(field?.managerEditBaseline)) return false;
+  return inForm(tabId, entry => globalThis.__qtsApplyForm.managerEditedSince(entry), [field]).catch(() => true);
+}
+
 async function fillAndCheckField(tabId, field, answer, file, seen) {
+  if (await managerEditedDuringFill(tabId, field)) return { preserved: true };
+  // A date in parts (Workday's Month / Year boxes): real key presses, part by part, each read back.
+  if (!file && field.dateParts?.length) {
+    const date = dateFromAnswer(answer.value, field.dateParts);
+    if (!date) return { ok: false, error: `"${answerText(answer.value).slice(0, 40)}" is not a date for this box (${field.placeholder || 'MM/YYYY'})` };
+    const typed = await fillDateParts(tabId, field, date);
+    if (typed.preserved) return { preserved: true };
+    if (!typed.ok) return { ok: false, error: typed.error };
+    const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [field.id]).catch(() => '');
+    return issue && !REQUIRED_MESSAGE.test(issue) ? { ok: false, error: issue } : { ok: true };
+  }
   // A search or suggestion box gets Chrome's own input (fillBox); any other box the form engine's.
   const fill = (fieldId) => (file
-    ? inForm(tabId, (id, value, upload) => globalThis.__qtsApplyForm.fillField(id, value, upload), [fieldId, answer.value ?? null, file])
-    : fillBox(tabId, fieldId, answer.value ?? null));
+    ? inForm(tabId, (id, value, upload, guard) => globalThis.__qtsApplyForm.fillField(id, value, upload, guard), [fieldId, answer.value ?? null, file, field])
+    : fillBox(tabId, fieldId, answer.value ?? null, field));
   let fieldId = field.id;
   // The usual case in ONE trip: filled, and the site's reaction read with it (fillAndInspect). A
   // suggestion box, an upload, or an engine without it takes the separate trips, as before.
@@ -1696,7 +2097,11 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
     }
   }
   if (!result) result = await fill(fieldId);
+  if (result?.preserved) return { preserved: true };
   // The page may rebuild a field after another answer (BambooHR); find it again by its question.
+  // Never a box of an Experience / Education entry: every entry asks the same questions ("Job
+  // Title"), and the first one found would be another job's.
+  if (result?.error === 'The field is no longer on the page.' && field.entryBox) return { gone: true };
   if (result?.error === 'The field is no longer on the page.') {
     inspected = null;
     const again = (await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()) || [])
@@ -1704,7 +2109,9 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
     if (!again) return { gone: true };
     seen.add(again.id);
     fieldId = again.id;
+    if (await managerEditedDuringFill(tabId, { ...field, id: fieldId })) return { preserved: true };
     result = await fill(fieldId);
+    if (result?.preserved) return { preserved: true };
   }
   // A dropdown that ignored simulated events gets real clicks, and so does a text box that ended up
   // empty: it keeps a value only when one of its suggestions is clicked (Lever's location).
@@ -1712,6 +2119,7 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
   // (A suggestion box already had its real input: left for the Manager to pick.)
   if (!result?.ok && !result?.pickYourself && (['menu', 'combobox'].includes(field.kind) || emptied) && !file) {
     inspected = null;
+    if (await managerEditedDuringFill(tabId, { ...field, id: fieldId })) return { preserved: true };
     const real = await pickWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     // The choices either way of opening it showed go to the AI, so it picks one the field has.
     const choices = real.choices?.length ? real.choices : result?.choices;
@@ -1720,9 +2128,11 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
   // Radio and tick-box options a site ignores simulated clicks on get real clicks on their labels.
   if (!result?.ok && ['radio', 'checkbox-group'].includes(field.kind)) {
     inspected = null;
+    if (await managerEditedDuringFill(tabId, { ...field, id: fieldId })) return { preserved: true };
     const real = await checkWithRealClick(tabId, { ...field, id: fieldId }, answer.value);
     result = real.ok ? { ok: true } : { ok: false, error: `${result?.error || 'not taken'}; with real clicks: ${real.error}` };
   }
+  if (!result?.ok && await managerEditedDuringFill(tabId, { ...field, id: fieldId })) return { preserved: true };
   if (!result?.ok) return { ok: false, error: result?.error || `it holds "${result?.value ?? ''}"`, choices: result?.choices || [], ...(result?.manualUpload ? { manualUpload: true } : {}), ...(result?.pickYourself ? { pickYourself: true } : {}) };
   const issue = inspected ? inspected.issue : await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [fieldId]).catch(() => '');
   // "This field is required" left from before the pick, under a field that now holds its answer, is
@@ -2652,6 +3062,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (review?.auto && sender.tab?.id === review.tabId && ['start', 'unclear', 'side'].includes(msg.kind)) noteTabClick(sender.tab.id, msg.kind, 'manager');
       return { ok: true };
     }
+    // The Answer box: the choices of this page's empty lists, read for the Manager's copy (2026-11-25).
+    // Only while QTS waits for the Manager (never while it fills: the lists are opened to be read).
+    if (msg.action === 'read_choices') {
+      const review = activeReviews.get(msg.attemptId);
+      const tabId = sender.tab?.id;
+      if (!review || tabId == null || tabId !== review.tabId) return { ok: false, error: 'This page is not the application\'s.' };
+      if (review.auto && !reviewWaiters.has(msg.attemptId)) return { ok: false, busy: true, error: 'QTS is still working on this page.' };
+      return readEmptyListChoices(tabId);
+    }
     // Auto Apply: the panel's own view (small, moved, folded sections, scroll), carried to a new tab.
     if (msg.action === 'ui_state') {
       const review = activeReviews.get(msg.attemptId);
@@ -3194,6 +3613,8 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
 async function runApplication(application, recipe, { auto = false, onProgress = () => {}, resume = null } = {}) {
   // The legacy/dry-run Normal Apply entry point must obey the same no-AI boundary.
   if (!auto) application.normalApplyAnswers = true;
+  // Auto Apply: a site whose form address QTS learned from an earlier job opens it directly.
+  if (auto && !resume) recipe = await learnedRecipe(recipe, application.job?.url || '').catch(() => recipe);
   let lostClaim = false;
   let tabClosed = false;
   // Auto Apply: the Manager's Cancel or Remove (which end it with its tab), a stopped panel kept on
@@ -3496,6 +3917,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   review.onTab = (opened) => {
     tab = opened;
     review.tabId = opened.id;
+    // Auto Apply: the application's tab runs at full speed even behind the Manager's tab.
+    if (auto) keepTabAwake(opened.id).catch(() => {});
   };
   // Auto Apply: the answers of every page the application left (their tabs closed), for the bid.
   review.closedAnswers = [...(resume?.closedAnswers || [])];
@@ -3899,7 +4322,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     while (review.orphaned) await interruptible(sleep(500));
     await closeMovedFromTabs(review);
     application.tabMoved = true;
-    await interruptible(waitForTabComplete(tab.id, 20 * 1000)).catch((error) => { if (error instanceof ApplyStop) throw error; });
+    await interruptible(waitForTabUsable(tab.id, 20 * 1000)).catch((error) => { if (error instanceof ApplyStop) throw error; });
     for (;;) {
       if (await stoppedForGood()) throw new ApplyStop('Stopped.', { skip: false, keepTab: false });
       const look = await lookAtAutoTab(tab.id);
@@ -3995,7 +4418,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     }
     // Auto Apply with APIs: a site last used for another candidate is cleared before it opens.
     if (application.apiFlow && !resumedTab) await interruptible(self.__qtsAutoApplyApi.prepareSite(recipe.formUrl, application, siteOptions));
-    tab = resumedTab || await openApplyTab(recipe.formUrl);
+    // (Opened behind the Manager's tab, at the window's end: a new job never takes the focus, 2026-11-25.)
+    tab = resumedTab || await openApplyTab(recipe.formUrl, { active: false });
+    if (auto) keepTabAwake(tab.id).catch(() => {});
     // (A stopped panel that was on this tab gives way to the application going on in it.)
     if (auto && resumedTab) await globalThis.__qtsAutoApplyStopped?.forget?.(resumedTab.id);
     review.tabId = tab.id;
@@ -4005,10 +4430,22 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       review.panel = reviewState('working', { step: currentStep, workingText: resumedTab ? 'Going on with this application…' : 'Opening the job page…' });
       showReviewPanel(tab.id, review.panel).catch(() => {});
     }
-    if (!resumedTab) await interruptible(waitForTabComplete(tab.id, 45 * 1000));
+    if (!resumedTab) await interruptible(auto ? waitForTabUsable(tab.id, 45 * 1000) : waitForTabComplete(tab.id, 45 * 1000));
     if (auto && !resumedTab) {
       review.panel = reviewState('working', { step: currentStep, workingText: 'Finding the application form…' });
       await showReviewPanel(tab.id, review.panel).catch(() => {});
+    }
+    // A form address worked out from the job link (Workable, Workday…, or learned on this site): when it
+    // shows no form, sign-in or Apply button, the job page itself is opened and the way found there.
+    if (!resumedTab && recipe.direct && recipe.jobUrl && recipe.jobUrl !== recipe.formUrl) {
+      const works = await interruptible(directFormShows(tab.id, recipe.workday ? 15000 : 8000));
+      diag('apply-direct-form', { site: recipe.site, learned: Boolean(recipe.learned), worked: works });
+      if (!works) {
+        const from = (await getTab(tab.id))?.url || '';
+        await chrome.tabs.update(tab.id, { url: recipe.jobUrl });
+        await interruptible(waitForTabUsable(tab.id, 45 * 1000, { from }));
+        if (recipe.learned) await forgetFormRoute(recipe.jobUrl);
+      }
     }
     if (application.apiFlow && !resumedTab) {
       const site = await confirmSiteAccount(1);
@@ -4017,6 +4454,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     if (recipe.findStart && !resumedTab) {
       const decision = await navigateToApplication(1);
       if (decision) return await finishBeforeSubmit(decision);
+      // Auto Apply: the form was reached at the job's own address plus a fixed ending ("/apply"): the
+      // next job on this site opens that address directly.
+      if (auto && !recipe.direct) rememberFormRoute(application.job.url, (await getTab(tab.id))?.url || '').catch(() => {});
     }
 
     let step = resume && resumedTab ? resume.step || 1 : 1;
@@ -4277,8 +4717,6 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
         if (shape) stopWatch = watchManagerNavigation(tab.id, shape);
       }
       let decision;
-      // Auto Apply with APIs: a question that appeared while the Manager reviews gets its own small fill.
-      let newQuestions = false;
       try {
       for (;;) {
         const listed = checklist?.summary(step);
@@ -4344,10 +4782,7 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
               notice = `Not saved: ${message.replace(/[.\s]+$/, '')}${retry}`;
             }
           }
-          if (application.apiFlow && !decision.manualCheck && await self.__qtsAutoApplyApi.hasNewQuestions(tab.id, application)) {
-            newQuestions = true;
-            break;
-          }
+          // Review-time changes only update the checklist; another fill requires Alt+F.
           await recheckPage(tab.id, step);
           await onProgress({ step, phase: final ? 'final' : 'needs_you', quiet: true, memory: memory() });
           continue;
@@ -4370,7 +4805,6 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
       }
       notice = null;
       fillAgain = false;
-      if (newQuestions) continue;
       // Auto Apply: the application went on in a new tab (the Manager's or QTS's click opened it). A
       // page that is not the form yet is led on to it; a step QTS has seen is checked again, never
       // refilled; a new one is filled.
@@ -5057,7 +5491,8 @@ async function refreshAssistQuestions(tabId, assistant, force = false, editedIds
   if (application && self.__qtsApplyAnswers?.resolveFields) {
     try {
       plan = self.__qtsApplyAnswers.resolveFields(scanned.map((question) => ({ id: question.id, label: question.label, kind: question.kind,
-        required: question.required, options: question.options || [], ...(question.note ? { note: question.note } : {}), ...(question.unit ? { unit: question.unit } : {}) })),
+        required: question.required, options: question.options || [], ...(question.note ? { note: question.note } : {}), ...(question.unit ? { unit: question.unit } : {}),
+        ...(question.otherLink ? { otherLink: true } : {}) })),
       application.candidate, application.savedAnswers,
       { normalApply: true, exchangeRates: application.exchangeRates, today: new Date(), coverLetterText: application.job?.coverLetterText,
         experiences: application.profileDetails?.experiences || [], jobCompany: application.job?.company || '', jobLocation: application.job?.location || '' });
@@ -5634,6 +6069,12 @@ async function processApplyQueue() {
   applyLoopRunning = true;
   // Apply and Auto Apply use the Manager's configured open-application limit.
   const running = new Set();
+  // (Auto Apply: applications claimed here, until their run ends; sent with each claim as "keep".)
+  const ours = new Set();
+  // (Auto Apply: the site and candidate of each application claimed here, until it ends; and jobs whose
+  // site was busy with another candidate, skipped until an application ends and frees a site.)
+  const ourSites = new Map();
+  const busySiteJobs = new Set();
   const track = (work) => {
     const run = work.catch(() => {}).finally(() => {
       running.delete(run);
@@ -5672,27 +6113,43 @@ async function processApplyQueue() {
         storedSelection?.mode === 'auto_apply' ? storedSelection : undefined,
         applyParallelLimit,
       )) track(run);
+      // Stopped tabs from before (kept with their hold, older versions): their jobs are given back now, so
+      // their holds stop taking this Chrome's jobs-at-once slots on the server; they come back "later".
+      await giveBackStoppedHolds();
     }
     while (await isApplyOn()) {
       const testMode = (await chrome.storage.local.get(APPLY_DRY_RUN_KEY))[APPLY_DRY_RUN_KEY] === true;
       // Auto Apply: every application tab open in this Chrome counts toward the Manager's limit: one QTS
       // works on or waits in, and one kept for the Manager after a stop (Submitted / Give back).
+      // A stopped application's tab (Stop, a reload) no longer counts: its job went back to the list
+      // (2026-11-25), so starting again never waits for the Manager to close it.
       const openNow = autoApply
-        ? Math.max(running.size, self.__qtsAutoApply.runningCount?.() || 0) + Object.keys((await chrome.storage.local.get('qtsAutoApplyStopped')).qtsAutoApplyStopped || {}).length
+        ? Math.max(running.size, self.__qtsAutoApply.runningCount?.() || 0)
         : running.size;
       if (openNow >= (testMode ? 1 : await freshLimit())) {
-        // (A kept tab is let go by the Manager, not by a run ending: looked at again every few seconds.)
         await Promise.race(running.size ? [...running, sleep(5000)] : [sleep(5000)]);
         continue;
       }
       if (autoApply && !(await self.__qtsAutoApply.retryPendingReleases())) break;
       const scope = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
       const claimMode = autoApply ? 'auto_apply' : 'apply';
-      const claim = await workerApiRequest('POST', '/api/extension/apply/claim', {
+      // Auto Apply: stopped jobs ("later") are skipped while any other job is ready; with none, asked for again.
+      const later = autoApply ? await laterJobIds() : [];
+      // Auto Apply: the applications this Chrome works on now go with it, so the server lets go of any
+      // other hold of this Chrome first (a stopped tab, a reload) and every free slot opens a job.
+      const keep = autoApply
+        ? [...new Set([...ours, ...(self.__qtsAutoApply.runningIds?.() || []), ...activeReviews.keys()])].slice(0, 20)
+        : null;
+      const ask = (skip) => workerApiRequest('POST', '/api/extension/apply/claim', {
         mode: claimMode,
-        skipJobIds: await cancelledJobIds(),
+        skipJobIds: skip,
+        ...(keep ? { keepAttemptIds: keep } : {}),
         ...(scope?.mode === claimMode ? { selection: scope } : {}),
       });
+      const skipped = [...await cancelledJobIds(), ...busySiteJobs];
+      let claim = await ask([...new Set([...skipped, ...later])].slice(-200));
+      if (later.length && claim.success === true && !claim.application) claim = await ask(skipped);
+      if (claim.success === true && claim.application?.job?.id) await forgetLaterJob(claim.application.job.id);
       if (claim.success !== true) {
         if ([401, 403, 426].includes(claim._httpStatus)) {
           await chrome.storage.local.set({ [EXTENSION_STATUS_KEY]: null });
@@ -5736,10 +6193,32 @@ async function processApplyQueue() {
         await notifyApply('Auto Apply is not turned on for you. Ask your Super Admin to turn on Auto Apply with APIs.');
         break;
       }
+      // Auto Apply: a job whose site another candidate is using in this Chrome now (open, or claimed a
+      // moment ago) would only wait in a slot without a tab: it goes back to the list at once and the
+      // next job is taken instead; it is offered again once an application here ends (2026-11-25).
+      if (autoApply) {
+        const site = self.__qtsAutoApplyApi?.siteOfJob?.(application.job.url) || '';
+        const candidateId = application.candidate?.candidateId || null;
+        const holder = self.__qtsAutoApplyApi?.siteHolder?.(site) ?? null;
+        const busy = site && ((holder && holder !== candidateId)
+          || [...ourSites.values()].some((entry) => entry.site === site && entry.candidateId !== candidateId));
+        if (busy) {
+          await workerApiRequest('POST', '/api/extension/apply/release', { attemptId: application.attemptId, mode: 'drop', reason: 'Its site is open for another candidate in this Chrome: taken later.' }).catch(() => null);
+          busySiteJobs.add(application.job.id);
+          continue;
+        }
+        ourSites.set(application.attemptId, { site, candidateId });
+      }
       const resume = autoApply ? await self.__qtsAutoApply.resumeForClaimedJob(application) : null;
-      track(testMode ? runApplication(application, recipe)
+      if (autoApply) ours.add(application.attemptId);
+      track((testMode ? runApplication(application, recipe)
         : autoApply ? self.__qtsAutoApply.run(application, recipe, resume)
-          : runAssistedApplication(application));
+          : runAssistedApplication(application)).finally(() => {
+        ours.delete(application.attemptId);
+        ourSites.delete(application.attemptId);
+        // A site may be free now: the jobs skipped for a busy site are offered again.
+        busySiteJobs.clear();
+      }));
     }
   } finally {
     await Promise.allSettled([...running]);
@@ -6153,10 +6632,50 @@ const changeStoppedAutoTabs = (change) => {
 };
 const readStoppedAutoTabs = async () => (await chrome.storage.local.get(AUTO_STOPPED_KEY))[AUTO_STOPPED_KEY] || {};
 
-/** A stopped application's tab: remembered, and its panel shown (mode "stopped"). */
+/**
+ * A stopped application's tab: remembered, and its panel shown (mode "stopped"). Its job goes back to the
+ * list at once, unchanged (its hold ends; 2026-11-25), and is marked "later": Auto Apply picks every other
+ * ready job first and opens this one again only when nothing else is ready. The tab stays for the
+ * Manager (Submitted still saves the bid) and never counts toward the jobs-at-once limit.
+ */
 async function keepStoppedAutoTab(tabId, entry) {
-  await changeStoppedAutoTabs((all) => { all[tabId] = { ...entry, at: Date.now() }; });
-  await showReviewPanel(tabId, entry.state).catch(() => {});
+  const state = entry.state ? {
+    ...entry.state,
+    problems: [...(entry.state.problems || []), { message: 'This job is back in the list: QTS opens it again later, after the other ready jobs. Already sent it? Click Submitted.', fieldId: null }],
+  } : entry.state;
+  await changeStoppedAutoTabs((all) => { all[tabId] = { ...entry, state, at: Date.now(), givenBack: Boolean(entry.attemptId) }; });
+  await showReviewPanel(tabId, state).catch(() => {});
+  if (entry.attemptId) {
+    await workerApiRequest('POST', '/api/extension/apply/release', { attemptId: entry.attemptId, mode: 'drop', reason: `Stopped (${String(entry.reason || 'QTS stopped').slice(0, 200)}): back in the list for later.` }).catch(() => null);
+  }
+  await noteLaterJob(entry.jobId);
+}
+
+/** Every stopped tab's job given back to the list (once per stop; its tab and panel stay). */
+async function giveBackStoppedHolds() {
+  const all = await readStoppedAutoTabs().catch(() => ({}));
+  for (const [tabId, entry] of Object.entries(all)) {
+    if (entry.givenBack || !entry.attemptId) continue;
+    await workerApiRequest('POST', '/api/extension/apply/release', { attemptId: entry.attemptId, mode: 'drop', reason: 'Stopped earlier: back in the list for later.' }).catch(() => null);
+    await noteLaterJob(entry.jobId);
+    await changeStoppedAutoTabs((stored) => { if (stored[tabId]) stored[tabId].givenBack = true; });
+  }
+}
+
+// Jobs that were stopped: opened again only when no other job is ready (kept in this Chrome's storage).
+const AUTO_LATER_KEY = 'qtsAutoApplyLaterJobs';
+async function laterJobIds() {
+  const stored = (await chrome.storage.local.get(AUTO_LATER_KEY).catch(() => ({})))[AUTO_LATER_KEY];
+  return Array.isArray(stored) ? stored : [];
+}
+async function noteLaterJob(jobId) {
+  if (!jobId) return;
+  const ids = (await laterJobIds()).filter((id) => id !== jobId);
+  await chrome.storage.local.set({ [AUTO_LATER_KEY]: [...ids, jobId].slice(-200) });
+}
+async function forgetLaterJob(jobId) {
+  const ids = await laterJobIds();
+  if (ids.includes(jobId)) await chrome.storage.local.set({ [AUTO_LATER_KEY]: ids.filter((id) => id !== jobId) });
 }
 const forgetStoppedAutoTab = (tabId) => changeStoppedAutoTabs((all) => { delete all[tabId]; });
 

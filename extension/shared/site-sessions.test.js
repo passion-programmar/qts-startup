@@ -27,9 +27,17 @@ test('a site last used for someone else names every address of that site to clea
   assert.deepEqual(known.origins.sort(), ['https://apply.acme.com', 'https://careers.acme.com']);
 });
 
-test('two companies on one platform count as one site: Chrome clears its cookies together', () => {
+test('Workday signs in per company (2026-11-26): two companies are apart, one company is shared', () => {
   const ledger = sessions.rememberSite({}, 'https://nvidia.wd5.myworkdayjobs.com/a', 'ben', 1000);
-  assert.equal(sessions.siteStanding(ledger, 'https://intel.wd1.myworkdayjobs.com/b', 'ana').standing, 'other');
+  assert.equal(sessions.siteStanding(ledger, 'https://intel.wd1.myworkdayjobs.com/b', 'ana').standing, 'none');
+  assert.equal(sessions.siteStanding(ledger, 'https://nvidia.wd5.myworkdayjobs.com/c', 'ana').standing, 'other');
+  assert.equal(sessions.holdKeyOf('https://intel.wd1.myworkdayjobs.com/b'), 'intel.wd1.myworkdayjobs.com');
+});
+
+test('a platform nobody signs in to (Workable) is never held or cleared between candidates', () => {
+  const ledger = sessions.rememberSite({}, 'https://apply.workable.com/acme/j/1', 'ben', 1000);
+  assert.equal(sessions.siteStanding(ledger, 'https://apply.workable.com/other/j/2', 'ana').standing, 'shared');
+  assert.equal(sessions.holdKeyOf('https://apply.workable.com/other/j/2'), '');
 });
 
 test('nobody is ever signed out of mail, LinkedIn, or the like', () => {

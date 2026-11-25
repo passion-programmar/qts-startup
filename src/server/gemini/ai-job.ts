@@ -9,6 +9,7 @@ import {
   nextPacificMidnight,
   type AiLimits,
   type AiModel,
+  type AiModelId,
   type AiPauseReason,
   type AiProvider,
   type AiSlotPause,
@@ -113,14 +114,25 @@ export type AiJobDeps<Claim, Result> = {
   savePauses: (pauses: AiSlotPauses) => Promise<void>;
   /** Turns the model's text into the answer. Throwing means the reply was unusable. */
   parse: (text: string) => Result;
+  /**
+   * The models to try first, in this order (the rest follow in their usual order). Apply's answers
+   * start with Groq (2026-11-26: about 3 s, against 10 s or an 18 s time-out on Gemini 3.6 Flash).
+   */
+  modelOrder?: readonly AiModelId[];
 };
 
 const busyMessage = "Gemini and Groq are busy right now. Try again shortly.";
 const quotaMessage = "Today's Gemini and Groq quota is used up. It resets at midnight Pacific.";
 
 export async function runAiJob<Claim, Result>(deps: AiJobDeps<Claim, Result>): Promise<Result> {
-  const models = aiModels.filter((model) => deps.keys[model.provider].length > 0);
+  const rank = (model: AiModel) => {
+    const at = deps.modelOrder?.indexOf(model.id) ?? -1;
+    return at === -1 ? (deps.modelOrder?.length ?? 0) + aiModels.indexOf(model) : at;
+  };
+  const models = aiModels.filter((model) => deps.keys[model.provider].length > 0).sort((a, b) => rank(a) - rank(b));
   if (!models.length) throw new AiJobError("ai_not_configured", "No Gemini or Groq key is set up. Ask your Super Admin.");
+  // Each provider gets its turn in the order of its first model (Gemini, then Groq, unless told otherwise).
+  const providers = [...new Set(models.map((model) => model.provider))];
 
   let state = await deps.readState();
   const tokensFor = new Map<string, number>(models.map((model) => [model.id, deps.estimateTokens(model)]));
@@ -139,9 +151,9 @@ export async function runAiJob<Claim, Result>(deps: AiJobDeps<Claim, Result>): P
   );
   const modelsOf = (provider: AiProvider) => models.filter((model) => model.provider === provider);
 
-  /** Google's turn ends early enough to leave Groq one full try. */
+  /** A provider's turn ends early enough to leave the next provider one full try. */
   const timeForTry = (provider: AiProvider): number => {
-    const reserved = provider === "gemini" && deps.keys.groq.length ? aiTryTimeoutMs : 0;
+    const reserved = providers.slice(providers.indexOf(provider) + 1).some((next) => deps.keys[next].length) ? aiTryTimeoutMs : 0;
     const left = deps.deadlineAt - deps.now() - reserved;
     return left < minimumTryMs ? 0 : Math.min(aiTryTimeoutMs, left);
   };
@@ -227,11 +239,13 @@ export async function runAiJob<Claim, Result>(deps: AiJobDeps<Claim, Result>): P
 
   const stopWaitingAt = deps.now() + noSlotWaitMs;
   for (;;) {
-    const gemini = await runProvider("gemini");
-    if ("value" in gemini) return gemini.value;
-    const groq = await runProvider("groq");
-    if ("value" in groq) return groq.value;
-    if (gemini.calls + groq.calls > 0) throw new AiJobError("ai_busy", busyMessage);
+    let calls = 0;
+    for (const provider of providers) {
+      const turn = await runProvider(provider);
+      if ("value" in turn) return turn.value;
+      calls += turn.calls;
+    }
+    if (calls > 0) throw new AiJobError("ai_busy", busyMessage);
 
     const nowMs = deps.now();
     const allSlots = models.flatMap((model) => deps.keys[model.provider].map((key) => slotOf(model, key)));

@@ -810,11 +810,11 @@ async function initializeQtsPageLauncher() {
       if (job.ready && job.resumeFolder) {
         buttons.append(customButton('📁 Path', '', async () => {
           const path = `Downloads\\${job.resumeFolder.replace(/\//g, '\\').replace(/\\+$/, '')}`;
-          showToast(await navigator.clipboard.writeText(path).then(() => true, () => false) ? `Copied: ${path}` : 'Could not copy. Try again.', 'info');
+          showToast(await copyPlain(path) ? `Copied: ${path}` : 'Could not copy. Try again.', 'info');
         }));
       }
       if (job.ready && job.coverLetterText) {
-        buttons.append(customButton('Letter', '', async () => showToast(await navigator.clipboard.writeText(job.coverLetterText).then(() => true, () => false) ? 'Copied: cover letter' : 'Could not copy. Try again.', 'info')));
+        buttons.append(customButton('Letter', '', async () => showToast(await copyPlain(job.coverLetterText) ? 'Copied: cover letter' : 'Could not copy. Try again.', 'info')));
       }
       if (job.url) buttons.append(customButton('Open URL', '', () => window.open(job.url, '_blank', 'noopener')));
       if (job.ready) buttons.append(customButton('Submitted', 'primary', () => customJobAction(job, 'submitted')));
@@ -1287,6 +1287,23 @@ async function initializeQtsPageLauncher() {
     attributeFilter: ['data-qts-get-jd-docked'],
   });
   syncGetJdDocking();
+
+  // Text to the clipboard: the Clipboard API where the page allows it; a page whose permissions policy
+  // turns it off (Workday) is copied with a copy command whose text is set here (no error logged).
+  async function copyPlain(value) {
+    const text = String(value ?? '');
+    const policy = document.permissionsPolicy || document.featurePolicy;
+    let allowed = true;
+    try { allowed = !policy?.allowsFeature || policy.allowsFeature('clipboard-write'); } catch {}
+    if (allowed && navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(text); return true; } catch {}
+    }
+    let done = false;
+    const onCopy = (event) => { event.clipboardData?.setData('text/plain', text); event.preventDefault(); done = true; };
+    document.addEventListener('copy', onCopy, true);
+    try { document.execCommand('copy'); } catch {} finally { document.removeEventListener('copy', onCopy, true); }
+    return done;
+  }
 
   // All toasts on the page share one stack (content/page-toast.js).
   function showToast(message, type = 'info') {
@@ -1882,12 +1899,19 @@ async function initializeQtsPageLauncher() {
         .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       if (!reply?.ok) {
         const message = String(reply?.error || reply?.message || 'Unknown error.');
-        console.warn('[QTS launcher] Could not refresh daily counts:', message);
-        showCountsProblem(message);
+        // This page's QTS is from before an extension reload: it no longer reaches the extension; the
+        // reloaded page's own panel takes over. Nothing to show or log.
+        if (/extension context invalidated/i.test(message)) return;
+        // The extension's worker restarted while it was asked (a reload, or Chrome woke it again): the
+        // answer was lost, not refused. Asked again quietly; only the last failed try is shown and logged.
+        const restarted = /message channel closed|receiving end does not exist|could not establish connection/i.test(message);
         if (countsRetries < COUNTS_MAX_RETRIES) {
+          if (!restarted) showCountsProblem(message);
           countsRetries += 1;
           refreshDailyCounts({ retry: true });
         } else {
+          console.warn('[QTS launcher] Could not refresh daily counts:', message);
+          showCountsProblem(message);
           showCountsFailed(message);
         }
         return;
