@@ -944,6 +944,12 @@ async function pickOneWithRealClick(tabId, field, wanted) {
     if (field.kind !== 'text') {
       if (!(await realOpen(tabId, field))) return { ok: false, error: 'the field is not on the screen' };
       choice = await findChoice(typed ? 1000 : 3000, Boolean(typed));
+      // A list that opens with its own search box and the cursor in it ("Start typing your city",
+      // Nebius, 2026-11-26): the answer's first part is typed there, then its match is picked.
+      if (!choice && !typed && await inForm(tabId, () => globalThis.__qtsApplyForm.popupSearchFocused?.() || false).catch(() => false)) {
+        await realPasteText(tabId, wanted.split(',')[0].split(/['’(/]/)[0].trim().slice(0, 40));
+        choice = await findChoice(3000, false);
+      }
     }
     // No choices shown, or not this one among them: typed to search. A search list may fetch its
     // results after typing.
@@ -2080,6 +2086,37 @@ async function fillAndCheckField(tabId, field, answer, file, seen) {
     const issue = await inForm(tabId, (id) => globalThis.__qtsApplyForm.fieldIssue(id), [field.id]).catch(() => '');
     return issue && !REQUIRED_MESSAGE.test(issue) ? { ok: false, error: issue } : { ok: true };
   }
+  // An "Add file" button that makes its file box only when clicked (HiBob): the page is set, in its
+  // own world, to hand this file to the next file box it opens instead of showing the file picker.
+  if (file?.base64 && field.buttonUpload) {
+    await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN',
+      func: (base64, filename, mimeType) => {
+        const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+        const give = (input) => {
+          const transfer = new DataTransfer();
+          transfer.items.add(new File([bytes], filename, { type: mimeType || 'application/pdf' }));
+          input.files = transfer.files;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        const click = HTMLInputElement.prototype.click;
+        const picker = HTMLInputElement.prototype.showPicker;
+        const restore = () => { HTMLInputElement.prototype.click = click; if (picker) HTMLInputElement.prototype.showPicker = picker; };
+        HTMLInputElement.prototype.click = function qtsClick() {
+          if (this.type !== 'file') return click.call(this);
+          restore(); give(this); return undefined;
+        };
+        if (picker) HTMLInputElement.prototype.showPicker = function qtsPicker() {
+          if (this.type !== 'file') return picker.call(this);
+          restore(); give(this); return undefined;
+        };
+        // Never left in place: undone after 8 s if no file box was opened.
+        setTimeout(restore, 8000);
+      },
+      args: [file.base64, file.filename, file.mimeType || 'application/pdf'],
+    }).catch(() => null);
+  }
   // A search or suggestion box gets Chrome's own input (fillBox); any other box the form engine's.
   const fill = (fieldId) => (file
     ? inForm(tabId, (id, value, upload, guard) => globalThis.__qtsApplyForm.fillField(id, value, upload, guard), [fieldId, answer.value ?? null, file, field])
@@ -3067,6 +3104,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'read_choices') {
       const review = activeReviews.get(msg.attemptId);
       const tabId = sender.tab?.id;
+      // No QTS work running on this tab at all (a page filled for a test, or by hand): its lists may be
+      // read for the copy, nothing can clash (2026-11-26).
+      const idle = tabId != null && ![...activeReviews.values()].some((entry) => entry.tabId === tabId);
+      if (!review && idle) return readEmptyListChoices(tabId);
       if (!review || tabId == null || tabId !== review.tabId) return { ok: false, error: 'This page is not the application\'s.' };
       if (review.auto && !reviewWaiters.has(msg.attemptId)) return { ok: false, busy: true, error: 'QTS is still working on this page.' };
       return readEmptyListChoices(tabId);

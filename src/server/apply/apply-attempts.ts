@@ -36,7 +36,7 @@ import { type LearnedAnswer } from "./question-memory-values";
 import { loadApplicationAnswers } from "./manager-answers";
 import { decryptSiteAccountPassword } from "./site-account-password";
 import type { WorkSelection } from "@/server/work/work-selection";
-import { hasEligibleExperienceCount } from "@/server/work/work-eligibility";
+import { hasEligibleExperienceCount, LINKEDIN_JOB_URL } from "@/server/work/work-eligibility";
 import { matchesManagerCustomUrl } from "@/server/work/custom-urls";
 
 // Server side of Apply with Manager review (docs/architecture.md): a Chrome claims a job and fills
@@ -184,7 +184,11 @@ export async function claimNextApplication(
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
   // Exclude all rows outside the explicit selection; an empty/stale selection never falls back.
   // The launcher's Custom jobs (Easy Apply, a recruiter's message) are applied to by the Manager: never claimed.
-  const customJobs = sql`select c.id from jobs c where c.manager_id = ${managerId} and c.custom_kind is not null`;
+  // Auto Apply never opens a job whose link is on linkedin.com (Easy Apply or a message to apply,
+  // the Manager's, 2026-11-27): skipped like a Custom job.
+  const customJobs = options.autoApply
+    ? sql`select c.id from jobs c where c.manager_id = ${managerId} and (c.custom_kind is not null or c.job_url ~* ${LINKEDIN_JOB_URL})`
+    : sql`select c.id from jobs c where c.manager_id = ${managerId} and c.custom_kind is not null`;
   const skips = selection ? sql`ARRAY(
     select j.id from jobs j where j.manager_id = ${managerId}
       and ((${selection.candidateId}::uuid is not null and j.candidate_id <> ${selection.candidateId}::uuid)

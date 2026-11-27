@@ -423,7 +423,8 @@ function entryFit(kind, entry, item) {
   }
   let score = 0;
   if (entry.school?.value && entrySays('school', entry.school.value, item.institution)) score += 3;
-  if (entry.degree?.value && entrySays('degree', entry.degree.value, item.degree)) score += 1;
+  // (An entry that is only a Degree box, YLD's Greenhouse: its degree alone makes it the same school.)
+  if (entry.degree?.value && entrySays('degree', entry.degree.value, item.degree)) score += entry.school ? 1 : 2;
   if (entry.field?.value && entrySquash(entry.field.value).includes(entrySquash(item.fieldOfStudy).slice(0, 8))) score += 1;
   return score;
 }
@@ -593,7 +594,19 @@ async function checkProfileEntries(tabId, application, { seen, problem, say, not
     const anchorOf = (entry) => (entry.title || entry.school)?.id || null;
     const placed = new Set();
     const why = new Map();
-    let canAdd = true;
+    // A section whose entries have no job-title or school box (YLD's Greenhouse: "Education" = a Degree
+    // list only) takes no more entries: one is enough and a new one cannot be told apart (2026-11-27).
+    let canAdd = !(entries.length && entries.every((entry) => !anchorOf(entry)));
+    // (No entry read, but the form already shows a lone "Degree" / "School" box: that box is the section.)
+    if (canAdd && !entries.length && kind === 'education') {
+      const plain = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForAssist()
+        .some((box) => !box.hidden && /^(degree|school|university|education|highest degree|level of education)\s*\*?$/i.test(String(box.label || '').trim()))).catch(() => false);
+      if (plain) {
+        canAdd = false;
+        // That box is filled with the profile's degree as a question: nothing to add, nothing to report.
+        missing.length = 0;
+      }
+    }
     for (const [count, index] of missing.entries()) {
       await throwIfStopped();
       if (!canAdd) continue;
@@ -825,7 +838,10 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   const quick = options.quick === true;
   // 0. The page: a sign-in or human check is the Manager's, and nothing is sent or filled for it.
   await inForm(tabId, (context) => globalThis.__qtsApplyForm.setUploadContext(context), [{ attemptId: application.attemptId, step }]);
+  let phaseAt = Date.now();
+  const phase = (name) => { timings[name] = (timings[name] || 0) + (Date.now() - phaseAt); phaseAt = Date.now(); };
   if (!quick) await waitForFormFields(tabId, { minFields: step > 1 || application.tabMoved ? 1 : 3, pollMs: 300, steadyPolls: 2 });
+  phase('wait');
   if (!quick) await inForm(tabId, () => globalThis.__qtsApplyForm.declineCookies()).catch(() => false);
   const page = quick ? null : await inForm(tabId, () => globalThis.__qtsApplyForm.classifyPage()).catch(() => null);
   if (['authentication_required', 'registration_required', 'verification_required'].includes(page?.type)) {
@@ -838,6 +854,39 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     return finish({ checks: false });
   }
   if (!quick) await inForm(tabId, () => globalThis.__qtsApplyForm.revealLazySections()).catch(() => null);
+  phase('page');
+  // Résumé first (the Manager, 2026-11-27): a site's "Import resume from ▾" menu gets the résumé once
+  // per application, the site fills the form from it, and QTS then fills everything as usual.
+  if (!quick && !application.resumeImportTried) {
+    const ready = await needDocuments().catch(() => null);
+    if (ready?.resume?.base64) {
+      const imported = await inForm(tabId, (file) => globalThis.__qtsApplyForm.importResume(file), [{ ...ready.resume, mimeType: 'application/pdf' }]).catch(() => null);
+      // No such menu: the site's own "Autofill from resume" upload box (Ashby), when shown and empty.
+      if (!imported?.found) {
+        const boxes = await inForm(tabId, () => globalThis.__qtsApplyForm.scanForm()).catch(() => []);
+        const box = (boxes || []).find((field) => !field.hidden && helpers.isAutofillUpload(field));
+        if (box) {
+          application.resumeImportTried = true;
+          const outcome = await fillAndCheck(tabId, box, { file: 'resume', source: 'documents' }, { ...ready.resume, mimeType: 'application/pdf' }, seen).catch(() => null);
+          if (outcome?.ok || outcome?.preserved) {
+            await say('The site is reading the résumé…');
+            await sleep(1500);
+            await settle(800, 6000);
+          }
+        }
+      }
+      if (imported?.found) {
+        application.resumeImportTried = true;
+        if (imported.ok) {
+          await say('The site is reading the résumé…');
+          await sleep(1500);
+          await settle(800, 6000);
+          await waitForFormFields(tabId, { minFields: 3, pollMs: 300, steadyPolls: 2 }).catch(() => null);
+        } else if (imported.error) problem(imported.error, null, 'upload');
+      }
+    }
+  }
+  phase('import');
 
   // Boxes met on an earlier pass are the Manager's now: never emptied or filled again (only their
   // own Fill again or Ask AI again goes back over them).
@@ -877,7 +926,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       const attached = await attachDocuments(filePlan);
       if (!attached) break;
       uploadedFirst = true;
-      await settle(600, 6000);
+      await settle(400, 3000);
       // The site rebuilds its form after an import or upload (Oracle: "Uploading…", fields loading):
       // looked at again only once it is done and its boxes are there and steady (at most 90 s: the form
       // is hidden while a file is still uploading, and a cover letter can take a minute).
@@ -887,13 +936,17 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
       // As many boxes as the page showed before (at most 3): a page whose only box is the upload
       // (Dropbox's first step) is not waited on; one that hid its form while uploading (Oracle) is.
       const boxesBefore = Math.min(3, shown.filter((field) => !field.hidden && !field.disabled && field.kind !== 'file').length);
-      for (let waited = 0; waited < 90000 && steady < 3; waited += 500) {
-        await sleep(500);
+      // (A page that never shows itself busy and keeps its boxes is done at the first look: 3 steady
+      // looks only after it was busy or its boxes changed, 2026-11-27: justjoin waited ~3 s for nothing.)
+      let sawBusy = false;
+      for (let waited = 0; waited < 90000 && steady < (sawBusy ? 3 : 1); waited += 500) {
+        if (waited) await sleep(500);
         const look = await inForm(tabId, () => ({
           busy: globalThis.__qtsApplyForm.pageUploadBusy() || /fields-loading/i.test(document.body?.innerText || ''),
           boxes: globalThis.__qtsApplyForm.scanForAssist().filter((field) => !field.hidden && !field.disabled && field.kind !== 'file').length,
         })).catch(() => null);
-        steady = look && !look.busy && look.boxes >= boxesBefore && look.boxes === last ? steady + 1 : 0;
+        if (!look || look.busy || look.boxes < boxesBefore || (last !== -1 && look.boxes !== last)) sawBusy = true;
+        steady = look && !look.busy && look.boxes >= boxesBefore && (last === -1 || look.boxes === last) ? steady + 1 : 0;
         last = look?.boxes ?? -1;
       }
     }
@@ -903,6 +956,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   for (const box of cleaned.stuck || []) application.stuckBoxes.set(box.id ?? box.label, box);
   emptiedCount = (cleaned.emptied || []).length;
   if (!quick) await settle(300, 1500);
+  phase('settle');
 
   // Experience and Education (2026-11-26): every entry checked against the profile and corrected, the
   // missing jobs and schools added with the section's own Add; never deleted. Their boxes are this
@@ -914,6 +968,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     for (const id of ownedEntries) seen.add(id);
     timings.fill += Date.now() - entryStarted;
   }
+  phase('entries');
 
   // The AI is called at most once per fill (one Ask AI = one call): a question that appears later in
   // this fill, or an answer the site refuses, is left for the Manager and the next Ask AI.
@@ -950,7 +1005,10 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
     const readKey = lightFill ? await glanceKey() : null;
     let fresh = [];
     for (const field of fields) {
-      if (field.hidden || field.disabled || field.unrelated || field.account || (field.managerChanged && !options.again && !options.onlyEmpty) || field.trackingValue || field.cardForm || reviewed.has(field.id) || seen.has(field.id)) continue;
+      // (A card form's box is the entry step's; one it left that is required and still empty, Oracle's
+      // "Degree*" in an opened Education card, is filled like any question, 2026-11-27.)
+      if (field.cardForm && !(field.required && await inForm(tabId, (entry) => globalThis.__qtsApplyForm.isUnanswered(entry), [field]).catch(() => false))) continue;
+      if (field.hidden || field.disabled || field.unrelated || field.account || (field.managerChanged && !options.again && !options.onlyEmpty) || field.trackingValue || reviewed.has(field.id) || seen.has(field.id)) continue;
       if (!options.onlyEmpty && await stillAnswered(field)) {
         seen.add(field.id);
         used[field.label].fieldId = field.id;
@@ -1301,6 +1359,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
   // without its country code, "72,000" for "72000", a link without "https://www.". Dates and lists of
   // several picks are not compared (sites rewrite them).
   await throwIfStopped();
+  phase('rounds');
   const toReadBack = Object.values(used)
     .filter((answer) => answer?.step === step && answer.fieldId && answer.source !== 'site' && metFields.has(answer.fieldId))
     .filter((answer) => !['file', 'date'].includes(metFields.get(answer.fieldId)?.kind) && !metFields.get(answer.fieldId)?.dateParts

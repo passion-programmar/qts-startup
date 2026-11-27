@@ -31,8 +31,13 @@ export function readyApply(): SQL {
     sql`(select count(*) from apply_attempts r where r.job_id = ${jobs.id} and r.status = 'released') < 2`) as SQL;
 }
 
+// A job link on linkedin.com (any LinkedIn host: www., ro., …): Easy Apply or a message to apply.
+export const LINKEDIN_JOB_URL = "^https?://([a-z0-9-]+\\.)*linkedin\\.com(/|$)";
+
 // Auto Apply exposes every resumable job without a bid. Live claims remain visible in the picker
 // so they can be shown disabled, while the locked claim function prevents concurrent processing.
+// Never a job on linkedin.com: the Manager applies to those (Easy Apply / message), 2026-11-27.
 export function readyAutoApply() {
-  return and(sql`${jobs.resumeLocalPath} is not null`, sql`${jobs.customKind} is null`, sql`not ${jobHasBid()}`);
+  return and(sql`${jobs.resumeLocalPath} is not null`, sql`${jobs.customKind} is null`, sql`not ${jobHasBid()}`,
+    sql`coalesce(${jobs.jobUrl}, '') !~* ${LINKEDIN_JOB_URL}`);
 }

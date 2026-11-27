@@ -504,6 +504,7 @@
           return {
             label, options, kind: field.kind, multiple: Boolean(field.multiple || known?.multiple), list: LIST_KINDS.includes(field.kind),
             more: !field.options?.length && Boolean(known?.more), search: !options.length && Boolean(known?.search),
+            ...(Number.isFinite(field.min) ? { min: field.min } : {}), ...(Number.isFinite(field.max) ? { max: field.max } : {}),
           };
         });
     } catch { entries = []; }
@@ -521,6 +522,29 @@
    * Up to 4 short options on one line ("Yes | No"); a longer list one per line (its first 40, "… N more");
    * a search list "(type to search…)"; a text box "(free text)".
    */
+  /**
+   * The salary a job description states, as written: "60-80K EUR", "€4,000 - €5,000 per month",
+   * "PLN 18 000–24 000 net (B2B)", "Salary: $120k". '' when it names no amount with a currency.
+   */
+  function salaryInText(text) {
+    const source = String(text || '').replace(/\s+/g, ' ');
+    if (!source) return '';
+    const CUR = '(?:€|\\$|£|zł|EUR|USD|GBP|PLN|CHF|SEK|NOK|DKK|CZK|RON|HUF|CAD|AUD)';
+    const NUM = '\\d{1,3}(?:[.,\\s]\\d{3})*(?:[.,]\\d+)?\\s?[kK]?';
+    const PERIOD = '(?:\\s*(?:/|per|a|an)\\s*(?:year|annum|yr|month|mo|day|hour|hr)\\b|\\s*(?:gross|net|brutto|netto|annual(?:ly)?|monthly|yearly|p\\.?a\\.?)\\b|\\s*\\((?:B2B|UoP|gross|net)[^)]*\\))*';
+    const patterns = [
+      new RegExp(`${CUR}\\s?${NUM}\\s?(?:-|–|—|to)\\s?${CUR}?\\s?${NUM}(?:\\s?${CUR})?${PERIOD}`, 'i'),
+      new RegExp(`${NUM}\\s?(?:-|–|—|to)\\s?${NUM}\\s?${CUR}${PERIOD}`, 'i'),
+      new RegExp(`(?:salary|compensation|pay|rate|budget)[^.:\\n]{0,25}[:\\-]?\\s?${CUR}\\s?${NUM}${PERIOD}`, 'i'),
+      new RegExp(`(?:salary|compensation|pay|rate|budget)[^.:\\n]{0,25}[:\\-]?\\s?${NUM}\\s?${CUR}${PERIOD}`, 'i'),
+    ];
+    for (const pattern of patterns) {
+      const found = source.match(pattern)?.[0];
+      if (found) return found.replace(/^(salary|compensation|pay|rate|budget)[^:\d€$£]{0,25}:?\s?/i, '').trim().slice(0, 80);
+    }
+    return '';
+  }
+
   function questionBlock(entry, number) {
     const options = (entry.options || []).map((option) => String(option).replace(/\s+/g, ' ').trim()).filter(Boolean);
     const lines = [`${number}. ${entry.label}`];
@@ -534,6 +558,10 @@
       lines.push('   (type to search: write the answer, the site matches it in its list)');
     } else if (entry.list) {
       lines.push('   (a list on the site: its options could not be read)');
+    } else if (entry.kind === 'number' || entry.kind === 'range') {
+      // A number box or a slider: a number only ("How many years…?" on a 0-20 slider).
+      const range = Number.isFinite(entry.min) && Number.isFinite(entry.max) ? ` from ${entry.min} to ${entry.max}` : Number.isFinite(entry.max) ? ` up to ${entry.max}` : '';
+      lines.push(`   (a number${range}, digits only)`);
     } else {
       lines.push('   (free text)');
     }
@@ -809,6 +837,7 @@
       Password: ['#fda4af', [P('M2.6 18.4A2 2 0 0 0 2 19.8V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4z'), C(16.5, 7.5, 0.5)]],
       'Per month': ['#86efac', [R(2, 6, 20, 12), C(12, 12, 2), P('M6 12h.01'), P('M18 12h.01')]],
       'Per year': ['#86efac', [P('m22 7-8.5 8.5-5-5L2 17'), P('M16 7h6v6')]],
+      'Offered': ['#fcd34d', [R(2, 7, 20, 14), P('M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16'), P('M2 13h20')]],
       'Résumé PDF': ['#fdba74', [P('M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'), P('M14 2v4a2 2 0 0 0 2 2h4'), P('M10 9H8'), P('M16 13H8'), P('M16 17H8')]],
       'Résumé folder': ['#fdba74', [P('M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z')]],
     };
@@ -921,6 +950,37 @@
     }
     // Salary: the same two lines for every candidate; the Manager edits them here (remembered).
     box.append(element('div', 'profile-group', 'Salary'));
+    // First, what this job offers: its saved salary, else the range its description states
+    // ("Salary Range: 60-80K EUR", "€4,000 - €5,000 per month"); none found, no row (2026-11-27).
+    // (Else the open page itself: Factorial shows "€55,000 - €60,000 Annual" beside its form. The panel
+    // sits in a closed shadow root, so its own salary lines are not read.)
+    const offered = String(state.job?.salary || '').trim() || salaryInText(state.references?.jobDescription || '')
+      || salaryInText(document.body?.innerText || '');
+    if (offered) {
+      // Drawn like the two rows below (a box with the value and a copy button); editable, for this job
+      // only (the next job shows its own offer again).
+      const row = element('div', 'profile-row salary-row');
+      const input = element('input', 'profile-input');
+      input.dataset.keep = 'salary-offered';
+      // (An edit is kept for this job while the panel redraws.)
+      const offerKey = `${state.job?.url || ''}|${state.job?.title || ''}|${state.job?.company || ''}`;
+      globalThis.__qtsOfferedEdits ||= {};
+      input.value = globalThis.__qtsOfferedEdits[offerKey] ?? offered;
+      input.addEventListener('input', () => { globalThis.__qtsOfferedEdits[offerKey] = input.value; });
+      input.title = 'What the job offers. Edit: this job only';
+      const copy = element('button', 'profile-copy-button', '⧉');
+      copy.type = 'button';
+      copy.title = 'Copy what the job offers';
+      copy.addEventListener('click', async () => {
+        const ok = await copyReference(input.value);
+        say(ok ? `Copied: ${input.value}` : 'Could not copy. Try again.');
+        if (!ok) return;
+        row.classList.add('copied');
+        setTimeout(() => row.classList.remove('copied'), 1200);
+      });
+      row.append(labelNode('Offered'), input, copy);
+      box.append(row);
+    }
     for (const [key, label] of [['salaryMonth', 'Per month'], ['salaryYear', 'Per year']]) {
       const row = element('div', 'profile-row salary-row');
       const input = element('input', 'profile-input');

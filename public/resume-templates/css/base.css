@@ -441,6 +441,14 @@ a {
   color: var(--color-muted);
 }
 
+/* The place beside a company or school starts with the template's separator, a real character in
+   the PDF's text, so an ATS reads "Company | City, Country" as two fields, never one name. */
+.entry-place::before {
+  content: var(--separator);
+  margin-inline-end: 0.4em;
+  color: var(--color-rule);
+}
+
 .item-company {
   color: var(--color-ink);
 }

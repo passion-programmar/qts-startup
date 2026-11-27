@@ -643,7 +643,10 @@
       }
       case "C": {
         const where = item.location ? `${item.location}${item.workMode ? ` (${item.workMode})` : ""}` : item.workMode;
-        return [[role(), dates()], [company(), where ? [detail(where)] : []]];
+        // Beside a company or school, the place starts with the template's separator (base.css
+        // .entry-place), so an ATS reads "WE AS WEB | Cluj-Napoca, Romania", never one name.
+        const placed = where ? [item.subheading ? el("span", "entry-detail entry-place", where) : detail(where)] : [];
+        return [[role(), dates()], [company(), placed]];
       }
       case "D":
         return [[company(), place ? [detail(place)] : []], [role(), dates()]];

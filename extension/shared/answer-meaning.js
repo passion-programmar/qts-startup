@@ -251,7 +251,22 @@
     }
     const language = named[0];
     const rank = rankFor(language);
-    if (!rank) return null;
+    if (!rank) {
+      // A language the profile does not list (it lists others): not spoken (2026-11-27, "What is your
+      // level of Russian?"): "None" / "No knowledge" when offered, else the lowest level; No to yes/no.
+      if (known['*'] || !Object.keys(known).length) return null;
+      const why = `${language}: not in the profile's languages`;
+      if (yesNo) {
+        const no = options.find((option) => /^(no|nie|nein|non|n[aã]o)\b/i.test(option.trim()));
+        return no ? { value: no, reason: why } : null;
+      }
+      if (isCheckbox) return { value: false, reason: why };
+      if (!options.length) return null;
+      const none = options.find((option) => /\b(none|no knowledge|not at all|not spoken|no proficiency|do not speak|don'?t speak|zero|n\/a)\b/i.test(option));
+      if (none) return { value: none, reason: why };
+      const ranked = options.filter((option, index) => optionRanks[index]).sort((a, b) => levelRank(a) - levelRank(b));
+      return ranked.length ? { value: ranked[0], reason: why } : null;
+    }
     const code = LEVELS.find((level) => level.rank === rank).code;
     const why = `${language}: ${code}`;
     if (yesNo || isCheckbox) {
@@ -269,6 +284,13 @@
     if (levelList || options.length) {
       // The option at this level; Native falls back to the highest level offered (C2 / Fluent).
       let best = null;
+      // An option naming several levels ("C2 / C1") is the candidate's when one of them is their level.
+      const exactOption = options.find((option) => {
+        const codes = String(option).match(/\b[abc][12]\b/gi) || [];
+        // (One code too: "Fluent (C1)" is C1 though "fluent" alone reads as C2, catchHR 2026-11-27.)
+        return codes.length >= 1 && codes.some((entry) => entry.toUpperCase() === code);
+      });
+      if (exactOption) return { value: exactOption, reason: why };
       options.forEach((option, index) => {
         const optionRank = optionRanks[index];
         if (optionRank && optionRank <= rank && (!best || optionRank > best.rank)) best = { option, rank: optionRank };
@@ -295,7 +317,7 @@
   const EMPLOYER_QUESTION = /\b(currently|presently|previously|ever|before|formerly|in the past|are you|have you|were you|do you)\b.{0,70}\b(employed|employee|worked|work(ing)?|contracted|contractor|engaged|consultant|worker|staff)\b.{0,50}\b(by|for|at|with|to)\b|\b(current|former|ex)[- ]?(or former )?(employee|contractor|worker)s?\b|\b(ever|previously|before|formerly)\b.{0,40}\b(issued|given|assigned|had|held)\b.{0,40}\b(employee (id|number|badge)|e-?mail (address|account))\b/;
   // "Have you ever been issued a Cisco Employee ID or Cisco email address?" (Workday, 2026-11-26): the
   // company is the one named before "Employee ID" / "email".
-  const ISSUED_BY = /\b(?:issued|given|assigned|had|held)\s+(?:an?\s+)?([A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,3})\s+(?:employee\s+(?:id|number|badge)|e-?mail)\b/;
+  const ISSUED_BY = /\b(?:issued|given|assigned|had|held)\s+(?:an?\s+)?([A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,3})\s+(?:[Ee]mployee\s+(?:[Ii][Dd]|[Nn]umber|[Bb]adge)|[Ee]-?[Mm]ail)\b/;
 
   /**
    * The answer to "employed / contracted by <company>?" from the candidate's work history: listed →
@@ -304,6 +326,20 @@
   function employerAnswer(field, experiences, jobCompany) {
     const label = clean(field.label);
     if (!EMPLOYER_QUESTION.test(label) || /\brelatives?\b|family|related to|spouse|referr|know (anyone|someone)/.test(label)) return null;
+    // An open question ("Which cloud provider have you worked with…", "Describe…") is no yes/no
+    // employer question (2026-11-26: Lever's "…worked with hands-on…" was answered "No").
+    if (/^(which|what|how|why|when|where|who|describe|tell|explain|list|name|give|share|please)\b/.test(label)) return null;
+    // "Are you legally authorized to work in the country with which you reside?": work permission,
+    // never an employer (2026-11-27, Greenhouse Wikimedia was answered "No").
+    if (/\b(authori[sz]ed|eligible|permitted|entitled|allowed|legally able|right) to work\b|\bwork (permit|authori[sz]ation|visa)\b|\bsponsor/.test(label)) return null;
+    // "Available to work for at least 4 hours…", "work for 40 hours a week", "for a period of": time,
+    // not an employer (2026-11-27 Northflank was answered "No").
+    if (/\b(work(ing)?|employed|available)\s+(for|at)\s+(at least|a minimum|minimum|up to|more than|less than|over|around|about|approximately|\d|one|two|three|four|five|six|eight|full|part|a (period|few|couple)|the (next|whole|full))\b|\bhours?\b|\btime ?zones?\b|\boverlap\w*\b/.test(label)
+      && !/\b(us|our company|this company|this employer)\b/.test(label) && !(jobCompany && label.includes(clean(jobCompany)))) return null;
+    // "Worked with …" is about a technology or a team ("Have you worked with Kubernetes?"), unless it
+    // names this company or says us / this company.
+    const withOnly = /\b(worked|work(ing)?)\s+with\b/.test(label) && !/\b(worked|work(ing)?|employed|contracted)\s+(by|for|at)\b|\bemployee|contractor|staff\b/.test(label);
+    if (withOnly && !/\b(us|our company|this company|this employer)\b/.test(label) && !(jobCompany && label.includes(clean(jobCompany)))) return null;
     const history = (experiences || []).filter((entry) => entry && String(entry.companyName || '').trim());
     if (!history.length) return null;
     const options = (field.options || []).map(String);
@@ -312,7 +348,7 @@
     // (Read from the label as written: the company's capital letters tell it apart from the words around it.)
     const issuedBy = String(field.label || '').match(ISSUED_BY)?.[1];
     if (issuedBy) named.push(issuedBy);
-    const after = label.match(/\b(?:by|for|at|with|to)\s+([^?,;]+?)(?:\s+or\s+(?:any|one)\s+of|\s+or\s+its|\s+and\s+its|\s+\(|\s*,|\?|$)/);
+    const after = label.match(/\b(?:by|for|at|with|to|of)\s+([^?,;]+?)(?:\s+or\s+(?:any|one)\s+of|\s+or\s+its|\s+and\s+its|\s+\(|\s*,|\?|$)/);
     if (after && !/^(us|our|this|the company|the employer|any|an?)\b/.test(after[1].trim())) named.push(after[1].trim());
     for (const option of options) {
       const yes = option.match(/^\s*yes\s*[-–:,]\s*(.+)$/i);

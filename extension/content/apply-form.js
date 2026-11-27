@@ -273,6 +273,20 @@
     }
     const wrapping = worded(textOf(control.closest('label')));
     if (wrapping) return wrapping;
+    // A list component whose <label for> names the component, not its inner input (Angular ng-select:
+    // <ng-select id="language0">…<input role="combobox"></ng-select><label for="language0">), catchHR.
+    for (let host = control.parentElement, depth = 0; host && depth < 6; host = host.parentElement, depth += 1) {
+      if (!host.id || host.tagName === 'FORM') continue;
+      const named = worded(textOf(root.querySelector?.(`label[for="${CSS.escape(host.id)}"]`)));
+      if (!named) continue;
+      // "Select language level" in a row that names its language ("English"): "English – language level".
+      if (/^\s*select (language|skill) level\b/i.test(named)) {
+        const row = host.parentElement?.parentElement;
+        const name = row && [...row.children].map((child) => (child.contains(host) ? '' : cleanText(child.innerText || ''))).find((text) => text && text.length <= 40);
+        if (name) return `${name}: ${named.replace(/^\s*select\s+/i, '')}`;
+      }
+      return named;
+    }
     const ariaLabel = worded(cleanText(control.getAttribute('aria-label')));
     if (ariaLabel) return ariaLabel;
     const component = worded(componentLabel(control));
@@ -339,7 +353,9 @@
   // Only LinkedIn and GitHub are filled, from the profile. Any other link box (Twitter/X, Website,
   // Portfolio, a blog, an "Other" link beside them) is marked otherLink: left empty, never asked of an
   // AI, and left out of the Answer copy.
-  const OWN_LINK = /linked\s?in|git\s?hub/i;
+  // (A "Public Profile" box is the LinkedIn one, 2026-11-27.)
+  // (And a bare first "Link 1" / "Link" / "URL" box, Oracle's: the LinkedIn one, 2026-11-27.)
+  const OWN_LINK = /linked\s?in|git\s?hub|^\s*(your )?(public|online|professional|social) profile( (url|link))?\s*\*?\s*$|^\s*(site )?(link|url)( 1)?\s*\*?\s*$/i;
   const LINK_NAME = /\b(urls?|links?|web ?sites?|web ?pages?|home ?pages?|portfolios?|personal (site|page)|blogs?|twitter|facebook|instagram|tiktok|youtube|dribbble|behance|medium|stack ?overflow|gitlab|bitbucket|kaggle|leetcode|hackerrank|mastodon|substack|codepen|xing|social (media|profiles?|networks?))\b|^x$|^x\s*[/(]|\(x\)|\/\s*x\b|\bx\.com\b/i;
   // A question about something else that only mentions a site ("How did you hear about us? Website…").
   const ASKS_SOMETHING_ELSE = /^(how|why|what|where|when|which|who|whom|whose|do|does|did|are|is|was|were|have|has|had|can|could|would|will|should|may)\b/i;
@@ -693,8 +709,10 @@
       const { text: question, block } = blockQuestion(element);
       if (block?.querySelector('input[type="file"]')) continue;
       // "or drag and drop here" beside a real file input (Workable) is that upload, not another one.
-      let near = element.parentElement;
-      for (let depth = 0; near && depth < 4 && !near.querySelector('input[type="file"]'); depth += 1) near = near.parentElement;
+      // (Out of a component's shadow part too: Loxo's <better-file-input> draws its box inside one.)
+      const up = (node) => node.parentElement || node.getRootNode?.()?.host || null;
+      let near = up(element);
+      for (let depth = 0; near && depth < 4 && !near.querySelector('input[type="file"]'); depth += 1) near = up(near);
       if (near?.querySelector('input[type="file"]')) continue;
       zones.push({ element, question });
     }
@@ -764,8 +782,21 @@
 
   // Choice buttons a page draws itself: pressable ones side by side (Ashby's Yes / No).
   function pressButtons(element) {
-    return [...element.children].filter((child) => child.tagName === 'BUTTON' && child.hasAttribute('aria-pressed'));
+    const pressable = [...element.children].filter((child) => child.tagName === 'BUTTON' && child.hasAttribute('aria-pressed'));
+    if (pressable.length) return pressable;
+    // Plain buttons used as choices (cord.com's "Onsite / Hybrid / Remote", 2026-11-26): a box holding
+    // only short buttons, none of them an action, under a question label of its own field.
+    const children = [...element.children];
+    const buttons = children.filter((child) => child.tagName === 'BUTTON' && (child.type || 'button') === 'button');
+    if (buttons.length < 2 || buttons.length !== children.length) return [];
+    const words = buttons.map((button) => cleanText(button.innerText || button.textContent || ''));
+    if (words.some((text) => !text || text.length > 40 || CHOICE_ACTION.test(text))) return [];
+    const field = element.parentElement;
+    const label = field && [...field.children].find((child) => child !== element && /^(LABEL|LEGEND|H3|H4|P)$/.test(child.tagName) && hasWords(textOf(child)));
+    return label ? buttons : [];
   }
+  // Button words that act (never a choice): navigation, sending, files, adding and removing.
+  const CHOICE_ACTION = /^(submit|send|next|back|previous|continue|apply|cancel|save|upload|attach|browse|add|remove|delete|clear|edit|sign|log ?in|register|search|close|show|more|less|skip|done|ok|reset)\b/i;
 
   /** Two or more short pressable buttons in a question's block are one choice question. */
   function isPressGroup(element) {
@@ -789,7 +820,10 @@
   // Revolut People's single-choice questions: tick boxes inside one "RadioButtons-…" group.
   const TICK_CHOICE_GROUP = '[data-testid^="RadioButtons"]';
   const isChosen = (item) => item.getAttribute('aria-checked') === 'true' || item.getAttribute('aria-pressed') === 'true'
-    || (item.tagName === 'LABEL' && item.querySelector('input[type="checkbox"], input[type="radio"]')?.checked === true);
+    || (item.tagName === 'LABEL' && item.querySelector('input[type="checkbox"], input[type="radio"]')?.checked === true)
+    // A plain button choice says it only by its state or class ("selected", "active", data-state="on").
+    || item.getAttribute('aria-selected') === 'true' || /^(on|checked|active|selected)$/i.test(item.getAttribute('data-state') || '')
+    || (item.tagName === 'BUTTON' && /(^|[\s_-])(selected|is-selected|active|is-active|checked|chosen)($|[\s_-])/i.test(String(item.className)));
 
   // Ashby draws a required question's asterisk with CSS: its heading's class says "required".
   function headingRequired(element) {
@@ -1003,6 +1037,16 @@
         });
         continue;
       }
+      // A salary's own currency menu beside its amount box (HiBob's <b-currency-value-select>): a
+      // question of its own, "Salary expectations currency" (2026-11-27).
+      if (isMenuButton(control) && /^(menu|listbox|true)$/i.test(control.getAttribute('aria-haspopup') || '')
+        && control.closest('b-currency-value-select, [class*="currency" i], [data-testid*="currency" i]')) {
+        const question = labelFor(control.closest('b-currency-value-select, [class*="currency" i], [data-testid*="currency" i]').querySelector('input')) || blockQuestion(control).text || 'Salary';
+        const label = `${question} currency`;
+        mark(control, MENU_ATTRIBUTE, 'lazy');
+        fields.push({ id: fieldId(control), label, kind: 'menu', lazy: true, required: isRequired(control, label), options: [], hidden: !isShown(control), disabled: control.disabled });
+        continue;
+      }
       // A menu whose choices exist only while it is open (Radix DropdownMenu): read by opening it.
       // A menu button beside an input (a phone number's country flag) belongs to that input.
       if (isMenuButton(control) && control.closest(QUESTION_HOLDER) && !control.closest(DATE_WRAPPER)
@@ -1134,7 +1178,14 @@
       // A dropdown with no label of its own whose choices are dialing codes is a phone's country code.
       // So is one labelled only "Country" beside a phone box when its choices are dialing codes
       // ("RO +40"), and a box labelled only "Number" in a phone question is the phone number.
-      const ownLabelText = labelFor(control);
+      let ownLabelText = labelFor(control);
+      // A lone tick box labelled only "Confirm" / "I agree" / "Yes" under a fieldset heading (Greenhouse
+      // talent-pool consent): the heading is its question.
+      if (type === 'checkbox' && /^\s*(i )?(confirm|agree|accept|consent|yes|ok)\s*\*?\s*$/i.test(ownLabelText || '')) {
+        const legend = control.closest('fieldset')?.querySelector(':scope > legend');
+        const heading = legend && textOf(legend).trim();
+        if (heading && heading.length > 10) ownLabelText = heading;
+      }
       const dialList = tag === 'SELECT' && dialCodeList(realOptions(control));
       const named = ((ownLabelText && BARE_CODE_LABEL.test(ownLabelText) || dialList && /^\s*country\s*\*?\s*$/i.test(ownLabelText || '')) && besidePhone(control)
         ? 'Phone country code'
@@ -1147,10 +1198,20 @@
       const ownLabel = (type === 'radio' || type === 'checkbox')
         ? control.closest('label') || (control.id && control.getRootNode().querySelector?.(`label[for="${CSS.escape(control.id)}"]`))
         : null;
-      const shown = type === 'file' ? isShown(control.closest('div, label, section') || control)
-        : (isShown(control) && !botTrap(control, tag, type)) || Boolean(ownLabel && isShown(ownLabel)) || Boolean(tag === 'SELECT' && selectWidget(control));
-      if ((type === 'radio' || type === 'checkbox') && control.name) {
-        const key = `${type}:${control.name}`;
+      const shown = type === 'file' ? isShown(control.closest('div, label, section') || control) || uploadAreaShown(control)
+        : (isShown(control) && !botTrap(control, tag, type)) || Boolean(ownLabel && isShown(ownLabel)) || Boolean(tag === 'SELECT' && selectWidget(control))
+          // A slider drawn by the page over an invisible range input (Teamtailor): shown with its holder.
+          || Boolean(type === 'range' && control.parentElement && isShown(control.parentElement))
+          // A list component's 0-wide search input (Angular ng-select): shown with its component.
+          || Boolean(control.getAttribute('role') === 'combobox' && control.closest('ng-select, .ng-select') && isShown(control.closest('ng-select, .ng-select')));
+      // A component's own inner file box (Loxo's <better-file-input>): the upload the form sends is the
+      // named input the component holds in the page itself, so the inner one is not a second upload.
+      if (type === 'file' && control.getRootNode?.()?.host?.querySelector?.('input[type="file"]')) continue;
+      // A slider's own "edit number" box (Teamtailor) is the same question as the slider: read once.
+      if (type === 'number' && !labelFor(control) && control.closest('[data-controller*="range"]')?.querySelector('input[type="range"]')) continue;
+      const nameless = type === 'checkbox' ? namelessGroup(control) : null;
+      if ((type === 'radio' || type === 'checkbox') && (control.name || nameless)) {
+        const key = nameless ? `${type}:nameless:${groupKeyOf(nameless)}` : `${type}:${control.name}`;
         const option = choiceText(control);
         if (!groups.has(key)) {
           const field = {
@@ -1181,7 +1242,11 @@
         ? (uploadQuestion(control)
           || (/resume|résumé|\bcv\b|cover|letter|file|attach|upload|document|portfolio/i.test(blockLabel)
             ? blockLabel
-            : cleanText(`${questionAround(control)} ${control.id || control.name || ''}`)))
+            // The text around it is another question's (Loxo: a consent sentence), but its own name says
+            // which document it takes ("resume_uploaded_file[]").
+            : /cover[_\s-]?letter/i.test(`${control.name} ${control.id}`) ? 'Cover letter'
+              : /resume|\bcv\b|[_-]cv[_-]?/i.test(`${control.name} ${control.id}`) ? 'Resume'
+                : cleanText(`${questionAround(control)} ${control.id || control.name || ''}`)))
         : label;
       const field = {
         id: fieldId(control),
@@ -1189,7 +1254,9 @@
         kind: tag === 'TEXTAREA' ? 'textarea'
           : tag === 'SELECT' ? 'select'
             : isCombobox ? 'combobox'
-              : ['email', 'tel', 'url', 'number', 'date', 'file', 'checkbox', 'range'].includes(type) ? type : 'text',
+              // A box marked as a number spinner (HiBob's salary amount, type="tel"): a number box.
+              : control.getAttribute('role') === 'spinbutton' && tag === 'INPUT' ? 'number'
+                : ['email', 'tel', 'url', 'number', 'date', 'file', 'checkbox', 'range'].includes(type) ? type : 'text',
         // An upload's name drops its "*", so its required mark is read from its label texts as written.
         required: isRequired(control, fieldLabel) || (type === 'file' && isRequired(control, uploadLabelsAsWritten(control, blockLabel))),
         hidden: !shown,
@@ -1253,6 +1320,21 @@
         ...(headingAbove(zone.element) ? { section: headingAbove(zone.element) } : {}),
       });
     }
+    // An "Add file" button that makes its file box only when clicked (HiBob: "Resume* / Upload your
+    // resume / [+ Add file]", no file box on the page): an upload of its own (2026-11-27). The extension
+    // hands the file to the box the page makes (background, uploadByButton).
+    for (const button of allElements().filter((element) => element.matches?.('button, [role="button"]') && isShown(element)
+      && /^\+?\s*(add|upload|attach|choose|select) (a )?(file|document|resume|résumé|cv)s?$/i.test(textOf(element).trim()))) {
+      let block = button.parentElement;
+      for (let depth = 0; block && depth < 4 && !/[a-z]{3}/i.test(cleanText(block.innerText || '').replace(textOf(button), '')); depth += 1) block = block.parentElement;
+      if (!block || deepQuery(block, 'input[type="file"]').length || fields.some((field) => field.kind === 'file' && findField(field.id) && block.contains(findField(field.id)))) continue;
+      const lines = String(block.innerText || '').split(/\n+/).map((line) => cleanText(line)).filter((line) => line && line !== textOf(button).trim());
+      const question = lines[0] || 'Attachment';
+      fields.push({
+        id: fieldId(button), label: question.replace(/\s*\*\s*$/, ''), kind: 'file', buttonUpload: true,
+        required: /\*/.test(question) || isRequired(button, question), hidden: false, disabled: false,
+      });
+    }
     for (const field of fields) {
       const control = firstControls.get(field.id);
       if (!control) continue;
@@ -1261,7 +1343,18 @@
       if (field.kind === 'checkbox-group' && field.options.length === 1) {
         const own = field.options[0];
         field.kind = 'checkbox';
-        field.label = own && /[a-z]{3}/i.test(own) ? own : question;
+        // Only "Confirm" / "I agree" / "Yes" (Greenhouse talent-pool consent): its question block names it.
+        const bare = /^\s*(i )?(confirm|agree|accept|consent|yes|ok)\s*\*?\s*$/i.test(own || '');
+        // (All the text above a bare "I agree", not its first paragraph only: Patrianna's second paragraph
+        // says the box is about being contacted for future roles, 2026-11-27.)
+        let above = '';
+        if (bare) {
+          for (let node = control.parentElement, depth = 0; node && depth < 5 && !above; node = node.parentElement, depth += 1) {
+            const text = cleanText(String(node.innerText || '').replace(own, ' '));
+            if (text.length > 20 && deepQuery(node, 'input:not([type="hidden"]), textarea, select').length === 1) above = text;
+          }
+        }
+        field.label = own && /[a-z]{3}/i.test(own) && !(bare && (above || question) && (above || question).length > 10) ? own : (above || question).slice(0, 900);
         delete field.options;
       } else {
         field.label = declaredGroupName(control).text || question || labelForGroup(control);
@@ -1604,6 +1697,8 @@
     const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
     if (setter) setter.call(element, value);
     else element.value = value;
+    // A slider set on purpose (to its lowest, "0 weeks' notice") is answered, not left at its start.
+    if (element.type === 'range') element.setAttribute('data-qts-range-set', '1');
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
   }
@@ -1633,7 +1728,47 @@
   }
 
   // Same type only: Rails pairs a checkbox with a hidden input of the same name.
+  /**
+   * Tick boxes without a name that share one question (Ashby: "Which ethnicity(ies) do you identify
+   * with?" as a fieldset of nameless boxes): their fieldset or group, so they are one list question,
+   * not one "free text" question per box. Null for a lone box.
+   */
+  function namelessGroup(control) {
+    if (control.type !== 'checkbox') return null;
+    // A fieldset or group; else the nearest block holding several boxes and nothing else to fill
+    // (JazzHR: <div class="form-group"><label>Question</label><label><input type=checkbox>…</label>…).
+    let holder = control.closest('fieldset, [role="group"]');
+    if (!holder) {
+      for (let node = control.parentElement, depth = 0; node && depth < 4; node = node.parentElement, depth += 1) {
+        if (node.querySelectorAll('input[type="checkbox"]').length < 2) continue;
+        if (node.querySelector('select, textarea, input:not([type="checkbox"]):not([type="hidden"])')) return null;
+        holder = node;
+        break;
+      }
+    }
+    if (!holder) return null;
+    const boxes = [...holder.querySelectorAll('input[type="checkbox"]')];
+    if (boxes.length < 2) return null;
+    // No names, or one name per box (Ashby names each box by its option: name="White").
+    const names = boxes.map((box) => box.name).filter(Boolean);
+    if (names.length && (names.length !== boxes.length || new Set(names).size !== names.length)) return null;
+    // The holder asks one question of its own (a legend or a label that names no box).
+    const question = [...holder.children].find((child) => /^(LEGEND|LABEL)$/.test(child.tagName) && !child.htmlFor?.includes?.('checkbox') && !child.querySelector('input'));
+    if (!question) return null;
+    return boxes.length >= 3 || MULTIPLE_TEXT.test(textOf(question)) ? holder : null;
+  }
+
+  const groupKeys = new WeakMap();
+  let nextGroupKey = 0;
+  function groupKeyOf(holder) {
+    if (!groupKeys.has(holder)) groupKeys.set(holder, ++nextGroupKey);
+    return groupKeys.get(holder);
+  }
+
   function controlsOfGroup(first) {
+    const holder = namelessGroup(first);
+    if (holder) return [...holder.querySelectorAll('input[type="checkbox"]')];
+    if (first.type === 'checkbox' && !first.name) return [first];
     const root = first.getRootNode();
     const local = [...root.querySelectorAll(`input[type="${first.type}"][name="${CSS.escape(first.name)}"]`)];
     // Page components keep each option in its own shadow root: the group spans them.
@@ -1674,9 +1809,13 @@
       const wanted = cleanText(value).toLowerCase();
       const item = groupItems(element).find((entry) => itemText(entry).toLowerCase() === wanted);
       if (!item) return { ok: false, error: `"${value}" is not an option.` };
-      if (!isChosen(item)) press(item);
+      if (isChosen(item)) return { ok: true, value: itemText(item) };
+      // A plain button choice may say it was chosen only by changing its look (its class).
+      const before = String(item.className);
+      press(item);
       await new Promise((resolve) => setTimeout(resolve, 200));
-      return { ok: isChosen(item), value: itemText(item) };
+      const marked = item.tagName === 'BUTTON' && !item.hasAttribute('aria-pressed') && String(item.className) !== before;
+      return { ok: isChosen(item) || marked, value: itemText(item) };
     }
     if (element.tagName !== 'INPUT' && element.getAttribute('role') === 'checkbox') {
       if ((element.getAttribute('aria-checked') === 'true') !== Boolean(value)) element.click();
@@ -2128,12 +2267,38 @@
       .find((box) => SHOWN_FILE_NAME.test(String(box.value || '')) && deepQuery(block, 'input[type="file"]').length === 1) || null;
   }
 
+  /**
+   * Whether an opened list put the cursor in its own search box (a text box that is no question of
+   * the form: "Start typing your city"), so typing goes there and nowhere else.
+   */
+  function popupSearchFocused() {
+    const active = focusedElement();
+    if (!active || active.tagName !== 'INPUT' || !['text', 'search', ''].includes((active.getAttribute('type') || '').toLowerCase())) return false;
+    if (active.hasAttribute(FIELD_ATTRIBUTE) || !isShown(active)) return false;
+    return Boolean(active.closest('[role="dialog"], [role="listbox"], [class*="popup" i], [class*="popover" i], [class*="dropdown" i], [class*="menu" i], [id*="popup" i]'))
+      || /\b(search|type|start typing|filter)\b/i.test(active.getAttribute('placeholder') || '');
+  }
+
+  /** The inner file box of a component holding this page input (Loxo's <better-file-input>), or null. */
+  function componentFileBox(element) {
+    if (!element?.matches?.('input[type="file"]') || element.files?.length) return null;
+    const host = element.parentElement;
+    const inner = host ? shadowRootOf(host)?.querySelector('input[type="file"]') : null;
+    return inner && inner !== element ? inner : null;
+  }
+
   async function inspectUpload(element, file) {
     if (!element?.isConnected) return { state: 'uncertain', error: 'The upload control changed before its attachment could be verified.' };
     if (!element.matches('input[type="file"]')) {
       const inputs = deepQuery(element, 'input[type="file"]');
       if (inputs.length === 1) return inspectUpload(inputs[0], file);
     }
+    // A form-associated component (Loxo's <better-file-input>) keeps the file in its own inner box and
+    // sends it itself; the page's input beside it stays empty. The inner box is what is checked.
+    const inner = componentFileBox(element);
+    if (inner?.files?.length) return inspectUpload(inner, file);
+    // (It may keep the file to itself and only show its name: the name it shows is the sign.)
+    if (inner && cleanText(shadowRootOf(element.parentElement)?.textContent || '').includes(file.filename)) return { state: 'confirmed' };
     const scope = uploadScope(element);
     const issue = uploadError(element);
     if (issue) return { state: 'rejected', error: issue };
@@ -2206,13 +2371,42 @@
         if (ownInputs.length === 1) input = ownInputs[0];
       }
       if (input && !acceptsFile(input, file)) return uploadOutcome(record, { state: 'rejected', error: 'This upload does not accept this PDF type.' });
+      // A hidden upload behind an "Attach resume" / "Paste resume" choice (JazzHR): the attach choice
+      // is clicked first, so the page shows the file and sends it as an upload, not as pasted text.
+      if (input && !isShown(input)) {
+        for (let node = input.parentElement, depth = 0; node && depth < 5; node = node.parentElement, depth += 1) {
+          const attach = [...node.querySelectorAll('a, button, [role="button"]')].find((entry) => isShown(entry)
+            && /^(attach|upload|choose)( (a |your )?(resume|résumé|cv|file|document))?( file)?$/i.test(textOf(entry).trim()));
+          if (attach) { attach.click(); await new Promise((resolve) => setTimeout(resolve, 400)); break; }
+        }
+      }
       const transfer = new DataTransfer();
       transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
       record.sent = true;
       if (input) {
-        input.files = transfer.files;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
+        // A component that holds the form's input and draws its own upload box (Loxo's
+        // <better-file-input>, 2026-11-26) shows a file only through its inner box: the file goes
+        // there first, so the box shows it and the component sets the form's input itself.
+        const host = input.parentElement && shadowRootOf(input.parentElement) ? input.parentElement : null;
+        const inner = host ? shadowRootOf(host)?.querySelector('input[type="file"]') : null;
+        if (inner && acceptsFile(inner, file)) {
+          inner.files = transfer.files;
+          inner.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+          inner.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+          // (It may clear the form's input while it takes the file: that input is filled after it.)
+          await sleep(800);
+        }
+        if (!input.files?.length || inner) {
+          input.files = transfer.files;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      } else if (element.matches('button, [role="button"]')) {
+        // An "Add file" button whose page makes the file box on click (HiBob): the extension has set
+        // the page to hand this file to that box (no file picker); the click starts it.
+        element.click();
+        for (let waited = 0; waited < 6000 && !exactFilenameShown(uploadScope(element), file.filename); waited += 300) await sleep(300);
+        return exactFilenameShown(uploadScope(element), file.filename) ? uploadOutcome(record, { state: 'confirmed' }) : settleUpload(record, element, key);
       } else {
         for (const type of ['dragenter', 'dragover', 'drop']) element.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
       }
@@ -2737,6 +2931,8 @@
     if (field.kind === 'radio' || field.kind === 'checkbox-group') return !controlsOfGroup(element).some((control) => control.checked);
     if (field.kind === 'checkbox') return element.tagName === 'INPUT' ? !element.checked : element.getAttribute('aria-checked') !== 'true';
     if (isEditorHost(element)) return !textOf(element);
+    // A slider still at its lowest value (Teamtailor's "How many years…?" starts at 0): not answered yet.
+    if (element.tagName === 'INPUT' && element.type === 'range') return String(element.value) === String(element.min || 0) && !element.hasAttribute('data-qts-range-set');
     if (field.kind === 'select') return !element.value || PLACEHOLDER.test(optionText(element.selectedOptions?.[0] || {}));
     if (field.kind === 'menu' || field.kind === 'combobox') {
       const shown = shownValue(field.id).replace(/[×✕]/g, '').trim();
@@ -2751,9 +2947,17 @@
   function uploadAccepted(id) {
     const element = findField(id);
     if (!element) return false;
-    if (element.files?.length) return true;
+    const inner = componentFileBox(element);
+    if (element.files?.length || inner?.files?.length) return true;
+    if (inner && ATTACHED.test(cleanText(shadowRootOf(element.parentElement)?.textContent || ''))) return true;
     const { block } = blockQuestion(element);
-    return ATTACHED.test(textOf(block || element.parentElement));
+    if (ATTACHED.test(textOf(block || element.parentElement))) return true;
+    // An input kept in a hidden box (Teamtailor): the visible upload area around it shows the file.
+    for (let node = element.parentElement, up = 0; node && node !== document.body && up < 6; node = node.parentElement, up += 1) {
+      if (node.querySelectorAll('input[type="file"]').length > 1) break;
+      if (isShown(node) && ATTACHED.test(textOf(node))) return true;
+    }
+    return false;
   }
 
   /**
@@ -2983,6 +3187,8 @@
         errors.push(`${labelFor(element) || 'A field'} is marked invalid`);
       } else if (element.getAttribute('role') === 'alert' || /(^|\s|-)error(-message)?($|\s|-)/i.test(element.className || '')) {
         const text = textOf(element);
+        // A success notice in an alert box ("Autofill completed! Please review…", Workable) is no error.
+        if (/\b(autofill|auto-fill|import|upload)\w* (completed|complete|succeeded|successful|done)\b|\bsuccessfully (uploaded|imported|parsed)\b/i.test(text || '')) continue;
         if (text && text.length < 300) errors.push(text);
       }
     }
@@ -3702,7 +3908,19 @@
     // Only the application form is filled (the Manager's rule of 2026-11-22): on a page with several
     // forms, a box in any form other than the application's is not touched.
     const main = applicationForm();
-    if (main && form !== main && !main.contains(form) && !form.contains(main)) return true;
+    // (A second form right beside it, its questions (HiBob: details form + questions form), is part of
+    // the application: they share a close parent that is not the whole page.)
+    const besideMain = (() => {
+      const clean = () => !form.querySelector('input[type="password"]') && !UNRELATED_FORM.test(cleanText(form.innerText || '').slice(0, 300));
+      let near = main?.parentElement;
+      for (let depth = 0; near && depth < 14 && near !== document.body; depth += 1, near = near.parentElement) {
+        // Close by, or inside one block named for the application (<careers-ui-job-ad-application-form>).
+        const named = /applica|apply/i.test(`${near.tagName} ${near.id || ''} ${typeof near.className === 'string' ? near.className : ''}`);
+        if ((depth < 4 || named) && near.contains(form)) return clean();
+      }
+      return false;
+    })();
+    if (main && form !== main && !main.contains(form) && !form.contains(main) && !besideMain) return true;
     const named = `${form.id} ${typeof form.className === 'string' ? form.className : ''} ${form.getAttribute('name') || ''} ${form.getAttribute('action') || ''} ${form.getAttribute('aria-label') || ''}`;
     if (UNRELATED_FORM.test(named.replace(/[-_/.?=&]+/g, ' '))) return true;
     const boxes = [...form.querySelectorAll('input, select, textarea')]
@@ -4221,6 +4439,19 @@
   // ONE question at its first part; the worker clicks each part, types its digits with real key
   // presses and reads each part back from what the page shows.
 
+  /**
+   * A file input kept in a hidden box inside a visible upload area ("Drop your file or upload",
+   * Teamtailor on careers.<company>.com, 2026-11-26): the area a person sees, a few levels up,
+   * holding this upload alone.
+   */
+  function uploadAreaShown(control) {
+    for (let node = control.parentElement, up = 0; node && node !== document.body && up < 6; node = node.parentElement, up += 1) {
+      if (node.querySelectorAll('input[type="file"]').length > 1) return false;
+      if (isShown(node) && /\b(drop|upload|attach|browse|choose (a )?file|cv|r[eé]sum[eé])\b/i.test(textOf(node))) return true;
+    }
+    return false;
+  }
+
   /** Which part of a date a box is ('month' / 'day' / 'year'), or null for any other box. */
   function datePartOf(element) {
     if (!element || element.nodeType !== 1) return null;
@@ -4468,12 +4699,19 @@
     const words = kind === 'experience' ? /experience|employment|job|position|work|role|career/i : /education|school|degree|qualification|academic|study|studies/i;
     const addText = (button) => cleanText(`${button.innerText || ''} ${button.getAttribute('aria-label') || ''} ${button.getAttribute('title') || ''}`);
     const isAdd = (button) => /^\s*\+?\s*add\b|^\s*\+\s*$|\badd (another|more|new)\b/i.test(addText(button)) && !ENTRY_OTHER_KIND.test(addText(button));
-    const around = (scope) => {
+    // The other kind's section heading ("Education" when looking for Experience).
+    const otherWords = kind === 'experience' ? /^(education|academic|qualifications?|schools?|degrees?)\b/i : /^(work |professional |employment )?(experience|employment|work history)\b/i;
+    const otherSectionIn = (box) => deepQuery(box, 'h1, h2, h3, h4, h5, legend, [role="heading"], label, p, span, div')
+      .some((node) => isShown(node) && node.children.length <= 2 && cleanText(node.textContent).length <= 40 && otherWords.test(cleanText(node.textContent)));
+    const around = (scope, fromHeading = false) => {
       for (let box = scope, up = 0; box && box !== document.documentElement && up < 4; box = box.parentElement, up += 1) {
         const buttons = deepQuery(box, 'button, a, [role="button"]').filter((button) => isShown(button) && !button.disabled && isAdd(button));
         const named = buttons.find((button) => words.test(addText(button)));
         const generic = buttons.filter((button) => !/\b(experience|employment|job|position|education|school|degree|qualification)\b/i.test(addText(button)));
-        const found = named || (generic.length === 1 ? generic[0] : null);
+        // (From a heading, a plain "Add another" is the other section's when that section is in the
+        // same box: YLD's Greenhouse page has an "Experience" heading in the job text and only an
+        // Education section, whose "Add another" was clicked for four jobs, 2026-11-27.)
+        const found = named || (generic.length === 1 && !(fromHeading && otherSectionIn(box)) ? generic[0] : null);
         if (found) return found;
       }
       return null;
@@ -4485,7 +4723,7 @@
     const heading = deepQuery(document, 'h1, h2, h3, h4, h5, legend, [role="heading"], label, p, span, div')
       .find((node) => isShown(node) && node.children.length <= 2 && cleanText(node.textContent).length <= 60 && words.test(cleanText(node.textContent))
         && !ENTRY_OTHER_KIND.test(cleanText(node.textContent)) && /^(work |professional |employment )?(experience|history|education|employment|work history|academic|qualifications?)\b/i.test(cleanText(node.textContent)));
-    return heading?.parentElement ? around(heading.parentElement) : null;
+    return heading?.parentElement ? around(heading.parentElement, true) : null;
   }
 
   /**
@@ -4670,6 +4908,47 @@
     return null;
   }
 
+  /**
+   * The site's "Import resume from ▾" menu (Workable's Autofill application): opened, and the résumé
+   * put in its "My computer" box, so the site fills the form from it before QTS fills the rest
+   * (the Manager, 2026-11-27). { found: false } when the page has no such menu.
+   */
+  async function importResume(file) {
+    const IMPORT = /^(import|upload|autofill|auto-fill|fill)\b.{0,30}\b(resume|résumé|cv)\b|\b(resume|résumé|cv)\b.{0,10}\b(import|autofill)\b/i;
+    // Also a résumé "Select ▾" menu named by its heading (Jobvite: "Add Resume*" → [Select] → File).
+    const namedResume = (element) => {
+      const ids = String(element.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+      const heading = ids.map((id) => textOf(document.getElementById(id) || document.createElement('i'))).join(' ');
+      return /^\s*(add |attach |upload )?(your )?(resume|résumé|cv)\b/i.test(`${element.getAttribute('attachment-label') || ''}`) || /^\s*(add |attach |upload )?(your )?(resume|résumé|cv)\b/i.test(heading);
+    };
+    const button = allElements().find((element) => element.matches?.('button, [role="button"]') && isShown(element)
+      && element.getAttribute('aria-haspopup') && (IMPORT.test(textOf(element).trim()) || namedResume(element)));
+    if (!button || !file?.base64) return { found: false };
+    const before = new Set(allElements().filter((element) => element.matches?.('input[type="file"]')));
+    if (button.getAttribute('aria-expanded') !== 'true') button.click();
+    let input = null;
+    for (let waited = 0; waited < 3000 && !input; waited += 200) {
+      await sleep(200);
+      const menu = button.getAttribute('aria-controls') && document.getElementById(button.getAttribute('aria-controls'));
+      const inMenu = menu ? [...menu.querySelectorAll('input[type="file"]')] : [];
+      const fresh = allElements().filter((element) => element.matches?.('input[type="file"]') && !before.has(element));
+      // A file box already on the page whose "File" choice the menu just showed (Jobvite).
+      const revealed = [...before].filter((box) => box.id && [...box.getRootNode().querySelectorAll(`label[for="${CSS.escape(box.id)}"]`)].some((label) => isShown(label)));
+      const candidates = [...inMenu, ...fresh, ...revealed];
+      input = candidates.find((box) => /computer|device|local|upload/i.test(`${box.getAttribute('data-ui') || ''} ${box.id} ${textOf(box.closest('li, [role="option"], label') || box)}`)) || candidates[0] || null;
+    }
+    if (!input) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return { found: true, ok: false, error: 'The "Import resume" menu has no upload from this computer.' };
+    }
+    const transfer = new DataTransfer();
+    transfer.items.add(base64ToFile(file.base64, file.filename, file.mimeType));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return { found: true, ok: true };
+  }
+
   /** Saves (or cancels) a section's open form with its own button. Whether a button was pressed. */
   async function closeSectionForm(kind, save) {
     const region = sectionRegion(kind);
@@ -4702,6 +4981,8 @@
     entryAddPoint,
     entrySavePoint,
     datePartsOf,
+    popupSearchFocused,
+    importResume,
     datePartValue,
     datePartPoint,
     dateShown,
