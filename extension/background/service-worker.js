@@ -6194,8 +6194,30 @@ async function generateCustomJobs(jobIds) {
   return { state: 'generating' };
 }
 
-async function handleCustomJob(msg) {
+async function handleCustomJob(msg, sender = null) {
   const op = String(msg.op || '');
+  // Easy Apply: the job shown on this page (LinkedIn's split view included), read the way Get JD
+  // reads it, from the page itself: no AI and no server call. Nothing is saved until Generate résumé.
+  if (op === 'read_page') {
+    const tabId = sender?.tab?.id;
+    if (tabId == null) return { ok: false, error: 'Open the job page first.' };
+    const result = await extractJobFromTab(tabId);
+    const data = result?.data || {};
+    const text = (value, max) => String(value || '').replace(/\r\n/g, '\n').trim().slice(0, max);
+    const job = {
+      title: text(data.title, 500),
+      company: text(data.company, 500),
+      description: text(data.description, 100_000),
+      url: text(data.url || result?.url, 2048),
+    };
+    // A LinkedIn job's plain address (no ?position=…&refId=…&trackingId=…), as Get JD saves it.
+    const view = job.url.match(/^https?:\/\/(?:[a-z0-9-]+\.)*linkedin\.com\/jobs\/view\/([^/?#]+)/i);
+    if (view) job.url = `https://www.linkedin.com/jobs/view/${view[1]}/`;
+    if (!job.description && !job.title) {
+      return { ok: false, error: result?.error || 'QTS could not read a job on this page. Paste the job description instead.' };
+    }
+    return { ok: true, job };
+  }
   const send = (body) => workerApiRequest('POST', '/api/extension/custom', body);
   let result;
   if (op === 'list') result = await send({ action: 'list' });
@@ -6500,7 +6522,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Custom works from the QTS panel on a web page.' });
       return false;
     }
-    handleCustomJob(msg).then(sendResponse, (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Custom failed.' }));
+    handleCustomJob(msg, sender).then(sendResponse, (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Custom failed.' }));
     return true;
   }
   if (msg.type === 'QTS_PAGE_ACTION') {

@@ -3,7 +3,8 @@
 // The buttons in each candidate row of the People list that save something or copy text.
 import { useActionState, type ReactNode } from "react";
 import { Trash2 } from "lucide-react";
-import { deleteCandidateAccountAction, toggleCandidateAccountStatusAction, type UserActionState } from "@/app/users/actions";
+import { deleteCandidateAccountAction, setLinkedInStatusAction, toggleCandidateAccountStatusAction, type UserActionState } from "@/app/users/actions";
+import { LINKEDIN_STATUS_LABELS, LINKEDIN_STATUSES, type LinkedInStatus } from "@/server/users/linkedin-status";
 import { ConfirmDialog } from "@/app/ui/confirm-dialog";
 import { Switch } from "@/app/ui/switch";
 
@@ -95,6 +96,58 @@ export function CopyableAccountField({
     >
       {children}
     </button>
+  );
+}
+
+// Each LinkedIn status in the app's own badge colours (src/app/ui/badge.tsx), right in both themes.
+const LINKEDIN_STATUS_STYLES: Record<LinkedInStatus, { dot: string; badge: string }> = {
+  live: { dot: "bg-success", badge: "bg-success-soft text-success-text ring-success-ring" },
+  applying: { dot: "bg-primary", badge: "bg-primary-soft text-primary-text ring-primary-ring" },
+  blocked: { dot: "bg-danger", badge: "bg-danger-soft text-danger-text ring-danger-ring" },
+};
+
+/**
+ * The LinkedIn account signal: a badge that is a menu (Live / Applying / Blocked), saved as soon as
+ * one is picked. Hovering shows since when.
+ */
+export function LinkedInStatusForm({
+  userId,
+  candidateName,
+  status,
+  changedAt,
+}: {
+  userId: string;
+  candidateName: string;
+  status: LinkedInStatus;
+  changedAt: string | null;
+}) {
+  const [state, formAction, isPending] = useActionState(setLinkedInStatusAction, initialState);
+  const style = LINKEDIN_STATUS_STYLES[status];
+  const since = changedAt
+    ? `${LINKEDIN_STATUS_LABELS[status]} since ${new Date(changedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+    : LINKEDIN_STATUS_LABELS[status];
+  return (
+    <form action={formAction}>
+      <input name="userId" type="hidden" value={userId} />
+      <label className={`relative inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${style.badge}`} title={`${since} · click to change`}>
+        <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${style.dot}`} />
+        <select
+          aria-label={`LinkedIn status for ${candidateName}`}
+          className="cursor-pointer appearance-none bg-transparent pr-3 font-semibold outline-none disabled:cursor-wait"
+          defaultValue={status}
+          disabled={isPending}
+          key={status}
+          name="linkedinStatus"
+          onChange={(event) => event.currentTarget.form?.requestSubmit()}
+        >
+          {LINKEDIN_STATUSES.map((value) => (
+            <option className="bg-surface text-fg" key={value} value={value}>{LINKEDIN_STATUS_LABELS[value]}</option>
+          ))}
+        </select>
+        <span aria-hidden="true" className="pointer-events-none absolute right-2 text-[9px] opacity-70">▾</span>
+      </label>
+      <RowError message={state.error} />
+    </form>
   );
 }
 

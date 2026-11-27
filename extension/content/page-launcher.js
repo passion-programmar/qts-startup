@@ -670,6 +670,8 @@ async function initializeQtsPageLauncher() {
     custom.error = '';
     renderCustom();
     if (custom.open) setTimeout(() => customUi.form.querySelector('textarea')?.focus({ preventScroll: true }), 0);
+    // The accounts again (at most every 30 s): a LinkedIn status changed in People counts at once.
+    if (custom.open) loadWorkAccounts().then(() => { if (custom.open) renderCustomForm(); }).catch(() => {});
     loadCustomJobs();
   }
 
@@ -727,13 +729,32 @@ async function initializeQtsPageLauncher() {
     form.append(kinds);
     // The account this job is for: its own choice here (the one chosen at the top, when there is one).
     if (!candidate.loaded) loadWorkAccounts().then(() => { if (custom.open) renderCustomForm(); }).catch(() => {});
-    if (!customDraft.candidateId || !candidate.accounts.some((entry) => entry.id === customDraft.candidateId)) customDraft.candidateId = chosenAccount()?.id || '';
+    // Easy Apply: only the accounts the Manager marked "Applying" in People (their LinkedIn signal);
+    // a server too old to send the status lists them all. A recruiter message: every account.
+    const sendsStatus = candidate.accounts.some((entry) => typeof entry.linkedinStatus === 'string');
+    const offered = customDraft.kind === 'easy_apply' && sendsStatus
+      ? candidate.accounts.filter((entry) => entry.linkedinStatus === 'applying')
+      : candidate.accounts;
+    if (!customDraft.candidateId || !offered.some((entry) => entry.id === customDraft.candidateId)) {
+      const chosen = chosenAccount();
+      customDraft.candidateId = chosen && offered.some((entry) => entry.id === chosen.id) ? chosen.id : '';
+    }
     const accountSelect = Object.assign(document.createElement('select'), { className: 'custom-input' });
-    accountSelect.append(Object.assign(new Option(candidate.loaded ? 'Choose an account…' : 'Loading accounts…', ''), { disabled: true }));
-    for (const entry of candidate.accounts) accountSelect.append(new Option(entry.name || 'Account', entry.id));
+    const noneApplying = candidate.loaded && customDraft.kind === 'easy_apply' && sendsStatus && !offered.length;
+    accountSelect.append(Object.assign(new Option(!candidate.loaded ? 'Loading accounts…'
+      : noneApplying ? 'No account is set to Applying (People › LinkedIn)' : 'Choose an account…', ''), { disabled: true }));
+    for (const entry of offered) accountSelect.append(new Option(entry.name || 'Account', entry.id));
     accountSelect.value = customDraft.candidateId;
     accountSelect.addEventListener('change', () => { customDraft.candidateId = accountSelect.value; });
     form.append(customField('Account', accountSelect));
+    // Easy Apply: the job open on this page fills the form (description, title, company, address);
+    // the Manager checks it, then Generate résumé. (A recruiter message is pasted, as before.)
+    if (customDraft.kind === 'easy_apply') {
+      const read = Object.assign(document.createElement('div'), { className: 'custom-buttons' });
+      read.style.justifyContent = 'flex-start';
+      read.append(customButton(custom.reading ? 'Reading…' : 'Read this page', '', () => readCustomPage()));
+      form.append(read);
+    }
     form.append(customField('Job description', customInput('description', 'Paste the job description', true)));
     const names = Object.assign(document.createElement('div'), { className: 'custom-pair' });
     names.append(customField('Title', customInput('title', 'Senior DevOps Engineer')), customField('Company', customInput('company', 'Compuco')));
@@ -747,6 +768,25 @@ async function initializeQtsPageLauncher() {
       customButton(custom.busy ? 'Saving…' : 'Generate résumé', 'primary', () => createCustomJob()),
     );
     form.append(buttons);
+  }
+
+  async function readCustomPage() {
+    if (custom.reading) return;
+    custom.reading = true;
+    custom.error = '';
+    renderCustom();
+    const reply = await customSend({ op: 'read_page' });
+    custom.reading = false;
+    if (reply?.ok && reply.job) {
+      // Only what was found is written; anything already typed by hand stays when the page lacks it.
+      for (const key of ['description', 'title', 'company', 'url']) {
+        if (reply.job[key]) customDraft[key] = reply.job[key];
+      }
+      if (customDraft.description.length < 50) custom.error = 'Only part of the job was found: paste the job description.';
+    } else {
+      custom.error = reply?.error || 'Could not read this page. Paste the job description instead.';
+    }
+    renderCustom();
   }
 
   async function createCustomJob() {

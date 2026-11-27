@@ -11,12 +11,14 @@ import {
   CopyableAccountField,
   CopyLinkedInUrl,
   DeleteCandidateAccountForm,
+  LinkedInStatusForm,
   ToggleCandidateAccountStatusForm,
 } from "@/app/users/row-actions";
 import { CreateUserForm, CredentialResetForm, DeleteStaffUserForm } from "@/app/users/staff-forms";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { labelTextColor } from "@/server/users/manager-category-color";
+import { linkedInStatusOf } from "@/server/users/linkedin-status";
 
 export const instant = false;
 
@@ -45,6 +47,8 @@ type UserRow = {
   candidate_email: string | null;
   phone: string | null;
   linkedin_url: string | null;
+  linkedin_status: string | null;
+  linkedin_status_changed_at: Date | string | null;
   address_line_1: string | null;
   postal_code: string | null;
   category_id: string | null;
@@ -88,7 +92,7 @@ export default async function UsersPage({
       visible_users.id, visible_users.role, visible_users.parent_user_id, visible_users.display_name,
       visible_users.login_name, visible_users.blocked_at, visible_users.deleted_at,
       profiles.first_name, profiles.last_name, profiles.candidate_email, profiles.phone,
-      profiles.linkedin_url, profiles.address_line_1, profiles.postal_code,
+      profiles.linkedin_url, profiles.linkedin_status, profiles.linkedin_status_changed_at, profiles.address_line_1, profiles.postal_code,
       profiles.category_id, profiles.manager_category, profiles.manager_category_color,
       categories.name as category_name
     from visible_users
@@ -156,8 +160,8 @@ function CandidateList({ rows, requestedCategory }: { rows: UserRow[]; requested
           { label: "Label", className: "w-[11%]" },
           { label: "Contact", className: "w-[17%]" },
           { label: "Street address", className: "w-[15%]" },
-          { label: "Postal code", className: "w-[9%]" },
-          { label: "LinkedIn", className: "w-[7%]" },
+          { label: "Postal code", className: "w-[8%]" },
+          { label: "LinkedIn", className: "w-[8%]" },
           { label: "Edit", className: "w-[7%] text-center" },
           { label: "Status", className: "w-[9%] text-center" },
           { label: "Delete", className: "w-[8%] text-center" },
@@ -201,7 +205,19 @@ function CandidateList({ rows, requestedCategory }: { rows: UserRow[]; requested
               <CopyableAccountField ariaLabel={`Copy postal code for ${name}`} key="postal-code" value={candidate.postal_code || "—"}>
                 {candidate.postal_code || "—"}
               </CopyableAccountField>,
-              candidate.linkedin_url ? <CopyLinkedInUrl key="linkedin" url={candidate.linkedin_url} /> : "—",
+              // The LinkedIn account's status (Live / Applying / Blocked, the Manager's signal), with the
+              // profile link to copy under it.
+              <div className="space-y-1" key="linkedin">
+                {deleted ? null : (
+                  <LinkedInStatusForm
+                    candidateName={name}
+                    changedAt={candidate.linkedin_status_changed_at ? new Date(candidate.linkedin_status_changed_at).toISOString() : null}
+                    status={linkedInStatusOf(candidate.linkedin_status)}
+                    userId={candidate.id}
+                  />
+                )}
+                {candidate.linkedin_url ? <CopyLinkedInUrl url={candidate.linkedin_url} /> : <span className="block text-xs text-fg-faint">—</span>}
+              </div>,
               <LinkButton
                 aria-label={deleted ? "View deleted candidate profile" : "Edit candidate profile"}
                 href={`/users/${candidate.id}/edit`}

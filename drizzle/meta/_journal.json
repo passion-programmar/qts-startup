@@ -743,6 +743,13 @@
       "when": 1795338482308,
       "tag": "0105_remote_companies",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1795772752928,
+      "tag": "0106_linkedin_status",
+      "breakpoints": true
     }
   ]
 }

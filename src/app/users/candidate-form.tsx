@@ -27,6 +27,7 @@ import { DIVERSITY_FIELDS } from "@/lib/diversity-options";
 import { pdfTemplateLabels, pdfTemplateValues, type PdfTemplate } from "@/server/pdf/pdf-templates";
 import { formatProfileMonth } from "@/server/users/profile-values";
 import { labelTextColor, managerCategoryColors } from "@/server/users/manager-category-color";
+import { LINKEDIN_STATUS_LABELS, LINKEDIN_STATUSES, linkedInStatusOf } from "@/server/users/linkedin-status";
 import { createUserAction, type UserActionState, updateCandidateProfileAction } from "@/app/users/actions";
 import { FormMessage, TextField } from "@/app/users/form-fields";
 
@@ -53,6 +54,7 @@ export type CandidateProfileValues = {
   categoryName?: string | null;
   managerCategory: string;
   managerCategoryColor: string | null;
+  linkedinStatus?: string | null;
   workAuthorization: string | null;
   needsSponsorship: boolean | null;
   noticePeriod: string | null;
@@ -568,6 +570,7 @@ export function CandidateEditForm({
             onChange={setManagerCategoryColor}
             value={managerCategoryColor}
           />
+          <LinkedInStatusField value={candidate.linkedinStatus} />
           </div>
           </FormCard>
           <ApplicationFactsSection candidate={candidate} fieldId={fieldId} />
@@ -1037,6 +1040,15 @@ function TextAreaField({
       />
     </div>
   );
+}
+
+// The LinkedIn account signal (also changed from the People list): Live, Applying or Blocked.
+function LinkedInStatusField({ value }: { value?: string | null }) {
+  return <label className="block space-y-2 text-xs font-semibold text-slate-700">LinkedIn status
+    <select className="block w-full rounded-md border border-slate-300 bg-white p-2 text-sm" name="linkedinStatus" defaultValue={linkedInStatusOf(value)}>
+      {LINKEDIN_STATUSES.map((status) => <option key={status} value={status}>{LINKEDIN_STATUS_LABELS[status]}</option>)}
+    </select>
+  </label>;
 }
 
 function CandidateCategoryField({ categories, value, name }: { categories: CategoryOption[]; value?: string | null; name?: string | null }) {

@@ -34,6 +34,8 @@ export async function GET(request: Request): Promise<NextResponse> {
         category: profiles.managerCategory,
         categoryColor: profiles.managerCategoryColor,
         categoryName: categories.name,
+        // The Manager's LinkedIn signal: Custom Easy Apply offers only the "applying" accounts.
+        linkedinStatus: profiles.linkedinStatus,
         qualified: sql<boolean>`${qualified}`,
         generation: sql<number>`count(${jobs.id}) filter (where ${readyGenerationJob(new Date())})::int`,
         apply: sql<number>`count(${jobs.id}) filter (where ${readyApply()})::int`,
@@ -53,6 +55,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         category: account.category || "",
         categoryColor: account.categoryColor || null,
         categoryName: account.categoryName || "Global",
+        linkedinStatus: account.linkedinStatus || "live",
         counts: {
           generation: account.qualified === true ? Number(account.generation) || 0 : 0,
           apply: Number(account.apply) || 0,

@@ -22,6 +22,7 @@ import {
 import { isPdfTemplate } from "@/server/pdf/pdf-templates";
 import { readApplicationFacts } from "@/server/users/application-facts";
 import { isManagerCategoryColor } from "@/server/users/manager-category-color";
+import { isLinkedInStatus } from "@/server/users/linkedin-status";
 
 export type UserActionState = {
   error: string | null;
@@ -321,6 +322,7 @@ export async function updateCandidateProfileAction(
     postalCode: readText(formData, "postalCode", limits.postalCode),
     managerCategory: readText(formData, "managerCategory", limits.managerCategory),
     managerCategoryColor: readText(formData, "managerCategoryColor", limits.managerCategoryColor),
+    linkedinStatus: readText(formData, "linkedinStatus", 16),
   };
   const educationRows = normalizeEducationRows(readHistoryRows(formData, "education", {
     institution: 120,
@@ -348,6 +350,9 @@ export async function updateCandidateProfileAction(
     })
   ) {
     return { ...emptyState, error: "One or more profile fields are missing or too long." };
+  }
+  if (values.linkedinStatus && !isLinkedInStatus(values.linkedinStatus)) {
+    return { ...emptyState, error: "Choose Live, Applying or Blocked for the LinkedIn status." };
   }
   if (!isManagerCategoryColor(values.managerCategoryColor)) {
     return { ...emptyState, error: "Select a valid label color." };
@@ -420,6 +425,8 @@ export async function updateCandidateProfileAction(
         update profiles
         set manager_category = ${values.managerCategory},
           manager_category_color = ${values.managerCategoryColor || null},
+          linkedin_status_changed_at = case when ${values.linkedinStatus || null}::text is not null and profiles.linkedin_status is distinct from ${values.linkedinStatus || null}::text then now() else profiles.linkedin_status_changed_at end,
+          linkedin_status = coalesce(${values.linkedinStatus || null}::text, profiles.linkedin_status),
           category_id = coalesce(${categoryId}::uuid, category_id),
           first_name = ${values.firstName}, last_name = ${values.lastName},
           birthday = ${values.birthday || null}::date,
@@ -657,6 +664,42 @@ export async function toggleCandidateAccountStatusAction(
   revalidatePath("/");
   revalidatePath("/users");
   return { error: null, success: "Candidate account status updated." };
+}
+
+/** The LinkedIn account signal (Live / Applying / Blocked), set by the candidate's own Manager only. */
+export async function setLinkedInStatusAction(
+  _previousState: UserActionState,
+  formData: FormData,
+): Promise<UserActionState> {
+  const actor = await requireUser();
+  if (actor.role !== "manager") {
+    return { ...emptyState, error: "Only Managers can change the LinkedIn status." };
+  }
+  const userId = readText(formData, "userId", 64);
+  const status = readText(formData, "linkedinStatus", 16);
+  if (!isUuid(userId)) return { ...emptyState, error: "Select a valid candidate account." };
+  if (!isLinkedInStatus(status)) return { ...emptyState, error: "Choose Live, Applying or Blocked." };
+
+  try {
+    // Only the Manager's own candidates; the date changes only when the status does.
+    const updated = await db.execute(sql`
+      update profiles
+      set linkedin_status_changed_at = case when profiles.linkedin_status is distinct from ${status} then now() else profiles.linkedin_status_changed_at end,
+        linkedin_status = ${status},
+        updated_at = now()
+      from users
+      where users.id = profiles.user_id and users.id = ${userId}
+        and users.role = 'account' and users.parent_user_id = ${actor.id} and users.deleted_at is null
+      returning profiles.user_id
+    `);
+    if (!updated.rows.length) return { ...emptyState, error: "That candidate account was not found in your team." };
+  } catch (error) {
+    logUserActionFailure("changing a LinkedIn status", error);
+    return { ...emptyState, error: "The LinkedIn status could not be saved. Please try again." };
+  }
+
+  revalidatePath("/users");
+  return { error: null, success: "LinkedIn status saved." };
 }
 
 export async function deleteCandidateAccountAction(

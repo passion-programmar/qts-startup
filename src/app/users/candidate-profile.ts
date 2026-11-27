@@ -25,6 +25,7 @@ type CandidateRow = {
   category_name: string | null;
   manager_category: string | null;
   manager_category_color: string | null;
+  linkedin_status: string | null;
   work_authorization: string | null;
   needs_sponsorship: boolean | null;
   notice_period: string | null;
@@ -72,7 +73,7 @@ export async function loadManagerCandidateProfile(
       profiles.candidate_email, profiles.phone, profiles.headline, profiles.linkedin_url,
       profiles.country, profiles.city, profiles.province, profiles.address_line_1, profiles.postal_code,
       profiles.category_id, categories.name as category_name,
-      profiles.manager_category, profiles.manager_category_color,
+      profiles.manager_category, profiles.manager_category_color, profiles.linkedin_status,
       profiles.work_authorization, profiles.needs_sponsorship, profiles.notice_period,
       profiles.salary_expectation_amount, profiles.salary_expectation_currency, profiles.salary_expectation_period,
       profiles.years_of_experience, profiles.willing_to_relocate, profiles.github_url, profiles.portfolio_url,
@@ -127,6 +128,7 @@ export async function loadManagerCandidateProfile(
       categoryName: row.category_name,
       managerCategory: row.manager_category || "",
       managerCategoryColor: row.manager_category_color,
+      linkedinStatus: row.linkedin_status,
       workAuthorization: row.work_authorization,
       needsSponsorship: row.needs_sponsorship,
       noticePeriod: row.notice_period,

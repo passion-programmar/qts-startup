@@ -24,8 +24,9 @@ export function readyGeneration(now = new Date()) {
 // Manual Apply: the job conditions of claim_apply_attempt (drizzle/0083) when not Auto Apply.
 export function readyApply(): SQL {
   // (Custom jobs, the launcher's Easy Apply and recruiter messages, are the Manager's to apply to.)
+  // (Never a job on linkedin.com either, as in Auto Apply: the Manager applies there, 2026-11-27.)
   return and(sql`${jobs.resumeLocalPath} is not null`, sql`${jobs.customKind} is null`, eq(jobs.generationStatus, "completed"), ne(jobs.status, "applied"),
-    sql`not ${jobHasBid()}`,
+    sql`not ${jobHasBid()}`, sql`coalesce(${jobs.jobUrl}, '') !~* ${LINKEDIN_JOB_URL}`,
     sql`not exists (select 1 from apply_attempts x where x.job_id = ${jobs.id}
       and x.status in ('claimed', 'waiting_review', 'waiting_confirmation', 'submitting', 'confirmed', 'not_confirmed', 'failed', 'skipped'))`,
     sql`(select count(*) from apply_attempts r where r.job_id = ${jobs.id} and r.status = 'released') < 2`) as SQL;

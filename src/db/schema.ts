@@ -207,6 +207,11 @@ export const profiles = pgTable(
     // Manager's optional free-text label, independent of the global category catalog.
     managerCategory: text("manager_category").default("").notNull(),
     managerCategoryColor: text("manager_category_color"),
+    // The candidate's LinkedIn account as the Manager marks it (a signal only, 2026-11-27): "live",
+    // "applying" (used for LinkedIn Easy Apply: only these are offered in the extension's Custom
+    // Easy Apply) or "blocked"; and when the Manager last changed it.
+    linkedinStatus: text("linkedin_status").default("live").notNull(),
+    linkedinStatusChangedAt: timestamp("linkedin_status_changed_at", { withTimezone: true, mode: "date" }),
     // Facts application forms ask for. Apply fills what fits from here; ChatGPT answers the rest.
     workAuthorization: text("work_authorization"),
     needsSponsorship: boolean("needs_sponsorship"),
@@ -263,6 +268,7 @@ export const profiles = pgTable(
       "profiles_work_preferences_check",
       sql`(${table.contractType} is null or ${table.contractType} in ('employment', 'b2b', 'either')) and (${table.workHours} is null or ${table.workHours} in ('full_time', 'part_time', 'either')) and (${table.workMode} is null or ${table.workMode} in ('remote', 'hybrid', 'onsite', 'any'))`,
     ),
+    check("profiles_linkedin_status_check", sql`${table.linkedinStatus} in ('live', 'applying', 'blocked')`),
     check(
       "profiles_manager_category_color_check",
       sql`${table.managerCategoryColor} is null or ${table.managerCategoryColor} ~ '^#[0-9a-fA-F]{6}$'`,
