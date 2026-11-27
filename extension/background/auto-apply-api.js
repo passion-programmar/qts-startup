@@ -771,7 +771,7 @@ async function fillApiFormPageBody(tabId, application, keepAlive, step, options,
 
   const needDocuments = async () => {
     if (documents) return documents;
-    documents = await fetchApplyDocuments(application.attemptId);
+    documents = await fetchApplyDocuments(application.attemptId, application.documentPaths);
     if (!self.__qtsSiteSessions.documentsBelong(documents.paths, application.candidate)) {
       documents = null;
       throw new ApplyStop(`The PDFs saved for this job are not named after ${candidateNameOf(application)}, so QTS did not attach them. Check the job's documents.`, { skip: false });

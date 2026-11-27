@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { applySubmitSettings, renewApplyAttempt } from "@/server/apply/apply-attempts";
+import { renewApplyAttempt, submitSettingsFrom } from "@/server/apply/apply-attempts";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 
 // Renews this Chrome's claim every 30 seconds, less often while the Manager reviews (the answer says
@@ -20,7 +20,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       : null;
     const leaseSeconds = await renewApplyAttempt(body.attemptId, auth.manager.id, auth.browser.id, recover);
     return leaseSeconds !== null
-      ? NextResponse.json({ success: true, leaseSeconds, ...(await applySubmitSettings(auth.manager.id)) })
+      // (The Submit settings come from the session check's read of the Manager: no second read.)
+      ? NextResponse.json({ success: true, leaseSeconds, ...submitSettingsFrom(auth.applySettings) })
       : NextResponse.json(
         { success: false, message: "This application is no longer held by this Chrome." },
         { status: 409 },

@@ -556,9 +556,13 @@
     let anchor = control;
     while (anchor.getRootNode() !== document && anchor.getRootNode().host) anchor = anchor.getRootNode().host;
     let found = '';
-    for (const heading of document.querySelectorAll('h1, h2, h3, h4, legend, [role="heading"]')) {
+    // (Also a short line styled as a header, Phenom's <div class="markdown-as-header">Additional
+    // Attachments :</div>, 2026-11-27.)
+    for (const heading of document.querySelectorAll('h1, h2, h3, h4, legend, [role="heading"], [class*="as-header" i], [class*="section-header" i], [class*="section-title" i]')) {
       if (heading.contains(anchor) || !(heading.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-      if (isShown(heading) && textOf(heading)) found = textOf(heading);
+      // (An upload's instruction line, "Upload either DOC, DOCX, … (2MB max)", is no heading.)
+      if (isShown(heading) && textOf(heading) && textOf(heading).length <= 80
+        && !/^(upload|drag|drop|supported|accepted|allowed|max(imum)?|file types?|formats?|or)\b/i.test(textOf(heading).trim())) found = textOf(heading);
     }
     return cleanText(found).slice(0, 120);
   }

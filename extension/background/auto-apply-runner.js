@@ -329,6 +329,13 @@ async function recoverStoppedAutoRuns() {
   return complete;
 }
 
+/** Stored applications a restarted worker goes on with or still gives back (not the paused ones it keeps as they are). */
+async function hasAutoRunsToResume() {
+  const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
+  return Object.values(stored).some((record) => record && !autoRuns.has(record.attemptId)
+    && (record.pendingRelease || record.submitted || !record.paused));
+}
+
 async function retryPendingAutoReleases() {
   const stored = (await chrome.storage.local.get(AUTO_APPLY_RUNS_KEY))[AUTO_APPLY_RUNS_KEY] || {};
   for (const record of Object.values(stored)) {
@@ -352,6 +359,7 @@ self.__qtsAutoApply = {
   releaseRun: releaseInterruptedAutoRun,
   recoverStoppedRuns: recoverStoppedAutoRuns,
   retryPendingReleases: retryPendingAutoReleases,
+  hasRunsToResume: hasAutoRunsToResume,
   browserSession: autoApplyBrowserSession,
   isRunning: () => autoRuns.size > 0,
   runningCount: () => autoRuns.size,

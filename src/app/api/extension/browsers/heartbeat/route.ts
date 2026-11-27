@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getExtensionManager } from "@/lib/extension-auth";
 import { MIN_WORK_EXTENSION_VERSION, parseBrowserHeaders } from "@/server/apply/apply-values";
 import { recordBrowserHeartbeat } from "@/server/browsers/extension-browsers";
+import { isReadyKind } from "@/server/work/work-readiness";
 
 // Each Chrome reports its modes every 30 seconds and learns whether "Stop all" was pressed.
 export async function POST(request: Request): Promise<NextResponse> {
@@ -19,7 +20,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 400 },
     );
   }
-  const body = await request.json().catch(() => null) as { getJdOn?: unknown; workMode?: unknown } | null;
+  const body = await request.json().catch(() => null) as { getJdOn?: unknown; workMode?: unknown; ready?: unknown; scoped?: unknown } | null;
   const workMode = body?.workMode;
   if (typeof body?.getJdOn !== "boolean" || (workMode !== "off" && workMode !== "generation" && workMode !== "apply")) {
     return NextResponse.json(
@@ -27,15 +28,19 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 400 },
     );
   }
+  // The Chrome may ask how many jobs are ready for one mode (it then claims only when there are).
+  const ready = isReadyKind(body.ready) ? { kind: body.ready, scoped: body.scoped === true } : undefined;
 
   try {
-    // Registering the Chrome, recording its modes and reading "Stop all" share one database trip.
-    const { browser, ...stopVersions } = await recordBrowserHeartbeat(manager.id, identity, { getJdOn: body.getJdOn, workMode });
+    // Registering the Chrome, recording its modes, reading "Stop all" and counting ready work share
+    // one database trip.
+    const { browser, ready: readyWork, ...stopVersions } = await recordBrowserHeartbeat(manager.id, identity, { getJdOn: body.getJdOn, workMode }, ready);
     return NextResponse.json({
       success: true,
       browser: { id: browser.id, name: browser.name, canTakeWork: browser.canTakeWork },
       minWorkExtensionVersion: MIN_WORK_EXTENSION_VERSION,
       ...stopVersions,
+      ...(ready && readyWork ? { ready: { kind: ready.kind, count: readyWork.count, key: readyWork.key } } : {}),
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Could not record the Chrome heartbeat.", error);

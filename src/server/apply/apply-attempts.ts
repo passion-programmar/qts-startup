@@ -171,14 +171,18 @@ export async function claimNextApplication(
   browser: ExtensionBrowser,
   skipJobIds: string[] = [],
   selection?: WorkSelection,
-  options: { autoApply?: boolean } = {},
+  options: { autoApply?: boolean; parallelLimit?: number } = {},
 ): Promise<ClaimedApplication | null> {
   // Apply and Auto Apply both follow the Manager's "Maximum open applications" (per Chrome),
-  // chosen jobs included.
-  const [managerSettings] = await db.select({ parallelLimit: users.autoApplyParallelLimit })
-    .from(users).where(and(eq(users.id, managerId), eq(users.role, "manager"))).limit(1);
-  if (!managerSettings) throw new Error("Manager Apply settings are unavailable.");
-  const parallelLimit = Math.min(Math.max(managerSettings.parallelLimit, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
+  // chosen jobs included. The claim route passes it from the session check's read (no second read).
+  let configuredLimit = options.parallelLimit;
+  if (!Number.isInteger(configuredLimit)) {
+    const [managerSettings] = await db.select({ parallelLimit: users.autoApplyParallelLimit })
+      .from(users).where(and(eq(users.id, managerId), eq(users.role, "manager"))).limit(1);
+    if (!managerSettings) throw new Error("Manager Apply settings are unavailable.");
+    configuredLimit = managerSettings.parallelLimit;
+  }
+  const parallelLimit = Math.min(Math.max(configuredLimit as number, 1), MAX_AUTO_APPLY_PARALLEL_LIMIT);
   // Unscoped Apply and Auto Apply skip these domains; a submitted selection opts jobs in explicitly.
   const skipCustomUrlJobs = !selection;
   // Keep the existing stored function's advisory lock, eligibility, leases and parallel limit.
@@ -346,6 +350,11 @@ async function loadApplication(attemptId: string, autoApplyCustomUrlGemini = fal
 export type ApplyReviewMode = "every_step" | "before_submit";
 const reviewModeOf = (value: string | null | undefined): ApplyReviewMode => (value === "before_submit" ? "before_submit" : "every_step");
 
+/** The Submit settings from the Manager row the session check already read (no second read). */
+export function submitSettingsFrom(settings: { applyReviewMode: string | null; autoSubmit: boolean }): { reviewMode: ApplyReviewMode; autoSubmit: boolean } {
+  return { reviewMode: reviewModeOf(settings.applyReviewMode), autoSubmit: settings.autoSubmit === true };
+}
+
 /** The Manager's Submit settings now, so a change by Super Admin takes effect at the next step. */
 export async function applySubmitSettings(managerId: string): Promise<{ reviewMode: ApplyReviewMode; autoSubmit: boolean }> {
   const [row] = await db
@@ -366,15 +375,18 @@ export async function applySubmitSettings(managerId: string): Promise<{ reviewMo
 export async function releaseUnheldAttempts(managerId: string, browserId: string, keep: string[]): Promise<number> {
   const mine = and(eq(applyAttempts.managerId, managerId), eq(applyAttempts.browserId, browserId));
   const notKept = keep.length ? sql`not (${inArray(applyAttempts.id, keep)})` : sql`true`;
-  const dropped = await db.delete(applyAttempts)
-    .where(and(mine, inArray(applyAttempts.status, ["claimed", "waiting_review"]), notKept))
-    .returning({ id: applyAttempts.id });
   const now = new Date();
-  const ended = await db.update(applyAttempts)
-    .set({ status: "failed", resultReason: "Left by this Chrome without an answer (not working on it any more).", finishedAt: now, leaseExpiresAt: null, updatedAt: now })
-    .where(and(mine, inArray(applyAttempts.status, ["submitting", "waiting_confirmation"]), notKept,
-      sql`${applyAttempts.updatedAt} < now() - interval '10 minutes'`))
-    .returning({ id: applyAttempts.id });
+  // Both in one database round trip (2026-11-27: two, on every Auto Apply claim).
+  const [dropped, ended] = await db.batch([
+    db.delete(applyAttempts)
+      .where(and(mine, inArray(applyAttempts.status, ["claimed", "waiting_review"]), notKept))
+      .returning({ id: applyAttempts.id }),
+    db.update(applyAttempts)
+      .set({ status: "failed", resultReason: "Left by this Chrome without an answer (not working on it any more).", finishedAt: now, leaseExpiresAt: null, updatedAt: now })
+      .where(and(mine, inArray(applyAttempts.status, ["submitting", "waiting_confirmation"]), notKept,
+        sql`${applyAttempts.updatedAt} < now() - interval '10 minutes'`))
+      .returning({ id: applyAttempts.id }),
+  ]);
   return dropped.length + ended.length;
 }
 

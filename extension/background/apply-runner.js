@@ -16,8 +16,13 @@ const APPLY_CHAT_TAB_KEY = 'qtsApplyChatTab';
 // Test mode: fills everything, then stops right before Submit and gives the job back.
 const APPLY_DRY_RUN_KEY = 'qtsApplyDryRun';
 const APPLY_HEARTBEAT_MS = 30 * 1000;
-// Auto Apply renews its claim more often, so a Stop all on the Jobs page (which ends the claim) is seen sooner.
+// Auto Apply looks every 15 seconds whether its hold is due, and renews it every 30 seconds while
+// filling and every 60 seconds while the Manager reviews (2026-11-27: it renewed every 15 seconds the
+// whole time, about 240 calls an hour per open job). A Stop all on the Jobs page still reaches it
+// within 30 seconds through the Chrome's own heartbeat (service-worker.js sendBrowserHeartbeat).
 const AUTO_APPLY_HEARTBEAT_MS = 15 * 1000;
+const AUTO_APPLY_RENEW_MS = 30 * 1000;
+const AUTO_APPLY_WAITING_RENEW_MS = 60 * 1000;
 const APPLY_FORM_WAIT_MS = 25 * 1000;
 const APPLY_APPLICATIONS_PER_CHAT_TAB = 10;
 const APPLY_MAX_FORM_PAGES = 5;
@@ -34,6 +39,14 @@ const APPLY_START_WAIT_MS = 15 * 1000;
 // Normal Apply looks at its open pages again this often, besides page events.
 const ASSIST_RECHECK_MS = 15 * 1000;
 let applyLoopRunning = false;
+// The running queue's wait for new jobs, cut short when the Manager opens QTS (wakeApplyQueue): only
+// the Manager's own action wakes it, never the 30-second alarms, so the 2-minute wait still saves calls.
+let applyQueueWake = null;
+function wakeApplyQueue() {
+  const wake = applyQueueWake;
+  applyQueueWake = null;
+  wake?.();
+}
 
 // Development diagnostics: off unless chrome.storage.local has qtsApplyDebug: true (set it from the
 // service worker's console). Shown in that console only. Never the candidate's facts, the résumé,
@@ -1987,12 +2000,17 @@ async function waitForSiteFill(tabId) {
 /**
  * The résumé and cover letter to upload, read from the exact files saved by Generation.
  */
-async function fetchApplyDocuments(attemptId) {
+async function fetchApplyDocuments(attemptId, knownPaths = null) {
   const missingPaths = 'The saved PDF paths are missing or unavailable for this application. Cancel and ask your QTS administrator to check the existing PDF paths and application access. Apply will not generate replacement PDFs.';
-  const response = await workerApiRequest(
-    'GET',
-    `/api/extension/apply/documents?attemptId=${encodeURIComponent(attemptId)}`,
-  );
+  // The claim brings the saved PDF paths (2026-11-27): no separate call then; without them (an older
+  // server, an old job to relink), the documents route is asked, as before.
+  const given = knownPaths && typeof knownPaths.resumePath === 'string' && typeof knownPaths.coverLetterPath === 'string';
+  const response = given
+    ? { success: true, documents: knownPaths }
+    : await workerApiRequest(
+      'GET',
+      `/api/extension/apply/documents?attemptId=${encodeURIComponent(attemptId)}`,
+    );
   if (response.success !== true || !response.documents) {
     const stop = new ApplyStop(
       response.code === 'PDF_RELINK_REQUIRED' ? response.message : response._httpStatus === 404
@@ -2264,7 +2282,7 @@ async function fillFormPageBody(tabId, application, keepAlive, step, options, st
     // Uploads already paused (an earlier read failed): no new read until the Manager chooses Retry.
     if (options.uploadsPaused?.()) { documentsError = { message: '', paused: true }; return null; }
     try {
-      return await fetchApplyDocuments(application.attemptId);
+      return await fetchApplyDocuments(application.attemptId, application.documentPaths);
     } catch (error) {
       if (!assist || !(error instanceof ApplyStop) || error.keepTab === false) throw error;
       documentsError = error;
@@ -3697,14 +3715,19 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     ? Promise.race([work, stopped.then((reason) => { throw new ApplyStop(reason, { skip: false, keepTab: false }); })])
     : work);
   // While the Manager reviews, the server holds the application longer (it says how long), so the
-  // hold is renewed less often; any other time, every 30 seconds (Auto Apply: every 15, so a Stop all
-  // on the Jobs page, which ends the claim, is noticed sooner).
+  // hold is renewed less often; any other time, every 30 seconds. Auto Apply: every 30 seconds while
+  // filling and every 60 while the Manager reviews, so a job stopped on the Jobs page is noticed
+  // within a minute (a Stop all comes sooner, through the Chrome's heartbeat).
   let renewedAt = 0;
   let waitingLeaseSeconds = 0;
   const keepAlive = async () => {
     const waiting = reviewWaiters.has(application.attemptId);
     const renewEvery = self.__qtsIdlePacing.renewEveryMs(waitingLeaseSeconds);
-    if (waiting && Date.now() - renewedAt < (auto ? Math.min(renewEvery, AUTO_APPLY_HEARTBEAT_MS) : renewEvery)) return;
+    const dueEvery = waiting
+      ? (auto ? Math.min(renewEvery, AUTO_APPLY_WAITING_RENEW_MS) : renewEvery)
+      : (auto ? AUTO_APPLY_RENEW_MS : 0);
+    // (3 s early is still due: the 15-second ticks would otherwise stretch 30 seconds to 45.)
+    if (dueEvery && Date.now() - renewedAt < dueEvery - 3000) return;
     // Auto Apply: its job and the Stop all count it was taken with, so a hold that ran out while this
     // Chrome was away (a VPN drop, a PC asleep) is taken back instead of lost.
     const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', {
@@ -4014,11 +4037,22 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     ...(application.apiFlow ? { apiFlow: true } : {}),
     ...extra,
   });
-  const report = (path, body) => workerApiRequest('POST', `/api/extension/apply/${path}`, {
-    attemptId: application.attemptId,
-    ...body,
-    ...(auto && path === 'result' && body.submitted === true ? { removeJob: true } : {}),
-  });
+  const report = async (path, body) => {
+    const response = await workerApiRequest('POST', `/api/extension/apply/${path}`, {
+      attemptId: application.attemptId,
+      ...body,
+      ...(auto && path === 'result' && body.submitted === true ? { removeJob: true } : {}),
+    });
+    // Saving a step renews the hold on the server and brings the Manager's Submit settings
+    // (2026-11-27): it counts as a renewal, so no separate "still holding" call follows it.
+    if (path === 'review' && response?.success === true && Number(response.leaseSeconds) > 0) {
+      renewedAt = Date.now();
+      waitingLeaseSeconds = body.review === true ? Number(response.leaseSeconds) : 0;
+      if (response.reviewMode) application.reviewMode = response.reviewMode;
+      if (typeof response.autoSubmit === 'boolean') application.autoSubmit = response.autoSubmit;
+    }
+    return response;
+  };
   const release = (mode, reason) => auto
     ? self.__qtsAutoApply.releaseRun({ attemptId: application.attemptId, jobId: application.job.id, ...(application.apiFlow ? { apiFlow: true, releaseMode: mode } : {}) }, reason.slice(0, 480), keptAnswers())
     : report('release', { mode, reason: reason.slice(0, 480), appliedAnswers: appliedAnswers(answersUsed) });
@@ -6137,11 +6171,12 @@ async function processApplyQueue() {
       return;
     }
     // Apply and Auto Apply (chosen jobs included) open as many jobs at once as the Manager's limit in Settings.
-    // Read again every 30 s while running, so a limit changed in Settings counts without Stop and Start.
+    // Read again every 5 minutes while running (2026-11-27: was 30 s), so a limit changed in Settings
+    // counts without Stop and Start.
     let applyParallelLimit = configuredLimit;
     let limitReadAt = Date.now();
     const freshLimit = async () => {
-      if (Date.now() - limitReadAt < 30 * 1000) return applyParallelLimit;
+      if (Date.now() - limitReadAt < 5 * 60 * 1000) return applyParallelLimit;
       limitReadAt = Date.now();
       try { applyParallelLimit = await getManagerApplyParallelLimit(); } catch { /* the last one stays */ }
       return applyParallelLimit;
@@ -6188,6 +6223,7 @@ async function processApplyQueue() {
         ...(scope?.mode === claimMode ? { selection: scope } : {}),
       });
       const skipped = [...await cancelledJobIds(), ...busySiteJobs];
+      const claimSentAt = Date.now();
       let claim = await ask([...new Set([...skipped, ...later])].slice(-200));
       if (later.length && claim.success === true && !claim.application) claim = await ask(skipped);
       if (claim.success === true && claim.application?.job?.id) await forgetLaterJob(claim.application.job.id);
@@ -6201,10 +6237,15 @@ async function processApplyQueue() {
       }
       const application = claim.success === true ? claim.application : null;
       if (!application) {
+        // The same ready jobs start no other claim: the Chrome's heartbeat says when they change
+        // (service-worker.js workReadyNow), and then starts this queue or wakes its wait below.
+        if (claim.success === true) await self.__qtsWorkReadiness?.noteEmptyClaim?.(claimMode, claimSentAt).catch(() => {});
         if (!running.size) break;
-        // Nothing ready now: looked for again shortly (Auto Apply: 10 s, so a slot the server frees is
-        // taken soon), else in a minute, or when one of the open jobs ends.
-        await Promise.race([...running, sleep(autoApply ? 10 * 1000 : 60 * 1000)]);
+        // Nothing ready now, while other jobs are open: looked for again when one of the open jobs ends,
+        // when the Manager opens QTS (wakeApplyQueue), else in 2 minutes (Auto Apply; 2026-11-27: was
+        // 10 s, six calls a minute) or a minute (Apply).
+        await Promise.race([...running, sleep(autoApply ? 2 * 60 * 1000 : 60 * 1000), new Promise((resolve) => { applyQueueWake = resolve; })]);
+        applyQueueWake = null;
         continue;
       }
       if (!(await isApplyOn())) {
@@ -6341,7 +6382,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // An application being filled or waiting for the Manager: never paced down or turned off.
 const isBusy = () => activeReviews.size > 0;
 
-self.__qtsApplyRunner = { processApplyQueue, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, toggleOwnedPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
+/**
+ * Something an earlier worker left for the Apply queue (its open pages, an Auto Apply run to go on
+ * with or give back, a stopped job to give back): the queue starts for it without waiting for the
+ * heartbeat to say new work is ready.
+ */
+async function hasApplyWorkToResume() {
+  if (Object.keys(await applySessions()).some((attemptId) => !activeReviews.has(attemptId))) return true;
+  if (await self.__qtsAutoApply?.hasRunsToResume?.()) return true;
+  const stopped = await readStoppedAutoTabs().catch(() => ({}));
+  return Object.values(stopped).some((entry) => entry && !entry.givenBack && entry.attemptId);
+}
+
+self.__qtsApplyRunner = { processApplyQueue, wakeApplyQueue, hasWorkToResume: hasApplyWorkToResume, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, toggleOwnedPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
   // The tabs of the applications under way (verification-mail.js watches them for code pages).
   applicationTabs: () => [...activeReviews.values()].flatMap((review) => [...tabsOf(review)].map((tabId) => ({ tabId, attemptId: review.attemptId }))) };
 

@@ -942,6 +942,12 @@
       if (isAutofillUpload(field)) return { skip: 'The site\'s autofill-from-résumé upload.' };
       // Photos and other images are never uploaded, even when required: Apply has no image to give.
       if (isImageUpload(field)) return { skip: 'An image upload (photo).' };
+      // An extra-documents upload ("Additional Attachments", "Supporting documents", "Other documents")
+      // takes the cover letter: the résumé went to its own upload (Veralto showed it twice, 2026-11-27).
+      if (/\b(additional|supporting|other|further|extra)\b.{0,15}\b(attachments?|documents?|files?|materials?)\b/i.test(`${field.label || ''} ${field.section || ''}`)
+        && !/\b(resume|résumé|cv)\b/i.test(field.label || '')) {
+        return { file: 'coverLetter', source: 'documents' };
+      }
       const document = uploadDocument(field);
       if (document) return { file: document, source: 'documents' };
       if (field.id === context.generalUploadId) return { file: 'resume', source: 'documents' };
@@ -1011,6 +1017,31 @@
       const level = LEVELS.find(([inProfile]) => inProfile.test(degree));
       const choices = level ? field.options.filter((option) => level[1].test(String(option))) : [];
       if (choices.length === 1) return { value: choices[0], source: 'profile', fact: 'answer', note: `degree: ${degree}` };
+      // Several of that level ("Bachelor", "Bachelor of Arts (BA)", "Bachelor of Science (BSc)"…,
+      // Veralto): the science one for a science / computing / engineering field, else the plainest.
+      if (choices.length > 1) {
+        const study = String(latestSchool(context)?.fieldOfStudy || '').toLowerCase();
+        const science = /scien|comput|informati|math|physic|chemi|engineer|technolog|data/.test(study)
+          ? choices.find((option) => /\bscience\b|\b(bsc|msc|bs|ms)\b/i.test(String(option))) : null;
+        const engineering = /engineer/.test(study) ? choices.find((option) => /engineer/i.test(String(option))) : null;
+        const pick = science || engineering || [...choices].sort((a, b) => String(a).length - String(b).length)[0];
+        return { value: pick, source: 'profile', fact: 'answer', note: `degree: ${degree}` };
+      }
+    }
+    // "Field of study" / "Major" as a list: the profile's field, in the list's own words.
+    if (context.autoApply === true && hasOptions(field) && /^(field of study|major|discipline|area of study|study field|subject|specialization|specialisation)$/.test(label)) {
+      const study = String(latestSchool(context)?.fieldOfStudy || '').trim();
+      const squash = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      if (study) {
+        const want = squash(study);
+        const words = want.split(' ').filter((word) => word.length > 2);
+        const exact = field.options.find((option) => squash(option) === want);
+        const containing = field.options.filter((option) => squash(option).includes(want) || (want.includes(squash(option)) && squash(option).length > 3));
+        const scored = field.options.map((option) => ({ option, hits: words.filter((word) => squash(option).split(' ').includes(word)).length }))
+          .filter((entry) => entry.hits).sort((a, b) => b.hits - a.hits || String(a.option).length - String(b.option).length);
+        const pick = exact || (containing.length ? containing.sort((a, b) => String(a).length - String(b).length)[0] : null) || (scored[0]?.hits >= Math.min(2, words.length) ? scored[0].option : null);
+        if (pick) return { value: pick, source: 'profile', fact: 'answer', note: `field of study: ${study}` };
+      }
     }
     // "Are you currently based in Vilnius or Kaunas?" (Vilnius / Kaunas / Other city/country): the choice
     // with the candidate's city or country, else "Other …" (2026-11-27, Lever).

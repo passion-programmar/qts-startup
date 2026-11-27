@@ -6,6 +6,37 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const now = Date.parse('2026-10-27T12:00:00Z');
 
+/** A chrome.* stand-in: session storage, alarms, and the PC's presence ('active', 'idle' or 'locked'). */
+function fakeChrome({ presence = null } = {}) {
+  const store = {};
+  const alarms = new Map();
+  const created = [];
+  // Session storage: local storage would send every check to every open tab's page scripts.
+  const notLocal = async () => { throw new Error('Idle pacing must not use local storage.'); };
+  const chrome = {
+    storage: {
+      session: {
+        get: async (key) => (key in store ? { [key]: store[key] } : {}),
+        set: async (values) => Object.assign(store, values),
+      },
+      local: { get: notLocal, set: notLocal },
+    },
+    alarms: {
+      get: async (name) => alarms.get(name),
+      create: async (name, info) => { created.push([name, info]); alarms.set(name, { name, ...info }); },
+    },
+  };
+  if (presence) {
+    chrome.idle = {
+      queryState: async (seconds) => {
+        assert.equal(seconds, pacing.AWAY_AFTER_SECONDS);
+        return presence.state;
+      },
+    };
+  }
+  return { chrome, alarms, created };
+}
+
 test('an idle Chrome checks less and less often, never less than every 2 minutes', () => {
   assert.equal(pacing.checkEveryMs(0), 30 * SECOND);
   assert.equal(pacing.checkEveryMs(90 * SECOND), 30 * SECOND);
@@ -14,7 +45,7 @@ test('an idle Chrome checks less and less often, never less than every 2 minutes
   assert.equal(pacing.checkEveryMs(5 * 60 * MINUTE), 2 * MINUTE);
 });
 
-test('a check is due by idle time, always while busy, and at the first tick', () => {
+test('a check is due by idle time, always while busy, never while away, and at the first tick', () => {
   const idleHour = now - 60 * MINUTE;
   // Every 2 minutes after an hour idle: a 30-second tick is not enough, a 2-minute one is.
   assert.equal(pacing.isDue({ now, activityAt: idleHour, checkedAt: now - 30 * SECOND, busy: false }), false);
@@ -25,12 +56,20 @@ test('a check is due by idle time, always while busy, and at the first tick', ()
   assert.equal(pacing.isDue({ now, activityAt: now - 10 * SECOND, checkedAt: now - 30 * SECOND, busy: false }), true);
   assert.equal(pacing.isDue({ now, activityAt: idleHour, checkedAt: now - 5 * SECOND, busy: true }), true);
   assert.equal(pacing.isDue({ now, activityAt: idleHour, checkedAt: 0, busy: false }), true);
+  // Away from the PC: no check at all, however long ago the last one was; work running here goes on.
+  assert.equal(pacing.isDue({ now, activityAt: idleHour, checkedAt: now - 60 * MINUTE, busy: false, away: true }), false);
+  assert.equal(pacing.isDue({ now, activityAt: idleHour, checkedAt: 0, busy: false, away: true }), false);
+  assert.equal(pacing.isDue({ now, activityAt: idleHour, checkedAt: now - 5 * SECOND, busy: true, away: true }), true);
 });
 
-test('modes turn off after two idle hours, never while work runs', () => {
-  assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 119 * MINUTE, busy: false }), false);
-  assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 120 * MINUTE, busy: false }), true);
+test('modes turn off after an idle hour at the PC or 2 hours away, never while work runs', () => {
+  assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 59 * MINUTE, busy: false }), false);
+  assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 60 * MINUTE, busy: false }), true);
+  // Away (a lunch break): still on after an hour, off after two.
+  assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 90 * MINUTE, busy: false, away: true }), false);
+  assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 120 * MINUTE, busy: false, away: true }), true);
   assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 5 * 60 * MINUTE, busy: true }), false);
+  assert.equal(pacing.shouldTurnOff({ now, activityAt: now - 5 * 60 * MINUTE, busy: true, away: true }), false);
   assert.equal(pacing.shouldTurnOff({ now, activityAt: 0, busy: false }), false);
 });
 
@@ -45,56 +84,73 @@ test('a held application is renewed four times per hold, at least every 30 secon
 });
 
 test('stored pacing: activity resets the back-off, and each kind is paced on its own', async () => {
-  const store = {};
-  // Session storage: local storage would send every check to every open tab's page scripts.
-  const notLocal = async () => { throw new Error('Idle pacing must not use local storage.'); };
-  global.chrome = {
-    storage: {
-      session: {
-        get: async (key) => (key in store ? { [key]: store[key] } : {}),
-        set: async (values) => Object.assign(store, values),
-      },
-      local: { get: notLocal, set: notLocal },
-    },
-  };
+  global.chrome = fakeChrome().chrome;
   try {
     const start = now;
     // First ticks: due, and activity starts counting from now.
     assert.equal(await pacing.claimCheck('heartbeat', false, start), true);
     assert.equal(await pacing.claimCheck('apply', false, start), true);
     assert.equal(await pacing.claimCheck('heartbeat', false, start + 30 * SECOND), true);
-    // An hour later with no activity: one check per 2 minutes.
-    const later = start + 60 * MINUTE;
+    // Half an hour later with no activity: one check per 2 minutes.
+    const later = start + 30 * MINUTE;
     assert.equal(await pacing.claimCheck('heartbeat', false, later), true);
     assert.equal(await pacing.claimCheck('heartbeat', false, later + 30 * SECOND), false);
     assert.equal(await pacing.claimCheck('heartbeat', false, later + 2 * MINUTE), true);
+    // A heartbeat sent outside the alarm (the Manager opened QTS) counts as that check.
+    await pacing.noteCheck('heartbeat', later + 3 * MINUTE);
+    assert.equal(await pacing.claimCheck('heartbeat', false, later + 4 * MINUTE), false);
+    assert.equal(await pacing.claimCheck('heartbeat', false, later + 5 * MINUTE), true);
     // Activity: back to every 30 seconds.
     await pacing.noteActivity(later + 11 * MINUTE);
     assert.equal(await pacing.claimCheck('heartbeat', false, later + 11 * MINUTE), true);
     assert.equal(await pacing.claimCheck('heartbeat', false, later + 11 * MINUTE + 30 * SECOND), true);
-    assert.equal(await pacing.idleTooLong(false, later + 11 * MINUTE + 119 * MINUTE), false);
-    assert.equal(await pacing.idleTooLong(false, later + 11 * MINUTE + 120 * MINUTE), true);
+    assert.equal(await pacing.idleTooLong(false, later + 11 * MINUTE + 59 * MINUTE), false);
+    assert.equal(await pacing.idleTooLong(false, later + 11 * MINUTE + 60 * MINUTE), true);
+  } finally {
+    delete global.chrome;
+  }
+});
+
+test('away from the PC: no checks, a slow alarm, and the modes stay on through a lunch break', async () => {
+  const presence = { state: 'active' };
+  const fake = fakeChrome({ presence });
+  global.chrome = fake.chrome;
+  try {
+    fake.alarms.set('qts-browser-heartbeat', { name: 'qts-browser-heartbeat', periodInMinutes: 0.5 });
+    await pacing.noteActivity(now);
+    assert.equal(await pacing.claimCheck('heartbeat', false, now), true);
+    // No keyboard or mouse for 10 minutes (or the screen locked): nothing is due, not even the first time.
+    presence.state = 'idle';
+    assert.equal(await pacing.claimCheck('heartbeat', false, now + 15 * MINUTE), false);
+    assert.equal(await pacing.claimCheck('generation', false, now + 15 * MINUTE), false);
+    presence.state = 'locked';
+    assert.equal(await pacing.claimCheck('apply', false, now + 16 * MINUTE), false);
+    // Work running here goes on while away.
+    assert.equal(await pacing.claimCheck('apply', true, now + 16 * MINUTE), true);
+    // The alarm only wakes the worker every 10 minutes (to turn the modes off in time).
+    assert.equal(await pacing.checkIntervalMs(false, now + 16 * MINUTE), 10 * MINUTE);
+    assert.equal(await pacing.checkIntervalMs(true, now + 16 * MINUTE), 30 * SECOND);
+    await pacing.pacePeriodicAlarm('qts-browser-heartbeat', false, now + 16 * MINUTE);
+    assert.deepEqual(fake.created.at(-1), ['qts-browser-heartbeat', { delayInMinutes: 10, periodInMinutes: 10 }]);
+    // A lunch break: still on after 90 minutes away, off after 2 hours.
+    assert.equal(await pacing.idleTooLong(false, now + 90 * MINUTE), false);
+    assert.equal(await pacing.idleTooLong(false, now + 120 * MINUTE), true);
+    // Back at the PC: due at once, and the alarm follows the idle steps again.
+    presence.state = 'active';
+    assert.equal(await pacing.claimCheck('heartbeat', false, now + 90 * MINUTE), true);
+    await pacing.pacePeriodicAlarm('qts-browser-heartbeat', false, now + 90 * MINUTE);
+    assert.deepEqual(fake.created.at(-1), ['qts-browser-heartbeat', { delayInMinutes: 2, periodInMinutes: 2 }]);
+    // At the PC, an hour with nothing to do turns the modes off.
+    assert.equal(await pacing.idleTooLong(false, now + 60 * MINUTE), true);
   } finally {
     delete global.chrome;
   }
 });
 
 test('a paced alarm ticks only as often as its check is due, and activity brings it back to 30 seconds', async () => {
-  const store = {};
-  const alarms = new Map();
-  const created = [];
-  global.chrome = {
-    storage: {
-      session: {
-        get: async (key) => (key in store ? { [key]: store[key] } : {}),
-        set: async (values) => Object.assign(store, values),
-      },
-    },
-    alarms: {
-      get: async (name) => alarms.get(name),
-      create: async (name, info) => { created.push([name, info]); alarms.set(name, { name, ...info }); },
-    },
-  };
+  const fake = fakeChrome();
+  const { alarms, created } = fake;
+  global.chrome = fake.chrome;
   try {
     // A mode that is off has no alarm: pacing never turns it on.
     await pacing.pacePeriodicAlarm('qts-browser-heartbeat', false, now);

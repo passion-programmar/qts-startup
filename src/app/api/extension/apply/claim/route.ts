@@ -1,8 +1,6 @@
-import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { users } from "@/db/schema";
-import { db } from "@/lib/db";
 import { claimNextApplication, releaseUnheldAttempts } from "@/server/apply/apply-attempts";
+import { loadApplyDocumentPaths } from "@/server/apply/apply-documents";
 import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 import { scheduleDailyCleanup } from "@/server/database/database-usage";
 import { readWorkSelection } from "@/server/work/work-selection";
@@ -21,12 +19,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ success: false, message: "Choose Apply or Auto Apply." }, { status: 400 });
     }
     // Auto Apply answers only with Gemini and Groq, so only a Manager whose Super Admin turned on
-    // "Auto Apply with APIs" may use it.
-    if (mode === "auto_apply") {
-      const [settings] = await db.select({ autoApplyApi: users.autoApplyApi }).from(users).where(eq(users.id, auth.manager.id)).limit(1);
-      if (settings?.autoApplyApi !== true) {
-        return NextResponse.json({ success: false, message: AUTO_APPLY_OFF_MESSAGE }, { status: 403 });
-      }
+    // "Auto Apply with APIs" may use it. (Read with the session check: no second read.)
+    if (mode === "auto_apply" && auth.applySettings.autoApplyApi !== true) {
+      return NextResponse.json({ success: false, message: AUTO_APPLY_OFF_MESSAGE }, { status: 403 });
     }
     let selection;
     try { selection = readWorkSelection(body?.selection); }
@@ -40,9 +35,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
     const application = await claimNextApplication(auth.manager.id, auth.browser, skipJobIds, selection, {
       autoApply: mode === "auto_apply",
+      parallelLimit: auth.applySettings.applyParallelLimit,
     });
+    // The claimed job's saved PDF paths come with it, so the extension needs no separate documents
+    // call (2026-11-27). Missing paths (an old job to relink) are left out: the documents route then
+    // explains what to do, as before.
+    const documents = application
+      ? await loadApplyDocumentPaths(application.attemptId, auth.manager.id, auth.browser.id).catch(() => null)
+      : null;
     return NextResponse.json(
-      { success: true, application },
+      { success: true, application: application && documents ? { ...application, documentPaths: documents } : application },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

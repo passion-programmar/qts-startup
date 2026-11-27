@@ -52,10 +52,18 @@ export async function getExtensionManager(
   return (await getExtensionManagerWithApplyAccess(request))?.manager ?? null;
 }
 
+/** The Manager's Apply settings, read with the session check so the Apply routes need no second read. */
+export type ExtensionApplySettings = {
+  applyReviewMode: string | null;
+  autoSubmit: boolean;
+  autoApplyApi: boolean;
+  applyParallelLimit: number;
+};
+
 /** The signed-in Manager and whether Super Admin turned Apply on, from the same database read. */
 export async function getExtensionManagerWithApplyAccess(
   request: Request,
-): Promise<{ manager: ExtensionManager; canUseApply: boolean } | null> {
+): Promise<{ manager: ExtensionManager; canUseApply: boolean; applySettings: ExtensionApplySettings } | null> {
   const authorization = request.headers.get("authorization");
   const match = authorization?.match(/^Bearer\s+(\S+)$/i);
   if (!match) return null;
@@ -90,6 +98,10 @@ export async function getExtensionManagerWithApplyAccess(
       loginName: users.loginName,
       authVersion: users.authVersion,
       canUseApply: users.canUseApply,
+      applyReviewMode: users.applyReviewMode,
+      autoSubmit: users.autoSubmit,
+      autoApplyApi: users.autoApplyApi,
+      applyParallelLimit: users.autoApplyParallelLimit,
     })
     .from(users)
     .where(
@@ -112,5 +124,11 @@ export async function getExtensionManagerWithApplyAccess(
       authVersion: manager.authVersion,
     },
     canUseApply: manager.canUseApply,
+    applySettings: {
+      applyReviewMode: manager.applyReviewMode,
+      autoSubmit: manager.autoSubmit === true,
+      autoApplyApi: manager.autoApplyApi === true,
+      applyParallelLimit: manager.applyParallelLimit,
+    },
   };
 }

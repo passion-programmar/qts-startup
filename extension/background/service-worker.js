@@ -136,9 +136,12 @@ const generationHeartbeatOkAt = new Map();
 const GENERATION_HEARTBEAT_GRACE_MS = 5 * 60 * 1000;
 // How often a running Generation asks QTS whether it is still on (and renews its 5-minute hold)
 // while it waits for ChatGPT or for downloads: each check is a server call with database work, so
-// every 20 s rather than every 3 s (~85% fewer calls). A Manager's cancel on the QTS site is seen
-// within 20 s; a cancel in this Chrome stops it at once.
-const GENERATION_SERVER_CHECK_MS = 20_000;
+// every 60 s (2026-11-27: was 20 s; first 3 s). A Manager's cancel on the QTS site is seen within a
+// minute; a cancel in this Chrome stops it at once.
+const GENERATION_SERVER_CHECK_MS = 60_000;
+// A check asked for again sooner than this after one that succeeded (the back-to-back checks around
+// "start", one before each downloaded file) is skipped: the job was still on a moment ago.
+const GENERATION_CHECK_MIN_GAP_MS = 45_000;
 // ChatGPT has this long from sending a prompt to finishing its answer (5 minutes, the Manager's choice 2026-11-19).
 const GENERATION_ANSWER_MAX_WAIT_MS = 5 * 60 * 1000;
 // An answer that finished with no text, or ChatGPT never starting, is retried in a fresh tab
@@ -4352,6 +4355,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
   }
 
   async function ensureQueuedGenerationIsActive(jobId) {
+    if (Date.now() - (generationHeartbeatOkAt.get(jobId) || 0) < GENERATION_CHECK_MIN_GAP_MS) return;
     const result = await workerApiRequest(
       'POST',
       '/api/extension/generation/heartbeat',
@@ -5089,6 +5093,7 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const scope = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
         // Jobs that failed wait for their next try; the claim takes the next ready job instead.
         const waitingJobIds = await waitingGenerationJobIds();
+        const claimSentAt = Date.now();
         const claim = await workerApiRequest(
           'POST',
           '/api/extension/generation/claim',
@@ -5116,6 +5121,8 @@ async function waitForScannerChatGptTab(tabId, timeoutMs = 45000) {
         const limit = Number(claim.parallelLimit);
         if (Number.isInteger(limit) && limit >= 1) generationParallelLimit = Math.min(limit, GENERATION_MAX_LANES);
         if (!claim.job) {
+          // The same ready jobs start no other claim (the heartbeat's answer, workReadyNow).
+          await noteEmptyWorkClaim('generation', claimSentAt).catch(() => {});
           // Several Chromes share the queue, so Generation stays on and checks again on its
           // 30-second alarm (less often when idle) instead of turning itself off; Cancel or Stop
           // all turns it off. Only the last lane still running speaks for the run.
@@ -8071,29 +8078,147 @@ async function flushGenerationCancellation() {
   try { return await generationCancellationRequest; } finally { generationCancellationRequest = null; }
 }
 
+// ---- Work ready? (2026-11-27) ----
+// With a work mode on, the heartbeat also asks how many jobs that mode could take now, with a
+// fingerprint of which ones. With nothing running here, a queue claims only when that answer has jobs
+// this Chrome has not already found empty, so an idle Chrome makes one call per check instead of a
+// heartbeat, a settings read and a claim. With no answer (the first check after Chrome starts, an
+// older server), the queues claim as before.
+const WORK_READINESS_KEY = 'qtsWorkReadiness';
+const WORK_EMPTY_CLAIM_KEY_PREFIX = 'qtsWorkEmptyClaim.';
+// An answer older than this decides nothing: the heartbeat paused (the Manager is away), and the
+// next one asks again.
+const WORK_READINESS_FRESH_MS = 3 * 60 * 1000;
+// A claim that found nothing is not repeated for the same ready jobs, except after this long, for what
+// the fingerprint does not show (a candidate given a third experience, an old hold that ran out).
+const WORK_EMPTY_CLAIM_RECHECK_MS = 10 * 60 * 1000;
+
+/** The mode whose ready jobs the heartbeat asks about: Generation, Apply or Auto Apply; none with only Get JD on. */
+async function workReadyKind(modes) {
+  if (modes.workMode === 'generation') return 'generation';
+  if (modes.workMode !== 'apply') return null;
+  return (await self.__qtsAutoApply?.isOn?.()) === true ? 'auto_apply' : 'apply';
+}
+
+/** The mode works on chosen jobs or a chosen candidate (the server then counts every ready job). */
+async function workScoped(kind) {
+  const selection = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
+  return selection?.mode === kind;
+}
+
+async function saveWorkReadiness(kind, scoped, answer) {
+  const at = Date.now();
+  const ready = answer?.kind === kind && Number.isInteger(answer.count) && answer.count >= 0
+    ? { kind, scoped, count: answer.count, key: typeof answer.key === 'string' ? answer.key : null, at }
+    // An older server does not count: the queues claim as before.
+    : { kind, scoped, unsupported: true, at };
+  await chrome.storage.session.set({ [WORK_READINESS_KEY]: ready });
+  return ready;
+}
+
+function shortHash(text) {
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0;
+  return hash.toString(36);
+}
+
+/** What this Chrome itself adds to a claim: its chosen jobs and (Generation) the failed jobs waiting for their next try. */
+async function workClaimSignature(kind) {
+  const selection = (await chrome.storage.local.get('qtsWorkSelection')).qtsWorkSelection;
+  const chosen = selection?.mode === kind ? JSON.stringify([selection.candidateId || null, selection.jobIds || []]) : '';
+  const waiting = kind === 'generation' ? (await waitingGenerationJobIds()).sort().join(',') : '';
+  return shortHash(`${chosen}|${waiting}`);
+}
+
+/**
+ * A claim found nothing: the same ready jobs (as the last answer from before the claim saw them)
+ * start no other claim, until they change, this Chrome's own choice changes, or 10 minutes pass.
+ */
+async function noteEmptyWorkClaim(kind, claimSentAt) {
+  const readiness = (await chrome.storage.session.get(WORK_READINESS_KEY))[WORK_READINESS_KEY];
+  const known = readiness?.kind === kind && !readiness.unsupported && readiness.at <= claimSentAt;
+  await chrome.storage.session.set({
+    [WORK_EMPTY_CLAIM_KEY_PREFIX + kind]: {
+      key: known ? readiness.key : null,
+      signature: await workClaimSignature(kind),
+      at: Date.now(),
+    },
+  });
+}
+self.__qtsWorkReadiness = { noteEmptyClaim: noteEmptyWorkClaim };
+
+/**
+ * Whether a queue with nothing running here should claim now, from the heartbeat's last answer: yes
+ * when it has jobs this Chrome has not already found empty, and when no answer decides (none since
+ * Chrome started, an older server, the mode or the chosen jobs changed since). An answer too old
+ * (the heartbeat paused while the Manager is away) waits for the next heartbeat.
+ */
+async function workReadyNow(kind, now = Date.now()) {
+  const emptyKey = WORK_EMPTY_CLAIM_KEY_PREFIX + kind;
+  const stored = await chrome.storage.session.get([WORK_READINESS_KEY, emptyKey]);
+  const readiness = stored[WORK_READINESS_KEY];
+  if (!readiness || readiness.kind !== kind || readiness.unsupported || readiness.scoped !== await workScoped(kind)) return true;
+  if (now - readiness.at > WORK_READINESS_FRESH_MS || !(readiness.count > 0)) return false;
+  const empty = stored[emptyKey];
+  return !(empty && empty.key != null && empty.key === readiness.key
+    && now - empty.at < WORK_EMPTY_CLAIM_RECHECK_MS
+    && empty.signature === await workClaimSignature(kind));
+}
+
+/** The heartbeat found work this Chrome has not found empty: the queue starts, or a queue waiting with jobs open looks now. */
+async function startReadyWork(ready) {
+  if (!ready || ready.unsupported || !(ready.count > 0) || !(await workReadyNow(ready.kind))) return;
+  if (ready.kind === 'generation') {
+    await processQueuedGenerationJobs();
+    return;
+  }
+  if (self.__qtsApplyRunner.isQueueRunning()) self.__qtsApplyRunner.wakeApplyQueue?.();
+  else await self.__qtsApplyRunner.processApplyQueue();
+}
+
+/**
+ * Tells QTS this Chrome's modes and learns whether "Stop all" was pressed. With a work mode on it also
+ * asks how many jobs that mode could take now, and returns that answer (null otherwise, or when the
+ * mode was just stopped).
+ */
 async function sendBrowserHeartbeat() {
   const modes = await browserModes();
-  if (!modes.signedIn) return;
+  if (!modes.signedIn) return null;
+  const readyKind = await workReadyKind(modes);
+  const scoped = readyKind ? await workScoped(readyKind) : false;
   const response = await workerApiRequest('POST', '/api/extension/browsers/heartbeat', {
     getJdOn: modes.getJdOn,
     workMode: modes.workMode,
+    ...(readyKind ? { ready: readyKind, scoped } : {}),
   });
-  if (response.success !== true) return;
+  if (response.success !== true) {
+    // No answer: the queues claim as before rather than wait on a heartbeat that fails.
+    if (readyKind) await saveWorkReadiness(readyKind, scoped, null).catch(() => {});
+    return null;
+  }
+  // The alarm's next heartbeat counts from this one, whoever sent it (a mode turned on, QTS opened).
+  await self.__qtsIdlePacing.noteCheck('heartbeat').catch(() => {});
+  const ready = readyKind ? await saveWorkReadiness(readyKind, scoped, response.ready) : null;
   const stored = await chrome.storage.local.get(STOP_VERSIONS_KEY);
   const previous = stored[STOP_VERSIONS_KEY];
   const current = {
     generation: Number(response.generationStopVersion) || 0,
     apply: Number(response.applyStopVersion) || 0,
   };
-  await chrome.storage.local.set({ [STOP_VERSIONS_KEY]: current });
-  if (!previous) return;
+  // (Written only when it changed: each local write reaches every open tab's storage listeners.)
+  if (previous?.generation !== current.generation || previous?.apply !== current.apply) {
+    await chrome.storage.local.set({ [STOP_VERSIONS_KEY]: current });
+  }
+  if (!previous) return ready;
   const stopped = (modes.workMode === 'generation' && current.generation > previous.generation)
     || (modes.workMode === 'apply' && current.apply > previous.apply);
   if (stopped) {
     await stopWorkSlotLocally();
     const label = modes.workMode === 'generation' ? 'Generation' : 'Apply';
     await notifyWorkStopped(`${label} was stopped from the Jobs page ("Stop all").`);
+    return null;
   }
+  return ready;
 }
 
 async function notifyWorkStopped(message) {
@@ -8107,7 +8232,8 @@ async function notifyWorkStopped(message) {
 
 // ---- Fewer calls when idle (shared/idle-pacing.js) ----
 // The 30-second alarms keep ticking, but an idle Chrome skips most ticks: QTS is asked less and
-// less often, and after two quiet hours the modes turn off. Work running here is never paced down.
+// less often, not at all while the Manager is away from the PC, and after a quiet hour (2 hours
+// away) the modes turn off. Work running here is never paced down.
 
 /** Work running in this Chrome: a Generation job, a Cancel being finished, or an application. */
 async function isWorkBusy() {
@@ -8117,8 +8243,8 @@ async function isWorkBusy() {
     || self.__qtsApplyRunner?.isBusy?.() === true;
 }
 
-/** After two idle hours: the work slot stops the way Cancel does, Get JD turns off, and a notice says so. */
-async function turnOffIdleModes() {
+/** After an idle hour (2 hours away): the work slot stops the way Cancel does, Get JD turns off, and a notice says so. */
+async function turnOffIdleModes(away = false) {
   const modes = await browserModes();
   const names = [
     modes.workMode === 'generation' ? 'Generation' : modes.workMode === 'apply' ? 'Apply' : '',
@@ -8131,43 +8257,87 @@ async function turnOffIdleModes() {
     getJdLastPageByTab.clear();
   }
   if (names.length) {
-    await notifyWorkStopped(`${names.join(' and ')} turned off in this Chrome after 2 hours with nothing to do. Turn it on again in QTS when you need it.`);
+    const after = away ? 'after 2 hours away from this PC' : 'after an hour with nothing to do';
+    await notifyWorkStopped(`${names.join(' and ')} turned off in this Chrome ${after}. Turn it on again in QTS when you need it.`);
   }
 }
 
 async function pacedBrowserHeartbeat() {
   const busy = await isWorkBusy();
   if (await self.__qtsIdlePacing.idleTooLong(busy)) {
-    await turnOffIdleModes();
+    await turnOffIdleModes(await self.__qtsIdlePacing.isAway());
     return;
   }
-  if (await self.__qtsIdlePacing.claimCheck('heartbeat', busy)) await sendBrowserHeartbeat();
-  // The alarm then ticks only as often as the check is due (idle: every 1 or 2 minutes).
+  const ready = await self.__qtsIdlePacing.claimCheck('heartbeat', busy) ? await sendBrowserHeartbeat() : null;
+  // The alarm then ticks only as often as the check is due (idle: every 1 or 2 minutes; away: no check).
   await self.__qtsIdlePacing.pacePeriodicAlarm(BROWSER_HEARTBEAT_ALARM, busy);
+  // Work ready: the queue starts, or a queue waiting with jobs open looks again now.
+  await startReadyWork(ready);
+}
+
+/**
+ * Whether the Generation queue runs from its alarm or a fresh worker: for a job an earlier worker
+ * left, a Cancel to finish, or work the heartbeat says is ready (free lanes claim only then).
+ */
+async function generationQueueShouldRun() {
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, GENERATION_PENDING_CANCEL_KEY, ...GENERATION_LANE_JOB_KEYS]);
+  if (stored[GENERATION_PENDING_CANCEL_KEY] || stored[EXTENSION_STATUS_KEY] === 'cancel') return true;
+  if (!generationLanesInFlight.size && generationLaneJobIds(stored).length) return true;
+  if (stored[EXTENSION_STATUS_KEY] !== 'generation') return false;
+  return workReadyNow('generation');
+}
+
+/** Whether the Apply queue runs from its alarm or a fresh worker: for pages or give-backs an earlier worker left, or ready work. */
+async function applyQueueShouldRun() {
+  const modes = await browserModes();
+  if (modes.workMode !== 'apply') return false;
+  if (await self.__qtsApplyRunner.hasWorkToResume?.()) return true;
+  const kind = await workReadyKind(modes);
+  return Boolean(kind) && await workReadyNow(kind);
+}
+
+/**
+ * A failed job's next try has come since the last claim that found nothing: Generation knows the time
+ * itself, so it claims then even while the Manager is away (failed jobs heal without the Manager).
+ */
+async function generationRetryDue(now = Date.now()) {
+  if ((await chrome.storage.local.get(EXTENSION_STATUS_KEY))[EXTENSION_STATUS_KEY] !== 'generation') return false;
+  const emptyKey = WORK_EMPTY_CLAIM_KEY_PREFIX + 'generation';
+  const emptyAt = Number((await chrome.storage.session.get(emptyKey))[emptyKey]?.at) || 0;
+  return Object.values(await readGenerationRetries())
+    .some((entry) => Number(entry?.nextAt) <= now && Number(entry?.nextAt) > emptyAt);
 }
 
 async function pacedGenerationQueue() {
   const busy = await isWorkBusy();
-  if (await self.__qtsIdlePacing.claimCheck('generation', busy)) await processQueuedGenerationJobs();
+  const due = await self.__qtsIdlePacing.claimCheck('generation', busy);
+  if ((due && await generationQueueShouldRun()) || (!due && await generationRetryDue())) {
+    await processQueuedGenerationJobs();
+  }
   await self.__qtsIdlePacing.pacePeriodicAlarm(GENERATION_QUEUE_ALARM, busy);
 }
 
 async function pacedApplyQueue() {
   const busy = await isWorkBusy();
-  if (await self.__qtsIdlePacing.claimCheck('apply', busy)) await self.__qtsApplyRunner.processApplyQueue();
+  if (await self.__qtsIdlePacing.claimCheck('apply', busy) && await applyQueueShouldRun()) {
+    await self.__qtsApplyRunner.processApplyQueue();
+  }
   await self.__qtsIdlePacing.pacePeriodicAlarm(self.__qtsApplyRunner.APPLY_QUEUE_ALARM, busy);
+}
+
+/** Every paced alarm ticks as often as its check is due now (after activity, or the Manager leaving or coming back). */
+async function paceWorkAlarms() {
+  const busy = await isWorkBusy();
+  for (const name of [BROWSER_HEARTBEAT_ALARM, GENERATION_QUEUE_ALARM, self.__qtsApplyRunner?.APPLY_QUEUE_ALARM]) {
+    if (name) await self.__qtsIdlePacing.pacePeriodicAlarm(name, busy);
+  }
 }
 
 // Activity (a mode turned on, the launcher opened, a page Get JD reads, work done) brings every
 // paced alarm back to every 30 seconds at once, as the checks themselves are.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'session' || !changes[self.__qtsIdlePacing.ACTIVITY_KEY]) return;
-  (async () => {
-    const busy = await isWorkBusy();
-    for (const name of [BROWSER_HEARTBEAT_ALARM, GENERATION_QUEUE_ALARM, self.__qtsApplyRunner?.APPLY_QUEUE_ALARM]) {
-      if (name) await self.__qtsIdlePacing.pacePeriodicAlarm(name, busy);
-    }
-  })().catch(() => {});
+  paceWorkAlarms().catch(() => {});
 });
 
 /** Opening QTS (the popup or the page launcher): not idle, and this Chrome checks for work right away. */
@@ -8175,9 +8345,42 @@ async function checkForWorkNow() {
   await self.__qtsIdlePacing.noteActivity();
   const modes = await browserModes();
   if (!modes.signedIn || (!modes.getJdOn && modes.workMode === 'off')) return;
-  await sendBrowserHeartbeat();
-  if (modes.workMode === 'generation') await processQueuedGenerationJobs();
-  if (modes.workMode === 'apply') await self.__qtsApplyRunner.processApplyQueue();
+  const ready = await sendBrowserHeartbeat();
+  if ((await browserModes()).workMode !== modes.workMode) return;
+  // The queue claims when the answer has ready jobs (or there is no answer), or for work left here;
+  // with 0 ready, the heartbeat was the whole check.
+  const worthClaiming = !ready || ready.unsupported === true || ready.count > 0;
+  if (modes.workMode === 'generation' && (worthClaiming || await generationQueueShouldRun())) {
+    await processQueuedGenerationJobs();
+  }
+  if (modes.workMode === 'apply' && (worthClaiming || await self.__qtsApplyRunner.hasWorkToResume?.())) {
+    // A queue already running (jobs open) waits up to 2 minutes for new jobs: opening QTS looks now.
+    self.__qtsApplyRunner.wakeApplyQueue?.();
+    await self.__qtsApplyRunner.processApplyQueue();
+  }
+}
+
+// ---- Away from the PC (shared/idle-pacing.js) ----
+// No keyboard or mouse for 10 minutes, or the screen locked: no checks (work running here goes on),
+// and the alarms slow down. Back at the PC: one heartbeat at once, which starts any ready work.
+async function backAtThePc() {
+  const modes = await browserModes();
+  if (!modes.signedIn || (!modes.getJdOn && modes.workMode === 'off')) return;
+  // Coming back counts as activity: checks from every 30 seconds again, and the quiet hour from now.
+  await self.__qtsIdlePacing.noteActivity();
+  await startReadyWork(await sendBrowserHeartbeat());
+}
+
+if (self.chrome?.idle?.onStateChanged) {
+  try {
+    chrome.idle.setDetectionInterval(self.__qtsIdlePacing.AWAY_AFTER_SECONDS);
+  } catch {
+    // Chrome's 60-second default then; the pacing still asks for 10 minutes (idle-pacing.js isAway).
+  }
+  chrome.idle.onStateChanged.addListener((state) => {
+    (state === 'active' ? backAtThePc() : paceWorkAlarms())
+      .catch((error) => console.warn('[QTS] Could not follow whether the Manager is at the PC:', error));
+  });
 }
 
 async function syncGenerationQueueAlarm() {
@@ -8233,13 +8436,14 @@ async function recoverWorkOnStartup() {
   startupRecoveryInFlight = true;
   try {
     // Startup runs both queues immediately, without a launcher click. Saved Cancel remains stopped.
+    // A fresh worker (Chrome starting, or Chrome waking it for an alarm every few minutes) takes up
+    // at once what an earlier one left; it claims new work only when the heartbeat says some is
+    // ready, or no answer decides yet (2026-11-27: each wake-up used to claim, unpaced).
     await syncBrowserHeartbeatAlarm();
     await self.__qtsApplyRunner?.syncApplyQueueAlarm();
     await syncGenerationQueueAlarm();
-    await processQueuedGenerationJobs();
-    if ((await chrome.storage.local.get(EXTENSION_STATUS_KEY))[EXTENSION_STATUS_KEY] === 'apply') {
-      await self.__qtsApplyRunner.processApplyQueue();
-    }
+    if (await generationQueueShouldRun()) await processQueuedGenerationJobs();
+    if (await applyQueueShouldRun()) await self.__qtsApplyRunner.processApplyQueue();
   } finally {
     startupRecoveryInFlight = false;
   }

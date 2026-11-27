@@ -3,9 +3,6 @@ import { NextResponse } from "next/server";
 import { users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { getExtensionManager } from "@/lib/extension-auth";
-import { managerCanManagePageExclusions } from "@/server/page-exclusions";
-import { managerCanManageJobDetectionUrlRules } from "@/server/job-detection-url-rules";
-import { managerCanManageTextHighlights } from "@/server/text-highlights";
 
 export async function GET(request: Request): Promise<NextResponse> {
   const manager = await getExtensionManager(request);
@@ -16,20 +13,22 @@ export async function GET(request: Request): Promise<NextResponse> {
     );
   }
   try {
-    const [canManageTextHighlights, canManagePageExclusions, canManageJobDetectionUrlRules, [applySettings]] = await Promise.all([
-      managerCanManageTextHighlights(manager.id),
-      managerCanManagePageExclusions(manager.id),
-      managerCanManageJobDetectionUrlRules(manager.id),
-      // Super Admin turns Apply on per Manager and picks the AI that answers its open questions.
-      db.select({
-        canUseApply: users.canUseApply,
-        applyAiMode: users.applyAiMode,
-        chatGptUrl: users.chatGptUrl,
-        autoApplyParallelLimit: users.autoApplyParallelLimit,
-        autoApplyApi: users.autoApplyApi,
-      })
-        .from(users).where(eq(users.id, manager.id)).limit(1),
-    ]);
+    // One read of the Manager's row (2026-11-27: four, one per setting). Super Admin turns Apply on
+    // per Manager and picks the AI that answers its open questions.
+    const [applySettings] = await db.select({
+      canManageTextHighlights: users.canManageTextHighlights,
+      canManagePageExclusions: users.canManagePageExclusions,
+      canManageJobDetectionUrlRules: users.canManageJobDetectionUrlRules,
+      canUseApply: users.canUseApply,
+      applyAiMode: users.applyAiMode,
+      chatGptUrl: users.chatGptUrl,
+      autoApplyParallelLimit: users.autoApplyParallelLimit,
+      autoApplyApi: users.autoApplyApi,
+    })
+      .from(users).where(eq(users.id, manager.id)).limit(1);
+    const canManageTextHighlights = applySettings?.canManageTextHighlights === true;
+    const canManagePageExclusions = applySettings?.canManagePageExclusions === true;
+    const canManageJobDetectionUrlRules = applySettings?.canManageJobDetectionUrlRules === true;
     return NextResponse.json(
       {
         success: true,
