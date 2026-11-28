@@ -34,12 +34,15 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     // Registering the Chrome, recording its modes, reading "Stop all" and counting ready work share
     // one database trip.
-    const { browser, ready: readyWork, ...stopVersions } = await recordBrowserHeartbeat(manager.id, identity, { getJdOn: body.getJdOn, workMode }, ready);
+    const { browser, ready: readyWork, settingsVersion, ...stopVersions } = await recordBrowserHeartbeat(manager.id, identity, { getJdOn: body.getJdOn, workMode }, ready);
     return NextResponse.json({
       success: true,
       browser: { id: browser.id, name: browser.name, canTakeWork: browser.canTakeWork },
       minWorkExtensionVersion: MIN_WORK_EXTENSION_VERSION,
       ...stopVersions,
+      // Changes when a highlight, exclusion, URL rule, skip site or feature switch changes: the Chrome
+      // then refreshes its copies (none are asked for every minute any more).
+      ...(settingsVersion ? { settingsVersion } : {}),
       ...(ready && readyWork ? { ready: { kind: ready.kind, count: readyWork.count, key: readyWork.key } } : {}),
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

@@ -19,6 +19,7 @@ import { localResumeFiles } from "@/server/jobs/delete-jobs";
 import type { ExtensionBrowser } from "@/server/browsers/extension-browsers";
 import { isPdfTemplate, pdfTemplateLabels } from "@/server/pdf/pdf-templates";
 import {
+  APPLY_AWAY_LEASE_SECONDS,
   APPLY_LEASE_SECONDS,
   MAX_AUTO_APPLY_PARALLEL_LIMIT,
   APPLY_REVIEW_LEASE_SECONDS,
@@ -505,8 +506,9 @@ export async function renewApplyAttempt(
   managerId: string,
   browserId: string,
   recover: { jobId: string; stopVersion: number } | null = null,
+  away = false,
 ): Promise<number | null> {
-  const renewed = await renewHeldAttempt(attemptId, managerId, browserId);
+  const renewed = await renewHeldAttempt(attemptId, managerId, browserId, away);
   if (renewed !== null || !recover) return renewed;
   const [manager] = await db.select({ stopVersion: users.applyStopVersion }).from(users).where(eq(users.id, managerId)).limit(1);
   if (!manager || manager.stopVersion !== recover.stopVersion) return null;
@@ -539,14 +541,19 @@ export async function renewApplyAttempt(
   return remade.rows.length ? APPLY_REVIEW_LEASE_SECONDS : null;
 }
 
-async function renewHeldAttempt(attemptId: string, managerId: string, browserId: string): Promise<number | null> {
+/**
+ * Renews this Chrome's hold. One being filled: 2 minutes. One waiting for the Manager: 10 minutes, or
+ * an hour while they are away from the PC (away, 2026-11-28), so the Chrome need not renew it often.
+ */
+async function renewHeldAttempt(attemptId: string, managerId: string, browserId: string, away = false): Promise<number | null> {
+  const waitingSeconds = away ? APPLY_AWAY_LEASE_SECONDS : APPLY_REVIEW_LEASE_SECONDS;
   const updated = await db
     .update(applyAttempts)
     .set({
       // Cast: inside a CASE the date parameters arrive as text, which Postgres won't assign to a timestamp.
       leaseExpiresAt: sql`case when ${applyAttempts.status} = 'claimed'
         then ${leaseFor(APPLY_LEASE_SECONDS)}::timestamptz
-        else ${leaseFor(APPLY_REVIEW_LEASE_SECONDS)}::timestamptz end`,
+        else ${leaseFor(waitingSeconds)}::timestamptz end`,
       updatedAt: new Date(),
     })
     .where(and(
@@ -557,7 +564,7 @@ async function renewHeldAttempt(attemptId: string, managerId: string, browserId:
     ))
     .returning({ status: applyAttempts.status });
   if (!updated.length) return null;
-  return updated[0].status === "claimed" ? APPLY_LEASE_SECONDS : APPLY_REVIEW_LEASE_SECONDS;
+  return updated[0].status === "claimed" ? APPLY_LEASE_SECONDS : waitingSeconds;
 }
 
 /**

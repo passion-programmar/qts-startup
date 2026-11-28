@@ -110,6 +110,10 @@ export async function createUserAction(
 
   const normalizedLinkedInUrl =
     expectedRole === "account" ? normalizeLinkedInProfile(linkedinUrl) : "";
+  // The Add candidate page chooses the LinkedIn status (2026-11-28); a new candidate starts at None.
+  const newLinkedInStatus = expectedRole === "account" ? readText(formData, "linkedinStatus", 16) : "";
+  // Application facts and diversity answers can be filled on the Add candidate page too (2026-11-28).
+  const newApplicationFacts = expectedRole === "account" ? readApplicationFacts(formData) : null;
   if (expectedRole === "account") {
     if (!isManagerCategoryColor(managerCategoryColor)) {
       return { ...emptyState, error: "Select a valid label color." };
@@ -135,6 +139,10 @@ export async function createUserAction(
     if (normalizedLinkedInUrl === null) {
       return { ...emptyState, error: "Enter a LinkedIn profile as linkedin.com/in/username." };
     }
+    if (newLinkedInStatus && !isLinkedInStatus(newLinkedInStatus)) {
+      return { ...emptyState, error: "Choose None, Live, Applying or Blocked." };
+    }
+    if (typeof newApplicationFacts === "string") return { ...emptyState, error: newApplicationFacts };
     const educationError = validateEducationRows(educationRows);
     if (educationError) return { ...emptyState, error: educationError };
     const experienceError = validateExperienceRows(experienceRows);
@@ -148,6 +156,7 @@ export async function createUserAction(
 
   try {
     if (expectedRole === "account") {
+      const facts = typeof newApplicationFacts === "string" ? null : newApplicationFacts;
       const categoryId = await readCandidateCategory(formData);
       const educationEntries = sortProfileHistoryNewestFirst(educationRows)
         .filter((row) => row.institution)
@@ -187,16 +196,24 @@ export async function createUserAction(
           insert into profiles (
             user_id, category_id, manager_category, manager_category_color, first_name, last_name, birthday, pdf_template, candidate_email, phone,
             headline, linkedin_url, country, city, province, address_line_1,
-            postal_code
+            postal_code, linkedin_status, linkedin_status_changed_at,
+            nationality, languages, github_url, portfolio_url, gender, ethnicity,
+            veteran_status, disability_status, sexual_orientation, pronouns
           )
           select id,
-            coalesce(${categoryId}::uuid, (select id from categories where is_default)), ${managerCategory}, ${managerCategoryColor || null},
+            coalesce(${categoryId}::uuid, (select id from categories where is_default)), ${managerCategory},
+            -- A category with a Super Admin colour decides the label colour (2026-11-28).
+            coalesce((select color from categories where id = coalesce(${categoryId}::uuid, (select id from categories where is_default))), ${managerCategoryColor || null}),
             ${firstName}, ${lastName},
             ${birthday || null}::date, ${pdfTemplate},
             ${candidateEmail ? candidateEmail.toLowerCase() : null},
             ${phone || null}, ${headline || null}, ${normalizedLinkedInUrl || null},
             ${country || null}, ${city || null}, ${province || null},
-            ${addressLine1 || null}, ${postalCode || null}
+            ${addressLine1 || null}, ${postalCode || null},
+            coalesce(${newLinkedInStatus || null}::text, 'none'), now(),
+            ${facts?.nationality ?? null}, ${facts?.languages ?? null}, ${facts?.githubUrl ?? null}, ${facts?.portfolioUrl ?? null},
+            ${facts?.gender ?? null}, ${facts?.ethnicity ?? null}, ${facts?.veteranStatus ?? null},
+            ${facts?.disabilityStatus ?? null}, ${facts?.sexualOrientation ?? null}, ${facts?.pronouns ?? null}
           from new_user
           returning user_id
         ),
@@ -424,7 +441,11 @@ export async function updateCandidateProfileAction(
       tx`
         update profiles
         set manager_category = ${values.managerCategory},
-          manager_category_color = ${values.managerCategoryColor || null},
+          -- A category with a Super Admin colour decides the label colour (2026-11-28).
+          manager_category_color = coalesce(
+            (select color from categories where id = coalesce(${categoryId}::uuid, profiles.category_id)),
+            ${values.managerCategoryColor || null}
+          ),
           linkedin_status_changed_at = case when ${values.linkedinStatus || null}::text is not null and profiles.linkedin_status is distinct from ${values.linkedinStatus || null}::text then now() else profiles.linkedin_status_changed_at end,
           linkedin_status = coalesce(${values.linkedinStatus || null}::text, profiles.linkedin_status),
           category_id = coalesce(${categoryId}::uuid, category_id),
@@ -678,7 +699,7 @@ export async function setLinkedInStatusAction(
   const userId = readText(formData, "userId", 64);
   const status = readText(formData, "linkedinStatus", 16);
   if (!isUuid(userId)) return { ...emptyState, error: "Select a valid candidate account." };
-  if (!isLinkedInStatus(status)) return { ...emptyState, error: "Choose Live, Applying or Blocked." };
+  if (!isLinkedInStatus(status)) return { ...emptyState, error: "Choose None, Live, Applying or Blocked." };
 
   try {
     // Only the Manager's own candidates; the date changes only when the status does.

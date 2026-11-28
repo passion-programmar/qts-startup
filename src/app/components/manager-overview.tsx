@@ -275,10 +275,10 @@ function StepsCard({ steps, windowText }: { steps: ManagerAnalysis["steps"]; win
 /** A Manager's Overview: today against the target; bids and interview rounds for a week day by day, or by month or year. */
 export async function ManagerOverview({ user, view }: { user: StaffSession; view: AnalysisView }) {
   const analysis = await readManagerAnalysis(user.id, view);
-  return <ManagerOverviewView analysis={analysis} displayName={user.displayName} view={view} />;
+  return <ManagerOverviewView analysis={analysis} view={view} />;
 }
 
-export function ManagerOverviewView({ analysis, displayName, view }: { analysis: ManagerAnalysis; displayName: string; view: AnalysisView }) {
+export function ManagerOverviewView({ analysis, view }: { analysis: ManagerAnalysis; view: AnalysisView }) {
   const { range } = view;
   const labelled = analysis.points.map((point) => ({ ...point, ...periodLabels(point.start, range) }));
   const bidPoints: TrendPoint[] = labelled.map((point) => ({ short: point.short, full: point.full, value: point.bids }));
@@ -289,14 +289,11 @@ export function ManagerOverviewView({ analysis, displayName, view }: { analysis:
   const windowText = range === "week"
     ? (view.weeksBack === 0 ? "this week" : `the week of ${monday ? weekSpan(monday) : "–"}`)
     : `the last ${count} ${bucket}s`;
-  // Nothing after today counts, so the current week, month or year is "so far".
-  const upToToday = range !== "week" || view.weeksBack === 0 ? " up to today" : "";
   const previousText = previousLabel(view);
 
   return (
     <main className="mx-auto max-w-[1440px] space-y-6 py-1 2xl:max-w-none">
       <PageHeader
-        description={`Welcome back, ${displayName}. Your bids and interviews for ${windowText}${upToToday}, in ${analysisZones[view.zone].label} time.`}
         title="Overview"
       />
 

@@ -34,9 +34,8 @@ export default async function SettingsPage({
       .from(users).where(and(eq(users.id, currentUser.id), isNull(users.blockedAt))).limit(1);
     if (!manager) redirect("/");
     return (
-      <main className="mx-auto max-w-3xl py-1">
+      <main className="py-1">
         <PageHeader
-          description="Set your ChatGPT Project URL and choose how many Apply forms and résumés each Chrome can work on together."
           title="Your settings"
         />
         <SettingsCard title="ChatGPT Project URL" summary="Choose where your ChatGPT conversations open">
@@ -61,9 +60,8 @@ export default async function SettingsPage({
   const activeTab = parseSuperAdminSettingsTab((await searchParams).tab);
 
   return (
-    <main className="mx-auto max-w-6xl py-1 text-fg">
+    <main className="py-1 text-fg">
       <PageHeader
-        description="Choose what each Manager can use, keep the prompts AI follows, and set system-wide options."
         title="AI settings"
       />
 

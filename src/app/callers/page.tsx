@@ -21,7 +21,6 @@ export default async function CallersPage() {
     <main className="py-1">
       <PageHeader
         actions={<Badge className="px-3 py-1 text-xs">{active} active</Badge>}
-        description="The people who take interview calls. Your Managers choose one on each interview."
         title="Callers"
       />
       <Card className="mb-6">

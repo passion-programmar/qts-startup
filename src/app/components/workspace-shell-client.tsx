@@ -146,7 +146,6 @@ export function WorkspaceShellClient({
     .map((item) => item.href)
     .filter((href) => pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)))
     .sort((a, b) => b.length - a.length)[0] ?? "";
-  const pageLabel = navigation.find((item) => item.href === activeHref)?.label || "Overview";
   const initials = user.displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "Q";
   // Managers and admins see two time-zone clocks; Super Admins have their own clock on Gemini usage.
   const showClocks = user.role !== "super_admin";
@@ -175,10 +174,6 @@ export function WorkspaceShellClient({
           <button aria-controls="workspace-sidebar" aria-expanded={mobileNavigationOpen} aria-label={mobileNavigationOpen ? "Close navigation" : "Open navigation"} className="workspace-icon-button workspace-mobile-toggle" onClick={() => setMobileNavigationOpen((open) => !open)} type="button">
             {mobileNavigationOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
-          <span className="workspace-header__crumbs">
-            <span className="workspace-header__eyebrow">{roleLabels[user.role]} workspace</span>
-            <span className="workspace-header__page">{pageLabel}</span>
-          </span>
         </div>
         {showClocks ? <div className="hidden xl:block"><WorkspaceClocks compact /></div> : null}
         <div className="workspace-header__actions">

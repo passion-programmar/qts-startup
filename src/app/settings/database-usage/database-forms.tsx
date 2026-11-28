@@ -164,6 +164,43 @@ export function TableDeleteForm({
   );
 }
 
+/** "Free up space": one suggestion freed in one click (asked once more), the same delete as by hand. */
+export function FreeSpaceButton({
+  tableKey,
+  label,
+  mode,
+  days,
+  what,
+  warning,
+}: {
+  tableKey: string;
+  label: string;
+  mode: "older" | "expired";
+  days: number;
+  what: string;
+  warning?: string;
+}) {
+  const [state, formAction, isPending] = useActionState(deleteRowsAction, initialState);
+  return (
+    <form action={formAction} className="flex flex-col items-end gap-1">
+      <input name="table" type="hidden" value={tableKey} />
+      <input name="mode" type="hidden" value={mode} />
+      <input name="days" type="hidden" value={String(days)} />
+      <ConfirmButton
+        className={buttonClass}
+        confirmLabel="Free it"
+        description={<>Delete {what} from {label}? {warning ?? ""} This cannot be undone.</>}
+        disabled={isPending}
+        title={`Free space in ${label}?`}
+      >
+        {isPending ? <LoadingIcon className="size-3.5" /> : <Eraser className="size-3.5" />}
+        {isPending ? "Freeing..." : "Free it"}
+      </ConfirmButton>
+      <ActionFeedback state={state} />
+    </form>
+  );
+}
+
 export function KeepDaysForm({ generationRuns }: { generationRuns: number }) {
   const [state, formAction, isPending] = useActionState(saveKeepDaysAction, initialState);
   return (

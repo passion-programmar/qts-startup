@@ -3720,12 +3720,22 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   // within a minute (a Stop all comes sooner, through the Chrome's heartbeat).
   let renewedAt = 0;
   let waitingLeaseSeconds = 0;
+  // When this Chrome last asked for the away hold (an older server never gives it: then as before).
+  let awayAskedAt = 0;
   const keepAlive = async () => {
     const waiting = reviewWaiters.has(application.attemptId);
+    // Waiting for a Manager who is away from the PC (2026-11-28): the job is held an hour and renewed
+    // about every 45 minutes, so the database sleeps meanwhile; back at the PC, renewed at once as before.
+    // A job QTS is filling keeps its 30-second renewals.
+    const away = waiting && await self.__qtsIdlePacing.isAway();
+    const longHold = waitingLeaseSeconds >= self.__qtsIdlePacing.LONG_HOLD_SECONDS;
+    const askLong = away && !longHold && Date.now() - awayAskedAt > 10 * 60 * 1000;
     const renewEvery = self.__qtsIdlePacing.renewEveryMs(waitingLeaseSeconds);
-    const dueEvery = waiting
-      ? (auto ? Math.min(renewEvery, AUTO_APPLY_WAITING_RENEW_MS) : renewEvery)
-      : (auto ? AUTO_APPLY_RENEW_MS : 0);
+    const dueEvery = askLong ? 0
+      : away && longHold ? renewEvery
+        : waiting
+          ? (longHold ? 0 : auto ? Math.min(renewEvery, AUTO_APPLY_WAITING_RENEW_MS) : renewEvery)
+          : (auto ? AUTO_APPLY_RENEW_MS : 0);
     // (3 s early is still due: the 15-second ticks would otherwise stretch 30 seconds to 45.)
     if (dueEvery && Date.now() - renewedAt < dueEvery - 3000) return;
     // Auto Apply: its job and the Stop all count it was taken with, so a hold that ran out while this
@@ -3733,7 +3743,9 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
     const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', {
       attemptId: application.attemptId,
       ...(auto && Number.isInteger(application.applyStopVersion) ? { jobId: application.job.id, stopVersion: application.applyStopVersion } : {}),
+      ...(away ? { away: true } : {}),
     });
+    if (away) awayAskedAt = Date.now();
     if (renewed._httpStatus === 409) {
       lostClaim = true;
       aiAbortController?.abort();
@@ -3931,6 +3943,8 @@ async function runApplication(application, recipe, { auto = false, onProgress = 
   diag('application', { attempt: String(application.attemptId).slice(0, 8), site: recipe.site, aiMode: application.aiMode });
   const review = {
     attemptId: application.attemptId,
+    // QTS fills this one itself (isFilling): while it does, the Chrome's checks never slow down.
+    byQts: true,
     tabId: null,
     chromeName: await browserName(),
     candidate: ([application.candidate.firstName, application.candidate.lastName].filter(Boolean).join(' ') || 'Candidate') + (application.candidate.managerCategory ? ` (${application.candidate.managerCategory})` : ''),
@@ -5174,9 +5188,27 @@ async function resumeSubmittedApplication(record) {
   };
   activeReviews.set(attemptId, review);
   publishApplyState();
-  const keepAlive = () => workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId }).catch(() => {});
-  const heartbeat = setInterval(keepAlive, APPLY_HEARTBEAT_MS);
-  keepAlive();
+  // Every 30 seconds as before; while the Manager is away, held an hour and renewed about every 45
+  // minutes (2026-11-28; an older server that keeps the short hold is renewed as before).
+  let renewedAt = 0;
+  let leaseSeconds = 0;
+  let awayAskedAt = 0;
+  const keepAlive = async () => {
+    const away = await self.__qtsIdlePacing.isAway();
+    const longHold = leaseSeconds >= self.__qtsIdlePacing.LONG_HOLD_SECONDS;
+    const askLong = away && !longHold && Date.now() - awayAskedAt > 10 * 60 * 1000;
+    const due = askLong || (!away && longHold)
+      || Date.now() - renewedAt >= (away && longHold ? self.__qtsIdlePacing.renewEveryMs(leaseSeconds) : APPLY_HEARTBEAT_MS - 3000);
+    if (!due) return;
+    const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId, ...(away ? { away: true } : {}) }).catch(() => null);
+    if (away) awayAskedAt = Date.now();
+    if (renewed?.success === true) {
+      renewedAt = Date.now();
+      leaseSeconds = Number(renewed.leaseSeconds) || 0;
+    }
+  };
+  const heartbeat = setInterval(() => keepAlive().catch(() => {}), APPLY_HEARTBEAT_MS);
+  keepAlive().catch(() => {});
   const reviewState = (mode, extra = {}) => ({
     attemptId, mode, chromeName: review.chromeName, candidate: record.candidate, auto: true, answers: [], unresolved: [],
     job: { title: record.title, company: record.company, location: '', workType: '', salary: null, url: record.url || '' },
@@ -5861,9 +5893,17 @@ async function runAssistedApplication(application, { resumeTabIds = null, adoptT
   const { attemptId } = application;
   let renewedAt = Date.now();
   let leaseSeconds = 0;
+  // While the Manager is away from the PC (2026-11-28): held an hour, renewed about every 45 minutes,
+  // so the database sleeps; back at the PC, renewed at once. An older server keeps the short hold.
+  let awayAskedAt = 0;
   const keepAlive = async () => {
-    if (Date.now() - renewedAt < self.__qtsIdlePacing.renewEveryMs(leaseSeconds)) return;
-    const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId });
+    const away = await self.__qtsIdlePacing.isAway();
+    const longHold = leaseSeconds >= self.__qtsIdlePacing.LONG_HOLD_SECONDS;
+    const askLong = away && !longHold && Date.now() - awayAskedAt > 10 * 60 * 1000;
+    const due = askLong || (!away && longHold) || Date.now() - renewedAt >= self.__qtsIdlePacing.renewEveryMs(leaseSeconds);
+    if (!due) return;
+    const renewed = await workerApiRequest('POST', '/api/extension/apply/heartbeat', { attemptId, ...(away ? { away: true } : {}) });
+    if (away) awayAskedAt = Date.now();
     if (renewed._httpStatus === 409) answerManager(attemptId, { action: 'lost' });
     if (renewed.success === true) {
       renewedAt = Date.now();
@@ -6177,6 +6217,9 @@ async function processApplyQueue() {
     let limitReadAt = Date.now();
     const freshLimit = async () => {
       if (Date.now() - limitReadAt < 5 * 60 * 1000) return applyParallelLimit;
+      // (Not while the Manager is away from the PC: nobody changes the limit then, and the read
+      // would wake the database; it is read again when they are back.)
+      if (await self.__qtsIdlePacing.isAway()) return applyParallelLimit;
       limitReadAt = Date.now();
       try { applyParallelLimit = await getManagerApplyParallelLimit(); } catch { /* the last one stays */ }
       return applyParallelLimit;
@@ -6242,10 +6285,20 @@ async function processApplyQueue() {
         if (claim.success === true) await self.__qtsWorkReadiness?.noteEmptyClaim?.(claimMode, claimSentAt).catch(() => {});
         if (!running.size) break;
         // Nothing ready now, while other jobs are open: looked for again when one of the open jobs ends,
-        // when the Manager opens QTS (wakeApplyQueue), else in 2 minutes (Auto Apply; 2026-11-27: was
-        // 10 s, six calls a minute) or a minute (Apply).
-        await Promise.race([...running, sleep(autoApply ? 2 * 60 * 1000 : 60 * 1000), new Promise((resolve) => { applyQueueWake = resolve; })]);
-        applyQueueWake = null;
+        // when the Manager opens QTS or the heartbeat sees new work (wakeApplyQueue). The timer (2 min
+        // Auto Apply, 1 min Apply) looks again only when the heartbeat's last answer says work is ready
+        // (2026-11-28): while the Manager is away no heartbeat is sent, so nothing is claimed until they
+        // are back, and a job waiting for them no longer keeps the database awake.
+        for (;;) {
+          const why = await Promise.race([
+            ...[...running].map((run) => run.then(() => 'ended')),
+            sleep(autoApply ? 2 * 60 * 1000 : 60 * 1000).then(() => 'timer'),
+            new Promise((resolve) => { applyQueueWake = () => resolve('wake'); }),
+          ]);
+          applyQueueWake = null;
+          if (why !== 'timer' || !running.size || !(await isApplyOn())) break;
+          if (await self.__qtsWorkReadiness?.readyNow?.(claimMode) !== false) break;
+        }
         continue;
       }
       if (!(await isApplyOn())) {
@@ -6381,6 +6434,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // An application being filled or waiting for the Manager: never paced down or turned off.
 const isBusy = () => activeReviews.size > 0;
+// An application QTS is filling right now: not one only waiting for the Manager (Normal Apply's pages
+// and a "Submitted?" question always wait for them). While away, only these keep the checks going.
+const isFilling = () => [...activeReviews.values()].some((review) => review.byQts === true && !reviewWaiters.has(review.attemptId));
 
 /**
  * Something an earlier worker left for the Apply queue (its open pages, an Auto Apply run to go on
@@ -6394,7 +6450,7 @@ async function hasApplyWorkToResume() {
   return Object.values(stopped).some((entry) => entry && !entry.givenBack && entry.attemptId);
 }
 
-self.__qtsApplyRunner = { processApplyQueue, wakeApplyQueue, hasWorkToResume: hasApplyWorkToResume, syncApplyQueueAlarm, isBusy, openOwnedPanel: openOwnedAssistPanel, toggleOwnedPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
+self.__qtsApplyRunner = { processApplyQueue, wakeApplyQueue, hasWorkToResume: hasApplyWorkToResume, syncApplyQueueAlarm, isBusy, isFilling, openOwnedPanel: openOwnedAssistPanel, toggleOwnedPanel, isQueueRunning: () => applyLoopRunning, APPLY_QUEUE_ALARM, APPLY_DRY_RUN_KEY,
   // The tabs of the applications under way (verification-mail.js watches them for code pages).
   applicationTabs: () => [...activeReviews.values()].flatMap((review) => [...tabsOf(review)].map((tabId) => ({ tabId, attemptId: review.attemptId }))) };
 

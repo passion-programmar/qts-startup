@@ -25,9 +25,8 @@ export default async function AnswersPage() {
   }));
 
   return (
-    <main className="mx-auto max-w-5xl py-1">
+    <main className="py-1">
       <PageHeader
-        description="Write a question once with its answers. Apply and Auto Apply fill it for every candidate and job. The first answer is the main one; the others are tried when a form's choices need different words."
         title="Answers"
       />
       <AnswersList rows={rows} />

@@ -206,12 +206,17 @@ let lastSourceTabId = null;
 const lastAutoDetectKeyByTab = new Map();
 const CAPTURE_PANEL_FILE = 'content/capture-panel.js';
 const detectGenerationByTab = new Map();
-const GLOBAL_TEXT_HIGHLIGHT_REFRESH_TTL_MS = 60_000;
+// The settings copies below are refreshed when the heartbeat's settings version changes (an add, edit
+// or delete anywhere: settingsVersionChanged), and an edit made in this Chrome updates its copy at
+// once; the time limit is only a fallback for a Chrome with no mode on (2026-11-28: it was 1 to 5
+// minutes, and each refresh woke the database while the Manager only browsed job pages).
+const SETTINGS_COPY_FALLBACK_TTL_MS = 6 * 60 * 60_000;
+const GLOBAL_TEXT_HIGHLIGHT_REFRESH_TTL_MS = SETTINGS_COPY_FALLBACK_TTL_MS;
 let globalTextHighlightRefreshPromise = null;
 const PAGE_EXCLUSIONS_STORAGE_KEY = 'qtsManagerPageExclusions';
 const PAGE_EXCLUSIONS_UPDATED_AT_KEY = 'qtsManagerPageExclusionsUpdatedAt';
 const PAGE_EXCLUSIONS_MANAGER_ID_KEY = 'qtsManagerPageExclusionsManagerId';
-const PAGE_EXCLUSIONS_REFRESH_TTL_MS = 5 * 60_000;
+const PAGE_EXCLUSIONS_REFRESH_TTL_MS = SETTINGS_COPY_FALLBACK_TTL_MS;
 let pageExclusionsRefreshPromise = null;
 const JOB_DETECTION_URL_RULES_STORAGE_KEY = 'qtsManagerJobDetectionUrlRules';
 const JOB_DETECTION_URL_RULES_UPDATED_AT_KEY = 'qtsManagerJobDetectionUrlRulesUpdatedAt';
@@ -223,12 +228,12 @@ function readGetJdSkipSitesResponse(result) {
     ? result.skipSites.filter((site) => typeof site === 'string' && site.length <= 200).slice(0, 300)
     : [];
 }
-const JOB_DETECTION_URL_RULES_REFRESH_TTL_MS = 5 * 60_000;
+const JOB_DETECTION_URL_RULES_REFRESH_TTL_MS = SETTINGS_COPY_FALLBACK_TTL_MS;
 let jobDetectionUrlRulesRefreshPromise = null;
 const MANAGER_FEATURES_STORAGE_KEY = 'qtsManagerExtensionFeatures';
 const MANAGER_FEATURES_UPDATED_AT_KEY = 'qtsManagerExtensionFeaturesUpdatedAt';
 const MANAGER_FEATURES_MANAGER_ID_KEY = 'qtsManagerExtensionFeaturesManagerId';
-const MANAGER_FEATURES_REFRESH_TTL_MS = 5 * 60_000;
+const MANAGER_FEATURES_REFRESH_TTL_MS = SETTINGS_COPY_FALLBACK_TTL_MS;
 let managerFeaturesRefreshPromise = null;
 
 async function getManagerExtensionFeatures(forceRefresh = false, localOnly = false) {
@@ -933,9 +938,9 @@ async function refreshLauncherForManagerJobRules() {
   await launcherFocus.sync();
 }
 
-async function refreshGlobalTextHighlights() {
+async function refreshGlobalTextHighlights(force = false) {
   if (globalTextHighlightRefreshPromise) return globalTextHighlightRefreshPromise;
-  globalTextHighlightRefreshPromise = fetchGlobalTextHighlights();
+  globalTextHighlightRefreshPromise = fetchGlobalTextHighlights(force);
   try {
     return await globalTextHighlightRefreshPromise;
   } finally {
@@ -943,7 +948,7 @@ async function refreshGlobalTextHighlights() {
   }
 }
 
-async function fetchGlobalTextHighlights() {
+async function fetchGlobalTextHighlights(force = false) {
   const highlighting = self.__qtsTextHighlighting;
   if (!highlighting) return { success: false, message: 'Text highlight helper is unavailable.' };
 
@@ -953,7 +958,7 @@ async function fetchGlobalTextHighlights() {
   const cachedRules = highlighting.normalizeRules(stored[storageKey] || []);
   const cachedAt = Number(stored[timestampKey] || 0);
   const cacheAge = Date.now() - cachedAt;
-  if (cachedAt > 0 && cacheAge >= 0 && cacheAge < GLOBAL_TEXT_HIGHLIGHT_REFRESH_TTL_MS) {
+  if (!force && cachedAt > 0 && cacheAge >= 0 && cacheAge < GLOBAL_TEXT_HIGHLIGHT_REFRESH_TTL_MS) {
     return { success: true, rules: cachedRules, cached: true };
   }
 
@@ -1876,6 +1881,12 @@ async function runGetJdAutoRetry(tabId) {
   const key = `${GET_JD_RETRY_ALARM}${tabId}`;
   const pending = (await chrome.storage.session.get(key))[key];
   if (!pending) return;
+  // The Manager is away from the PC (2026-11-28): the retry waits for them (looked at again in 10
+  // minutes, and at once when they are back: resumeGetJdAutoRetries), so the database can sleep.
+  if (await self.__qtsIdlePacing.isAway()) {
+    await chrome.alarms.create(key, { when: Date.now() + 10 * 60 * 1000 });
+    return;
+  }
   await chrome.storage.session.remove(key);
   const tab = await getTab(tabId);
   if (tab?.url !== pending.url || !(await isGetJdActive())) return;
@@ -1892,6 +1903,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => { cancelGetJdAutoRetry(tabId).catch(() => {}); });
+/** Back at the PC: retries that waited while the Manager was away run now. */
+async function resumeGetJdAutoRetries() {
+  const all = await chrome.storage.session.get(null);
+  for (const key of Object.keys(all)) {
+    if (key.startsWith(GET_JD_RETRY_ALARM)) await chrome.alarms.create(key, { when: Date.now() + 1000 });
+  }
+}
 // End of Get JD automatic retries.
 
 // The page Get JD last finished in each tab, and whether it is a search page showing one job.
@@ -6219,6 +6237,9 @@ async function handleCustomJob(msg, sender = null) {
     return { ok: true, job };
   }
   const send = (body) => workerApiRequest('POST', '/api/extension/custom', body);
+  // The cards' timed refresh asks nothing while the Manager is away from the PC (2026-11-28): the
+  // cards stay as they are and look again on the next refresh after they are back.
+  if (op === 'list' && msg.timed === true && await self.__qtsIdlePacing.isAway()) return { ok: false, skipped: true };
   let result;
   if (op === 'list') result = await send({ action: 'list' });
   else if (op === 'create') result = await send({ action: 'create', job: msg.job });
@@ -7109,6 +7130,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The panel's Generation card: "Open" brings the ChatGPT tab writing the job to the front.
   // The panel's counts for today (URL · JOB · APPLY), asked for while it is open.
   if (msg.type === 'QTS_DAILY_COUNTS') {
+    // The panel's timed refresh asks nothing while the Manager is away from the PC (2026-11-28).
+    if (msg.timed === true) {
+      self.__qtsIdlePacing.isAway().then((away) => {
+        if (away) { sendResponse({ ok: true, skipped: true }); return; }
+        workerApiRequest('GET', '/api/extension/stats')
+          .then((result) => sendResponse(result?.success
+            ? { ok: true, urls: result.urls, jobs: result.jobs, applied: result.applied }
+            : { ok: false, error: result?.message || "Could not read today's counts." }))
+          .catch(() => sendResponse({ ok: false }));
+      }).catch(() => sendResponse({ ok: true, skipped: true }));
+      return true;
+    }
     workerApiRequest('GET', '/api/extension/stats')
       .then((result) => sendResponse(result?.success
         ? { ok: true, urls: result.urls, jobs: result.jobs, applied: result.applied }
@@ -8167,7 +8200,7 @@ async function noteEmptyWorkClaim(kind, claimSentAt) {
     },
   });
 }
-self.__qtsWorkReadiness = { noteEmptyClaim: noteEmptyWorkClaim };
+self.__qtsWorkReadiness = { noteEmptyClaim: noteEmptyWorkClaim, readyNow: (kind) => workReadyNow(kind) };
 
 /**
  * Whether a queue with nothing running here should claim now, from the heartbeat's last answer: yes
@@ -8198,6 +8231,22 @@ async function startReadyWork(ready) {
   else await self.__qtsApplyRunner.processApplyQueue();
 }
 
+// The settings version this Chrome's copies were last refreshed for (session storage: no page sees it).
+const SETTINGS_VERSION_KEY = 'qtsSettingsVersion';
+
+/** The heartbeat's settings version: a new one (or the first since Chrome started) refreshes every copy once. */
+async function settingsVersionChanged(version) {
+  const known = (await chrome.storage.session.get(SETTINGS_VERSION_KEY))[SETTINGS_VERSION_KEY];
+  if (known === version) return;
+  await chrome.storage.session.set({ [SETTINGS_VERSION_KEY]: version });
+  await Promise.allSettled([
+    refreshGlobalTextHighlights(true),
+    fetchManagerPageExclusions(),
+    refreshManagerJobDetectionUrlRules(),
+    fetchManagerExtensionFeatures(),
+  ]);
+}
+
 /**
  * Tells QTS this Chrome's modes and learns whether "Stop all" was pressed. With a work mode on it also
  * asks how many jobs that mode could take now, and returns that answer (null otherwise, or when the
@@ -8220,6 +8269,10 @@ async function sendBrowserHeartbeat() {
   }
   // The alarm's next heartbeat counts from this one, whoever sent it (a mode turned on, QTS opened).
   await self.__qtsIdlePacing.noteCheck('heartbeat').catch(() => {});
+  // A highlight, exclusion, URL rule, skip site or feature switch changed: the copies are refreshed.
+  if (typeof response.settingsVersion === 'string') {
+    settingsVersionChanged(response.settingsVersion).catch((error) => console.warn('[QTS] Could not refresh the settings copies:', error));
+  }
   const ready = readyKind ? await saveWorkReadiness(readyKind, scoped, response.ready) : null;
   const stored = await chrome.storage.local.get(STOP_VERSIONS_KEY);
   const previous = stored[STOP_VERSIONS_KEY];
@@ -8257,12 +8310,26 @@ async function notifyWorkStopped(message) {
 // less often, not at all while the Manager is away from the PC, and after a quiet hour (2 hours
 // away) the modes turn off. Work running here is never paced down.
 
-/** Work running in this Chrome: a Generation job, a Cancel being finished, or an application. */
+/** Work running in this Chrome: a Generation job, a Cancel being finished, or an application. Never turned off. */
 async function isWorkBusy() {
   const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ...GENERATION_LANE_JOB_KEYS]);
   return generationLaneJobIds(stored).length > 0
     || stored[EXTENSION_STATUS_KEY] === 'cancel'
     || self.__qtsApplyRunner?.isBusy?.() === true;
+}
+
+/**
+ * Whether the checks keep their 30-second pace: work running here, except an application that only
+ * waits for a Manager who is away from the PC (2026-11-28). Its job stays held (an hour at a time,
+ * apply-runner.js keepAlive), but nothing else is asked until they are back, so the database sleeps.
+ */
+async function needsFrequentChecks() {
+  const stored = await chrome.storage.local.get([EXTENSION_STATUS_KEY, ...GENERATION_LANE_JOB_KEYS]);
+  if (generationLaneJobIds(stored).length > 0 || stored[EXTENSION_STATUS_KEY] === 'cancel') return true;
+  const apply = self.__qtsApplyRunner;
+  if (apply?.isBusy?.() !== true) return false;
+  if (apply.isFilling?.() === true) return true;
+  return !(await self.__qtsIdlePacing.isAway());
 }
 
 /** After an idle hour (2 hours away): the work slot stops the way Cancel does, Get JD turns off, and a notice says so. */
@@ -8285,11 +8352,13 @@ async function turnOffIdleModes(away = false) {
 }
 
 async function pacedBrowserHeartbeat() {
-  const busy = await isWorkBusy();
-  if (await self.__qtsIdlePacing.idleTooLong(busy)) {
+  // Open work never turns the modes off; only work that needs it keeps the 30-second checks.
+  const open = await isWorkBusy();
+  if (await self.__qtsIdlePacing.idleTooLong(open)) {
     await turnOffIdleModes(await self.__qtsIdlePacing.isAway());
     return;
   }
+  const busy = open && await needsFrequentChecks();
   const ready = await self.__qtsIdlePacing.claimCheck('heartbeat', busy) ? await sendBrowserHeartbeat() : null;
   // The alarm then ticks only as often as the check is due (idle: every 1 or 2 minutes; away: no check).
   await self.__qtsIdlePacing.pacePeriodicAlarm(BROWSER_HEARTBEAT_ALARM, busy);
@@ -8331,7 +8400,7 @@ async function generationRetryDue(now = Date.now()) {
 }
 
 async function pacedGenerationQueue() {
-  const busy = await isWorkBusy();
+  const busy = await needsFrequentChecks();
   const due = await self.__qtsIdlePacing.claimCheck('generation', busy);
   if ((due && await generationQueueShouldRun()) || (!due && await generationRetryDue())) {
     await processQueuedGenerationJobs();
@@ -8340,7 +8409,7 @@ async function pacedGenerationQueue() {
 }
 
 async function pacedApplyQueue() {
-  const busy = await isWorkBusy();
+  const busy = await needsFrequentChecks();
   if (await self.__qtsIdlePacing.claimCheck('apply', busy) && await applyQueueShouldRun()) {
     await self.__qtsApplyRunner.processApplyQueue();
   }
@@ -8349,7 +8418,7 @@ async function pacedApplyQueue() {
 
 /** Every paced alarm ticks as often as its check is due now (after activity, or the Manager leaving or coming back). */
 async function paceWorkAlarms() {
-  const busy = await isWorkBusy();
+  const busy = await needsFrequentChecks();
   for (const name of [BROWSER_HEARTBEAT_ALARM, GENERATION_QUEUE_ALARM, self.__qtsApplyRunner?.APPLY_QUEUE_ALARM]) {
     if (name) await self.__qtsIdlePacing.pacePeriodicAlarm(name, busy);
   }
@@ -8390,6 +8459,8 @@ async function backAtThePc() {
   if (!modes.signedIn || (!modes.getJdOn && modes.workMode === 'off')) return;
   // Coming back counts as activity: checks from every 30 seconds again, and the quiet hour from now.
   await self.__qtsIdlePacing.noteActivity();
+  // Get JD retries that waited while the Manager was away run now.
+  await resumeGetJdAutoRetries().catch(() => {});
   await startReadyWork(await sendBrowserHeartbeat());
 }
 

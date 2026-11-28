@@ -127,6 +127,12 @@ test("daily use subtracts each day's last check, starting again in a new billing
     { day: "2026-11-01", value: 1800 },
   ]);
   assert.deepEqual(dailyUse([], "transferBytes"), []);
+  // Several days between checks, or a period's first check after its first day: not one day's use.
+  assert.deepEqual(dailyUse([
+    point("2026-11-05", "09", "2026-11-01", 180_000),
+    point("2026-11-09", "09", "2026-11-01", 200_000),
+    point("2026-11-10", "09", "2026-11-01", 203_600),
+  ], "computeSeconds"), [{ day: "2026-11-10", value: 3600 }]);
 });
 
 test("Neon answers: missing numbers stay null, never zero", () => {

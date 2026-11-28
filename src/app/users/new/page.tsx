@@ -20,7 +20,7 @@ export default async function NewCandidatePage() {
   if (actor.role !== "manager") redirect("/users");
 
   const candidateCategories = await db
-    .select({ id: categories.id, name: categories.name })
+    .select({ id: categories.id, name: categories.name, color: categories.color, isDefault: categories.isDefault })
     .from(categories)
     .orderBy(asc(categories.name));
 
@@ -28,7 +28,6 @@ export default async function NewCandidatePage() {
     <main className="py-1">
       <PageHeader
         back={{ href: "/users", label: "Candidate accounts" }}
-        description="Add contact details and career information for this candidate."
         title="Add New candidate"
       />
       <CandidateCreateForm categories={candidateCategories} />

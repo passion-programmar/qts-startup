@@ -30,8 +30,8 @@ export default async function ProfilePage() {
   const initials = user.displayName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "Q";
 
   return (
-    <main className="mx-auto max-w-3xl space-y-5 py-1">
-      <PageHeader description="Update your display name, login name, and password." title="My profile" />
+    <main className="space-y-5 py-1">
+      <PageHeader title="My profile" />
 
       <Card className="flex items-center gap-4">
         <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-linear-to-br from-indigo-500 to-violet-500 text-lg font-bold text-white shadow-md shadow-indigo-500/25">

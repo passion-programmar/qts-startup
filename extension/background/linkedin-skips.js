@@ -1,6 +1,8 @@
 // LinkedIn skip-list, the worker's part. QTS's server is the only source of truth and is required:
-// the skip-list runs only while QTS has answered within the last 2 minutes (any extension call
-// counts, so this adds no requests), and pauses otherwise. This Chrome keeps a mirror of the list
+// the skip-list runs only while QTS has answered within the last 10 minutes (any extension call
+// counts), and pauses otherwise. (2026-11-28: 2 minutes, which made a LinkedIn search tab ask QTS
+// every 2 minutes whenever nothing else called it, keeping the database awake; now the 10-minute
+// fetch below is also what keeps it reachable.) This Chrome keeps a mirror of the list
 // (IndexedDB: it can be large, and chrome.storage.local changes reach every open tab) only to match
 // cards quickly while QTS is reachable; there is no offline queue.
 // Fetch: only what changed, at most every 10 minutes (sooner, but not within 30 s, when the panel
@@ -16,7 +18,7 @@
   const MIRROR_KEY = 'linkedinSkipsMirrorV2';
   const FRESH_MS = 10 * 60_000;
   const NUDGE_MS = 30_000;
-  const REACH_MS = 2 * 60_000;
+  const REACH_MS = FRESH_MS;
   const BATCH_MS = 10_000;
   const BATCH_MAX = 25;
   const POST_MAX = 200;

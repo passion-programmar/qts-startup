@@ -39,9 +39,8 @@ export default async function SystemGuidePage({ searchParams }: { searchParams: 
 
   return (
     <main className="py-1 text-fg">
-      <div className="mx-auto max-w-6xl">
+      <div>
         <PageHeader
-          description="How QTS is built, how a release goes live, and every setting it needs. Open it again whenever you deploy or change a setting."
           title="System guide"
         />
 

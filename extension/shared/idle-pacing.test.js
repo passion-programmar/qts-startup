@@ -78,6 +78,8 @@ test('a held application is renewed four times per hold, at least every 30 secon
   assert.equal(pacing.renewEveryMs(600), 150 * SECOND);
   // Filling, or a wait the server holds only 2 minutes (a CAPTCHA): as before.
   assert.equal(pacing.renewEveryMs(120), 30 * SECOND);
+  // Waiting while the Manager is away: held an hour, renewed 15 minutes before it ends.
+  assert.equal(pacing.renewEveryMs(3600), 45 * MINUTE);
   // An older server that does not say.
   assert.equal(pacing.renewEveryMs(undefined), 30 * SECOND);
   assert.equal(pacing.renewEveryMs('x'), 30 * SECOND);

@@ -1,0 +1,2 @@
+ALTER TABLE "profiles" DROP CONSTRAINT "profiles_linkedin_status_check";--> statement-breakpoint
+ALTER TABLE "profiles" ADD CONSTRAINT "profiles_linkedin_status_check" CHECK ("profiles"."linkedin_status" in ('none', 'live', 'applying', 'blocked'));

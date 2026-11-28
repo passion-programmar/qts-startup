@@ -52,16 +52,8 @@ export default async function ManagerPromptsPage() {
   const defaultPrompt = defaultRows[0];
 
   return (
-      <main className="mx-auto max-w-4xl space-y-6 py-1 text-fg">
+      <main className="space-y-6 py-1 text-fg">
           <PageHeader
-            description={<>
-            {myPrompts.length === 0
-              ? "You have no prompts yet, so Generation uses the default prompt. Click + to add one."
-              : myPrompts.length === 1
-                ? "Generation uses your prompt for every job."
-                : `Generation uses your ${myPrompts.length} prompts in least-recent-use order unless you choose one for a queued job.`}
-            {" "}Click a prompt to open it. Saving a change adds a version; earlier versions are kept and can be put back in use.
-            </>}
             title="My AI prompts"
           />
 

@@ -116,7 +116,7 @@ export function CalendarPageSkeleton() {
 /** Settings and Profile: title, then a column of setting cards. */
 export function CardsPageSkeleton({ label = "Loading settings" }: { label?: string }) {
   return (
-    <Busy className="mx-auto max-w-3xl space-y-5 py-1" label={label}>
+    <Busy className="space-y-5 py-1" label={label}>
       <HeaderSkeleton />
       {[0, 1, 2].map((card) => (
         <Card className="space-y-4" key={card}>

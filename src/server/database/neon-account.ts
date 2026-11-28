@@ -17,7 +17,7 @@ import {
 const NEON_API = "https://console.neon.tech/api/v2";
 
 export type NeonProjectResult =
-  | ({ ok: true; isAppProject: boolean } & NeonProjectUsage & { endpointError: string | null; branchError: string | null })
+  | ({ ok: true; isAppProject: boolean; appEndpointId?: string | null } & NeonProjectUsage & { endpointError: string | null; branchError: string | null })
   | { ok: false; id: string; isAppProject: boolean; error: string };
 
 export type NeonAccountUsage =
@@ -81,7 +81,8 @@ export async function readNeonAccountUsage(): Promise<NeonAccountUsage> {
         project.branchCount = sizes.count;
       }
       const isAppProject = Boolean(appEndpoint && project.endpoints.some((endpoint) => endpoint.id === appEndpoint));
-      return { ok: true, isAppProject, endpointError, branchError, ...project };
+      // (The compute this app connects to, so its state is shown, not an old branch's: 2026-11-28.)
+      return { ok: true, isAppProject, appEndpointId: isAppProject ? appEndpoint : null, endpointError, branchError, ...project };
     } catch (error) {
       return { ok: false, id, isAppProject: false, error: messageOf(error) };
     }

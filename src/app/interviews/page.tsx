@@ -77,7 +77,6 @@ export default async function InterviewsPage({
       <main className="py-1">
         <PageHeader
           actions={<><TimeSettingsButton /><AddInterviewButton key={startBid?.id ?? "none"} startBid={startBid} /></>}
-          description={`Interviews for jobs you applied to. Times are ${zoneShortName(zone, now)}${second ? `, with ${zoneShortName(second, now)} beside them` : ""}.`}
           title="Interviews"
         />
 

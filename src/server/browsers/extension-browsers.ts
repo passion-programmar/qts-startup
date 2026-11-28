@@ -5,6 +5,7 @@ import { extensionBrowsers, users } from "@/db/schema";
 import { db } from "@/lib/db";
 import { type BrowserHeaders, canTakeWork, defaultBrowserName, parseBrowserHeaders } from "@/server/apply/apply-values";
 import { type ReadyKind, readyWorkCount } from "@/server/work/work-readiness";
+import { settingsVersion } from "@/server/browsers/settings-version";
 
 export type ExtensionBrowser = {
   id: string;
@@ -98,7 +99,7 @@ export async function recordBrowserHeartbeat(
   identity: BrowserHeaders,
   modes: BrowserModes,
   ready?: { kind: ReadyKind; scoped: boolean },
-): Promise<{ browser: ExtensionBrowser; generationStopVersion: number; applyStopVersion: number; ready?: { count: number; key: string } }> {
+): Promise<{ browser: ExtensionBrowser; generationStopVersion: number; applyStopVersion: number; settingsVersion: string | null; ready?: { count: number; key: string } }> {
   const base = [
     upsertExtensionBrowser(managerId, identity, new Date(), modes),
     selectExtensionBrowser(managerId, identity),
@@ -110,6 +111,8 @@ export async function recordBrowserHeartbeat(
       .from(users)
       .where(eq(users.id, managerId))
       .limit(1),
+    // The fingerprint of the settings the Chrome keeps copies of (same trip; settings-version.ts).
+    settingsVersion(managerId),
   ] as const;
   // The count never costs the heartbeat itself: if it fails, the heartbeat runs again without it
   // (the Chrome then claims as before), so "Stop all" still reaches every Chrome.
@@ -119,12 +122,13 @@ export async function recordBrowserHeartbeat(
       return null;
     })
     : null;
-  const [, [row], [manager]] = counted ?? await db.batch(base);
-  const readyRow = counted ? counted[3][0] : undefined;
+  const [, [row], [manager], [version]] = counted ?? await db.batch(base);
+  const readyRow = counted ? counted[4][0] : undefined;
   return {
     browser: { ...row, canTakeWork: canTakeWork(row.extensionVersion) },
     generationStopVersion: manager?.generationStopVersion ?? 0,
     applyStopVersion: manager?.applyStopVersion ?? 0,
+    settingsVersion: version?.version ?? null,
     ...(counted ? { ready: { count: Number(readyRow?.count) || 0, key: String(readyRow?.key ?? "0") } } : {}),
   };
 }

@@ -21,10 +21,9 @@ export default async function UsefulPromptsPage() {
   const prompts = await listUsefulPrompts(currentUser.id);
 
   return (
-      <main className="mx-auto max-w-4xl space-y-3 py-1 text-fg">
+      <main className="space-y-3 py-1 text-fg">
           <PageHeader
             actions={<Badge className="px-3 py-1 text-xs">{prompts.length} saved</Badge>}
-            description="Prompts you keep for special cases. Jobs, Generation and Apply never use them. Each save adds a version, and earlier versions stay in the history."
             title="Useful prompts"
           />
           <FormCard

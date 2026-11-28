@@ -62,6 +62,9 @@ export const categories = pgTable(
     name: text("name").notNull(),
     // The one category ("Global") new accounts start in and deleted categories' accounts move to.
     isDefault: boolean("is_default").default(false).notNull(),
+    // Super Admin's colour for the category (2026-11-28): saving it resets the label colour of every
+    // candidate in the category, and new or moved candidates take it. Null = no colour.
+    color: text("color"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .defaultNow()
       .notNull(),
@@ -76,6 +79,7 @@ export const categories = pgTable(
     uniqueIndex("categories_one_default_unique")
       .on(table.isDefault)
       .where(sql`${table.isDefault}`),
+    check("categories_color_check", sql`${table.color} is null or ${table.color} ~ '^#[0-9a-fA-F]{6}$'`),
   ],
 );
 
@@ -209,7 +213,7 @@ export const profiles = pgTable(
     managerCategoryColor: text("manager_category_color"),
     // The candidate's LinkedIn account as the Manager marks it (a signal only, 2026-11-27): "live",
     // "applying" (used for LinkedIn Easy Apply: only these are offered in the extension's Custom
-    // Easy Apply) or "blocked"; and when the Manager last changed it.
+    // Easy Apply), "blocked" or "none" (no LinkedIn account yet); and when the Manager last changed it.
     linkedinStatus: text("linkedin_status").default("live").notNull(),
     linkedinStatusChangedAt: timestamp("linkedin_status_changed_at", { withTimezone: true, mode: "date" }),
     // Facts application forms ask for. Apply fills what fits from here; ChatGPT answers the rest.
@@ -268,7 +272,7 @@ export const profiles = pgTable(
       "profiles_work_preferences_check",
       sql`(${table.contractType} is null or ${table.contractType} in ('employment', 'b2b', 'either')) and (${table.workHours} is null or ${table.workHours} in ('full_time', 'part_time', 'either')) and (${table.workMode} is null or ${table.workMode} in ('remote', 'hybrid', 'onsite', 'any'))`,
     ),
-    check("profiles_linkedin_status_check", sql`${table.linkedinStatus} in ('live', 'applying', 'blocked')`),
+    check("profiles_linkedin_status_check", sql`${table.linkedinStatus} in ('none', 'live', 'applying', 'blocked')`),
     check(
       "profiles_manager_category_color_check",
       sql`${table.managerCategoryColor} is null or ${table.managerCategoryColor} ~ '^#[0-9a-fA-F]{6}$'`,

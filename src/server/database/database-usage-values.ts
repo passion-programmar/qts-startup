@@ -324,8 +324,12 @@ export type HistoryPoint = {
 /**
  * Per-day use of a counter Neon keeps for the billing period: the last check of each day minus
  * the day before's. When a new period starts, the counter starts again from zero, so that day's
- * use is the counter itself. Days without a check on both sides are left out, not guessed.
+ * use is the counter itself. Days without a check on both sides are left out, not guessed: a gap of
+ * several days, or a period's first check made after its first day, holds several days' use, and
+ * once showed as one impossible day (52 CU-hours, 2026-11-28).
  */
+const daysApart = (from: string, to: string) => Math.round((Date.parse(`${to.slice(0, 10)}T00:00:00Z`) - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
+
 export function dailyUse(points: HistoryPoint[], field: "computeSeconds" | "transferBytes"): { day: string; value: number }[] {
   const lastOfDay = new Map<string, HistoryPoint>();
   for (const point of [...points].sort((a, b) => a.at.localeCompare(b.at))) {
@@ -337,6 +341,8 @@ export function dailyUse(points: HistoryPoint[], field: "computeSeconds" | "tran
     const before = days[index - 1];
     const now = days[index];
     const samePeriod = before.periodStart === now.periodStart;
+    if (samePeriod && daysApart(before.day, now.day) !== 1) continue;
+    if (!samePeriod && (!now.periodStart || daysApart(now.periodStart, now.day) !== 0)) continue;
     const value = samePeriod ? now[field]! - before[field]! : now[field]!;
     if (value >= 0) result.push({ day: now.day, value });
   }

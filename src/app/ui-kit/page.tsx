@@ -29,7 +29,6 @@ export default async function UiKitPage({ searchParams }: { searchParams: Promis
         <PageHeader
           actions={<LinkButton href="/ui-kit" icon={<Plus aria-hidden="true" className="size-4" />}>Add New</LinkButton>}
           back={{ href: "/", label: "Home" }}
-          description="Every shared piece in one place, in the current theme. Switch light and dark from the account menu."
           title="UI kit"
         />
 

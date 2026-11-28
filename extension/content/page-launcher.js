@@ -675,8 +675,9 @@ async function initializeQtsPageLauncher() {
     loadCustomJobs();
   }
 
-  async function loadCustomJobs() {
-    const reply = await customSend({ op: 'list' });
+  async function loadCustomJobs({ timed = false } = {}) {
+    // (timed: the cards' own refresh, which the worker skips while the Manager is away from the PC.)
+    const reply = await customSend({ op: 'list', ...(timed ? { timed: true } : {}) });
     if (reply?.ok) {
       custom.jobs = reply.jobs || [];
       custom.loaded = true;
@@ -686,11 +687,14 @@ async function initializeQtsPageLauncher() {
     // Only the cards and the row's counts: the form is left alone, so a JD being typed keeps its
     // place and focus while the cards update.
     renderCustomCardsOnly();
-    // While a résumé is being made, the cards look again every 8 seconds (only with the panel shown);
-    // a failed one waits for the server's retry and is not looked at again and again.
+    // While a résumé is being made, the cards look again (only with the panel shown): every minute for
+    // one this Chrome makes, every 5 minutes for one made in another Chrome (2026-11-28: every 8 s for
+    // all, which kept the database awake). A failed one waits for the server's retry.
     clearTimeout(custom.timer);
-    if (custom.jobs.some((job) => !job.ready && job.generationStatus !== 'failed')) {
-      custom.timer = setTimeout(() => { if (launcher.classList.contains('open')) loadCustomJobs(); }, 8000);
+    const pending = custom.jobs.filter((job) => !job.ready && job.generationStatus !== 'failed');
+    if (pending.length) {
+      const every = pending.some((job) => job.here !== false) ? 60_000 : 5 * 60_000;
+      custom.timer = setTimeout(() => { if (launcher.classList.contains('open')) loadCustomJobs({ timed: true }); }, every);
     }
   }
 
@@ -1903,7 +1907,9 @@ async function initializeQtsPageLauncher() {
   let countsTimer = null;
   let countsRetries = 0;
   let countsEvery = null;
-  const COUNTS_REFRESH_MS = 60_000;
+  // (2026-11-28: was every minute, which kept the database awake while a panel stayed open; the counts
+  // are read again on opening and after each application or saved job anyway.)
+  const COUNTS_REFRESH_MS = 10 * 60_000;
   const COUNTS_RETRY_MS = 3_000;
   const COUNTS_MAX_RETRIES = 3;
   function showCountsProblem(message) {
@@ -1925,7 +1931,7 @@ async function initializeQtsPageLauncher() {
     for (const value of countValues()) { value.classList.remove('is-loading'); value.textContent = '⚠'; }
   }
   stats.addEventListener('click', () => { if (stats.classList.contains('failed')) refreshDailyCounts(); });
-  function refreshDailyCounts({ retry = false } = {}) {
+  function refreshDailyCounts({ retry = false, timed = false } = {}) {
     if (!active) return;
     if (!launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
     if (!retry) countsRetries = 0;
@@ -1935,7 +1941,8 @@ async function initializeQtsPageLauncher() {
     countsTimer = setTimeout(async () => {
       if (!active || !launcher.classList.contains('open') || !launcher.classList.contains('signed-in')) return;
       countsAskedAt = Date.now();
-      const reply = await chrome.runtime.sendMessage({ type: 'QTS_DAILY_COUNTS' })
+      // (timed: the 10-minute refresh, which the worker skips while the Manager is away from the PC.)
+      const reply = await chrome.runtime.sendMessage({ type: 'QTS_DAILY_COUNTS', ...(timed ? { timed: true } : {}) })
         .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       if (!reply?.ok) {
         const message = String(reply?.error || reply?.message || 'Unknown error.');
@@ -1956,6 +1963,8 @@ async function initializeQtsPageLauncher() {
         }
         return;
       }
+      // Skipped (away): the counts shown stay as they are.
+      if (reply.skipped === true) return;
       countsRetries = 0;
       showCountsProblem('');
       stats.classList.remove('failed');
@@ -1972,7 +1981,7 @@ async function initializeQtsPageLauncher() {
   // While the panel is open the counts stay fresh; closed, nothing is asked.
   function keepCountsFresh(open) {
     clearInterval(countsEvery);
-    countsEvery = open ? setInterval(() => refreshDailyCounts(), COUNTS_REFRESH_MS) : null;
+    countsEvery = open ? setInterval(() => refreshDailyCounts({ timed: true }), COUNTS_REFRESH_MS) : null;
   }
 
   // Each Generation job running at once keeps its state in its own key (the first one the original key).

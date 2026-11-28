@@ -3,6 +3,10 @@
 (function initGetJdAutoRetry(root) {
   const DELAYS_MS = [30_000, 60_000, 120_000];
   const REPEAT_DELAY_MS = 300_000;
+  // After this many automatic tries (about 18 minutes) the page shows the reason and Try again
+  // (2026-11-28: it retried every 5 minutes until Get JD turned off, keeping the database awake).
+  // A quota wait until the daily reset is one try and is not counted.
+  const MAX_ATTEMPTS = 6;
   const AFTER_RESET_MS = 60_000;
   const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
   // api-worker's messages when the request never got an HTTP reply.
@@ -28,6 +32,7 @@
     }
     const noReply = result._httpStatus === undefined && NO_REPLY_MESSAGES.has(result.message);
     if (hint?.kind === 'soon' || RETRYABLE_STATUSES.has(result._httpStatus) || noReply) {
+      if (attempt >= MAX_ATTEMPTS) return null;
       return { at: nowMs + delayForAttempt(attempt), message: WAITING_MESSAGE };
     }
     return null;
@@ -38,7 +43,7 @@
     return FINAL_CODES.has(result?.diagnosticCode);
   }
 
-  const api = { delayForAttempt, planRetry, isFinalFailure };
+  const api = { delayForAttempt, planRetry, isFinalFailure, MAX_ATTEMPTS };
   root.__qtsGetJdAutoRetry = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);

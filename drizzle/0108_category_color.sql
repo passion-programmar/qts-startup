@@ -1,0 +1,2 @@
+ALTER TABLE "categories" ADD COLUMN "color" text;--> statement-breakpoint
+ALTER TABLE "categories" ADD CONSTRAINT "categories_color_check" CHECK ("categories"."color" is null or "categories"."color" ~ '^#[0-9a-fA-F]{6}$');

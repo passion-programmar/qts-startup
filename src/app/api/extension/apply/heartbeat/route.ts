@@ -8,7 +8,7 @@ import { authorizeApplyRequest, isUuid } from "@/server/apply/apply-route-auth";
 export async function POST(request: Request): Promise<NextResponse> {
   const auth = await authorizeApplyRequest(request);
   if (auth instanceof NextResponse) return auth;
-  const body = await request.json().catch(() => null) as { attemptId?: unknown; jobId?: unknown; stopVersion?: unknown } | null;
+  const body = await request.json().catch(() => null) as { attemptId?: unknown; jobId?: unknown; stopVersion?: unknown; away?: unknown } | null;
   if (!isUuid(body?.attemptId)) {
     return NextResponse.json({ success: false, message: "A valid attempt ID is required." }, { status: 400 });
   }
@@ -18,7 +18,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     const recover = isUuid(body.jobId) && Number.isInteger(body.stopVersion)
       ? { jobId: body.jobId, stopVersion: body.stopVersion as number }
       : null;
-    const leaseSeconds = await renewApplyAttempt(body.attemptId, auth.manager.id, auth.browser.id, recover);
+    // away: the Manager is away from the PC, so a job waiting for them is held an hour (apply-values.ts).
+    const leaseSeconds = await renewApplyAttempt(body.attemptId, auth.manager.id, auth.browser.id, recover, body.away === true);
     return leaseSeconds !== null
       // (The Submit settings come from the session check's read of the Manager: no second read.)
       ? NextResponse.json({ success: true, leaseSeconds, ...submitSettingsFrom(auth.applySettings) })

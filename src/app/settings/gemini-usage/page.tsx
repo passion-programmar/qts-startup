@@ -80,7 +80,22 @@ export default async function GeminiUsagePage({
           operation: geminiApiCallLogs.operation,
           status: geminiApiCallLogs.status,
           httpStatus: geminiApiCallLogs.httpStatus,
-          responseBody: geminiApiCallLogs.responseBody,
+          // Only the few fields the reason line reads (readCallReason), not the whole reply (up to 1 MB
+          // each, 100 rows): the details window loads the full reply when it opens (2026-11-28). A reply
+          // that is not JSON comes back as "-", which reads as "not JSON" as before.
+          responseBody: sql<string | null>`case
+            when ${geminiApiCallLogs.responseBody} is null then null
+            when not pg_input_is_valid(${geminiApiCallLogs.responseBody}, 'jsonb') then '-'
+            else (select jsonb_strip_nulls(jsonb_build_object(
+              'error', b->'error',
+              'totalTokens', b->'totalTokens',
+              'choices', case when jsonb_typeof(b->'choices') = 'array' then jsonb_build_array(jsonb_build_object('finish_reason', b#>'{choices,0,finish_reason}')) end,
+              'usage', case when b ? 'usage' then jsonb_build_object('completion_tokens', b#>'{usage,completion_tokens}') end,
+              'promptFeedback', case when b ? 'promptFeedback' then jsonb_build_object('blockReason', b#>'{promptFeedback,blockReason}') end,
+              'candidates', case when jsonb_typeof(b->'candidates') = 'array' then jsonb_build_array(jsonb_build_object('finishReason', b#>'{candidates,0,finishReason}')) end,
+              'usageMetadata', case when b ? 'usageMetadata' then jsonb_build_object('candidatesTokenCount', b#>'{usageMetadata,candidatesTokenCount}') end
+            ))::text from (select ${geminiApiCallLogs.responseBody}::jsonb as b) as reply)
+          end`,
           responseTruncated: geminiApiCallLogs.responseTruncated,
           errorMessage: geminiApiCallLogs.errorMessage,
           durationMs: geminiApiCallLogs.durationMs,
@@ -166,7 +181,7 @@ export default async function GeminiUsagePage({
 
   return (
     <main className="py-1 text-slate-900">
-      <div className="mx-auto max-w-5xl">
+      <div>
         <PageHeader
           actions={
             <>
@@ -174,7 +189,6 @@ export default async function GeminiUsagePage({
               <LinkButton href="/settings" variant="secondary">Settings</LinkButton>
             </>
           }
-          description="Configure per-key limits, check key status, and review Google API responses."
           title="Gemini usage"
         />
 

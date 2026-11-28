@@ -84,7 +84,7 @@ test('server required: QTS unreachable pauses everything; nothing is matched or 
   const chrome = worker({ server: (method, url) => (!up ? { success: false, message: 'Cannot connect to the server.' } : method === 'GET' ? (url.includes('since=') ? noChanges : fullList) : { success: true }) });
   await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
   up = false;
-  await chrome.advance(3 * 60_000); // QTS last answered over 2 minutes ago
+  await chrome.advance(11 * 60_000); // QTS last answered over 10 minutes ago
   assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [item(9, 'viewed')], keys: [k(1)] }), { ok: false, state: 'server-down' });
   assert.deepEqual(await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MARK', items: [item(9, 'clicked')] }), { ok: false, state: 'server-down' });
   up = true;
@@ -162,7 +162,7 @@ test('QTS down: at most one check a minute, however often LinkedIn changes its p
   const chrome = worker({ server: server(state) });
   await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', reason: 'load', marks: [], keys: [] });
   state.down = true;
-  await chrome.advance(3 * 60_000);
+  await chrome.advance(11 * 60_000);
   for (let look = 0; look < 100; look += 1) { await chrome.ask({ type: 'QTS_LINKEDIN_SKIPS_MATCH', marks: [], keys: [] }); await chrome.advance(500); }
   // 100 looks over 50 seconds: one failed check, then quiet.
   assert.equal(chrome.gets().length, 2);

@@ -185,7 +185,6 @@ export default async function JobsPage({
               <Badge className="px-3 py-1 text-xs">{list.counts.all} saved</Badge>
             </div>
           }
-          description="Jobs saved for your candidate accounts. Jobs already applied to are on the Bids page."
           title="Jobs"
         />
         <JobsFilters candidates={filterCandidates} counts={list.counts} query={pageQuery} today={today} />

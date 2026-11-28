@@ -11,6 +11,12 @@ export const APPLY_LEASE_SECONDS = 120;
 /** An application waiting for the Manager (review, or Yes/No in an open tab) is held this long without a heartbeat. */
 export const APPLY_REVIEW_LEASE_SECONDS = 600;
 /**
+ * The same, while the Manager is away from the PC (the Chrome says so, 2026-11-28): renewed only
+ * about every 45 minutes, so the database can sleep while a job waits for them. A Chrome that stops
+ * meanwhile (closed, crashed) keeps the job at most this long.
+ */
+export const APPLY_AWAY_LEASE_SECONDS = 3600;
+/**
  * An application whose résumé and cover letter its Chrome may fetch: being filled, waiting for the
  * Manager (the assistant's job pages are held as waiting_review from the start), or being submitted.
  */

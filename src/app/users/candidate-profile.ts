@@ -58,9 +58,10 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 /**
  * One candidate of this Manager, with everything the edit page shows. Null when the id is not a
  * candidate account the Manager owns. A deleted candidate comes back with deleted: true (read-only).
+ * managerId null (the Super Admin, read-only view) accepts any Manager's candidate.
  */
 export async function loadManagerCandidateProfile(
-  managerId: string,
+  managerId: string | null,
   candidateId: string,
 ): Promise<{ candidate: CandidateProfileValues; deleted: boolean } | null> {
   if (!uuidPattern.test(candidateId)) return null;
@@ -87,7 +88,7 @@ export async function loadManagerCandidateProfile(
     left join categories on categories.id = profiles.category_id
     where users.id = ${candidateId}::uuid
       and users.role = 'account'
-      and users.parent_user_id = ${managerId}::uuid
+      and (${managerId}::uuid is null or users.parent_user_id = ${managerId}::uuid)
     limit 1
   `),
     // Newest first, the same order the list page used.

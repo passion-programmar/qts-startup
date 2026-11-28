@@ -86,7 +86,6 @@ export default async function RemoteCompaniesPage({
     <main className="py-1">
       <PageHeader
         actions={<Badge className="px-3 py-1 text-xs">{list.all} {list.all === 1 ? "company" : "companies"}</Badge>}
-        description="Companies with fully remote jobs that any Manager saved or applied to in QTS. Click a company to see its roles and who applied. Dates are Romania time."
         title={<span className="inline-flex items-center gap-2"><Globe aria-hidden="true" className="size-6 text-primary" />Remote companies</span>}
       />
       <CompanyDetails companies={details} searching={Boolean(query.q)}>

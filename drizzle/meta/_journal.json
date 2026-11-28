@@ -750,6 +750,20 @@
       "when": 1795772752928,
       "tag": "0106_linkedin_status",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1795861536104,
+      "tag": "0107_linkedin_status_none",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1795868235136,
+      "tag": "0108_category_color",
+      "breakpoints": true
     }
   ]
 }

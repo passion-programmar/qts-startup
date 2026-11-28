@@ -3,6 +3,8 @@ import { sql } from "drizzle-orm";
 import type { ReactNode } from "react";
 import { ManagerOverview } from "@/app/components/manager-overview";
 import { PaginatedTable } from "@/app/components/paginated-table";
+import { PeopleTree, type PeopleTreeUser } from "@/app/components/people-tree";
+import { peopleTreeSummary } from "@/app/components/people-tree-summary";
 import { Badge } from "@/app/ui/badge";
 import { Card, CardHeader } from "@/app/ui/card";
 import { PageHeader } from "@/app/ui/page-header";
@@ -15,6 +17,7 @@ export const instant = false;
 type WorkspaceUserRow = {
   id: string;
   role: string;
+  parent_user_id: string | null;
   display_name: string | null;
   login_name: string | null;
   blocked_at: Date | null;
@@ -32,31 +35,14 @@ type LoginHistoryRow = {
   logged_in_at: Date | string;
 };
 
-const roleLabels: Record<string, string> = {
-  super_admin: "Super Admin",
-  admin: "Admin",
-  manager: "Manager",
-  account: "Candidate",
-};
-
 function displayUserName(user: WorkspaceUserRow): string {
   if (user.role !== "account") return user.display_name ?? "Staff user";
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
   return name || "Incomplete candidate profile";
 }
 
-function initials(name: string): string {
-  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("");
-}
-
 function asDate(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
-}
-
-function formatDate(value: Date | string): string {
-  const date = asDate(value);
-  if (Number.isNaN(date.getTime())) return "Unknown date";
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
 
 function formatDateTime(value: Date | string): string {
@@ -109,7 +95,7 @@ export default async function Home({
         where ${canViewBlocked} or child.blocked_at is null
       )
       select
-        visible_users.id, visible_users.role, visible_users.display_name, visible_users.login_name,
+        visible_users.id, visible_users.role, visible_users.parent_user_id, visible_users.display_name, visible_users.login_name,
         visible_users.blocked_at, visible_users.created_at,
         profiles.first_name, profiles.last_name, profiles.candidate_email,
         categories.name as category_name
@@ -144,11 +130,23 @@ export default async function Home({
   const blockedCount = workspaceUsers.filter((user) => user.blocked_at).length;
   const categoryCount = categoryResult.rows[0]?.count ?? 0;
   const recentLogins = loginResult.rows;
+  // Everyone below the viewer, grouped Admin → Manager → candidates.
+  const treeUsers: PeopleTreeUser[] = workspaceUsers
+    .filter((user) => user.role !== "super_admin" && user.id !== currentUser.id)
+    .map((user) => ({
+      id: user.id,
+      role: user.role,
+      parentId: user.parent_user_id,
+      name: displayUserName(user),
+      login: user.login_name,
+      email: user.candidate_email,
+      category: user.category_name,
+      blocked: Boolean(user.blocked_at),
+    }));
 
   return (
     <main className="mx-auto max-w-[1440px] space-y-6 py-1 2xl:max-w-none">
       <PageHeader
-        description={`Welcome back, ${currentUser.displayName}. Your team, candidate profiles and categories at a glance.`}
         title="Workspace overview"
       />
 
@@ -160,44 +158,12 @@ export default async function Home({
 
       <Card flush className="overflow-hidden">
         <CardHeader
-          actions={<Badge tone="primary">{workspaceUsers.length} total</Badge>}
+          actions={<Badge tone="primary">{peopleTreeSummary(treeUsers)}</Badge>}
           className="border-b border-line-soft px-5 py-4 sm:px-6"
           icon={<Users />}
           title="People in your workspace"
         />
-        <PaginatedTable
-          embedded
-          columns={[
-            { label: "Name", className: "w-[45%]" },
-            { label: "Role", className: "w-[25%]" },
-            { label: "Category / added", className: "w-[30%]" },
-          ]}
-          emptyMessage="No team members"
-          rows={workspaceUsers.map((user) => {
-            const name = displayUserName(user);
-            return {
-              id: user.id,
-              cells: [
-                <div className="flex items-center gap-3" key="name">
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[10px] font-semibold text-primary-text">
-                    {initials(name) || "?"}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-2 truncate font-semibold text-fg">
-                      {name}
-                      {user.blocked_at && <Badge tone="danger">Blocked</Badge>}
-                    </span>
-                    <span className="mt-1 block truncate text-xs text-fg-muted">
-                      {user.role === "account" ? user.candidate_email || "—" : `@${user.login_name}`}
-                    </span>
-                  </span>
-                </div>,
-                roleLabels[user.role] ?? user.role,
-                user.category_name ?? formatDate(user.created_at),
-              ],
-            };
-          })}
-        />
+        <PeopleTree profileLinks={canViewBlocked} users={treeUsers} />
         {canViewBlocked && (
           <div className="border-t border-line-soft px-6 py-3 text-[11px] text-fg-muted">{blockedCount} blocked</div>
         )}

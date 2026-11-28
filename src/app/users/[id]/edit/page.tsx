@@ -23,12 +23,14 @@ export default async function EditCandidatePage({
 }) {
   const actor = await getCurrentUser();
   if (!actor) redirect("/login");
-  if (actor.role !== "manager") redirect("/users");
+  // The Manager edits their own candidates; the Super Admin may view any candidate (read-only).
+  const viewOnly = actor.role === "super_admin";
+  if (actor.role !== "manager" && !viewOnly) redirect("/users");
 
   const { id } = await params;
   const [loaded, candidateCategories] = await Promise.all([
-    loadManagerCandidateProfile(actor.id, id),
-    db.select({ id: categories.id, name: categories.name }).from(categories).orderBy(asc(categories.name)),
+    loadManagerCandidateProfile(viewOnly ? null : actor.id, id),
+    db.select({ id: categories.id, name: categories.name, color: categories.color, isDefault: categories.isDefault }).from(categories).orderBy(asc(categories.name)),
   ]);
   if (!loaded) notFound();
   const { candidate, deleted } = loaded;
@@ -37,11 +39,8 @@ export default async function EditCandidatePage({
   return (
     <main className="py-1">
       <PageHeader
-        back={{ href: "/users", label: "Candidate accounts" }}
-        description={deleted
-          ? "This candidate is deleted: the profile can be read but not changed, and it is not used for jobs."
-          : "Update the candidate's contact information and profile details."}
-        title={deleted ? `${name} (deleted, read-only)` : `Edit ${name}`}
+        back={{ href: "/users", label: viewOnly ? "People" : "Candidate accounts" }}
+        title={deleted ? `${name} (deleted, read-only)` : viewOnly ? `${name} (view only)` : `Edit ${name}`}
       />
       {/* Next keeps a left page alive with its typed values (Activity). Keyed by the saved data, the
           form starts over from the database after a save instead of showing the old values. */}
@@ -49,7 +48,7 @@ export default async function EditCandidatePage({
         candidate={candidate}
         categories={candidateCategories}
         key={createHash("sha1").update(JSON.stringify(loaded)).digest("hex")}
-        readOnly={deleted}
+        readOnly={deleted || viewOnly}
       />
     </main>
   );

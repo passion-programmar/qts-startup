@@ -70,7 +70,6 @@ export default async function BidsPage({
     <main className="py-1">
       <PageHeader
         actions={<Badge className="px-3 py-1 text-xs">{list.all} applied</Badge>}
-        description="Applications you confirmed as submitted. Times are Romania time."
         title="Bids"
       />
       <PaginatedTable

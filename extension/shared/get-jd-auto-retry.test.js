@@ -9,6 +9,9 @@ const now = 1_000_000;
 
 test('retries come after 30 s, 1 min, 2 min, then every 5 min', () => {
   assert.deepEqual([0, 1, 2, 3, 4, 50].map(retry.delayForAttempt), [30_000, 60_000, 120_000, 300_000, 300_000, 300_000]);
+  // After 6 automatic tries the page shows the reason and Try again instead of retrying on.
+  assert.ok(retry.planRetry({ success: false, _httpStatus: 503 }, retry.MAX_ATTEMPTS - 1, Date.now()));
+  assert.equal(retry.planRetry({ success: false, _httpStatus: 503 }, retry.MAX_ATTEMPTS, Date.now()), null);
 });
 
 test('a busy server retries by itself, on the schedule', () => {

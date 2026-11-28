@@ -35,6 +35,9 @@ const DIAGNOSTICS_KEY = "database_usage_diagnostics";
 const HISTORY_KEY = "database_usage_history";
 const HEALTH_KEY = "database_health";
 const ALERT_KEY = "database_alert_dismissed";
+// The warning bar's levels, saved with each quota check: every page reads this one small row instead
+// of the whole saved state (history and diagnostics can be large; 2026-11-28).
+const LEVELS_KEY = "database_usage_levels";
 const LOCK_KEY = "database_usage_lock";
 const CLEANUP_KEY = "database_cleanup";
 const KEEP_DAYS_KEY = "database_keep_days";
@@ -104,6 +107,43 @@ export async function previewDelete(request: DeleteRequest): Promise<{ rows: num
   return { rows, bytes: total ? Math.round((rows / total) * numberOf(row?.bytes)) : 0 };
 }
 
+export type FreeSpaceSuggestion = { tableKey: string; label: string; mode: "older" | "expired"; days: number; rows: number; bytes: number; warning?: string };
+
+// What "Free up space" offers (2026-11-28): old rows nothing needs any more. Bids (the Manager's
+// records) are never offered; jobs only their applied or failed rows (the table's own rule).
+const FREE_SPACE_OFFERS: { key: string; days: number }[] = [
+  { key: "generation_runs", days: 30 },
+  { key: "apply_attempts", days: 90 },
+  { key: "jobs", days: 90 },
+  { key: "gemini_api_call_logs", days: 7 },
+  { key: "gemini_key_usage_events", days: 30 },
+  { key: "get_jd_page_checks", days: 0 },
+  { key: "apply_question_memory", days: 90 },
+  { key: "login_history", days: 90 },
+  { key: "login_rate_limit_events", days: 30 },
+];
+
+/** The offers that would free something now, biggest first: counted only when the tab is opened. */
+export async function freeSpaceSuggestions(): Promise<FreeSpaceSuggestion[]> {
+  const found = await Promise.all(FREE_SPACE_OFFERS.map(async (offer) => {
+    const request = parseDeleteRequest(offer.key, "older", String(offer.days));
+    if (typeof request === "string") return null;
+    const { rows, bytes } = await previewDelete(request).catch(() => ({ rows: 0, bytes: 0 }));
+    if (!rows) return null;
+    const suggestion: FreeSpaceSuggestion = {
+      tableKey: request.table.key,
+      label: request.table.label,
+      mode: request.mode === "expired" ? "expired" : "older",
+      days: request.days,
+      rows,
+      bytes,
+      ...(request.table.warning ? { warning: request.table.warning } : {}),
+    };
+    return suggestion;
+  }));
+  return found.filter((item): item is FreeSpaceSuggestion => item !== null).sort((a, b) => b.bytes - a.bytes).slice(0, 5);
+}
+
 /**
  * Deletes what the request names, 2,000 rows at a time so no single statement runs long. Stops
  * after the time budget; `more` says rows are left for another click.
@@ -134,12 +174,18 @@ const upsertSetting = (key: string, value: unknown, userId: string | null) => db
 async function saveSetting(key: string, value: unknown, userId: string | null): Promise<void> {
   await upsertSetting(key, value, userId);
   savedCache = null;
+  bannerCache = null;
 }
 
 export const saveKeepDays = (generationRuns: number, userId: string) =>
   saveSetting(KEEP_DAYS_KEY, { generationRuns }, userId);
 
-export const savePlanLimits = (limits: PlanLimits, userId: string) => saveSetting(PLAN_LIMITS_KEY, limits, userId);
+export async function savePlanLimits(limits: PlanLimits, userId: string): Promise<void> {
+  await saveSetting(PLAN_LIMITS_KEY, limits, userId);
+  // New warning levels count at once on the warning bar.
+  const state = await readUsageState();
+  await saveSetting(LEVELS_KEY, { levels: appLevels({ ...state, planLimits: limits }), at: new Date().toISOString() }, userId);
+}
 
 /** "Dismiss" on the warning banner: it shows again only when a quota gets worse. */
 export const dismissAlerts = (levels: Partial<Record<QuotaKey, Level>>, userId: string) =>
@@ -354,8 +400,11 @@ async function readDatabaseSize(): Promise<QuotaSnapshot["database"]> {
   }
 }
 
-/** "Check quota": Neon's counters for every configured project and this database's size, saved until the next check. */
-export async function checkQuota(userId: string): Promise<QuotaSnapshot> {
+/**
+ * "Check quota": Neon's counters for every configured project and this database's size, saved until
+ * the next check. Super Admin's click, or the day's automatic check (userId null, cleanUpIfDue).
+ */
+export async function checkQuota(userId: string | null): Promise<QuotaSnapshot> {
   return withMonitoringLock(async () => {
     const [database, neon, state] = await Promise.all([readDatabaseSize(), readNeonAccountUsage(), readUsageState()]);
     const snapshot: QuotaSnapshot = { checkedAt: new Date().toISOString(), database, neon };
@@ -396,12 +445,15 @@ export async function checkQuota(userId: string): Promise<QuotaSnapshot> {
     if (!points.some((point) => point.databaseBytes !== null) && database.usedBytes !== null) {
       points.push({ at, day, projectId: "database", periodStart: null, computeSeconds: null, transferBytes: null, databaseBytes: database.usedBytes });
     }
+    const history = addHistory(state.history, points);
     await db.batch([
       upsertSetting(QUOTA_KEY, snapshot, userId),
-      upsertSetting(HISTORY_KEY, addHistory(state.history, points), userId),
+      upsertSetting(HISTORY_KEY, history, userId),
       upsertSetting(HEALTH_KEY, addHealth(state.health, events), userId),
+      upsertSetting(LEVELS_KEY, { levels: appLevels({ ...state, quota: snapshot, history }), at }, userId),
     ]);
     savedCache = null;
+    bannerCache = null;
     return snapshot;
   });
 }
@@ -607,7 +659,13 @@ export async function cleanUpIfDue(): Promise<CleanupResult | null> {
     returning key`);
   cleanedDay = day;
   if (!claimed.rows.length) return null;
-  return cleanUpNow(false);
+  const result = await cleanUpNow(false);
+  // Once a day, the quota too (2026-11-28): Neon's own counters (no compute is woken for them) and
+  // one size read, so the warning bar is current without anyone clicking Check quota.
+  await checkQuota(null).catch((error: unknown) => {
+    if (!(error instanceof MonitoringBusyError)) console.warn("The daily quota check failed.", errorText(error));
+  });
+  return result;
 }
 
 /** From a busy route: the day's clean-up runs after the response, never slowing the request. */
@@ -621,6 +679,28 @@ export function scheduleDailyCleanup(): void {
 // ---- Banner ----
 
 let savedCache: { at: number; state: UsageState } | null = null;
+let bannerCache: { at: number; value: BannerLevels | null } | null = null;
+
+export type BannerLevels = { levels: Partial<Record<QuotaKey, Level>>; dismissed: Partial<Record<QuotaKey, Level>> };
+
+/**
+ * The warning bar's levels and what Super Admin dismissed: two small rows, read at most every 10
+ * minutes per server. Null until the first quota check saves the levels (then the full state is used).
+ */
+export async function readBannerLevels(): Promise<BannerLevels | null> {
+  if (!bannerCache || Date.now() - bannerCache.at > 10 * 60_000) {
+    const rows = await db.select({ key: settings.key, value: settings.value }).from(settings)
+      .where(inArray(settings.key, [LEVELS_KEY, ALERT_KEY]));
+    const saved = objectOf(rows.find((row) => row.key === LEVELS_KEY)?.value);
+    const levels = objectOf(saved?.levels);
+    const dismissed = objectOf(objectOf(rows.find((row) => row.key === ALERT_KEY)?.value)?.levels);
+    bannerCache = {
+      at: Date.now(),
+      value: levels ? { levels: levels as BannerLevels["levels"], dismissed: (dismissed ?? {}) as BannerLevels["dismissed"] } : null,
+    };
+  }
+  return bannerCache.value;
+}
 
 /** The saved state for Super Admin's warning banner, read at most every 10 minutes per server. */
 export async function readSavedState(): Promise<UsageState> {

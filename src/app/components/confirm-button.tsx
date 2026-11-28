@@ -9,6 +9,7 @@ export function ConfirmButton({
   title,
   description,
   confirmLabel,
+  cancelLabel = "Cancel",
   children,
   className,
   ariaLabel,
@@ -18,6 +19,8 @@ export function ConfirmButton({
   title: string;
   description: ReactNode;
   confirmLabel: string;
+  // The button that keeps things as they are (first and focused, so Enter never confirms).
+  cancelLabel?: string;
   children: ReactNode;
   className?: string;
   ariaLabel?: string;
@@ -67,7 +70,7 @@ export function ConfirmButton({
             onClick={() => dialog.current?.close()}
             type="button"
           >
-            Cancel
+            {cancelLabel}
           </button>
           <button
             className="min-h-10 rounded-control bg-danger px-4 text-sm font-semibold text-white hover:bg-danger-hover"

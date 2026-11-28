@@ -29,6 +29,7 @@ import { ZoneClock } from "@/app/components/zone-clock";
 import { SettingsCard } from "@/app/settings/settings-card";
 import {
   type DiagnosticsSnapshot,
+  freeSpaceSuggestions,
   type ProjectQuotas,
   projectQuotas,
   readUsageState,
@@ -42,16 +43,18 @@ import {
   NEON_LIMITS_CHECKED_ON,
   type QuotaView,
 } from "@/server/database/database-usage-values";
-import { CleanUpNowButton, KeepDaysForm, MonitorButton, PlanLimitsForm, TableDeleteForm } from "./database-forms";
+import { CleanUpNowButton, FreeSpaceButton, KeepDaysForm, MonitorButton, PlanLimitsForm, TableDeleteForm } from "./database-forms";
 
 export const instant = false;
 
-type DatabaseUsageTab = "quota" | "diagnostics" | "cleanup";
+type DatabaseUsageTab = "overview" | "space" | "advanced";
 
+// One question per place (2026-11-28): is everything OK, is space getting full, what is wrong. The
+// full numbers and diagnostics wait folded under Advanced.
 const DATABASE_USAGE_TABS: { id: DatabaseUsageTab; label: string; description: string }[] = [
-  { id: "quota", label: "Quota & limits", description: "Neon usage, what is left, forecasts, health." },
-  { id: "diagnostics", label: "Diagnostics", description: "Tables, connections, queries (PostgreSQL)." },
-  { id: "cleanup", label: "Clean-up & delete", description: "Automatic clean-up and deleting by hand." },
+  { id: "overview", label: "Overview", description: "Is everything OK? Look here." },
+  { id: "space", label: "Free up space", description: "When storage gets full." },
+  { id: "advanced", label: "Advanced", description: "Full numbers, for troubleshooting." },
 ];
 
 const LEVELS: Record<Level, { label: string; badge: string; bar: string; Icon: LucideIcon }> = {
@@ -76,21 +79,22 @@ export default async function DatabaseUsagePage({
   const currentUser = await requireUser();
   if (currentUser.role !== "super_admin") redirect("/");
   const requested = (await searchParams).tab;
-  const activeTab: DatabaseUsageTab = requested === "diagnostics" || requested === "cleanup" ? requested : "quota";
+  // (Older links: Quota & limits and Diagnostics are under Advanced now, Clean-up under Free up space.)
+  const activeTab: DatabaseUsageTab = requested === "space" || requested === "cleanup" ? "space"
+    : requested === "advanced" || requested === "quota" || requested === "diagnostics" ? "advanced" : "overview";
   // Opening the page reads only what the last clicks and clean-up saved: one small read, no measuring.
   const state = await readUsageState();
 
   return (
     <main className="py-1 text-fg">
-      <div className="mx-auto max-w-5xl">
+      <div>
         <PageHeader
           actions={
             <>
               <LinkButton href="/settings" variant="secondary">Settings</LinkButton>
-              <MonitorButton kind={activeTab === "diagnostics" ? "diagnostics" : "quota"} />
+              <MonitorButton kind="quota" />
             </>
           }
-          description="Neon usage against the plan's limits, what is left, forecasts, database health, and diagnostics. Nothing is measured until you click, and the last result stays until the next click."
           title="Database usage"
         />
 
@@ -121,9 +125,9 @@ export default async function DatabaseUsagePage({
         </nav>
         </div>
 
-        {activeTab === "quota" && <QuotaTab state={state} />}
-        {activeTab === "diagnostics" && <DiagnosticsTab state={state} />}
-        {activeTab === "cleanup" && <CleanupTab state={state} />}
+        {activeTab === "overview" && <OverviewTab state={state} />}
+        {activeTab === "space" && <SpaceTab state={state} />}
+        {activeTab === "advanced" && <AdvancedTab state={state} />}
       </div>
     </main>
   );
@@ -201,7 +205,7 @@ const dayLabel = (day: string) =>
 function DailyBars({ values, format, label }: { values: { day: string; value: number }[]; format: (value: number) => string; label: string }) {
   const max = Math.max(...values.map((entry) => entry.value), 0);
   if (values.length < 2 || max <= 0) {
-    return <p className="text-[11px] text-slate-400">Daily history: insufficient data (needs Check quota on at least three days).</p>;
+    return <p className="text-[11px] text-slate-400">Per-day history: fills in by itself over the next days (one automatic check a day).</p>;
   }
   return (
     <div>
@@ -285,10 +289,138 @@ function QuotaCard({
   );
 }
 
+// ---- Overview: this month at a glance ----
+
+const OVERVIEW_NAMES: Record<QuotaView["key"], { title: string; meaning: string }> = {
+  compute: { title: "Compute", meaning: "time the database is ON" },
+  storage: { title: "Storage", meaning: "data kept" },
+  transfer: { title: "Transfer", meaning: "data sent to QTS" },
+};
+
+const shortDate = (iso: string) => formatRomaniaTime(iso).split(",")[0];
+
+/** One limit in one line: its bar, what is used of the limit, and where it ends the month. */
+function OverviewRow({ view }: { view: QuotaView }) {
+  const format = formatOf(view.key);
+  const name = OVERVIEW_NAMES[view.key];
+  const share = Math.min(100, view.percent ?? 0);
+  const forecast = view.key !== "storage" && view.forecast.enough ? view.forecast.projectedAtPeriodEnd : null;
+  return (
+    <div className="grid grid-cols-1 items-center gap-x-4 gap-y-1.5 py-3 sm:grid-cols-[11rem_1fr_auto]">
+      <div className="flex items-center gap-2">
+        <LevelBadge level={view.level} />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-slate-800">{name.title}</p>
+          <p className="text-[11px] text-slate-500">{name.meaning}</p>
+        </div>
+      </div>
+      <div aria-label={view.used === null ? `${name.title}: not checked` : `${name.title}: ${format(view.used)} of ${format(view.limit)}`} className="h-3 overflow-hidden rounded-full bg-slate-100" role="img">
+        {view.used !== null && <div className={`h-full rounded-full ${LEVELS[view.level ?? "ok"].bar}`} style={{ width: `${Math.max(share, 1)}%` }} />}
+      </div>
+      <div className="text-right text-xs tabular-nums text-slate-600">
+        {view.used === null ? <span className="text-slate-400">not checked</span> : (
+          <>
+            <span className="font-semibold text-slate-800">{format(view.used)}</span> of {format(view.limit)}
+            {forecast !== null && <span className="block text-[11px] text-slate-500">→ about {format(forecast)} by month end</span>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The verdict: one sentence that says whether the month is fine, from the forecasts and levels. */
+function overviewVerdict(views: QuotaView[]): { tone: "good" | "watch" | "bad"; text: string } {
+  const checked = views.filter((view) => view.used !== null);
+  if (!checked.length) return { tone: "watch", text: "Not checked yet: click Check quota. After that, QTS checks once a day by itself." };
+  const ending = (view: QuotaView) => (view.key !== "storage" && view.forecast.enough && view.forecast.projectedAtPeriodEnd !== null ? view.forecast.projectedAtPeriodEnd : view.used ?? 0);
+  const over = checked.find((view) => view.level === "reached" || ending(view) > view.limit);
+  if (over) {
+    const when = over.forecast.enough && over.forecast.limitDate ? ` around ${shortDate(over.forecast.limitDate)}` : "";
+    return { tone: "bad", text: `${OVERVIEW_NAMES[over.key].title} will run out${when}: finish or stop work before leaving, and close QTS panels you don't need.` };
+  }
+  const close = checked.some((view) => ending(view) >= view.limit * 0.7 || (view.level !== null && view.level !== "ok"));
+  return close
+    ? { tone: "watch", text: "Fine if you keep this pace: avoid leaving work running when nobody needs it." }
+    : { tone: "good", text: "All fine: this month stays well under the limits." };
+}
+
+/** Did the database answer every check of the last 7 days? One short line, from the saved checks. */
+function HealthLine({ state }: { state: UsageState }) {
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  const recent = state.health.events.filter((event) => Date.parse(event.at) > weekAgo);
+  if (!recent.length) return null;
+  const failed = recent.filter((event) => !event.ok);
+  return failed.length ? (
+    <span className="inline-flex items-center gap-1.5 font-semibold text-amber-700">
+      <AlertTriangle aria-hidden className="size-3.5" /> {failed.length} failed check{failed.length === 1 ? "" : "s"} in 7 days (last {ago((Date.now() - Date.parse(failed[0].at)) / 60_000)}): see Advanced
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5 text-emerald-700">
+      <HeartPulse aria-hidden className="size-3.5" /> Database answering, no errors in 7 days
+    </span>
+  );
+}
+
+function OverviewTab({ state }: { state: UsageState }) {
+  const projects = projectQuotas(state);
+  const app = projects.find((project) => project.isAppProject) ?? projects[0];
+  const { compute, storage, transfer } = app.views;
+  const verdict = overviewVerdict([compute, storage, transfer]);
+  const periodEnd = app.usage?.periodEnd ?? null;
+  const daysLeft = periodEnd ? Math.max(0, Math.ceil((Date.parse(periodEnd) - Date.now()) / 86_400_000)) : null;
+  const endpoint = appEndpointOf(app);
+  const asleep = endpoint?.state === "idle";
+  const tone = {
+    good: { box: "bg-emerald-50 text-emerald-800 ring-emerald-200", Icon: CheckCircle2 },
+    watch: { box: "bg-amber-50 text-amber-800 ring-amber-200", Icon: AlertTriangle },
+    bad: { box: "bg-rose-50 text-rose-800 ring-rose-200", Icon: AlertOctagon },
+  }[verdict.tone];
+  return (
+    <section className={`${cardClass} mb-6 flex flex-col gap-4`}>
+      <header className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-base font-semibold text-slate-800">Database this month</h2>
+        {periodEnd && <p className="text-xs text-slate-500">resets {shortDate(periodEnd)}{daysLeft !== null ? ` · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left` : ""}</p>}
+      </header>
+      <div className="divide-y divide-slate-100">
+        <OverviewRow view={compute} />
+        <OverviewRow view={storage} />
+        <OverviewRow view={transfer} />
+      </div>
+      <p className={`flex items-start gap-2 rounded-xl px-4 py-3 text-sm font-semibold ring-1 ${tone.box}`} role="status">
+        <tone.Icon aria-hidden className="mt-0.5 size-4 shrink-0" /> {verdict.text}
+      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+        {endpoint && (
+          <span className="inline-flex items-center gap-1.5">
+            {asleep ? <Moon aria-hidden className="size-3.5" /> : <Zap aria-hidden className="size-3.5" />}
+            {asleep ? "Asleep now (free)" : endpoint.state === "active" ? "ON now" : endpoint.state ?? "State unknown"}
+          </span>
+        )}
+        <span>{state.quotaAgeMinutes === null ? "Not checked yet" : `Checked ${ago(state.quotaAgeMinutes)} (automatic once a day; Check quota for now)`}</span>
+        <HealthLine state={state} />
+      </div>
+      <DailyBars format={hours} label="Compute used per day" values={compute.daily.slice(-14)} />
+    </section>
+  );
+}
+
 // ---- Quota & limits ----
 
+/**
+ * The compute this app connects to (its state, size and last activity), not another branch's (an old
+ * backup branch's showed "last active 29 Oct", 2026-11-28). A check saved before that knew no app
+ * compute: the most recently active one, which is the one in use.
+ */
+function appEndpointOf(project: ProjectQuotas) {
+  const endpoints = project.usage?.endpoints ?? [];
+  const appId = project.usage?.appEndpointId;
+  return (appId ? endpoints.find((entry) => entry.id === appId) : undefined)
+    ?? [...endpoints].sort((a, b) => (b.lastActive ?? "").localeCompare(a.lastActive ?? ""))[0];
+}
+
 function ComputeState({ project }: { project: ProjectQuotas }) {
-  const endpoint = project.usage?.endpoints.find((entry) => entry.state) ?? project.usage?.endpoints[0];
+  const endpoint = appEndpointOf(project);
   if (!project.usage) return null;
   if (!endpoint) {
     return <p className="text-[11px] text-slate-500">Compute state: {project.usage.endpointError ?? "Neon listed no compute."}</p>;
@@ -588,7 +720,7 @@ function DiagnosticsTab({ state }: { state: UsageState }) {
         <section className={`${cardClass} flex flex-col items-center gap-3 py-10 text-center`}>
           <span className="grid size-12 place-items-center rounded-2xl bg-indigo-50 text-indigo-600"><Activity className="size-6" /></span>
           <h2 className="text-sm font-semibold text-slate-800">No diagnostics yet</h2>
-          <p className="max-w-md text-xs leading-5 text-slate-500">Click Run diagnostics at the top for table sizes, connections, transactions, slow queries, locks, and index hints.</p>
+          <p className="max-w-md text-xs leading-5 text-slate-500">Click Run diagnostics for table sizes, connections, transactions, slow queries, locks, and index hints.</p>
         </section>
       ) : (
         <DiagnosticsBody diagnostics={diagnostics} />
@@ -815,12 +947,81 @@ function BidsPerDay({ days }: { days: { day: string; count: number }[] }) {
 
 // ---- Clean-up & delete ----
 
-function CleanupTab({ state }: { state: UsageState }) {
-  const { lastCleanup, keepDays, diagnostics } = state;
+// ---- Free up space: one button per suggestion, the rest folded ----
+
+async function SpaceTab({ state }: { state: UsageState }) {
+  // Counted when this tab opens (a few small counts); nothing is deleted without a click.
+  const suggestions = await freeSpaceSuggestions().catch(() => []);
+  const { lastCleanup, keepDays } = state;
+  return (
+    <section className={`${cardClass} mb-6 flex flex-col gap-5`}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="flex items-center gap-2 text-sm text-slate-700">
+          <CheckCircle2 aria-hidden className="size-4 shrink-0 text-emerald-600" />
+          {lastCleanup
+            ? <>Automatic clean-up ran {formatRomaniaTime(lastCleanup.at)} · freed about {formatBytes(lastCleanup.freedBytes)}</>
+            : "The automatic clean-up runs by itself once a day; it has not run yet."}
+        </p>
+        <CleanUpNowButton />
+      </div>
+      <div>
+        <h2 className="mb-1 text-sm font-semibold text-slate-800">Suggestions, biggest first</h2>
+        {suggestions.length ? (
+          <ul className="divide-y divide-slate-100">
+            {suggestions.map((item) => {
+              const what = item.mode === "expired" ? "the expired rows" : `rows older than ${item.days} days`;
+              return (
+                <li className="flex flex-wrap items-center justify-between gap-3 py-3" key={item.tableKey}>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800">{item.label} · {what}</p>
+                    <p className="text-[11px] text-slate-500">{item.rows.toLocaleString()} rows · about {formatBytes(item.bytes)}</p>
+                  </div>
+                  <FreeSpaceButton days={item.days} label={item.label} mode={item.mode} tableKey={item.tableKey} warning={item.warning} what={what} />
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-xs text-slate-500">Nothing to free now: the automatic clean-up keeps it tidy.</p>
+        )}
+      </div>
+      <KeepDaysForm generationRuns={keepDays.generationRuns} />
+      <details className="rounded-xl border border-slate-200 px-4 py-3">
+        <summary className="cursor-pointer text-xs font-semibold text-slate-700">More: what the clean-up deletes, and deleting any table by hand</summary>
+        <div className="mt-4"><HandDelete state={state} /></div>
+      </details>
+    </section>
+  );
+}
+
+// ---- Advanced: everything else, folded ----
+
+function AdvancedTab({ state }: { state: UsageState }) {
+  return (
+    <div className="mb-6 space-y-3">
+      <p className="text-xs text-slate-500">For troubleshooting: everything QTS knows about the database. Open a section when you need it.</p>
+      <details className={`${cardClass} !p-4`}>
+        <summary className="cursor-pointer text-sm font-semibold text-slate-800">Each limit in full: forecasts, per-day charts, health, plan limits</summary>
+        <div className="mt-4"><QuotaTab state={state} /></div>
+      </details>
+      <details className={`${cardClass} !p-4`}>
+        <summary className="cursor-pointer text-sm font-semibold text-slate-800">Database diagnostics: connections, queries, tables, index hints</summary>
+        <div className="mt-4">
+          <div className="mb-3 flex justify-end"><MonitorButton kind="diagnostics" /></div>
+          <DiagnosticsTab state={state} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/** What the automatic clean-up deletes, its last run in full, and deleting any table by hand. */
+function HandDelete({ state }: { state: UsageState }) {
+  const { lastCleanup, diagnostics } = state;
   const usageByName = new Map((diagnostics?.tables ?? []).map((usage) => [usage.name, usage]));
   return (
     <>
-      <section className={`${cardClass} mb-6`}>
+      <section className="mb-6">
         <h2 className="mb-2 text-sm font-semibold text-slate-800">Automatic clean-up</h2>
         <p className="mb-4 text-xs leading-5 text-slate-500">
           Runs by itself once a Romania day, inside the first Get JD or Apply request (no extra hosting work), and records the database size for the storage forecast. It deletes Generation runs older than the keep days below (each job keeps its newest delivered run, so Apply can still print its résumé), expired Get JD checks, Gemini logs older than 3 days, and questions unseen for 90 days. Bids are never deleted automatically.
@@ -841,10 +1042,6 @@ function CleanupTab({ state }: { state: UsageState }) {
           ) : (
             "No clean-up has run yet."
           )}
-        </div>
-        <div className="flex flex-wrap items-start gap-6">
-          <KeepDaysForm generationRuns={keepDays.generationRuns} />
-          <CleanUpNowButton />
         </div>
       </section>
 

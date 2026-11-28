@@ -53,10 +53,15 @@
   /**
    * While Apply waits for the Manager, the server holds the application for `leaseSeconds`: it is
    * renewed four times per hold, and never less often than every 30 seconds when the hold is unknown.
+   * A long hold (the hour a job waits while the Manager is away, 2026-11-28) is renewed 15 minutes
+   * before it ends, so the database sleeps between renewals.
    */
+  const LONG_HOLD_SECONDS = 30 * 60;
   function renewEveryMs(leaseSeconds) {
     const lease = Number(leaseSeconds);
-    return Number.isFinite(lease) && lease > 0 ? Math.max(30 * SECOND, (lease * SECOND) / 4) : 30 * SECOND;
+    if (!Number.isFinite(lease) || lease <= 0) return 30 * SECOND;
+    if (lease >= LONG_HOLD_SECONDS) return (lease - 15 * 60) * SECOND;
+    return Math.max(30 * SECOND, (lease * SECOND) / 4);
   }
 
   /** The Manager is away from this PC: no input for 10 minutes, or the screen locked. Unknown counts as at the PC. */
@@ -134,7 +139,7 @@
 
   const api = {
     checkEveryMs, isDue, shouldTurnOff, renewEveryMs, isAway, noteActivity, claimCheck, noteCheck, idleTooLong,
-    checkIntervalMs, pacePeriodicAlarm, TURN_OFF_AFTER_MS, AWAY_TURN_OFF_AFTER_MS, AWAY_AFTER_SECONDS,
+    checkIntervalMs, pacePeriodicAlarm, TURN_OFF_AFTER_MS, AWAY_TURN_OFF_AFTER_MS, AWAY_AFTER_SECONDS, LONG_HOLD_SECONDS,
     LEGACY_LOCAL_KEYS, ACTIVITY_KEY,
   };
   global.__qtsIdlePacing = Object.freeze(api);
